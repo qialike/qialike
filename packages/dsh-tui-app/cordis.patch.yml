@@ -1,0 +1,91 @@
+# The dsh-tui-app bundle patch: a full-screen Ink/React terminal surface over
+# the dsh-base layer. Applied after dsh-base's insert; rows here override base
+# rows by id, with the profile's own cordis.patch.yml and any --patch overlays
+# still to come.
+#
+# This surface is single-session and composes its agent process-wide, so the
+# base rows the Web surface moves behind agent presets stay mounted here (the
+# base bundle deliberately keeps them for the TUI). Only the OS-process sandbox
+# is not used: the SEA single-file binary carries no native addon, so reads and
+# writes are fenced by the sandbox-policy (workspace-write), the approval flow
+# (ask), and the permission presets instead.
+
+# ── surface-specific values the base deliberately omits ─────────────────────
+
+- id: system-prompt
+  config:
+    persona: >-
+      You are a coding agent powered by the {{model}} model. Your working directory is {{cwd}}.
+
+# The shared module-reload HMR row stays off; the launcher's watch-only
+# fallback keeps user patch layers live until exit.
+- id: hmr
+  disabled: true
+
+- id: tools
+  config:
+    # Keep the same temporary process-wide Code Mode opt-in as the other
+    # surfaces. Unset keeps the schema default (native).
+    mode: !!js process.env.DSH_TOOLS_MODE
+
+# ── no native sandbox: swap the OS sandbox rows for local providers ─────────
+#
+# `sandbox` runs the process sandbox backend (bwrap / landlock-run native
+# addon / seatbelt / restricted token). The SEA binary embeds no native addon,
+# and a terminal surface is most useful with the workspace reachable, so these
+# rows are disabled and the local bash/fs providers take their place. The file
+# effect boundary still holds: sandbox-policy (workspace-write), approval
+# (ask), permission presets, and fs-observation-policy stay enabled.
+
+- id: sandbox
+  disabled: true
+
+# The permission presets row is sandbox-coupled (it needs a confined bash
+# executor), so it stays disabled. The sandbox-POLICY service is policy-only
+# and mounts standalone: it owns the session's `sandbox:mode` and the
+# model-facing policy context, so the TUI's Tab permission switch really
+# changes the session policy (and feeds the sandbox_permissions + approval
+# escalation path) like the web surface.
+- id: permission
+  disabled: true
+
+- id: bash-sandbox
+  disabled: true
+
+- id: pwsh-sandbox
+  disabled: true
+
+# fs-sandbox is the PURE-JS file-policy fence (no native addon): write/edit/
+# delete tools consult the session sandbox-policy mode and deny mutations in
+# `read-only`, restrict to the workspace root in `workspace-write`, and
+# delegate unfenced in `danger-full-access`. It provides `ctx.fs` (extends
+# dsh-fs-local), so no separate local fs provider is inserted.
+- id: fs-sandbox
+  config:
+    mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
+
+- insert:
+    # Local, non-sandboxed bash provider (the OS bash sandbox is native and
+    # stubbed in the single file). File mutations via bash are fenced by the
+    # TUI's `tools/pre-execute` gate instead.
+    - id: bash-local
+      name: '@deepseek-ai/dsh-bash-local'
+
+    # Gives the model the `ask_user_question` tool, which asks the user for a
+    # decision (e.g. which language). The TUI registers a UserQuestionProvider
+    # that renders the question and returns the choice; without this row the
+    # model has no way to ask and would pick a default silently.
+    - id: tool-ask-user
+      name: '@deepseek-ai/dsh-tool-ask-user'
+
+    # Reads its cli flags, then drives the long-lived terminal session.
+    - id: tui-startup
+      name: '@yourname/dsh-tui-app/startup'
+
+    - id: tui-runtime
+      name: '@yourname/dsh-tui-app'
+      inject: [tuiStartup]
+      config:
+        workspace: !!js ctx.tuiStartup.workspace
+        resume: !!js ctx.tuiStartup.resume
+        model: !!js ctx.tuiStartup.model

@@ -1,0 +1,75 @@
+{
+  "name": "@yourname/dsh-tui-app",
+  "description": "The dsh TUI bundle: a full-screen Ink/React terminal surface over dsh-base, with a single interactive agent session.",
+  "version": "0.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourname/dsh-tui.git",
+    "directory": "packages/dsh-tui-app"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./startup": {
+      "types": "./lib/types/startup.d.ts",
+      "default": "./lib/startup.js"
+    },
+    "./invariant": {
+      "types": "./lib/types/invariant.d.ts",
+      "default": "./lib/invariant.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/startup.js",
+    "lib/invariant.js",
+    "cordis.patch.yml",
+    "lib/types/**/*.d.ts"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "dependencies": {
+    "commander": "^15.0.0",
+    "ink": "^4.4.1",
+    "mdast-util-from-markdown": "^2.0.3",
+    "mdast-util-gfm": "^3.1.0",
+    "micromark-extension-gfm": "^3.0.0",
+    "react": "^18.3.1",
+    "string-width": "^5.1.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^0.1.1",
+    "@deepseek-ai/cordis-plugin-loader": "^0.1.1",
+    "@deepseek-ai/dsh-agent": "^0.1.1",
+    "@deepseek-ai/dsh-agent-default-model": "^0.1.1",
+    "@deepseek-ai/dsh-cmdline": "^0.1.1",
+    "@deepseek-ai/dsh-credentials": "^0.1.1",
+    "@deepseek-ai/dsh-home-paths": "^0.1.1",
+    "@deepseek-ai/dsh-launch-environment": "^0.1.1",
+    "@deepseek-ai/dsh-llm": "^0.1.1",
+    "@deepseek-ai/dsh-sandbox-policy": "^0.1.1",
+    "@deepseek-ai/dsh-session": "^0.1.1",
+    "@deepseek-ai/dsh-tools": "^0.1.1",
+    "@deepseek-ai/dsh-user-approval": "^0.1.1",
+    "@deepseek-ai/dsh-user-questions": "^0.1.1",
+    "@deepseek-ai/schemastery": "^0.1.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.0"
+  }
+}

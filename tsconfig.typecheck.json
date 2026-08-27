@@ -1,0 +1,23 @@
+{
+  "extends": "./tsconfig.base.json",
+  "include": ["packages/dsh-tui-app/src/**/*.ts", "packages/dsh-tui-app/src/**/*.tsx"],
+  "compilerOptions": {
+    "paths": {
+      "@deepseek-ai/cordis": ["../deepseek-harness/vendor/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/cordis-plugin-loader": ["../deepseek-harness/vendor/loader/lib/types/index.d.ts"],
+      "@deepseek-ai/cordis-plugin-include": ["../deepseek-harness/vendor/include/lib/types/index.d.ts"],
+      "@deepseek-ai/schemastery": ["../deepseek-harness/vendor/schemastery/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-agent": ["../deepseek-harness/packages/core/agent/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-agent-default-model": ["../deepseek-harness/packages/core/agent-default-model/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-cmdline": ["../deepseek-harness/packages/boot/cmdline/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-credentials": ["../deepseek-harness/packages/credentials/credentials/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-home-paths": ["../deepseek-harness/packages/util/home-paths/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-llm": ["../deepseek-harness/packages/llm/llm/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-sandbox-policy": ["../deepseek-harness/packages/sandbox/sandbox-policy/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-session": ["../deepseek-harness/packages/core/session/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-tools": ["../deepseek-harness/packages/core/tools/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-user-approval": ["../deepseek-harness/packages/interaction/user-approval/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-user-questions": ["../deepseek-harness/packages/interaction/user-questions/lib/types/index.d.ts"]
+    }
+  }
+}

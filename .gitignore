@@ -1,0 +1,19 @@
+node_modules/
+dist/
+packages/*/lib/
+apps/tui-bin/generated/
+apps/tui-bin/x/
+apps/tui-bin/.resolve/
+apps/tui-bin/stub-native/
+*.tsbuildinfo
+.env
+
+# Model-run test artifacts left at the repo root (not project docs).
+/formatting-demo.md
+/letter.md
+/maintainable-software-report.md
+/medium-doc.md
+/report.md
+/REPORT.md
+/software-testing-guide.md
+/testing-frameworks.md
