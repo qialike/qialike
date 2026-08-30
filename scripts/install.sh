@@ -14,7 +14,9 @@ LINK="$INSTALL_DIR/$BIN_FILENAME"
 # Build if the binary is not present (or not executable).
 if [[ ! -x "$TARGET" ]]; then
   echo "dsh-tui: building $TARGET (first run)…"
-  (cd "$REPO_ROOT" && pnpm build) >&2
+  # --single: build only the current platform into dist/dsh-tui (fast; the
+  # default all-target build would not produce the host-named binary).
+  (cd "$REPO_ROOT" && pnpm build --single) >&2
 fi
 
 if [[ ! -x "$TARGET" ]]; then

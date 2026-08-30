@@ -45,9 +45,13 @@ import { persistSidebarMin, resolveSidebarMin } from './config.ts'
 import { theme } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initErrorLog, logError, logConsoleError } from './log.ts'
+import pkg from '../../../package.json' with { type: 'json' }
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-runtime'
+
+/** Project version (single source of truth: the root package.json). */
+const APP_VERSION = (pkg as { version?: string }).version ?? '0.0.0'
 
 /** Core services required before the terminal session can start. */
 export const inject = ['agentDefaultModel', 'agents', 'sessions']
@@ -143,6 +147,7 @@ class Store {
   private _question: PendingQuestion | null = null
   private _sidebarMin = resolveSidebarMin()
   private _width = process.stdout.columns ?? 80
+  private _rows = process.stdout.rows ?? 24
   private _permission: SandboxMode = 'workspace-write'
   private _modelLabel = ''
   private _session: Session | undefined
@@ -342,9 +347,13 @@ class Store {
   get sidebarMin(): number { return this._sidebarMin }
   setSidebarMin(min: number): void { this._sidebarMin = min; persistSidebarMin(min); this.notify() }
   get width(): number { return this._width }
-  setWidth(width: number): void {
-    if (width === this._width) return
+  get rows(): number { return this._rows }
+  /** Track the live terminal size; notifies when either dimension changed, so a
+   *  height-only resize re-renders the layout (Ink only re-lays-out the width). */
+  setSize(width: number, rows: number): void {
+    if (width === this._width && rows === this._rows) return
     this._width = width
+    this._rows = rows
     this.notify()
   }
   get permission(): SandboxMode { return this._permission }
@@ -965,7 +974,7 @@ export function App(props: { onSubmit(text: string): void; onCancel(): void; onC
   }
 
   return (
-    <Box flexDirection="column" height={rowsAvailable()}>
+    <Box flexDirection="column" height={store.rows}>
       <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="row" width="100%">
         <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           {items.length === 0
@@ -991,6 +1000,8 @@ export function App(props: { onSubmit(text: string): void; onCancel(): void; onC
             ? <Text dimColor>no plan yet</Text>
             : <StepRows steps={steps} />}
           <Text dimColor>session {sessionIdText}</Text>
+          <Box flexGrow={1} />
+          <Text dimColor>dsh-tui {APP_VERSION}</Text>
         </Box>
         )}
       </Box>
@@ -1046,13 +1057,8 @@ const WHEEL_STEP = 3
 function composerHeight(width: number, input: string, min: number): number {
   const usable = Math.max(10, width - 4)
   const wrapped = input.split('\n').reduce((sum, seg) => sum + Math.max(1, Math.ceil(seg.length / usable)), 0)
-  const cap = Math.max(min, Math.floor(rowsAvailable() * 0.4))
+  const cap = Math.max(min, Math.floor(store.rows * 0.4))
   return Math.min(min + wrapped - 1, cap)
-}
-
-/** Approximate current terminal rows; falls back to 24. */
-function rowsAvailable(): number {
-  return process.stdout.rows ?? 24
 }
 
 /** Estimated rendered rows for one transcript item at the conversation width. */
@@ -1070,7 +1076,7 @@ function convUsableWidth(width: number, showSidebar: boolean): number {
 
 /** Rows the transcript viewport can display given the surrounding fixed parts. */
 function convViewportLines(composerH: number, stepsH: number, modalH: number): number {
-  return Math.max(3, rowsAvailable() - composerH - 3 /* status bar: border + row */ - 2 /* conversation paddingY */ - stepsH - modalH)
+  return Math.max(3, store.rows - composerH - 3 /* status bar: border + row */ - 2 /* conversation paddingY */ - stepsH - modalH)
 }
 
 /**
@@ -1191,6 +1197,21 @@ function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
 interface TuiIo { exit(code: number): void }
 
 function requestExit(io: TuiIo, code: number): void { void io.exit(code) }
+
+/** Whether the DeepSeek API key is configured (env or the credentials store). */
+async function apiKeyConfigured(ctx: Context): Promise<boolean> {
+  if (process.env.DEEPSEEK_API_KEY?.trim()) return true
+  const credentials = ctx.get('credentials') as
+    | { describe?: (ref: ReturnType<typeof credentialRef>) => Promise<{ configured: boolean }> }
+    | undefined
+  if (credentials?.describe === undefined) return false
+  try {
+    const info = await credentials.describe(credentialRef('DEEPSEEK_API_KEY'))
+    return Boolean(info?.configured)
+  } catch {
+    return false
+  }
+}
 
 /** Map a provider model id to a friendly display name (display only). */
 function modelDisplayName(model: string): string {
@@ -1342,7 +1363,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   const sessionId = agent.session.id
   sessionRef.current = sessionId
   store.setSession(agent.session)
-  store.setModelLabel(modelDisplayName(agentOptions.model))
+  // No API key -> surface "not set" in the composer / /model hint; with a key,
+  // show the model name.
+  const modelLabel = (await apiKeyConfigured(ctx)) ? modelDisplayName(agentOptions.model) : 'not set'
+  store.setModelLabel(modelLabel)
 
   store.append('status', `Session ${sessionId} in ${config.workspace}`, true)
 
@@ -1405,7 +1429,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     { name: 'help', hint: 'show this help', run: () => { store.append('status', '/help · /think · /model · /compact · /clear · /resume · /connect · /sidebar · /exit', true) } },
     { name: 'connect', hint: 'store the DeepSeek API key (like the web Models page)', run: () => { store.openConnect('Paste a DeepSeek API key (stored in ~/.dsh/.credentials.yaml):') } },
     { name: 'think', hint: 'expand/collapse the Think (reasoning) text', run: () => { store.toggleReasoning() } },
-    { name: 'model', hint: `current model (${agentOptions.model})`, run: (arg) => { store.append('status', `model: ${arg || agentOptions.model}`, true) } },
+    { name: 'model', hint: `current model (${modelLabel})`, run: (arg) => { store.append('status', `model: ${arg || agentOptions.model}`, true) } },
     { name: 'compact', hint: 'compact the session history', run: () => { void compact(ctx, agent, sessionId, selection.provider, selection.model, io) } },
     { name: 'clear', hint: 'clear the transcript', run: () => { store.clear() } },
     {
@@ -1470,9 +1494,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   />)
 
   // Live terminal width: Bun/Node emit 'resize' on process.stdout and update
-  // `columns`; Ink only re-renders the DOM, so we drive a reactive Store width.
+  // `columns`; Ink only re-renders the DOM, so we drive a reactive Store size.
   const onResize = (): void => {
-    store.setWidth(process.stdout.columns ?? 80)
+    store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
     if (process.env.DSH_TUI_DEBUG_WIDTH === '1') {
       process.stderr.write(`[dsh-tui] width ${process.stdout.columns ?? 80}\n`)
     }

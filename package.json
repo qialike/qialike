@@ -1,6 +1,6 @@
 {
   "name": "@yourname/dsh-tui-root",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -36,6 +36,7 @@
     "esbuild": "^0.25.12",
     "js-yaml": "^4.1.0",
     "postject": "^1.0.0-alpha.6",
+    "semver": "^7.7.1",
     "typescript": "^6.0.3",
     "tsx": "^4.22.4"
   }

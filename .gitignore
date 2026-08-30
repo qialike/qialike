@@ -8,6 +8,10 @@ apps/tui-bin/stub-native/
 *.tsbuildinfo
 .env
 
+# Manually redirected build/install logs at the repo root.
+install.log
+build.log
+
 # Model-run test artifacts left at the repo root (not project docs).
 /formatting-demo.md
 /letter.md

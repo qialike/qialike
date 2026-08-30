@@ -21,17 +21,40 @@
  * @module dsh-tui/build
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
 import { build } from 'esbuild'
+import semver from 'semver'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)), '..')
 const HARNESS = process.env.DSH_HARNESS ?? resolve(ROOT, '../deepseek-harness')
 const OUT_DIR = join(ROOT, 'dist')
 const GEN_DIR = join(ROOT, 'apps/tui-bin/generated')
 const STUB_DIR = join(ROOT, 'apps/tui-bin/stub-native')
+const ENTRY = join(ROOT, 'apps/tui-bin/src/bin.ts')
+
+/**
+ * deepseek-harness versions this TUI is compatible with: the current version
+ * (`HARNESS_VERSION_MAX`, raised only after the TUI is re-validated against a
+ * newer harness release) and every historical release back to
+ * `HARNESS_VERSION_MIN`. Building against anything outside the range fails at
+ * compile time instead of breaking silently at runtime.
+ */
+const HARNESS_VERSION_MIN = '0.1.0-rc.7'
+const HARNESS_VERSION_MAX = '0.1.2-alpha.1'
+
+/** Cross-compile targets (`name` -> `bun build --compile --target` value). */
+const ALL_TARGETS = [
+  'linux-x64',
+  'linux-arm64',
+  'darwin-arm64',
+  'darwin-x64',
+  'windows-x64',
+  'windows-arm64',
+]
+const BUN_TARGET = Object.fromEntries(ALL_TARGETS.map((name) => [name, `bun-${name}`]))
 
 /** Packages that load a native `.node` addon; stubbed (never activated by the TUI patch). */
 const NATIVE_PACKAGES = new Set([
@@ -49,9 +72,13 @@ const NATIVE_PACKAGES = new Set([
  *
  * Add a module here (one line) instead of a new stubPackage call so the stub
  * set stays one data source and every stub is logged at build time.
+ *
+ * `koffi` is deliberately NOT in this set: on Windows the bundled harness
+ * genuinely needs it for durable session/file writes (`MoveFileExW`,
+ * `GetFileSecurityW`, ...). It gets a real `bun:ffi`-backed replacement
+ * instead (see `installKoffiShim` below).
  */
 const STUB_PACKAGES = new Set([
-  'koffi', // Windows FFI (advapi32/kernel32/user32/ole32) — guarded win32-only
   'node-pty', // PTY terminal sessions — never exercised; bash runs via child_process
   'sharp', // native image processing — a text coding-agent TUI does not use it
   'react-devtools-core', // optional Ink devtools — dev-only
@@ -59,6 +86,41 @@ const STUB_PACKAGES = new Set([
 
 function readJson(file) {
   return JSON.parse(readFileSync(file, 'utf8'))
+}
+
+/** Detect the deepseek-harness version: nearest git tag, then root package.json. */
+function detectHarnessVersion() {
+  try {
+    const tag = run('git', ['-C', HARNESS, 'describe', '--tags', '--abbrev=0']).trim()
+    if (tag.length > 0) return tag.replace(/^dsh-v/, '')
+  } catch { /* not a git checkout with tags; fall back to the root manifest */ }
+  const version = readJson(join(HARNESS, 'package.json')).version
+  if (typeof version !== 'string' || version.length === 0) {
+    throw new Error(`dsh-tui: cannot determine the deepseek-harness version at ${HARNESS}`)
+  }
+  return version.replace(/^dsh-v/, '')
+}
+
+/**
+ * Fail the build when the harness checkout is outside the supported range.
+ * The TUI is only compatible with the current harness version and historical
+ * releases; a newer (unvalidated) or too-old version is a misconfiguration.
+ */
+function assertHarnessCompatible() {
+  const version = detectHarnessVersion()
+  // Explicit gte/lte, not a semver range string: a range bound that carries a
+  // pre-release only matches same-tuple pre-releases, so `>=0.1.0-rc.7` would
+  // wrongly reject every historical 0.1.x version.
+  if (!(semver.gte(version, HARNESS_VERSION_MIN) && semver.lte(version, HARNESS_VERSION_MAX))) {
+    throw new Error(
+      `dsh-tui: deepseek-harness ${version} is outside the supported range `
+      + `(${HARNESS_VERSION_MIN} .. ${HARNESS_VERSION_MAX}). The TUI is only compatible with the `
+      + `current and historical harness versions; after upgrading the harness checkout and `
+      + `re-validating the TUI against it, raise HARNESS_VERSION_MAX in apps/tui-bin/build.mjs. `
+      + `Otherwise point DSH_HARNESS at a compatible checkout.`,
+    )
+  }
+  console.log(`dsh-tui: deepseek-harness ${version} (supported ${HARNESS_VERSION_MIN}..${HARNESS_VERSION_MAX})`)
 }
 
 function listSubdirs(base) {
@@ -115,7 +177,25 @@ function transformPackageCopy(name, dir) {
   }
   writeFileSync(join(out, 'package.json'), JSON.stringify(manifest, null, 2))
   copyLib(join(dir, 'lib'), join(out, 'lib'), dir)
+  // Preserve declared bin scripts: the farm symlinks `node_modules/@deepseek-ai/*`
+  // to these copies, and pnpm's bin-linking reads e.g. `cordis/bin.js` — a missing
+  // file triggers an ENOENT warning on every `pnpm install`.
+  copyBins(manifest, dir, out)
   return out
+}
+
+/** Copy a manifest's declared `bin` scripts from the source package into the copy. */
+function copyBins(manifest, dir, out) {
+  const bin = manifest.bin
+  const paths = typeof bin === 'string' ? [bin] : bin && typeof bin === 'object' ? Object.values(bin) : []
+  for (const binPath of paths) {
+    if (typeof binPath !== 'string') continue
+    const src = join(dir, binPath)
+    if (!existsSync(src)) continue
+    const dst = join(out, binPath)
+    mkdirSync(dirname(dst), { recursive: true })
+    copyFileSync(src, dst)
+  }
 }
 
 /** Recursively copy `from`'s `.js` files to `to`, inlining package.json reads against `pkgRoot`. */
@@ -231,6 +311,25 @@ function createResolveFarm() {
       '',
     ].join('\n'))
   }
+
+  /**
+   * Install the bun:ffi-backed koffi replacement at `<node_modules>/koffi`.
+   * The bundled harness loads koffi lazily on Windows for durable writes
+   * (`MoveFileExW`, `GetFileSecurityW`, `ReplaceFileW`, `GetLastError`) and
+   * process-table inspection; the native koffi addon cannot be embedded in a
+   * single-file bun compile, so a pure-JS shim over `bun:ffi` stands in. POSIX
+   * never imports koffi, but installing it unconditionally keeps one path for
+   * every platform.
+   * @param nm - the resolve-farm `node_modules` root.
+   */
+  const installKoffiShim = (nm) => {
+    const target = join(nm, 'koffi')
+    rmSync(target, { recursive: true, force: true })
+    mkdirSync(target, { recursive: true })
+    writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'koffi', type: 'module', main: 'index.js' }, null, 2))
+    writeFileSync(join(target, 'index.js'), readFileSync(join(ROOT, 'apps/tui-bin/stub/koffi.js'), 'utf8'))
+    console.log('dsh-tui: installed bun:ffi koffi shim')
+  }
   // No-op stubs so the native/optional deps bundle and resolve (they are never
   // activated by a text coding-agent TUI). Created before the mirror so the
   // harness store does not supply the real (native) package. The whitelist is
@@ -239,6 +338,13 @@ function createResolveFarm() {
     stubPackage(name)
     console.log(`dsh-tui: stubbed ${name}`)
   }
+
+  // Windows FFI: the bundled harness needs a WORKING koffi for durable
+  // session/file writes (`MoveFileExW`, `GetFileSecurityW`, ...) at runtime.
+  // The real koffi is a native addon that cannot be embedded in the single
+  // file, so install the bun:ffi-backed replacement in its place (before the
+  // harness-store mirror, which would otherwise re-link the native package).
+  installKoffiShim(nm)
 
   // Third-party deps of the vendored/transformed plugins resolve from the
   // harness's pnpm virtual store; mirror every entry we do not already own.
@@ -269,6 +375,29 @@ function createResolveFarm() {
     link(name, transformPackageCopy(name, dir))
   }
   link('@yourname/dsh-tui-app', join(ROOT, 'packages/dsh-tui-app'))
+
+  // On Windows, pnpm creates directory symlinks with relative targets (e.g.
+  // `..\..\..\node_modules\.pnpm\...`) that `realpath`/`stat` cannot traverse
+  // (EPERM), which breaks Bun's module resolution (its resolver canonicalizes
+  // paths through realpath). Convert them to absolute-target junctions — the
+  // native, no-admin link type whose realpath works — before bundling. POSIX
+  // symlinks have no such problem, so this step is Windows-only.
+  if (process.platform === 'win32') {
+    const fixShadowLinks = (base) => {
+      if (!existsSync(base)) return
+      for (const entry of readdirSync(base, { withFileTypes: true })) {
+        if (!entry.isSymbolicLink()) continue
+        const linkPath = join(base, entry.name)
+        const resolved = resolve(dirname(linkPath), readlinkSync(linkPath))
+        if (!existsSync(resolved)) continue
+        rmSync(linkPath, { recursive: true, force: true })
+        mkdirSync(dirname(linkPath), { recursive: true })
+        symlinkSync(resolved, linkPath, 'junction')
+      }
+    }
+    fixShadowLinks(join(ROOT, 'apps/tui-bin/node_modules/@yourname'))
+    fixShadowLinks(join(ROOT, 'packages/dsh-tui-app/node_modules'))
+  }
 }
 
 /** Symlink every entry of the harness virtual-store `node_modules` we don't own. */
@@ -357,11 +486,75 @@ function generate(specifiers) {
   ].join('\n'))
 }
 
-/** Bundle the entry with Bun and compile it into a single self-contained binary. */
+/** Per-target binary path: `dist/<name>/dsh-tui[.exe]` (generic binary name, no
+ *  platform/arch suffix; the arch lives in the parent dir / package name). */
+function targetBinaryPath(name) {
+  const exe = name.startsWith('windows') ? '.exe' : ''
+  return join(OUT_DIR, name, `dsh-tui${exe}`)
+}
+
+/** Compile one target: `name` is an ALL_TARGETS key, or `null` for the host (`bun`). */
+function compileTarget(name, outfile) {
+  const bunTarget = name === null ? 'bun' : BUN_TARGET[name]
+  mkdirSync(dirname(outfile), { recursive: true })
+  rmSync(outfile, { force: true })
+  run('bun', ['build', '--compile', '--target', bunTarget, '--outfile', outfile, ENTRY])
+  console.log(`dsh-tui: built ${outfile}`)
+}
+
+/** Archive one target's binary into `dist/`: linux -> tar.gz, others -> zip.
+ *  Package file names keep the platform/arch (`dsh-tui-<name>.tar.gz/.zip`); the
+ *  archive contains just the generic-named binary. */
+function packageBinary(name) {
+  const bin = targetBinaryPath(name)
+  if (name.startsWith('linux')) {
+    run('tar', ['-czf', join(OUT_DIR, `dsh-tui-${name}.tar.gz`), '-C', join(OUT_DIR, name), 'dsh-tui'])
+  } else {
+    run('zip', ['-j', join(OUT_DIR, `dsh-tui-${name}.zip`), bin])
+  }
+  console.log(`dsh-tui: packaged ${name}`)
+}
+
+/**
+ * Bundle the entry with Bun into single self-contained binaries (opencode-style).
+ *
+ * Target selection:
+ *   - `DSH_TUI_TARGETS=linux-x64,darwin-arm64` -> build exactly those;
+ *   - `--single` -> build only the current platform, output `dist/dsh-tui`;
+ *   - otherwise -> build every target in ALL_TARGETS.
+ * Cross-target binaries land in per-target dirs `dist/<name>/dsh-tui[.exe]` (so
+ * both Windows arches can keep the generic `dsh-tui.exe` name). Packaging:
+ * `--package` archives them into `dist/dsh-tui-<name>.tar.gz/.zip`, mirroring
+ * opencode's release gating. `--single` skips packaging.
+ */
 function bundle() {
-  const target = join(OUT_DIR, 'dsh-tui')
-  rmSync(target, { force: true })
-  run('bun', ['build', '--compile', '--target', 'bun', '--outfile', target, join(ROOT, 'apps/tui-bin/src/bin.ts')])
+  const args = process.argv.slice(2)
+  const single = args.includes('--single')
+  const pack = args.includes('--package')
+  const requested = (process.env.DSH_TUI_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+
+  if (requested.length > 0) {
+    for (const t of requested) {
+      if (BUN_TARGET[t] === undefined) {
+        throw new Error(`unknown DSH_TUI_TARGETS entry "${t}" (allowed: ${ALL_TARGETS.join(', ')})`)
+      }
+    }
+    for (const name of requested) {
+      compileTarget(name, targetBinaryPath(name))
+      if (pack) packageBinary(name)
+    }
+    return
+  }
+
+  if (single) {
+    compileTarget(null, join(OUT_DIR, 'dsh-tui'))
+    return
+  }
+
+  for (const name of ALL_TARGETS) {
+    compileTarget(name, targetBinaryPath(name))
+    if (pack) packageBinary(name)
+  }
 }
 
 function run(command, args) {
@@ -375,13 +568,17 @@ async function main() {
   if (!existsSync(join(HARNESS, 'package.json'))) {
     throw new Error(`DSH_HARNESS not found at ${HARNESS}; set DSH_HARNESS to the deepseek-harness checkout`)
   }
+  assertHarnessCompatible()
+  // Fresh dist: every previous artifact (cross-target dirs, tarballs) is stale
+  // for this build and would otherwise linger.
+  rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const specifiers = pluginSpecifiers()
   createResolveFarm()
   await buildBundleLib()
   generate(specifiers)
   bundle()
-  console.log(`dsh-tui: built ${join(OUT_DIR, 'dsh-tui')} (${specifiers.size} plugin specifiers)`)
+  console.log(`dsh-tui: build complete (${specifiers.size} plugin specifiers)`)
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await main()
+if (import.meta.url === pathToFileURL(process.argv[1]).href) await main()

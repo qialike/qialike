@@ -103,7 +103,12 @@ function materializeProfile(): { root: string; base: string; tui: string } {
 /** A bounded single controller that disposes the tree once on a stop request. */
 function installShutdown(ctx: { current?: Context }): { shutdown(): Promise<void> } {
   let stopping: Promise<void> | undefined
+  // Leave the alternate screen buffer before the process ends (SIGINT/SIGTERM,
+  // the app's `exit` callback, and fatal errors all funnel through here or the
+  // `process.on('exit')` fallback registered in main()).
+  const leaveAlt = (): void => { try { process.stdout.write('\x1b[?1049l') } catch { /* ignore */ } }
   const shutdown = (): Promise<void> => {
+    leaveAlt()
     stopping ??= (async () => { await ctx.current?.fiber.dispose() })()
     return stopping
   }
@@ -124,6 +129,10 @@ async function main(): Promise<void> {
     process.stdout.write(`${NAME} ${readVersion()}\n`)
     process.exit(0)
   }
+  // Run inside the alternate screen buffer so the terminal keeps no scrollback
+  // and never shows its right-edge scrollbar; restore on any exit path.
+  process.stdout.write('\x1b[?1049h')
+  process.on('exit', () => { try { process.stdout.write('\x1b[?1049l') } catch { /* ignore */ } })
   const profile = materializeProfile()
   const environment = loadLayeredEnv(NAME)
   const app: { current?: Context } = {}

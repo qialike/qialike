@@ -89,3 +89,12 @@
         workspace: !!js ctx.tuiStartup.workspace
         resume: !!js ctx.tuiStartup.resume
         model: !!js ctx.tuiStartup.model
+
+# The plugin-package inventory reads every active Loader entry's package.json
+# from disk at each model request; inside the single-file SEA there is no
+# on-disk node_modules to resolve, so its prepare step rejects every request
+# before HTTP (REQUEST_EXTENSION). The field is request-diagnostics only and
+# stays outside model input, so the TUI disables it like the native-sandbox rows.
+- id: plugin-package-inventory-deepseek
+  config:
+    enabled: false
