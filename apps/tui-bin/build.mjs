@@ -354,6 +354,12 @@ function createResolveFarm() {
   // fs.readFile, which a single file cannot satisfy; inline the wasm as base64.
   patchInkYoga(nm)
 
+  // Ink's full-screen render path falls back to clearing the whole terminal
+  // (clearTerminal) whenever the output fills the screen — i.e. on EVERY
+  // render of this full-screen TUI — which macOS Terminal.app repaints as a
+  // visible black flash/flicker. Patch it to overwrite frames in place.
+  patchInkFullScreen(nm)
+
   const link = (name, dir) => {
     const target = join(nm, ...name.split('/')) // @scope/name -> node_modules/@scope/name
     mkdirSync(dirname(target), { recursive: true })
@@ -435,6 +441,74 @@ function patchInkYoga(nm) {
       `Buffer.from(${JSON.stringify(b64)}, "base64")`,
     )
     if (rewritten !== text) writeFileSync(nodeJs, rewritten)
+  }
+}
+
+/**
+ * Patch Ink's full-screen render path so a full-height frame is overwritten in
+ * place (absolute positioning + per-line erase + write) instead of clearing the
+ * whole terminal first. Ink's `onRender` falls back to `ansiEscapes.clearTerminal`
+ * (`\x1b[2J\x1b[3J\x1b[H`) whenever `outputHeight >= stdout.rows` — i.e. on
+ * EVERY render of a full-screen app like this TUI — and macOS Terminal.app
+ * repaints that as a visible black flash/flicker. The content never exceeds the
+ * terminal height here (the root layout is `height=rows` and content clips), so
+ * overwriting in place is always safe.
+ *
+ * Two further behaviors ride on the same patch:
+ *  - line-level diffing: only lines whose text changed are erased and rewritten,
+ *    so a keystroke in the composer repaints just the composer region instead of
+ *    the whole screen (Terminal.app is slow at repainting CJK glyphs);
+ *  - a per-frame suffix hook (`globalThis.__dshTuiFrameSuffix`): the app uses it
+ *    to park the REAL terminal cursor at the composer caret after every frame,
+ *    because the macOS IME composition/candidate window anchors to that cursor —
+ *    a hidden or wandering cursor makes the candidate window jump on every
+ *    redraw while typing Chinese.
+ * Upgrade-safe (replaces any previous helper version) and fails loudly if Ink's
+ * internals move so the patch is never silently skipped.
+ * @param nm - the resolve-farm `node_modules` root.
+ */
+export function patchInkFullScreen(nm) {
+  const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
+  if (dirs.length === 0) {
+    throw new Error('dsh-tui: no ink package found in the resolve farm to patch')
+  }
+  const anchor = "import App from './components/App.js';"
+  const helperStart = '// dsh-tui patch: overwrite full-screen frames in place'
+  const helperEnd = 'const isCi ='
+  const helper = `\n${helperStart} (no clearTerminal flash), rewriting only the lines that\n// changed (line-level diff), so a keystroke in the composer repaints just the\n// composer instead of the whole screen. A per-frame suffix hook lets the app park\n// the real terminal cursor at the composer caret — the macOS IME composition/\n// candidate window anchors to that position instead of jumping around.\nconst writeFullScreenFrame = (stdout, output) => {\n    const lines = output.split('\\n');\n    const prev = writeFullScreenFrame._prev;\n    let frame = '';\n    if (prev === undefined || prev.length !== lines.length) {\n        // first frame or a resize: rewrite every line\n        for (let i = 0; i < lines.length; i++) {\n            frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + lines[i];\n        }\n        if (lines.length > 0) frame += '\\x1b[0J'; // clear residue below (shrink)\n    } else {\n        for (let i = 0; i < lines.length; i++) {\n            if (prev[i] === lines[i]) continue;\n            frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + lines[i];\n        }\n    }\n    writeFullScreenFrame._prev = lines;\n    const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';\n    if (suffix) frame += suffix;\n    if (frame !== '') stdout.write(frame);\n};\n`
+  const branchRe = /if \(outputHeight >= this\.options\.stdout\.rows\) \{\s*this\.options\.stdout\.write\(ansiEscapes\.clearTerminal \+ this\.fullStaticOutput \+ output\);/
+  const branchNew = 'if (outputHeight >= this.options.stdout.rows) {\n                    writeFullScreenFrame(this.options.stdout, output);'
+  for (const dir of dirs) {
+    const inkJs = join(nm, '.pnpm', dir, 'node_modules', 'ink', 'build', 'ink.js')
+    if (!existsSync(inkJs)) continue
+    let text = readFileSync(inkJs, 'utf8')
+    if (!text.includes(anchor)) {
+      throw new Error(`dsh-tui: cannot patch Ink (import anchor missing in ${inkJs})`)
+    }
+    let changed = false
+    // (Re)install the helper block: replace any previous version between the
+    // marker comment and the following `const isCi` declaration.
+    const s = text.indexOf(helperStart)
+    const e = text.indexOf(helperEnd)
+    if (s !== -1 && e !== -1 && e > s) {
+      const next = text.slice(0, s) + helper + text.slice(e)
+      if (next !== text) { text = next; changed = true }
+    } else if (s === -1 && e !== -1) {
+      const next = text.replace(anchor, anchor + helper)
+      if (next !== text) { text = next; changed = true }
+    } else {
+      throw new Error(`dsh-tui: cannot locate the Ink patch insertion point in ${inkJs} (Ink internals changed?)`)
+    }
+    if (branchRe.test(text)) {
+      text = text.replace(branchRe, branchNew)
+      changed = true
+    } else if (!text.includes('writeFullScreenFrame(this.options.stdout, output);')) {
+      throw new Error(`dsh-tui: cannot patch Ink onRender branch in ${inkJs} (Ink internals changed?)`)
+    }
+    if (changed) {
+      writeFileSync(inkJs, text)
+      console.log(`dsh-tui: patched Ink full-screen render path (${dir})`)
+    }
   }
 }
 

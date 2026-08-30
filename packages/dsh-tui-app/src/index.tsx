@@ -15,7 +15,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { render, Box, Text, useStdin, measureElement, type DOMElement } from 'ink'
-import React, { useSyncExternalStore, useMemo, useState } from 'react'
+import React, { useMemo, useState } from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -165,15 +165,20 @@ class Store {
 
   private _notifyScheduled = false
   private notify(): void {
-    this.version += 1
     // Coalesce bursts of store updates (e.g. a tool run fires tens of session
     // events synchronously) into ONE render per microtask; firing listeners
     // synchronously per notify would nest 50+ React renders and trip React's
-    // "Maximum update depth exceeded" guard.
+    // "Maximum update depth exceeded" guard. The version bump happens in the
+    // SAME microtask as the listeners: a bump landing between a commit and its
+    // passive-effect flush is observed by React's useSyncExternalStore
+    // consistency check, which then force-re-renders DURING the flush and
+    // trips the passive-nested-update guard ("Maximum update depth exceeded",
+    // see dsh-tui.log) under sustained streaming.
     if (this._notifyScheduled) return
     this._notifyScheduled = true
     queueMicrotask(() => {
       this._notifyScheduled = false
+      this.version += 1
       for (const listener of this.listeners) listener()
     })
   }
@@ -831,7 +836,16 @@ function handleKey(k: RawKey): void {
 /** The terminal-owning app. */
 export function App(props: { onSubmit(text: string): void; onCancel(): void; onConnect(value: string): void }): React.JSX.Element {
   const { isRawModeSupported } = useStdin()
-  const version = useSyncExternalStore(store.subscribe, store.getVersion)
+  // Plain force-render subscription to the store. This deliberately avoids
+  // useSyncExternalStore: its passive-effect consistency check re-renders
+  // DURING the effect flush whenever the store version changed between render
+  // and flush, and under sustained streaming that during-flush re-render chain
+  // trips React's "Maximum update depth exceeded" guard (dsh-tui.log is full of
+  // it). The store already coalesces every burst into one microtask notify, so
+  // a manual subscription renders exactly once per batch — no extra flushes.
+  const [, forceRender] = React.useReducer((c: number) => c + 1, 0)
+  React.useEffect(() => store.subscribe(() => forceRender()), [])
+  const version = store.getVersion()
   const items = store.getItems()
   const steps = store.steps
   const stepsDone = store.stepsDone
@@ -854,7 +868,6 @@ export function App(props: { onSubmit(text: string): void; onCancel(): void; onC
   const permissionLabel = store.permissionLabel
   const permissionColor = store.permissionColor
   const modelLabel = store.modelLabel
-  const cursor = store.cursor
   // The width is a Store value updated by our own `stdout.on('resize')`
   // listener (see start()); Ink only re-renders the DOM on resize and would
   // otherwise keep the boot-time width. Reactive version -> App re-render.
@@ -952,23 +965,21 @@ export function App(props: { onSubmit(text: string): void; onCancel(): void; onC
 
   const renderComposerText = (): React.ReactNode => {
     const len = input.length
-    const atEnd = cursor >= len || input[cursor] === '\n'
     const seg = (a: number, b: number, inv: boolean, k: string): React.ReactNode =>
       a < b ? <Text key={k} inverse={inv}>{input.slice(a, b)}</Text> : null
-    if (selRange === null) {
-      return atEnd
-        ? (<>{input.slice(0, cursor)}<ComposerCursor atEnd />{input.slice(cursor)}</>)
-        : (<>{input.slice(0, cursor)}<ComposerCursor char={input[cursor]!} />{input.slice(cursor + 1)}</>)
-    }
+    // The caret is drawn by the REAL terminal cursor (parked at the composer
+    // caret by the patched Ink frame writer), not by a React-drawn block — a
+    // React cursor blinks via setInterval, forcing a whole re-render twice a
+    // second, and macOS Terminal anchors the IME candidate window to the real
+    // cursor anyway.
+    if (selRange === null) return <>{input}</>
     const s = selRange.start
     const e = selRange.end
     return (
       <>
         {seg(0, s, false, 's0')}
         {seg(s, e, true, 's1')}
-        {atEnd
-          ? (<>{seg(e, cursor, false, 's2')}<ComposerCursor atEnd />{seg(cursor, len, false, 's3')}</>)
-          : (<>{seg(e, cursor, false, 's2')}<ComposerCursor char={input[cursor]!} />{seg(cursor + 1, len, false, 's3')}</>)}
+        {seg(e, len, false, 's2')}
       </>
     )
   }
@@ -1056,7 +1067,12 @@ const WHEEL_STEP = 3
 /** Height of the composer: at least `min` rows, growing with wrapped input lines. */
 function composerHeight(width: number, input: string, min: number): number {
   const usable = Math.max(10, width - 4)
-  const wrapped = input.split('\n').reduce((sum, seg) => sum + Math.max(1, Math.ceil(seg.length / usable)), 0)
+  // Wrap by VISUAL width (CJK/emoji count as two columns, via string-width —
+  // the same rule Ink uses). A code-unit count under-estimates Chinese input's
+  // wrapped rows by up to 2x, so the composer box would lag the real text
+  // height, clip/overflow the border and shift the whole layout at the wrong
+  // keystroke — the worst flicker while typing Chinese.
+  const wrapped = input.split('\n').reduce((sum, seg) => sum + Math.max(1, Math.ceil(visualWidth(seg) / usable)), 0)
   const cap = Math.max(min, Math.floor(store.rows * 0.4))
   return Math.min(min + wrapped - 1, cap)
 }
@@ -1079,21 +1095,7 @@ function convViewportLines(composerH: number, stepsH: number, modalH: number): n
   return Math.max(3, store.rows - composerH - 3 /* status bar: border + row */ - 2 /* conversation paddingY */ - stepsH - modalH)
 }
 
-/**
- * A blinking composer cursor. Mid-text it inverse-highlights the character at
- * the caret (so surrounding text never shifts); at a line end it renders a
- * block after the last character.
- */
-function ComposerCursor(props: { atEnd?: boolean; char?: string }): React.JSX.Element {
-  const [visible, setVisible] = React.useState(true)
-  React.useEffect(() => {
-    const timer = setInterval(() => setVisible((v) => !v), 530)
-    return () => clearInterval(timer)
-  }, [])
-  if (props.atEnd) return <Text color={theme.primary}>{visible ? '█' : ' '}</Text>
-  return <Text inverse={visible}>{props.char}</Text>
-}
-
+/** In-band approval prompt over a pending tool call. */
 /** In-band approval prompt over a pending tool call. */
 function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element {
   const { req } = props.approval
@@ -1333,6 +1335,21 @@ export function apply(ctx: Context, config: Config): void {
   })
 }
 
+/** Install the per-frame suffix hook the patched Ink frame writer (see
+ *  apps/tui-bin/build.mjs) appends to every full-screen frame it writes: it
+ *  re-shows the REAL terminal cursor and parks it at the composer caret, so the
+ *  macOS IME composition/candidate window — which anchors to the real cursor —
+ *  stays at the input position instead of jumping on every redraw while typing
+ *  Chinese. Called once at startup; exported so the headless verification can
+ *  exercise the same wiring. */
+export function installFrameSuffix(): void {
+  const frameSuffix = (): string => {
+    const cell = composerCaretCell()
+    return `\x1b[?25h${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
+  }
+  ;(globalThis as unknown as { __dshTuiFrameSuffix?: () => string }).__dshTuiFrameSuffix = frameSuffix
+}
+
 /** The async session lifetime, started from `apply` and owned by this plugin. */
 async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   await ctx.get('loader')?.await()
@@ -1487,6 +1504,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     process.stdin.setRawMode(true)
   }
 
+  // Park the REAL terminal cursor at the composer caret after every full-screen
+  // frame, and keep it visible. Ink hides the terminal cursor and (previously)
+  // drew its own blinking block; macOS Terminal anchors the IME composition/
+  // candidate window to the real cursor position, so a hidden or wandering
+  // cursor makes the candidate window jump on every redraw while typing
+  // Chinese. The patched Ink frame writer (apps/tui-bin/build.mjs) appends the
+  // suffix after all line updates, so the position is never overwritten by the
+  // next frame.
+  installFrameSuffix()
+
   const app = render(<App
     onSubmit={submitMessage}
     onCancel={cancelAction}
@@ -1558,33 +1585,62 @@ function composerInputIndex(row: number, col: number): number | null {
   const inRow = row - composerTop // 0-based row within the composer (0 = top border)
   const usable = Math.max(10, width - 4)
   const visualStarts: number[] = []
-  let logicalLine = -1
   for (let i = 0; i <= store.input.length; i++) {
-    if (i === 0 || store.input[i - 1] === '\n') {
-      logicalLine += 1
-      visualStarts.push(i)
-    }
+    if (i === 0 || store.input[i - 1] === '\n') visualStarts.push(i)
   }
-  const inputRows = visualStarts.reduce((sum, start, idx) => {
+  const lineAt = (start: number): string => {
     const nl = store.input.indexOf('\n', start)
-    const lineLen = (nl === -1 ? store.input.length : nl) - start
-    return sum + Math.max(1, Math.ceil(lineLen / usable))
-  }, 0)
+    return store.input.slice(start, nl === -1 ? store.input.length : nl)
+  }
+  // Wrapping is counted by visual width, not code units: Chinese lines wrap at
+  // half the characters the composer's box width would suggest.
+  const inputRows = visualStarts.reduce((sum, start) => sum + Math.max(1, Math.ceil(visualWidth(lineAt(start)) / usable)), 0)
   const clickRow = inRow - 1 // after the top border
   if (clickRow < 0 || clickRow >= inputRows) return null
   let acc = 0
-  for (let li = 0; li < visualStarts.length; li++) {
-    const start = visualStarts[li] ?? 0
-    const nl = store.input.indexOf('\n', start)
-    const lineLen = (nl === -1 ? store.input.length : nl) - start
-    const visLines = Math.max(1, Math.ceil(lineLen / usable))
+  for (const start of visualStarts) {
+    const line = lineAt(start)
+    const visLines = Math.max(1, Math.ceil(visualWidth(line) / usable))
     if (clickRow < acc + visLines) {
-      const c = Math.max(0, Math.min(col - 3, lineLen))
-      return start + c
+      // Map the clicked terminal column to a character index, counting wide
+      // (CJK) characters as two columns (mirrors colToChar).
+      return start + colToChar(line, Math.max(0, col - 3))
     }
     acc += visLines
   }
   return null
+}
+
+/** Terminal cell (1-based row/col) of the composer caret, or null when the
+ *  composer has no laid-out position. Used to park the REAL terminal cursor at
+ *  the caret: macOS Terminal anchors the IME composition/candidate window to
+ *  that cursor, so keeping it at the input position stops the candidate window
+ *  from jumping on every redraw while typing Chinese. */
+function composerCaretCell(): { row: number; col: number } | null {
+  const width = process.stdout.columns ?? 80
+  const height = process.stdout.rows ?? 24
+  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
+  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
+  const usable = Math.max(10, width - 4)
+  const caret = Math.max(0, Math.min(store.cursor, store.input.length))
+  // Visual (row, col) of the caret inside the input text (rows count wrapping).
+  let visRow = 0
+  let visCol = 0
+  let pos = 0
+  while (pos < caret) {
+    const nl = store.input.indexOf('\n', pos)
+    const end = nl === -1 ? store.input.length : nl
+    if (caret <= end) {
+      visCol = visualWidth(store.input.slice(pos, caret))
+      pos = caret
+    } else {
+      visRow += Math.max(1, Math.ceil(visualWidth(store.input.slice(pos, end)) / usable))
+      pos = end + 1
+    }
+  }
+  // Composer layout: top border at `composerTop`, input text starts on the next
+  // row; text column 0 sits at terminal column 3 (border at 1, paddingX at 2).
+  return { row: composerTop + 1 + visRow, col: 3 + visCol }
 }
 
 /** The composer-input offset range covered by a mouse selection, or null. */
