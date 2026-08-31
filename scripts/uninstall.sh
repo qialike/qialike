@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Remove the ~/.local/bin/dsh-tui symlink created by scripts/install.sh.
+# Remove the ~/.local/bin/dsh-tui symlink created by the removed
+# scripts/install.sh (legacy dev install; the current installer is scripts/install).
 #
 # Usage: pnpm uninstall:local     (or: bash scripts/uninstall.sh)
 set -euo pipefail

@@ -45,11 +45,23 @@ dist/dsh-tui --help
 
 ### 界面特性
 
-- **斜杠命令面板**：输入 `/` 自动补全。命令：`/help`、`/connect`、`/model`、`/compact`、`/clear`、`/resume`、`/exit`。
+- **斜杠命令面板**：输入 `/` 自动补全。命令：`/help`、`/models`、`/compact`、`/clear`、`/resume`、`/exit`。
   `↑/↓` 移动，`Enter` 执行，`Esc` 关闭。
-- **`/connect`**：启动后设置 DeepSeek API key，与 web Models 页一致。弹出掩码输入（粘贴一行 key + `Enter`），
-  经 credentials 服务写入 `~/.dsh/.credentials.yaml`（ref `DEEPSEEK_API_KEY`），下一次模型请求即生效（按需解析）。
-  key 不会进入 transcript/发给模型。（若环境变量已有 `DEEPSEEK_API_KEY` 则优先，遮蔽 store。）
+- **`/models`**：管理模型与 API key，与 web Models 页一致。弹出 opencode 式全屏对话框：`↑/↓` 选择模型
+  （DeepSeek V4 Flash / V4 Pro / V4 Flash Vision Exp），掩码输入 API key，`Enter` 保存、`Esc` 取消。
+  保存后下一次请求即切换为所选模型（`agentDefaultModel.saveSelection` 持久化默认选择）；选择器只显示已配置 API key 的提供商；
+  "＋ Add provider" 列出**所有已知的提供商**——自研适配器内置模板（DeepSeek、OpenAI、OpenRouter、Anthropic、Groq、Mistral、
+  Together、Fireworks、xAI、Cerebras，OpenAI-compatible 为主、Anthropic 走原生 Messages 协议）加上 `dsh-tui-llm:` 设置节声明的路由——并标注 key 状态
+  （`✓ key set` / `no key`）。选中任意一个（已配置的也可以）弹出子对话框设置或**替换**其 API key
+  （已有 key 时对话框提示 "replaces the current key"）；给休眠的模板路由设 key 会**当场激活**
+  （把模板的完整 profile——端点与模型目录——写入 `dsh-tui-llm` 设置节并热注册路由，其模型随即出现在选择器）；
+  列表支持滚动（高亮始终可见）。
+  "＋ Add a custom provider" 进入逐字段表单（第一步为提供商模板下拉——DeepSeek / OpenAI / OpenRouter / Groq 等
+  或自定义，自动预填 route/显示名/base URL；再填 API key / 模型 id），写入
+  `dsh-tui-llm` 设置节的 OpenAI 兼容提供商并存入凭据，适配器热注册后立即可选；key 经 credentials
+  服务写入 `~/.dsh/.credentials.yaml`（按各提供商的引用名）按需解析。key 不会进入 transcript/发给模型。
+  （若环境变量已有对应 key 则优先，遮蔽 store。）声明支持图片输入的模型（如 DeepSeek V4 Flash Vision Exp、GPT-4o、Claude）
+  可接收会话中附带的图片，适配器转成 OpenAI `image_url` parts 或 Anthropic base64 source 块。
 - **审批对话框**：某工具请求审批时，带内弹窗显示工具名与原因。`y`/`a` 允许一次，`n`/`Esc` 拒绝。
   （无沙箱 profile 下当前无工具会请求审批，故对话框默认休眠——已在需要时接线就绪。）
 - **`--resume` / `/resume` 会话选择**：列出持久化会话并恢复所选。
@@ -58,11 +70,15 @@ dist/dsh-tui --help
 ## 安装为命令
 
 ```sh
-pnpm install:local       # 构建 dist/dsh-tui 并软链到 ~/.local/bin
-# （若 ~/.local/bin 不在 PATH，安装器会打印 export 行；运行时也会自动追加到 ~/.bashrc）
+bash scripts/install      # 把 dist/dsh-tui 拷贝到 ~/.dsh/bin，并把 ~/.dsh/bin 加入 PATH
+# （等价于 pnpm install:local；工作台根执行：bash dsh-tui/scripts/install）
 dsh-tui                  # 此后任意目录可直接执行
 dsh-tui --help
-pnpm uninstall:local     # 移除 ~/.local/bin/dsh-tui 软链
+dsh-tui uninstall        # 从二进制内部卸载生产安装：删除 ~/.dsh/dsh-tui.{log,json}
+                         #   与追加到 ~/.bashrc/~/.zshrc 的 PATH 行；运行中的
+                         #   ~/.dsh/bin/dsh-tui 拷贝给出手动删除提示
+pnpm uninstall:local     # （历史遗留）移除旧版 scripts/install.sh 创建的
+                         #   ~/.local/bin/dsh-tui 软链
 ```
 
 二进制在构建时已内嵌 DeepSeek Harness，因此 `dsh-tui` 运行时**不需要** harness 检出、`pnpm` 或

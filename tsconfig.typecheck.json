@@ -15,6 +15,7 @@
       "@deepseek-ai/dsh-llm": ["../deepseek-harness/packages/llm/llm/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-sandbox-policy": ["../deepseek-harness/packages/sandbox/sandbox-policy/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-session": ["../deepseek-harness/packages/core/session/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-settings": ["../deepseek-harness/packages/settings/settings/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-tools": ["../deepseek-harness/packages/core/tools/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-user-approval": ["../deepseek-harness/packages/interaction/user-approval/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-user-questions": ["../deepseek-harness/packages/interaction/user-questions/lib/types/index.d.ts"]

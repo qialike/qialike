@@ -18,6 +18,25 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 const LOG_PATH = dshHomePath('dsh-tui.log')
 const MAX_BYTES = 1_048_576 // 1 MB; then rotate to `.1` (one previous run)
 
+/**
+ * Terminal control sequences — CSI (cursor show/hide `\x1b[?25l`, colors,
+ * moves), OSC (`\x1b]...\x1b\\`), and single-character escapes. They are
+ * terminal traffic, not errors; the mirror strips them so a pure-control
+ * stderr chunk (e.g. cli-cursor's `\x1b[?25l` cursor hide, written to stderr
+ * by default) is dropped entirely, and any real message that embeds codes
+ * logs cleanly.
+ */
+const CONTROL_RE = /\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[()][0-9A-Za-z]|[0-9@-Z\\^_`])/g
+
+/** Clean one raw stderr chunk for the log: strip terminal control sequences
+ *  and trailing whitespace. Returns `null` when nothing meaningful remains
+ *  (a pure-escape chunk, whitespace, or an empty write) so callers can skip
+ *  logging it. */
+export function sanitizeStderrChunk(chunk: string): string | null {
+  const clean = chunk.replace(CONTROL_RE, '').replace(/\s+$/, '')
+  return clean.length > 0 ? clean : null
+}
+
 /** Ensure the home dir exists, log the process start, and mirror stderr errors
  *  into the log (so thrown errors that bypass console.error — e.g. Ink's
  *  "<Box> can't be nested inside <Text>" — are captured too). */
@@ -28,14 +47,25 @@ export function initErrorLog(): void {
   } catch {
     // Logging is best-effort; never throw from here.
   }
+  // Record the exit so a clean run is distinguishable from a crash: any error
+  // lines precede `exited (code N)` (SIGKILL / power loss leave no record by
+  // nature). `process.exitCode` carries the code during 'exit'.
+  process.on('exit', () => {
+    writeLine(`dsh-tui exited (code ${process.exitCode ?? 0})`)
+  })
   try {
     const orig = process.stderr.write.bind(process.stderr) as (chunk: unknown, encoding?: unknown, cb?: unknown) => boolean
     process.stderr.write = ((chunk: unknown, encoding?: unknown, cb?: unknown): boolean => {
       try {
         const s = typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf8')
-        // Skip our own log echoes ([ISO] prefix) and dsh-tui debug lines.
+        // Skip our own log echoes ([ISO] prefix) and dsh-tui debug lines, and
+        // drop pure terminal-control chunks (cursor escapes) that libraries
+        // write to stderr.
         if (s && !s.startsWith('[20') && !s.includes('[dsh-tui]')) {
-          writeLine(`[stderr] ${s.replace(/\s+$/, '')}`)
+          const clean = sanitizeStderrChunk(s)
+          if (clean !== null) {
+            writeLine(`[stderr] ${clean}`)
+          }
         }
       } catch {
         // ignore

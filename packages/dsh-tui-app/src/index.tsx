@@ -35,11 +35,11 @@ import type {
   AskUserQuestionItem,
   AskUserQuestionOption,
   AskUserQuestionRequest,
-  UserQuestionProvider,
 } from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { TUI_STARTUP_SERVICE } from './startup.ts'
+import { TUI_MODELS_SERVICE, PROVIDER_TEMPLATES, type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from './markdown.tsx'
 import { persistSidebarMin, resolveSidebarMin } from './config.ts'
 import { theme } from './theme.ts'
@@ -54,7 +54,7 @@ export const name = 'tui-runtime'
 const APP_VERSION = (pkg as { version?: string }).version ?? '0.0.0'
 
 /** Core services required before the terminal session can start. */
-export const inject = ['agentDefaultModel', 'agents', 'sessions']
+export const inject = ['agentDefaultModel', 'agents', 'sessions', 'tuiModels']
 
 /** Plugin config: the invocation flags resolved from the injected provider service. */
 export interface Config {
@@ -81,6 +81,28 @@ export interface TranscriptItem {
 export interface StepItem {
   readonly content: string
   readonly status: 'pending' | 'in_progress' | 'completed'
+}
+
+/** One /models picker option: a provider route plus one of its models. */
+interface ModelsOption {
+  /** Registered provider route. */
+  provider: string
+  /** Model id sent to the provider. */
+  model: string
+  /** Display label (`provider · model`). */
+  label: string
+}
+
+// `todo/write` is typed in the harness by declaration merging from
+// `@deepseek-ai/dsh-tool-todo`, whose types this package's typecheck does not
+// load (tsconfig.typecheck.json maps only the @deepseek-ai/* packages the app
+// imports). The event is emitted at runtime by the bundled tool-todo plugin;
+// SessionEventMap is merge-extensible by design (see @deepseek-ai/dsh-session),
+// so declare the merge here with the transcript's own step shape.
+declare module '@deepseek-ai/dsh-session' {
+  interface SessionEventMap {
+    'todo/write': { todos: StepItem[] }
+  }
 }
 
 /** Session file-permission mode, cycled by Tab in the composer (matches the web surface). */
@@ -143,7 +165,6 @@ class Store {
   private _sessionIndex = 0
   private _steps: StepItem[] = []
   private _secret = ''
-  private _secretLabel = ''
   private _question: PendingQuestion | null = null
   private _sidebarMin = resolveSidebarMin()
   private _width = process.stdout.columns ?? 80
@@ -204,7 +225,6 @@ class Store {
   get sessions() { return this._sessions }
   get sessionIndex() { return this._sessionIndex }
   get secret() { return this._secret }
-  get secretLabel() { return this._secretLabel }
 
   append(kind: TranscriptItem['kind'], text: string, dim = kind === 'reasoning' || kind === 'status'): void {
     this.items = [...this.items, { key: this.key += 1, kind, text, dim }]
@@ -375,8 +395,165 @@ class Store {
   get session(): Session | undefined { return this._session }
   setSession(session: Session): void { this._session = session }
   setSessions(sessions: SessionSummary[]): void { this._sessions = sessions; this._sessionIndex = 0; this._panel = sessions.length > 0 ? 'resume' : 'conversation'; this.notify() }
-  /** Open the /connect secret-entry overlay. */
-  openConnect(label: string): void { this._secret = ''; this._secretLabel = label; this._panel = 'connect'; this.notify() }
+  private _models: readonly ModelsOption[] = []
+  private _modelIndex = 0
+  private _providerForm = false
+  private _providerField = 0
+  private _providerTemplates: readonly ProviderTemplate[] = []
+  private _providerTemplate = 0
+  private _providerValues: string[] = [] // route / display name / base URL / API key / model ids
+  private _providerFormError = ''
+  private _providerList = false
+  private _providerListIndex = 0
+  private _providerNames: readonly { provider: string; name: string; configured: boolean }[] = []
+  private _keyDialog = false
+  private _keyDialogProvider = ''
+  private _keyDialogName = ''
+  private _keyDialogConfigured = false
+  private _dialogNotice = ''
+  get models(): readonly ModelsOption[] { return this._models }
+  get modelIndex(): number { return this._modelIndex }
+  get dialogNotice(): string { return this._dialogNotice }
+  /** Show a transient notice inside the /models dialog (e.g. no providers registered). */
+  setDialogNotice(message: string): void {
+    this._dialogNotice = message
+    this.notify()
+  }
+  get providerForm(): boolean { return this._providerForm }
+  get providerField(): number { return this._providerField }
+  get providerTemplates(): readonly ProviderTemplate[] { return this._providerTemplates }
+  get providerTemplate(): number { return this._providerTemplate }
+  get providerValues(): readonly string[] { return this._providerValues }
+  get providerFormError(): string { return this._providerFormError }
+  get providerList(): boolean { return this._providerList }
+  get providerListIndex(): number { return this._providerListIndex }
+  get providerNames(): readonly { provider: string; name: string; configured: boolean }[] { return this._providerNames }
+  get keyDialog(): boolean { return this._keyDialog }
+  get keyDialogProvider(): string { return this._keyDialogProvider }
+  get keyDialogName(): string { return this._keyDialogName }
+  get keyDialogConfigured(): boolean { return this._keyDialogConfigured }
+  /** Move the /models picker highlight by `delta` (wraps; the last two slots are the add-provider entries). */
+  bumpModelIndex(delta: number): void {
+    const len = this._models.length + 2
+    this._modelIndex = (this._modelIndex + delta + len) % len
+    this.notify()
+  }
+  /** Open the /models dialog: picker over the configured providers' models. */
+  openModels(models: readonly ModelsOption[], initialIndex: number): void {
+    this._secret = ''
+    this._models = models
+    this._modelIndex = Math.max(0, Math.min(initialIndex, models.length))
+    this._providerForm = false
+    this._providerField = 0
+    this._providerValues = []
+    this._providerList = false
+    this._keyDialog = false
+    this._dialogNotice = ''
+    this._panel = 'connect'
+    this.notify()
+  }
+  /** Show the registered-provider list (pick one to set or change its API key). */
+  startProviderList(names: readonly { provider: string; name: string; configured: boolean }[]): void {
+    this._providerList = true
+    this._providerListIndex = 0
+    this._providerNames = names
+    this._dialogNotice = ''
+    this.notify()
+  }
+  bumpProviderListIndex(delta: number): void {
+    const len = Math.max(1, this._providerNames.length)
+    this._providerListIndex = (this._providerListIndex + delta + len) % len
+    this.notify()
+  }
+  /** Pick the highlighted provider: closes the list and returns the choice. */
+  selectProviderList(): { provider: string; name: string; configured: boolean } | undefined {
+    const picked = this._providerNames[this._providerListIndex]
+    this._providerList = false
+    this._modelIndex = 0 // back on a model option, so Enter saves (not re-opens the list)
+    this.notify()
+    return picked
+  }
+  cancelProviderList(): void {
+    this._providerList = false
+    this.notify()
+  }
+  /** Open the API-key sub-dialog for one provider (masked input; Enter saves to its ref). */
+  openKeyDialog(provider: string, name: string, configured: boolean): void {
+    this._secret = ''
+    this._keyDialog = true
+    this._keyDialogProvider = provider
+    this._keyDialogName = name
+    this._keyDialogConfigured = configured
+    this.notify()
+  }
+  cancelKeyDialog(): void {
+    this._keyDialog = false
+    this.notify()
+  }
+  /** Submit the key dialog: returns the provider and the typed key, then closes. */
+  keyDialogDone(): { provider: string; name: string; key: string } | null {
+    const provider = this._keyDialogProvider
+    const name = this._keyDialogName
+    const key = this._secret
+    this._keyDialog = false
+    this.notify()
+    return { provider, name, key }
+  }
+  /** Cycle the add-provider template dropdown (last slot = Custom provider); re-applies its defaults. */
+  bumpProviderTemplate(delta: number): void {
+    const len = this._providerTemplates.length + 1
+    this._providerTemplate = (this._providerTemplate + delta + len) % len
+    this.applyProviderTemplateDefaults()
+    this.notify()
+  }
+  /** Fill the template-derived fields (route/display name/base URL) from the highlighted template. */
+  applyProviderTemplateDefaults(): void {
+    const template = this._providerTemplates[this._providerTemplate]
+    this._providerValues[0] = template?.id ?? ''
+    this._providerValues[1] = template?.name ?? ''
+    this._providerValues[2] = template?.baseURL ?? ''
+  }
+  /** Enter the add-provider form (from the picker's "＋ Add provider" entry). */
+  startProviderForm(templates: readonly ProviderTemplate[]): void {
+    this._providerForm = true
+    this._providerField = 0
+    this._providerTemplates = templates
+    this._providerTemplate = 0
+    this._providerValues = ['', '', '', '', '']
+    this._providerFormError = ''
+    this.notify()
+  }
+  /** Cancel the add-provider form back to the picker. */
+  cancelProviderForm(): void {
+    this._providerForm = false
+    this._providerFormError = ''
+    this.notify()
+  }
+  /** Re-show the form with an error message (a submit failed). */
+  showProviderFormError(message: string): void {
+    this._providerForm = true
+    this._providerFormError = message
+    this.notify()
+  }
+  providerFormType(char: string): void {
+    if (this._providerField === 0) return // the template field is a dropdown: arrows only
+    this._providerValues[this._providerField - 1] = (this._providerValues[this._providerField - 1] ?? '') + char
+    this.notify()
+  }
+  providerFormBackspace(): void {
+    if (this._providerField === 0) return
+    const value = this._providerValues[this._providerField - 1] ?? ''
+    this._providerValues[this._providerField - 1] = value.slice(0, -1)
+    this.notify()
+  }
+  /** Advance to the next form field; true when the last field was just finished. */
+  providerFormAdvance(): boolean {
+    if (this._providerField === 0) this.applyProviderTemplateDefaults()
+    if (this._providerField >= 5) return true
+    this._providerField += 1
+    this.notify()
+    return false
+  }
   /** Append a masked character to the in-progress secret. */
   pushSecret(char: string): void { this._secret += char; this.notify() }
   /** Remove the last secret character (backspace). */
@@ -473,7 +650,14 @@ const sessionRef: { current?: SessionId } = {}
 /** Injected action callbacks used by the raw-stdin key dispatcher. */
 let submitMessage: (text: string) => void = () => {}
 let cancelAction: () => void = () => {}
-let connectAction: (value: string) => void = () => {}
+/** Save the /models dialog's chosen provider/model for the live agent. */
+let modelsSaveAction: (provider: string, model: string) => void = () => {}
+/** Submit the add-provider form (validates + writes settings/credential, refreshes the picker). */
+let providerFormSubmit: (input: AddProviderInput) => void = () => {}
+/** Open the "＋ Add provider" list of registered providers missing an API key. */
+let openProviderList: () => void = () => {}
+/** Submit the API-key sub-dialog for one provider. */
+let keyDialogSubmit: (provider: string, name: string, key: string) => void = () => {}
 /** The running agent, for the double-Esc pause. */
 let pauseAgent: () => void = () => {}
 /** Timestamp of the last Esc press (window for the double-Esc pause). */
@@ -717,19 +901,71 @@ function handleKey(k: RawKey): void {
     return
   }
   if (panel === 'connect') {
-    const secret = store.secret
-    if (k.return) {
-      const value = secret.trim()
-      if (value !== '') {
-        store.cancelConnect()
-        connectAction(value)
+    if (store.keyDialog) {
+      if (k.return) {
+        const done = store.keyDialogDone()
+        if (done !== null) keyDialogSubmit(done.provider, done.name, done.key)
+      } else if (k.backspace || k.delete) {
+        store.popSecret()
+      } else if (k.escape || (k.ctrl && char === 'c')) {
+        store.cancelKeyDialog()
+      } else if (char) {
+        store.pushSecret(char)
       }
-    } else if (k.backspace || k.delete) {
-      store.popSecret()
+      return
+    }
+    if (store.providerList) {
+      if (k.upArrow) { store.bumpProviderListIndex(-1); return }
+      if (k.downArrow) { store.bumpProviderListIndex(1); return }
+      if (k.return) {
+        const picked = store.selectProviderList()
+        if (picked !== undefined) store.openKeyDialog(picked.provider, picked.name, picked.configured)
+      } else if (k.escape || (k.ctrl && char === 'c')) {
+        store.cancelProviderList()
+      }
+      return
+    }
+    if (store.providerForm) {
+      if (store.providerField === 0 && (k.upArrow || k.downArrow)) {
+        store.bumpProviderTemplate(k.upArrow ? -1 : 1)
+        return
+      }
+      if (k.return) {
+        if (store.providerFormAdvance()) {
+          const values = store.providerValues
+          store.cancelProviderForm()
+          providerFormSubmit({
+            route: values[0] ?? '',
+            displayName: values[1] ?? '',
+            baseURL: values[2] ?? '',
+            apiKey: values[3] ?? '',
+            models: (values[4] ?? '').split(',').map((s) => s.trim()).filter((s) => s !== ''),
+          })
+        }
+      } else if (k.backspace || k.delete) {
+        store.providerFormBackspace()
+      } else if (k.escape || (k.ctrl && char === 'c')) {
+        store.cancelProviderForm()
+      } else if (char) {
+        store.providerFormType(char)
+      }
+      return
+    }
+    const secret = store.secret
+    if (k.upArrow) { store.bumpModelIndex(-1); return }
+    if (k.downArrow) { store.bumpModelIndex(1); return }
+    if (k.return) {
+      if (store.modelIndex === store.models.length) {
+        // "＋ Add provider": pick a registered provider to set or change its API key.
+        void openProviderList()
+        return
+      }
+      if (store.modelIndex === store.models.length + 1) { store.startProviderForm(PROVIDER_TEMPLATES); return } // "＋ Add a custom provider"
+      store.cancelConnect()
+      const option = store.models[store.modelIndex]
+      if (option !== undefined) modelsSaveAction(option.provider, option.model)
     } else if (k.escape || (k.ctrl && char === 'c')) {
       store.cancelConnect()
-    } else if (char) {
-      store.pushSecret(char)
     }
     return
   }
@@ -834,7 +1070,7 @@ function handleKey(k: RawKey): void {
 }
 
 /** The terminal-owning app. */
-export function App(props: { onSubmit(text: string): void; onCancel(): void; onConnect(value: string): void }): React.JSX.Element {
+export function App(props: { onSubmit(text: string): void; onCancel(): void }): React.JSX.Element {
   const { isRawModeSupported } = useStdin()
   // Plain force-render subscription to the store. This deliberately avoids
   // useSyncExternalStore: its passive-effect consistency check re-renders
@@ -859,7 +1095,6 @@ export function App(props: { onSubmit(text: string): void; onCancel(): void; onC
   const sessions = store.sessions
   const sessionIndex = store.sessionIndex
   const secret = store.secret
-  const secretLabel = store.secretLabel
   const sessionIdText = sessionRef.current ? String(sessionRef.current) : ''
   const question = store.question
   const sidebarMin = store.sidebarMin
@@ -984,6 +1219,13 @@ export function App(props: { onSubmit(text: string): void; onCancel(): void; onC
     )
   }
 
+  // The connect dialog replaces the whole screen (opencode-style modal), so it
+  // must be the only thing rendered — the overlay needs the full terminal
+  // either way, and replacing the tree keeps the layout trivially centered.
+  if (panel === 'connect') {
+    return <ModelsDialog masked={'•'.repeat(secret.length)} models={store.models} modelIndex={store.modelIndex} keyDialog={store.keyDialog} keyDialogName={store.keyDialogName} keyDialogConfigured={store.keyDialogConfigured} providerForm={store.providerForm} providerField={store.providerField} providerTemplates={store.providerTemplates} providerTemplate={store.providerTemplate} providerValues={store.providerValues} providerFormError={store.providerFormError} providerList={store.providerList} providerListIndex={store.providerListIndex} providerNames={store.providerNames} dialogNotice={store.dialogNotice} />
+  }
+
   return (
     <Box flexDirection="column" height={store.rows}>
       <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="row" width="100%">
@@ -1021,7 +1263,6 @@ export function App(props: { onSubmit(text: string): void; onCancel(): void; onC
           prompt (e.g. a user decision) sits right where you answer it. */}
       {panel === 'approval' && approval && <ApprovalDialog approval={approval} />}
       {panel === 'resume' && <ResumePicker sessions={sessions} index={sessionIndex} />}
-      {panel === 'connect' && <ConnectPanel label={secretLabel} masked={'•'.repeat(secret.length)} />}
       {panel === 'question' && question && <QuestionPanel question={question} />}
 
       {isSlash && filtered.length > 0 && (
@@ -1125,14 +1366,138 @@ function ResumePicker(props: { sessions: SessionSummary[]; index: number }): Rea
   )
 }
 
-/** Masked API-key entry for `/connect`. The value never reaches the transcript. */
-function ConnectPanel(props: { label: string; masked: string }): React.JSX.Element {
+/** The add-provider form's fields, in entry order (field 1 is the template dropdown). */
+const PROVIDER_FORM_FIELDS: readonly string[] = [
+  'route id (kebab-case)',
+  'display name',
+  'base URL',
+  'API key',
+  'model ids (comma-separated)',
+]
+
+/**
+ * The `/models` dialog, matching the harness Settings → Models page's core
+ * controls in a TUI: a provider/model picker (↑/↓), the API-key status with a
+ * masked input, an "＋ Add provider" entry leading to a sequential form
+ * (route / display name / base URL / API key / model ids), and Enter to save.
+ * Rendered as an opencode-style dialog that REPLACES the whole screen: a
+ * full-terminal backdrop with a centered bordered box. (Ink Boxes cannot
+ * paint a background — only Text can — so the backdrop is a wrapping run of
+ * spaces with the page color; it is the absolute first child, whose static
+ * position is the layout origin, so it covers the screen without offsets.)
+ * The input shows a blinking block cursor (React-drawn; the real terminal
+ * cursor stays hidden while the dialog is open, see installFrameSuffix). Key
+ * input needs no IME, so a React cursor is fine here unlike the composer.
+ */
+function ModelsDialog(props: {
+  masked: string
+  models: readonly ModelsOption[]
+  modelIndex: number
+  keyDialog: boolean
+  keyDialogName: string
+  keyDialogConfigured: boolean
+  providerForm: boolean
+  providerField: number
+  providerTemplates: readonly ProviderTemplate[]
+  providerTemplate: number
+  providerValues: readonly string[]
+  providerFormError: string
+  providerList: boolean
+  providerListIndex: number
+  providerNames: readonly { provider: string; name: string; configured: boolean }[]
+  dialogNotice: string
+}): React.JSX.Element {
+  const [cursorOn, setCursorOn] = React.useState(true)
+  React.useEffect(() => {
+    const timer = setInterval(() => setCursorOn((on) => !on), 530)
+    return () => clearInterval(timer)
+  }, [])
+  const block = <Text inverse={cursorOn}> </Text>
+  const fieldCount = PROVIDER_FORM_FIELDS.length + 1 // +1 = the template dropdown
   return (
-    <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1}>
-      <Text color={theme.accent} bold>Connect DeepSeek</Text>
-      <Text>{props.label}</Text>
-      <Text color={theme.primary}>{props.masked || ''}</Text>
-      <Text dimColor>paste a single-line key and press Enter · Esc cancel</Text>
+    <Box flexDirection="column" height={store.rows} alignItems="center" justifyContent="center">
+      <Box position="absolute" width="100%" height={store.rows} flexDirection="column">
+        <Text backgroundColor={theme.bg} wrap="wrap">{' '.repeat(Math.max(0, store.width * store.rows))}</Text>
+      </Box>
+      <Box width={72} borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1}>
+        {props.keyDialog ? (
+          <>
+            <Text color={theme.accent} bold>API key for {props.keyDialogName}</Text>
+            <Text color={theme.primary}>{props.masked}{block}</Text>
+            <Text dimColor>{props.keyDialogConfigured ? 'replaces the current key · ' : ''}paste a single-line key · Enter save · Esc cancel</Text>
+          </>
+        ) : props.providerList ? (
+          <>
+            <Text color={theme.accent} bold>Add provider</Text>
+            <Text dimColor>pick a provider to set or change its API key</Text>
+            <Box flexDirection="column" gap={0}>
+              {(() => {
+                // The catalog lists dozens of providers: render only the rows
+                // that fit the dialog, scrolled so the highlighted row stays
+                // in view (centered when possible).
+                const names = props.providerNames
+                const listRows = Math.max(1, store.rows - 8)
+                const start = Math.max(0, Math.min(
+                  props.providerListIndex - Math.floor(listRows / 2),
+                  Math.max(0, names.length - listRows),
+                ))
+                return names.slice(start, start + listRows).map((p, i) => {
+                  const index = start + i
+                  return (
+                    <Text key={p.provider} color={index === props.providerListIndex ? theme.accent : undefined} inverse={index === props.providerListIndex}>
+                      {index === props.providerListIndex ? '› ' : '  '}{p.name}
+                      <Text dimColor>  </Text>
+                      <Text color={p.configured ? theme.success : theme.warning}>{p.configured ? '✓ key set' : 'no key'}</Text>
+                    </Text>
+                  )
+                })
+              })()}
+            </Box>
+            <Text dimColor>↑/↓ choose · Enter select · Esc back</Text>
+          </>
+        ) : props.providerForm ? (
+          <>
+            <Text color={theme.accent} bold>Add a custom provider</Text>
+            <Text color={props.providerField === 0 ? theme.primary : undefined}>
+              1/{fieldCount} provider: {props.providerTemplate < props.providerTemplates.length
+                ? props.providerTemplates[props.providerTemplate]?.name ?? ''
+                : 'Custom provider'}
+              {props.providerField === 0 ? block : null}
+            </Text>
+            {PROVIDER_FORM_FIELDS.map((label, i) => {
+              const field = i + 2
+              return (
+                <Text key={label} color={field === props.providerField ? theme.primary : undefined}>
+                  {field}/{fieldCount} {label}: {props.providerValues[i] ?? ''}
+                  {field === props.providerField ? block : null}
+                </Text>
+              )
+            })}
+            {props.providerFormError !== '' && <Text color={theme.error}>{props.providerFormError}</Text>}
+            <Text dimColor>↑/↓ choose provider · type fields · Enter next · Enter on last saves · Esc cancel</Text>
+          </>
+        ) : (
+          <>
+            <Text color={theme.accent} bold>Models</Text>
+            <Text dimColor>current: {props.modelIndex < props.models.length ? props.models[props.modelIndex]?.label ?? '' : '＋ Add provider'}</Text>
+            <Box flexDirection="column" gap={0}>
+              {props.models.map((m, i) => (
+                <Text key={`${m.provider}/${m.model}`} color={i === props.modelIndex ? theme.accent : undefined} inverse={i === props.modelIndex}>
+                  {i === props.modelIndex ? '› ' : '  '}{m.label}
+                </Text>
+              ))}
+              <Text color={props.modelIndex === props.models.length ? theme.accent : undefined} inverse={props.modelIndex === props.models.length}>
+                {props.modelIndex === props.models.length ? '› ' : '  '}＋ Add provider
+              </Text>
+              <Text color={props.modelIndex === props.models.length + 1 ? theme.accent : undefined} inverse={props.modelIndex === props.models.length + 1}>
+                {props.modelIndex === props.models.length + 1 ? '› ' : '  '}＋ Add a custom provider
+              </Text>
+            </Box>
+            {props.dialogNotice !== '' && <Text color={theme.warning}>{props.dialogNotice}</Text>}
+            <Text dimColor>↑/↓ choose · Enter save · Esc cancel</Text>
+          </>
+        )}
+      </Box>
     </Box>
   )
 }
@@ -1215,11 +1580,20 @@ async function apiKeyConfigured(ctx: Context): Promise<boolean> {
   }
 }
 
+/** Flatten the models service's providers into picker options (one per model). */
+function buildModelOptions(providers: readonly ModelsProviderOption[]): ModelsOption[] {
+  return providers.flatMap((p) =>
+    p.models.map((m) => ({ provider: p.provider, model: m.id, label: `${p.name} · ${m.name}` })),
+  )
+}
+
 /** Map a provider model id to a friendly display name (display only). */
 function modelDisplayName(model: string): string {
   const known: Record<string, string> = {
     'deepseek-v4-flash': 'DeepSeek V4 Flash',
     'deepseek-v4': 'DeepSeek V4',
+    'deepseek-v4-pro': 'DeepSeek V4 Pro',
+    'deepseek-v4-flash-vision-exp': 'DeepSeek V4 Flash Vision Exp',
   }
   return known[model] ?? model
 }
@@ -1286,14 +1660,18 @@ export function apply(ctx: Context, config: Config): void {
     text: 'When a task can proceed under more than one user-owned choice (such as the programming language, test framework, or output format), call ask_user_question with the options and use the answer the human picks. Do not silently pick a default for a decision the user would prefer to make. Prefer to ask for genuinely user-owned choices; do not ask for facts you can discover yourself.',
   })
 
-  // Register the user-questions provider: the model's ask_user_question routes
-  // here, and the TUI renders a choice panel and returns the user's pick.
-  const questions = ctx.get('userQuestions')
-  if (questions !== undefined && typeof (questions as { registerProvider?: unknown }).registerProvider === 'function') {
-    (questions as { registerProvider(provider: UserQuestionProvider): unknown }).registerProvider({
-      ask: (request: AskUserQuestionRequest) => askUser(ctx, request, io),
-    })
-  }
+  // Answer the model's ask_user_question in-band: the current harness routes
+  // the request through the 'user-questions/request' waterfall (see
+  // @deepseek-ai/dsh-user-questions), which a UI claims by returning the
+  // answer — the same claim-or-delegate pattern as the approval answerer
+  // above. Questions aimed at another agent are delegated down the chain.
+  ctx.on('user-questions/request', (request, next) => {
+    if (sessionRef.current === undefined
+      || (request.agent !== undefined && request.agent.session.id !== sessionRef.current)) {
+      return next()
+    }
+    return askUser(request)
+  })
 
   // Register the approval answerer: claim questions for our agent and block on
   // the in-band dialog; delegate every other agent to the rest of the chain.
@@ -1344,6 +1722,10 @@ export function apply(ctx: Context, config: Config): void {
  *  exercise the same wiring. */
 export function installFrameSuffix(): void {
   const frameSuffix = (): string => {
+    // While the connect dialog is open the composer sits under the overlay
+    // backdrop, so parking the real cursor there would show it mid-backdrop;
+    // the dialog input is drawn as masked dots, so hide the cursor instead.
+    if (store.panel === 'connect') return '\x1b[?25l'
     const cell = composerCaretCell()
     return `\x1b[?25h${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
   }
@@ -1362,8 +1744,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   const agentOptions = config.model === undefined
     ? { provider: selection.provider, model: selection.model }
     : { provider: selection.provider, model: config.model }
+  // The mutable selection ref is shared: prompt assembly reads it per request
+  // (so the /models dialog can switch the live agent's model), and setup()
+  // couples it to the agent.
+  const selected: ModelSelectionRef = { current: selection, assembled: undefined }
   const setup = (agentCtx: Context): void => {
-    const selected: ModelSelectionRef = { current: selection, assembled: undefined }
     installModelSelection(agentCtx, selected)
   }
 
@@ -1380,7 +1765,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   const sessionId = agent.session.id
   sessionRef.current = sessionId
   store.setSession(agent.session)
-  // No API key -> surface "not set" in the composer / /model hint; with a key,
+  // No API key -> surface "not set" in the composer; with a key,
   // show the model name.
   const modelLabel = (await apiKeyConfigured(ctx)) ? modelDisplayName(agentOptions.model) : 'not set'
   store.setModelLabel(modelLabel)
@@ -1413,7 +1798,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // The model's step-by-step plan and progress: latest write wins (sidebar
       // Steps + pinned block). The tool rows below are separate.
       case 'todo/write': {
-        const todos = event.data.todos as StepItem[]
+        const todos = event.data.todos
         if (todos.length > 0) store.setSteps(todos)
         break
       }
@@ -1439,14 +1824,22 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     }
   })
 
-  store.append('status', 'Ready. Type a message, Enter to send, Ctrl+C to exit.', true)
+  store.append('status', 'Ready. Enter to send · Ctrl+C clears the input · /exit quits.', true)
 
   // Wire the slash commands (built after the agent exists).
   const commandItems: CommandItem[] = [
-    { name: 'help', hint: 'show this help', run: () => { store.append('status', '/help · /think · /model · /compact · /clear · /resume · /connect · /sidebar · /exit', true) } },
-    { name: 'connect', hint: 'store the DeepSeek API key (like the web Models page)', run: () => { store.openConnect('Paste a DeepSeek API key (stored in ~/.dsh/.credentials.yaml):') } },
+    { name: 'help', hint: 'show this help', run: () => { store.append('status', '/help · /think · /models · /compact · /clear · /resume · /sidebar · /exit', true) } },
+    { name: 'models', hint: 'manage models and the API key', run: () => {
+      if (modelsService === undefined) {
+        store.append('status', 'models: service unavailable', true)
+        return
+      }
+      void modelsService.listConfigured().then((providers) => {
+        const options = buildModelOptions(providers)
+        store.openModels(options, Math.max(0, options.findIndex((o) => o.provider === selection.provider && o.model === selection.model)))
+      })
+    } },
     { name: 'think', hint: 'expand/collapse the Think (reasoning) text', run: () => { store.toggleReasoning() } },
-    { name: 'model', hint: `current model (${modelLabel})`, run: (arg) => { store.append('status', `model: ${arg || agentOptions.model}`, true) } },
     { name: 'compact', hint: 'compact the session history', run: () => { void compact(ctx, agent, sessionId, selection.provider, selection.model, io) } },
     { name: 'clear', hint: 'clear the transcript', run: () => { store.clear() } },
     {
@@ -1486,7 +1879,76 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
   }
   cancelAction = () => { /* nothing: keep the session open */ }
-  connectAction = (value) => { void connect(ctx, value) }
+  const modelsService = ctx.get('tuiModels') as TuiModelsService | undefined
+  modelsSaveAction = (provider: string, model: string) => {
+    // The mutable selection ref is read per request by prompt assembly, so
+    // updating it switches the LIVE agent's next request to the new model
+    // (the same mechanism the web Models page uses); saveSelection persists
+    // the default for future runs.
+    selected.current = { provider, model }
+    void defaultModel.saveSelection({ provider, model }).catch(() => { /* best-effort persist */ })
+    void apiKeyConfigured(ctx).then(ok => store.setModelLabel(ok ? modelDisplayName(model) : 'not set'))
+    store.append('status', `models: ${provider} · ${modelDisplayName(model)}`, true)
+  }
+  openProviderList = () => {
+    if (modelsService === undefined) return
+    void modelsService.listAll().then((names) => {
+      if (names.length === 0) {
+        // No registered provider at all: surface the notice inside the dialog.
+        store.setDialogNotice('no providers are registered')
+        return
+      }
+      store.startProviderList(names)
+    })
+  }
+  keyDialogSubmit = (provider: string, name: string, key: string) => {
+    if (modelsService === undefined) return
+    void modelsService.setKey(provider, key).then((result) => {
+      if (!result.ok) {
+        store.append('status', `models: ${result.error}`, true)
+        return
+      }
+      store.append('status', `models: API key saved for ${name}`, true)
+      // Activating a dormant catalog route registers asynchronously (settings
+      // write → adapter hot re-register), and its model list only resolves
+      // once the route is registered, so poll until the picker can show it.
+      const refresh = (attempts: number): void => {
+        void modelsService.listConfigured().then((providers) => {
+          const options = buildModelOptions(providers)
+          if (options.some((o) => o.provider === provider) || attempts <= 0) {
+            store.openModels(options, Math.max(0, options.findIndex((o) => o.provider === provider)))
+            return
+          }
+          setTimeout(() => refresh(attempts - 1), 120)
+        })
+      }
+      refresh(25)
+    })
+  }
+  providerFormSubmit = (input: AddProviderInput) => {
+    if (modelsService === undefined) {
+      store.showProviderFormError('models service unavailable')
+      return
+    }
+    void modelsService.addProvider(input).then((result) => {
+      if (!result.ok) {
+        store.showProviderFormError(result.error)
+        return
+      }
+      // The settings write commits before the pi-ai adapter re-registers the
+      // new route, so poll briefly until the picker can see it.
+      const refresh = (attempts: number): void => {
+        const options = buildModelOptions(modelsService.listProviders())
+        if (options.some((o) => o.provider === input.route.trim()) || attempts <= 0) {
+          store.openModels(options, Math.max(0, options.findIndex((o) => o.provider === input.route.trim())))
+          store.append('status', `models: provider ${input.route.trim()} added`, true)
+          return
+        }
+        setTimeout(() => refresh(attempts - 1), 120)
+      }
+      refresh(10)
+    })
+  }
   pauseAgent = () => {
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     store.setPaused(true)
@@ -1517,7 +1979,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   const app = render(<App
     onSubmit={submitMessage}
     onCancel={cancelAction}
-    onConnect={connectAction}
   />)
 
   // Live terminal width: Bun/Node emit 'resize' on process.stdout and update
@@ -1553,6 +2014,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     void loadSessions(ctx).then((list) => store.setSessions([] as SessionSummary[])).catch(() => {})
   }
 
+  // Restore the terminal on exit. This handler is registered after every other
+  // exit-time writer (log.ts's stderr mirror of `dsh-tui exited`, Ink's
+  // signal-exit unmount frame), so writing the leave sequence here makes it the
+  // process's LAST visible terminal output: everything written before it lands
+  // in the alternate screen buffer and is discarded when the buffer is switched
+  // back, leaving no dsh-tui residue above the shell prompt. (One harmless
+  // `\x1b[?25h` cursor-show may still follow: restore-cursor registers an
+  // afterexit hook that unconditionally re-shows the cursor — invisible by
+  // design, and the cursor being visible is the correct end state anyway.)
   process.once('exit', () => {
     if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
       process.stdin.setRawMode(false)
@@ -1560,6 +2030,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     process.stdout.off('resize', onResize)
     process.stdin.off('data', onStdin)
     void app.unmount()
+    try { process.stdout.write('\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
   })
   await agent.whenIdle()
 }
@@ -1623,7 +2094,10 @@ function composerCaretCell(): { row: number; col: number } | null {
   const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
   const usable = Math.max(10, width - 4)
   const caret = Math.max(0, Math.min(store.cursor, store.input.length))
-  // Visual (row, col) of the caret inside the input text (rows count wrapping).
+  // Visual (row, col) of the caret inside the input text (rows count wrapping):
+  // each '\n'-separated segment occupies ceil(visualWidth/usable) rows, and the
+  // caret's own segment wraps again at `usable` columns within the segment
+  // (mirrors composerInputIndex, the inverse mouse-click mapping).
   let visRow = 0
   let visCol = 0
   let pos = 0
@@ -1631,7 +2105,9 @@ function composerCaretCell(): { row: number; col: number } | null {
     const nl = store.input.indexOf('\n', pos)
     const end = nl === -1 ? store.input.length : nl
     if (caret <= end) {
-      visCol = visualWidth(store.input.slice(pos, caret))
+      const upToCaret = visualWidth(store.input.slice(pos, caret))
+      visRow += Math.floor(upToCaret / usable)
+      visCol = upToCaret % usable
       pos = caret
     } else {
       visRow += Math.max(1, Math.ceil(visualWidth(store.input.slice(pos, end)) / usable))
@@ -1760,15 +2236,13 @@ async function loadSessions(ctx: Context): Promise<SessionSummary[]> {
 }
 
 /**
- * The user-questions provider: present each of the model's questions in-band
+ * The user-questions answerer: present each of the model's questions in-band
  * and return the human's answer. Single-select options plus a typeable
  * "Other" row; if only one question is asked this is a one-step decision.
- * @param ctx - plugin context (terminal surface).
  * @param request - the ask_user_question request.
- * @param io - process-facing effects (unused here, kept for symmetry).
  * @returns the structured answer.
  */
-async function askUser(ctx: Context, request: AskUserQuestionRequest, io: TuiIo): Promise<AskUserQuestionAnswer> {
+async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
   const answers: AskUserQuestionAnswerItem[] = []
   for (const item of request.questions) {
     const answer = await new Promise<AskUserQuestionAnswerItem>((resolve, reject) => {

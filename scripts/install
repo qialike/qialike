@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# Install dsh-tui into ~/.dsh/bin: copy the single-file binary there and make
+# sure ~/.dsh/bin is on PATH so `dsh-tui` runs from any directory.
+#
+# Usage: bash scripts/install   (from the repo root, or from the workspace root
+#                                where the repo lives at ./dsh-tui)
+set -euo pipefail
+
+NAME="dsh-tui"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INSTALL_DIR="${HOME}/.dsh/bin"
+DEST="$INSTALL_DIR/$NAME"
+
+# Locate the binary. Candidates cover running from the repo root (./dist) and
+# from the workspace root (./dsh-tui/dist), both the single-target build
+# (dist/dsh-tui) and the platform dirs (dist/linux-x64/dsh-tui, ...).
+find_binary() {
+  local base
+  for base in "$REPO_ROOT" "$(pwd)"; do
+    local cand
+    for cand in \
+      "$base/dist/$NAME" \
+      "$base/dist/linux-x64/$NAME" \
+      "$base/$NAME/dist/$NAME" \
+      "$base/$NAME/dist/linux-x64/$NAME"; do
+      if [[ -x "$cand" ]]; then
+        printf '%s\n' "$cand"
+        return 0
+      fi
+    done
+    local dir
+    for dir in "$base"/dist/*/; do
+      [[ -d "$dir" && -x "$dir/$NAME" ]] || continue
+      printf '%s\n' "$dir/$NAME"
+      return 0
+    done
+  done
+  return 1
+}
+
+BIN="$(find_binary)" || {
+  echo "dsh-tui: binary not found under $REPO_ROOT/dist (or ./dsh-tui/dist); run \`pnpm build --single\` first" >&2
+  exit 1
+}
+
+mkdir -p "$INSTALL_DIR"
+cp "$BIN" "$DEST"
+chmod +x "$DEST"
+echo "dsh-tui: installed  $DEST"
+
+# Make sure ~/.dsh/bin is on PATH for future shells (and tell the user how to
+# enable it in the current one).
+PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
+if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
+  echo "dsh-tui: $INSTALL_DIR is already on PATH"
+else
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    if [[ -f "$rc" ]] && ! grep -qsF "$PATH_LINE" "$rc"; then
+      printf '\n# dsh-tui\n%s\n' "$PATH_LINE" >> "$rc"
+      echo "dsh-tui: appended to $rc: $PATH_LINE"
+    fi
+  done
+  echo "dsh-tui: $INSTALL_DIR is not on PATH in this shell; run the following now,"
+  echo "          or open a new terminal:"
+  echo "            source $HOME/.bashrc"
+  echo "            or"
+  echo "            $PATH_LINE"
+fi
+
+echo "dsh-tui: installed. Run 'dsh-tui' (or 'dsh-tui uninstall')."

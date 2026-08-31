@@ -82,9 +82,19 @@
     - id: tui-startup
       name: '@yourname/dsh-tui-app/startup'
 
+    # /models capability: provider enumeration + "Add provider" writes. The
+    # self-hosted OpenAI-compatible provider layer (`tui-llm`) replaces the
+    # base composition's pi-ai twin and the deepseek adapter; both are
+    # disabled below.
+    - id: tui-llm
+      name: '@yourname/dsh-tui-app/llm'
+
+    - id: tui-models
+      name: '@yourname/dsh-tui-app/models'
+
     - id: tui-runtime
       name: '@yourname/dsh-tui-app'
-      inject: [tuiStartup]
+      inject: [tuiStartup, tuiModels]
       config:
         workspace: !!js ctx.tuiStartup.workspace
         resume: !!js ctx.tuiStartup.resume
@@ -98,3 +108,17 @@
 - id: plugin-package-inventory-deepseek
   config:
     enabled: false
+
+# ── self-hosted provider layer replaces pi-ai and the deepseek adapter ──────
+#
+# `tui-llm` registers its own OpenAI-compatible adapter (built-in DeepSeek
+# route + `dsh-tui-llm:` settings section). The base rows these replace are
+# disabled so no route is owned twice:
+#   - llm-pi-ai:   the pi-ai catalog twin (third-party dependency, dropped)
+#   - llm-deepseek: the deepseek adapter (deepseek-official is now provided by
+#                   tui-llm, whose routes and models it advertises the same)
+- id: llm-pi-ai
+  disabled: true
+
+- id: llm-deepseek
+  disabled: true
