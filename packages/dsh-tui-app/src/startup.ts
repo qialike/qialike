@@ -39,13 +39,14 @@ function tuiCommand(): Command {
     .description('Boot an interactive full-screen terminal surface over an agent session.')
     .helpOption('-h, --help', 'show this help')
     .option('--workspace <dir>', 'the directory the agent operates in (default: the invoking directory)')
-    .option('--resume <sessionId>', 'resume a persisted session instead of starting fresh')
+    .option('--resume <sessionId>', 'resume a specific persisted session instead of auto-resuming')
     .option('--model <model>', 'a provider/name model override, e.g. deepseek-v4-flash')
     .addHelpText('after', `
 Examples:
-  dsh --profile tui                      start a fresh session in the current directory
-  dsh --profile tui --workspace ~/proj   start a fresh session in ~/proj
-  dsh --profile tui --resume <sessionId> resume an existing session
+  dsh --profile tui                      continue the newest session in this directory (default), or start fresh when none exists
+  dsh --profile tui --workspace ~/proj   continue the newest session in ~/proj
+  dsh --profile tui --resume <sessionId> resume a specific persisted session
+  # always start fresh: resume_last: false in ~/.dsh/dsh-tui.json, or DSH_TUI_RESUME_LAST=0
 `)
 }
 

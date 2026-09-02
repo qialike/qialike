@@ -7,20 +7,21 @@
  * Surface features (each owned here, none touching the harness core):
  *   - slash command palette (type `/`)
  *   - a `approval/request` answerer that prompts for tool approval in-band
- *   - a `--resume` / `/resume` session picker over persisted sessions
+ *   - launch auto-resume (`resume_last`) / `--resume <id>` over persisted sessions
  *   - an opencode-style two-panel layout (conversation + activity) and input dock
  *
  * @module @yourname/dsh-tui-app
  */
 
 import { randomUUID } from 'node:crypto'
-import { render, Box, Text, useStdin, measureElement, type DOMElement } from 'ink'
-import React, { useMemo, useState } from 'react'
+import { render, Box, Text } from 'ink'
+import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
-import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
+import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
@@ -39,9 +40,12 @@ import type {
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { TUI_STARTUP_SERVICE } from './startup.ts'
-import { TUI_MODELS_SERVICE, PROVIDER_TEMPLATES, type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
-import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from './markdown.tsx'
-import { persistSidebarMin, resolveSidebarMin } from './config.ts'
+import { TUI_MODELS_SERVICE, type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
+import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
+
+import { readHiddenProviders, resolveResumeLast, setHiddenProviders } from './config.ts'
+import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { lastActivity, touchSession } from './session-activity.ts'
 import { theme } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initErrorLog, logError, logConsoleError } from './log.ts'
@@ -51,7 +55,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 export const name = 'tui-runtime'
 
 /** Project version (single source of truth: the root package.json). */
-const APP_VERSION = (pkg as { version?: string }).version ?? '0.0.0'
+export const APP_VERSION = (pkg as { version?: string }).version ?? '0.0.0'
 
 /** Core services required before the terminal session can start. */
 export const inject = ['agentDefaultModel', 'agents', 'sessions', 'tuiModels']
@@ -84,13 +88,28 @@ export interface StepItem {
 }
 
 /** One /models picker option: a provider route plus one of its models. */
-interface ModelsOption {
+export interface ModelsOption {
   /** Registered provider route. */
   provider: string
   /** Model id sent to the provider. */
   model: string
   /** Display label (`provider · model`). */
   label: string
+  /** Reasoning-effort levels the model supports (when any): selecting it steps
+   *  through an Effort dialog before the choice saves. Absent = direct save. */
+  efforts?: readonly { id: string; name: string; description?: string }[]
+  /** Effort preselected when no saved effort matches (route default). */
+  defaultEffort?: string
+}
+
+/** One /models first-level entry: a configured provider with its model list. */
+export interface ProviderModelsEntry {
+  /** Registered provider route. */
+  provider: string
+  /** Human-readable provider name. */
+  name: string
+  /** The provider's model options (the second-level list). */
+  models: readonly ModelsOption[]
 }
 
 // `todo/write` is typed in the harness by declaration merging from
@@ -111,7 +130,7 @@ export const SANDBOX_CYCLE: readonly SandboxMode[] = ['read-only', 'workspace-wr
 const PERMISSION_LABEL: Record<SandboxMode, string> = {
   'read-only': 'Read Only',
   'workspace-write': 'Workspace Write',
-  'danger-full-access': 'Full access',
+  'danger-full-access': 'Full access · no approval',
 }
 const PERMISSION_COLOR: Record<SandboxMode, string> = {
   'read-only': theme.error,
@@ -119,11 +138,19 @@ const PERMISSION_COLOR: Record<SandboxMode, string> = {
   'danger-full-access': theme.success,
 }
 
-/** A selectable persisted session for the resume picker. */
+/** A selectable persisted session for the /sessions dialog. */
 export interface SessionSummary {
   readonly id: SessionId
+  /** Plain display title (user rename wins over the auto title). */
+  readonly title?: string
   readonly label: string
   readonly cwd?: string
+  /** Creation timestamp (local epoch ms), used for time-grouped display. */
+  readonly createdAt?: number
+  /** /sessions dialog extras (harness list projection). */
+  readonly running?: boolean
+  readonly completed?: boolean
+  readonly updatedAt?: number
 }
 
 /** An in-progress tool approval question awaiting the user's decision. */
@@ -140,6 +167,9 @@ export interface PendingQuestion {
   index: number
   custom: string
   customMode: boolean
+  /** Position within a multi-question ask (1-based) and the total, when > 1. */
+  readonly position?: number
+  readonly total?: number
 }
 
 /** A command in the slash palette. */
@@ -150,27 +180,44 @@ export interface CommandItem {
 }
 
 /** Mutable UI store the Ink app subscribes to. */
-class Store {
+export class Store {
   private items: TranscriptItem[] = []
   private key = 0
   private version = 0
   private listeners = new Set<() => void>()
   private _input = ''
   private _cursor = 0
-  private _panel: 'conversation' | 'approval' | 'resume' | 'connect' | 'question' = 'conversation'
+  private _panel: 'conversation' | 'approval' | 'connect' | 'question' | 'sessions' | 'export' | 'help' = 'conversation'
   private _commandFilter = ''
   private _commandIndex = 0
   private _approval: PendingApproval | null = null
-  private _sessions: SessionSummary[] = []
-  private _sessionIndex = 0
+  /** /sessions dialog state: full list, highlight, live filter, content-search hits. */
+  private _sessionsDialog: readonly SessionSummary[] = []
+  private _sessionsDialogIndex = 0
+  private _sessionsFilter = ''
+  private _sessionsSearch: readonly { id: string; snippet: string }[] = []
+  /** Row index armed for deletion (Ctrl+D twice); `null` = not arming. */
+  private _sessionsDeleting: number | null = null
+  /** One-line in-dialog notice (guard message, delete result). */
+  private _sessionsNotice = ''
+  /** Row index being renamed (Ctrl+R); `null` = not renaming. */
+  private _sessionsRenaming: number | null = null
+  /** Rename input text (edited in the filter box while renaming). */
+  private _sessionsRenameInput = ''
+  /** /export dialog state: format / file name / sanitize fields. */
+  private _exportField = 0
+  private _exportFormat: 'json' | 'markdown' = 'json'
+  private _exportName = ''
+  private _exportNameEdited = false
+  private _exportSanitize = false
   private _steps: StepItem[] = []
   private _secret = ''
   private _question: PendingQuestion | null = null
-  private _sidebarMin = resolveSidebarMin()
   private _width = process.stdout.columns ?? 80
   private _rows = process.stdout.rows ?? 24
   private _permission: SandboxMode = 'workspace-write'
   private _modelLabel = ''
+  private _modelEffortName = ''
   private _session: Session | undefined
   private _workspace = ''
   private _running = false
@@ -211,6 +258,32 @@ class Store {
 
   getVersion = (): number => this.version
 
+  // ── action slots (injected by start(); panels call them through the store) ──
+  /** Sent-message history (shared with the conversation panel's browse). */
+  inputHistory: string[] = []
+  /** Last Esc timestamp for the double-Esc pause window. */
+  lastEscTime = 0
+  /** Last model selection, for panel commands (e.g. /models initial index);
+   *  `reasoningEffort` is the saved effort id when one was chosen. */
+  currentModel: { provider: string; model: string; reasoningEffort?: string } = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+  modelsSaveAction: (provider: string, model: string, effort?: string) => void = () => {}
+  /** Cycle the current model's reasoning effort (Ctrl+T / Alt+T). */
+  cycleEffort: () => void = () => {}
+  /** Hide one provider from /models AND remove its API key (Ctrl+D / Alt+D on
+   *  the first level); re-adding happens through "Add provider" + a new key. */
+  deactivateProvider: (route: string, name: string) => void = () => {}
+  openProviderList: () => void = () => {}
+  keyDialogSubmit: (provider: string, name: string, key: string) => void = () => {}
+  providerFormSubmit: (input: AddProviderInput) => void = () => {}
+  submitMessage: (text: string) => void = () => {}
+  cancelAction: () => void = () => {}
+  pauseAgent: () => void = () => {}
+  /** Start a brand-new session in place (injected by start(); the `/new`
+   *  command calls it). The current session is cancelled, disposed, and left
+   *  durably persisted by the harness, so it stays reachable from
+   *  `/sessions` / `--resume` afterward. */
+  newSessionAction: () => void = () => {}
+
   getItems(): readonly TranscriptItem[] { return this.items }
   get steps(): readonly StepItem[] { return this._steps }
   get stepsDone(): number { return this._steps.filter(s => s.status === 'completed').length }
@@ -222,8 +295,111 @@ class Store {
   get commandFilter() { return this._commandFilter }
   get commandIndex() { return this._commandIndex }
   get approval() { return this._approval }
-  get sessions() { return this._sessions }
-  get sessionIndex() { return this._sessionIndex }
+  get sessionsDialog() { return this._sessionsDialog }
+  get sessionsDialogIndex() { return this._sessionsDialogIndex }
+  get sessionsFilter() { return this._sessionsFilter }
+  get sessionsSearch() { return this._sessionsSearch }
+  /** Row index armed for deletion (Ctrl+D twice), or `null`. */
+  get sessionsDeleting() { return this._sessionsDeleting }
+  /** One-line in-dialog notice (guard message, delete result). */
+  get sessionsNotice() { return this._sessionsNotice }
+  setSessionsNotice(text: string): void {
+    if (this._sessionsNotice !== text) { this._sessionsNotice = text; this.notify() }
+  }
+  /** Arm (or disarm) the highlighted row for deletion confirmation. */
+  armSessionsDelete(index: number | null): void {
+    if (this._sessionsDeleting !== index) { this._sessionsDeleting = index; this.notify() }
+  }
+  cancelSessionsDelete(): void {
+    if (this._sessionsDeleting !== null) { this._sessionsDeleting = null; this.notify() }
+  }
+  /** Row index being renamed (Ctrl+R), or `null`. */
+  get sessionsRenaming() { return this._sessionsRenaming }
+  /** Rename input text (edited in the filter box while renaming). */
+  get sessionsRenameInput() { return this._sessionsRenameInput }
+  /** Begin renaming the given row, prefilling its current display title. */
+  startSessionsRename(index: number | null, prefill: string): void {
+    this._sessionsRenaming = index
+    this._sessionsRenameInput = prefill
+    this.notify()
+  }
+  sessionsRenameType(char: string): void {
+    this._sessionsRenameInput = (this._sessionsRenameInput + char).slice(0, 120)
+    this.notify()
+  }
+  sessionsRenameBackspace(): void {
+    this._sessionsRenameInput = this._sessionsRenameInput.slice(0, -1)
+    this.notify()
+  }
+  cancelSessionsRename(): void {
+    if (this._sessionsRenaming !== null) { this._sessionsRenaming = null; this._sessionsRenameInput = ''; this.notify() }
+  }
+  get exportField() { return this._exportField }
+  get exportFormat() { return this._exportFormat }
+  get exportName() { return this._exportName }
+  get exportSanitize() { return this._exportSanitize }
+  /** Open the /export dialog (format / file name / sanitize). */
+  openExport(defaultName: string): void {
+    this._exportField = 0
+    this._exportFormat = 'json'
+    this._exportName = defaultName
+    this._exportNameEdited = false
+    this._exportSanitize = false
+    this._panel = 'export'
+    this.notify()
+  }
+  exportFieldMove(delta: number): void {
+    this._exportField = (this._exportField + delta + 3) % 3
+    this.notify()
+  }
+  exportFormatToggle(): void {
+    this._exportFormat = this._exportFormat === 'json' ? 'markdown' : 'json'
+    this.notify()
+  }
+  exportSanitizeToggle(): void {
+    this._exportSanitize = !this._exportSanitize
+    this.notify()
+  }
+  exportNameType(char: string): void {
+    // The first typed character REPLACES the prefilled default name; later
+    // input appends.
+    if (!this._exportNameEdited) {
+      this._exportName = ''
+      this._exportNameEdited = true
+    }
+    this._exportName = (this._exportName + char).slice(0, 120)
+    this.notify()
+  }
+  exportNameBackspace(): void {
+    this._exportNameEdited = true
+    this._exportName = this._exportName.slice(0, -1)
+    this.notify()
+  }
+  cancelExport(): void {
+    if (this._panel === 'export') this._panel = 'conversation'
+    this.notify()
+  }
+  /** Open the /help dialog. */
+  openHelp(): void {
+    this._panel = 'help'
+    this.notify()
+  }
+  cancelHelp(): void {
+    if (this._panel === 'help') this._panel = 'conversation'
+    this.notify()
+  }
+  /** /sessions dialog rows filtered by the live filter (title/id/cwd match). */
+  get sessionsFiltered(): readonly SessionSummary[] {
+    const filter = this._sessionsFilter.trim().toLowerCase()
+    const base = filter === ''
+      ? this._sessionsDialog
+      : this._sessionsDialog.filter((s) =>
+        (s.label).toLowerCase().includes(filter)
+        || String(s.id).toLowerCase().includes(filter)
+        || (s.cwd ?? '').toLowerCase().includes(filter))
+    // Pinned sessions sort to the top (stable: createdAt order within groups).
+    return [...base].sort((a, b) => (isPinned(b.id) ? 1 : 0) - (isPinned(a.id) ? 1 : 0))
+  }
   get secret() { return this._secret }
 
   append(kind: TranscriptItem['kind'], text: string, dim = kind === 'reasoning' || kind === 'status'): void {
@@ -277,6 +453,16 @@ class Store {
   clear(): void {
     this.items = []
     this._steps = []
+    this.notify()
+  }
+
+  /** Replace the transcript with folded session history (resumed-session
+   *  replay) and continue keying from the loaded items, so live appends never
+   *  collide with replayed keys. */
+  loadHistory(items: readonly TranscriptItem[], steps: readonly StepItem[]): void {
+    this.items = [...items]
+    this.key = items.length
+    this._steps = [...steps]
     this.notify()
   }
 
@@ -344,18 +530,38 @@ class Store {
   }
   setPanel(panel: Store['_panel']): void { this._panel = panel; this.notify() }
   setCommandFilter(value: string): void { this._commandFilter = value; this._commandIndex = 0; this.notify() }
-  bumpCommandIndex(delta: number): void {
-    const len = Math.max(1, this.commands.length)
-    this._commandIndex = (this._commandIndex + delta + len) % len
+  setCommandIndex(index: number): void { this._commandIndex = index; this.notify() }
+
+  setApproval(approval: PendingApproval | null): void {
+    this._approval = approval
+    if (approval) this._approvalChoice = 2 // default: Allow once
+    if (approval) this._panel = 'approval'
+    else if (this._panel === 'approval') this._panel = 'conversation'
     this.notify()
   }
-  private _commands: CommandItem[] = []
-  get commands(): CommandItem[] { return this._commands }
-  setCommands(commands: CommandItem[]): void { this._commands = commands; this.notify() }
-
-  setApproval(approval: PendingApproval | null): void { this._approval = approval; if (approval) this._panel = 'approval'; else if (this._panel === 'approval') this._panel = 'conversation'; this.notify() }
+  /** Selected approval action (0=Deny, 1=Allow always, 2=Allow once); ←/→ cycle + Enter. */
+  private _approvalChoice = 2
+  get approvalChoice(): number { return this._approvalChoice }
+  cycleApprovalChoice(delta: number): void {
+    this._approvalChoice = (this._approvalChoice + delta + 3) % 3
+    this.notify()
+  }
+  /** Tool names the user chose "Allow always" for this session (in-memory, opencode-style). */
+  private _allowAlways = new Set<string>()
+  /** Tools allowed without asking for the rest of this session. */
+  get allowAlways(): readonly string[] { return [...this._allowAlways] }
+  isAllowAlways(toolName: string): boolean { return this._allowAlways.has(toolName) }
+  rememberAllowAlways(toolName: string): void { this._allowAlways.add(toolName); this.notify() }
   get question(): PendingQuestion | null { return this._question }
-  setQuestion(q: PendingQuestion): void { this._question = q; this._panel = 'question'; this.notify() }
+  setQuestion(q: PendingQuestion): void { this._question = q; this._questionScroll = 0; this._panel = 'question'; this.notify() }
+  /** Question-detail scroll offset (long details such as plan reviews are
+   *  shown in a bounded, PgUp/PgDn-scrollable window inside the dock). */
+  private _questionScroll = 0
+  get questionScroll(): number { return this._questionScroll }
+  scrollQuestion(delta: number): void {
+    this._questionScroll = Math.max(0, this._questionScroll + delta)
+    this.notify()
+  }
   clearQuestion(): void { this._question = null; if (this._panel === 'question') this._panel = 'conversation'; this.notify() }
   bumpQuestionIndex(delta: number): void {
     if (this._question === null) return
@@ -369,8 +575,6 @@ class Store {
     this._question.customMode = mode
     this.notify()
   }
-  get sidebarMin(): number { return this._sidebarMin }
-  setSidebarMin(min: number): void { this._sidebarMin = min; persistSidebarMin(min); this.notify() }
   get width(): number { return this._width }
   get rows(): number { return this._rows }
   /** Track the live terminal size; notifies when either dimension changed, so a
@@ -391,12 +595,27 @@ class Store {
     return this._permission
   }
   get modelLabel(): string { return this._modelLabel }
-  setModelLabel(label: string): void { this._modelLabel = label; this.notify() }
+  /** The reasoning-effort display name shown in the composer label ('' when
+   *  the current model has no effort chosen or supports none). The full
+   *  `modelLabel` already embeds it as ` · <name>`; the composer renders the
+   *  effort part separately (warning color, like opencode's variant chip). */
+  get modelEffortName(): string { return this._modelEffortName }
+  setModelLabel(label: string, effortName = ''): void { this._modelLabel = label; this._modelEffortName = effortName; this.notify() }
   get session(): Session | undefined { return this._session }
   setSession(session: Session): void { this._session = session }
-  setSessions(sessions: SessionSummary[]): void { this._sessions = sessions; this._sessionIndex = 0; this._panel = sessions.length > 0 ? 'resume' : 'conversation'; this.notify() }
   private _models: readonly ModelsOption[] = []
   private _modelIndex = 0
+  private _providers: readonly ProviderModelsEntry[] = []
+  /** Provider routes the user hid from the /models first-level list (Ctrl+D /
+   *  Alt+D), persisted in `dsh-tui.json`; they stay reachable from the
+   *  "Add provider" list, where the same key unhides them. */
+  private _hiddenProviders = new Set<string>()
+  private _providerIndex = 0
+  private _providerFilter = '' // live type-to-filter for the first-level provider list
+  private _modelScope = '' // provider route currently shown in the second level; '' = first level
+  private _modelScopeName = ''
+  private _modelFilter = '' // live type-to-filter text for the second-level model list
+  private _providerListFilter = '' // live type-to-filter for the Add-provider list
   private _providerForm = false
   private _providerField = 0
   private _providerTemplates: readonly ProviderTemplate[] = []
@@ -405,7 +624,7 @@ class Store {
   private _providerFormError = ''
   private _providerList = false
   private _providerListIndex = 0
-  private _providerNames: readonly { provider: string; name: string; configured: boolean }[] = []
+  private _providerNames: readonly { provider: string; name: string; configured: boolean; needsBaseURL: boolean }[] = []
   private _keyDialog = false
   private _keyDialogProvider = ''
   private _keyDialogName = ''
@@ -413,6 +632,55 @@ class Store {
   private _dialogNotice = ''
   get models(): readonly ModelsOption[] { return this._models }
   get modelIndex(): number { return this._modelIndex }
+  get providers(): readonly ProviderModelsEntry[] { return this._providers }
+  /** Hidden provider routes (persisted); wired persistence hook in start(). */
+  onHiddenProvidersChange: (routes: string[]) => void = () => {}
+  get hiddenProviders(): readonly string[] { return [...this._hiddenProviders] }
+  isProviderHidden(route: string): boolean { return this._hiddenProviders.has(route) }
+  /** Seed the hidden set from the config file at startup. */
+  seedHiddenProviders(routes: readonly string[]): void { this._hiddenProviders = new Set(routes) }
+  /** Hide one provider from the first-level list (persisted); no-op when already hidden. */
+  hideProvider(route: string): void {
+    if (this._hiddenProviders.has(route)) return
+    this._hiddenProviders.add(route)
+    this._providers = this._providers.filter((p) => p.provider !== route)
+    if (this._providerIndex >= this._providers.length) {
+      this._providerIndex = Math.max(0, this._providers.length - 1)
+    }
+    this.onHiddenProvidersChange([...this._hiddenProviders])
+    this.notify()
+  }
+  /** Unhide one provider (its first-level entry returns on the next dialog open). */
+  unhideProvider(route: string): void {
+    if (!this._hiddenProviders.delete(route)) return
+    this.onHiddenProvidersChange([...this._hiddenProviders])
+    this.notify()
+  }
+  get providerIndex(): number { return this._providerIndex }
+  get providerFilter(): string { return this._providerFilter }
+  /** First-level providers filtered by `providerFilter` (name match, case-insensitive). */
+  get providerFiltered(): readonly ProviderModelsEntry[] {
+    const filter = this._providerFilter.trim().toLowerCase()
+    if (filter === '') return this._providers
+    return this._providers.filter((p) => p.name.toLowerCase().includes(filter))
+  }
+  get modelScope(): string { return this._modelScope }
+  get modelScopeName(): string { return this._modelScopeName }
+  get modelFilter(): string { return this._modelFilter }
+  /** The second-level model list filtered by the live `modelFilter` text
+   *  (matches the display label or the model id, case-insensitive). */
+  get modelFiltered(): readonly ModelsOption[] {
+    const filter = this._modelFilter.trim().toLowerCase()
+    if (filter === '') return this._models
+    return this._models.filter((m) => m.label.toLowerCase().includes(filter) || m.model.toLowerCase().includes(filter))
+  }
+  get providerListFilter(): string { return this._providerListFilter }
+  /** Add-provider list filtered by `providerListFilter` (name match, case-insensitive). */
+  get providerListFiltered(): readonly { provider: string; name: string; configured: boolean; needsBaseURL: boolean }[] {
+    const filter = this._providerListFilter.trim().toLowerCase()
+    if (filter === '') return this._providerNames
+    return this._providerNames.filter((p) => p.name.toLowerCase().includes(filter))
+  }
   get dialogNotice(): string { return this._dialogNotice }
   /** Show a transient notice inside the /models dialog (e.g. no providers registered). */
   setDialogNotice(message: string): void {
@@ -422,59 +690,228 @@ class Store {
   get providerForm(): boolean { return this._providerForm }
   get providerField(): number { return this._providerField }
   get providerTemplates(): readonly ProviderTemplate[] { return this._providerTemplates }
+  /** Fill the add-provider template dropdown (merged core + plugin catalog). */
+  setProviderTemplates(templates: readonly ProviderTemplate[]): void {
+    this._providerTemplates = templates
+    this.notify()
+  }
   get providerTemplate(): number { return this._providerTemplate }
   get providerValues(): readonly string[] { return this._providerValues }
   get providerFormError(): string { return this._providerFormError }
   get providerList(): boolean { return this._providerList }
   get providerListIndex(): number { return this._providerListIndex }
-  get providerNames(): readonly { provider: string; name: string; configured: boolean }[] { return this._providerNames }
+  get providerNames(): readonly { provider: string; name: string; configured: boolean; needsBaseURL: boolean }[] { return this._providerNames }
   get keyDialog(): boolean { return this._keyDialog }
   get keyDialogProvider(): string { return this._keyDialogProvider }
   get keyDialogName(): string { return this._keyDialogName }
   get keyDialogConfigured(): boolean { return this._keyDialogConfigured }
-  /** Move the /models picker highlight by `delta` (wraps; the last two slots are the add-provider entries). */
+  /** Move the second-level (model) highlight by `delta` (wraps within the
+   *  filtered model list). */
   bumpModelIndex(delta: number): void {
-    const len = this._models.length + 2
+    const len = Math.max(1, this.modelFiltered.length)
     this._modelIndex = (this._modelIndex + delta + len) % len
     this.notify()
   }
-  /** Open the /models dialog: picker over the configured providers' models. */
-  openModels(models: readonly ModelsOption[], initialIndex: number): void {
+  /** Append one character to the live model filter and jump to the first match. */
+  modelFilterType(char: string): void {
+    this._modelFilter = (this._modelFilter + char).slice(0, 64)
+    this._modelIndex = 0
+    this.notify()
+  }
+  /** Remove the last filter character and jump to the first match. */
+  modelFilterBackspace(): void {
+    this._modelFilter = this._modelFilter.slice(0, -1)
+    this._modelIndex = 0
+    this.notify()
+  }
+  /** Clear the live model filter (no-op when already empty). */
+  clearModelFilter(): void {
+    if (this._modelFilter === '') return
+    this._modelFilter = ''
+    this._modelIndex = 0
+    this.notify()
+  }
+  /** Jump the second-level highlight to `target` (clamped to the filtered list). */
+  moveModelIndex(target: number): void {
+    const len = this.modelFiltered.length
+    this._modelIndex = len === 0 ? 0 : Math.max(0, Math.min(target, len - 1))
+    this.notify()
+  }
+  // ── third level: the reasoning-effort picker for one effort-capable model ──
+  private _effortOpen = false
+  private _effortIndex = 0
+  /** Whether the Effort picker (third level) is showing. */
+  get effortOpen(): boolean { return this._effortOpen }
+  /** The highlighted model's reasoning-effort choices (its declared levels). */
+  get effortChoices(): readonly { id: string; name: string; description?: string }[] {
+    return this.modelFiltered[this._modelIndex]?.efforts ?? []
+  }
+  get effortIndex(): number { return this._effortIndex }
+  /** The highlighted model's label (the Effort picker's subject line). */
+  get effortLabel(): string { return this.modelFiltered[this._modelIndex]?.label ?? '' }
+  /** Open the Effort picker for the highlighted model (no-op when the model
+   *  declares no efforts). The model-list state is kept so Esc returns to it. */
+  openEffort(): void {
+    const option = this.modelFiltered[this._modelIndex]
+    const choices = option?.efforts ?? []
+    if (option === undefined || choices.length === 0) return
+    let index = 0
+    const saved = this.currentModel
+    const preselected = saved.provider === option.provider && saved.model === option.model
+      ? saved.reasoningEffort
+      : undefined
+    const preferred = preselected ?? option.defaultEffort ?? ''
+    const hit = choices.findIndex((e) => e.id === preferred)
+    if (hit >= 0) index = hit
+    this._effortIndex = index
+    this._effortOpen = true
+    this.notify()
+  }
+  /** Back out of the Effort picker to the model list. */
+  cancelEffort(): void {
+    if (!this._effortOpen) return
+    this._effortOpen = false
+    this._effortIndex = 0
+    this.notify()
+  }
+  /** Move the Effort highlight by `delta` (wraps within the choices). */
+  bumpEffortIndex(delta: number): void {
+    const len = Math.max(1, this.effortChoices.length)
+    this._effortIndex = (this._effortIndex + delta + len) % len
+    this.notify()
+  }
+  /** Move the first-level (provider) highlight by `delta` (wraps; while
+   *  unfiltered the last two slots are the add-provider entries, filtered the
+   *  list is just the matches). */
+  bumpProviderIndex(delta: number): void {
+    const filtered = this.providerFiltered.length < this._providers.length
+    const len = filtered ? Math.max(1, this.providerFiltered.length) : this._providers.length + 2
+    this._providerIndex = (this._providerIndex + delta + len) % len
+    this.notify()
+  }
+  /** Jump the first-level highlight to `target` (clamped to the filtered list). */
+  moveProviderIndex(target: number): void {
+    const len = this.providerFiltered.length
+    this._providerIndex = len === 0 ? 0 : Math.max(0, Math.min(target, len - 1))
+    this.notify()
+  }
+  /** Append one character to the first-level provider filter. */
+  providerFilterType(char: string): void {
+    this._providerFilter = (this._providerFilter + char).slice(0, 64)
+    this._providerIndex = 0
+    this.notify()
+  }
+  /** Remove the last first-level filter character. */
+  providerFilterBackspace(): void {
+    this._providerFilter = this._providerFilter.slice(0, -1)
+    this._providerIndex = 0
+    this.notify()
+  }
+  /** Clear the first-level provider filter (no-op when already empty). */
+  clearProviderFilter(): void {
+    if (this._providerFilter === '') return
+    this._providerFilter = ''
+    this._providerIndex = 0
+    this.notify()
+  }
+  /** Open the /models dialog at the provider list (first level). Hidden
+   *  providers (see `hideProvider`) are dropped from the list; the highlight
+   *  re-anchors on the initially-targeted provider when still visible. */
+  openModels(providers: readonly ProviderModelsEntry[], initialIndex: number): void {
     this._secret = ''
-    this._models = models
-    this._modelIndex = Math.max(0, Math.min(initialIndex, models.length))
+    const target = providers[Math.max(0, Math.min(initialIndex, providers.length - 1))]?.provider
+    const visible = providers.filter((p) => !this._hiddenProviders.has(p.provider))
+    this._providers = visible
+    const anchor = target === undefined ? 0 : visible.findIndex((p) => p.provider === target)
+    this._providerIndex = anchor < 0 ? 0 : anchor
+    this._providerFilter = ''
+    this._modelScope = ''
+    this._modelScopeName = ''
+    this._modelFilter = ''
+    this._providerListFilter = ''
+    this._models = []
+    this._modelIndex = 0
     this._providerForm = false
     this._providerField = 0
     this._providerValues = []
     this._providerList = false
     this._keyDialog = false
     this._dialogNotice = ''
+    this._effortOpen = false
+    this._effortIndex = 0
     this._panel = 'connect'
     this.notify()
   }
+  /** Drill into one provider's model list (second level). */
+  openProviderModels(entry: ProviderModelsEntry, initialIndex: number): void {
+    this._secret = ''
+    this._modelScope = entry.provider
+    this._modelScopeName = entry.name
+    this._modelFilter = ''
+    this._models = entry.models
+    this._modelIndex = entry.models.length === 0 ? 0 : Math.max(0, Math.min(initialIndex, entry.models.length - 1))
+    this.notify()
+  }
+  /** Back out of the model list to the provider list. */
+  cancelProviderModels(): void {
+    this._modelScope = ''
+    this._modelScopeName = ''
+    this._modelFilter = ''
+    this._models = []
+    this._modelIndex = 0
+    this.notify()
+  }
   /** Show the registered-provider list (pick one to set or change its API key). */
-  startProviderList(names: readonly { provider: string; name: string; configured: boolean }[]): void {
+  startProviderList(names: readonly { provider: string; name: string; configured: boolean; needsBaseURL: boolean }[]): void {
     this._providerList = true
     this._providerListIndex = 0
+    this._providerListFilter = ''
     this._providerNames = names
     this._dialogNotice = ''
     this.notify()
   }
   bumpProviderListIndex(delta: number): void {
-    const len = Math.max(1, this._providerNames.length)
+    const len = Math.max(1, this.providerListFiltered.length)
     this._providerListIndex = (this._providerListIndex + delta + len) % len
     this.notify()
   }
+  /** Jump the Add-provider highlight to `target` (clamped to the filtered list). */
+  moveProviderListIndex(target: number): void {
+    const len = this.providerListFiltered.length
+    this._providerListIndex = len === 0 ? 0 : Math.max(0, Math.min(target, len - 1))
+    this.notify()
+  }
+  /** Append one character to the Add-provider list filter. */
+  providerListFilterType(char: string): void {
+    this._providerListFilter = (this._providerListFilter + char).slice(0, 64)
+    this._providerListIndex = 0
+    this.notify()
+  }
+  /** Remove the last Add-provider filter character. */
+  providerListFilterBackspace(): void {
+    this._providerListFilter = this._providerListFilter.slice(0, -1)
+    this._providerListIndex = 0
+    this.notify()
+  }
+  /** Clear the Add-provider filter (no-op when already empty). */
+  clearProviderListFilter(): void {
+    if (this._providerListFilter === '') return
+    this._providerListFilter = ''
+    this._providerListIndex = 0
+    this.notify()
+  }
   /** Pick the highlighted provider: closes the list and returns the choice. */
-  selectProviderList(): { provider: string; name: string; configured: boolean } | undefined {
-    const picked = this._providerNames[this._providerListIndex]
+  selectProviderList(): { provider: string; name: string; configured: boolean; needsBaseURL: boolean } | undefined {
+    const picked = this.providerListFiltered[this._providerListIndex]
     this._providerList = false
+    this._providerListFilter = ''
     this._modelIndex = 0 // back on a model option, so Enter saves (not re-opens the list)
     this.notify()
     return picked
   }
   cancelProviderList(): void {
     this._providerList = false
+    this._providerListFilter = ''
     this.notify()
   }
   /** Open the API-key sub-dialog for one provider (masked input; Enter saves to its ref). */
@@ -523,6 +960,28 @@ class Store {
     this._providerFormError = ''
     this.notify()
   }
+  /** Open the custom-provider form pre-filled from one Add-provider template
+   *  (deployment-configured providers: the user supplies baseURL + API key).
+   *  The dropdown was filled at startup via `setProviderTemplates`. */
+  startProviderFormForTemplate(provider: string): void {
+    const templates = this._providerTemplates
+    const template = templates.find((t) => t.id === provider)
+    if (template === undefined) { this.startProviderForm(templates); return }
+    this._providerTemplates = templates
+    this._providerTemplate = templates.findIndex((t) => t.id === provider)
+    this._providerValues = [
+      template.id,
+      template.name,
+      '',
+      '',
+      (template.models ?? []).map((model) => model.id).join(', '),
+    ]
+    this._providerField = 0
+    this._providerFormError = ''
+    this._providerForm = true
+    this._panel = 'connect'
+    this.notify()
+  }
   /** Cancel the add-provider form back to the picker. */
   cancelProviderForm(): void {
     this._providerForm = false
@@ -559,12 +1018,77 @@ class Store {
   /** Remove the last secret character (backspace). */
   popSecret(): void { this._secret = this._secret.slice(0, -1); this.notify() }
   /** Close the /connect overlay without storing. */
-  cancelConnect(): void { this._secret = ''; if (this._panel === 'connect') this._panel = 'conversation'; this.notify() }
-  bumpSessionIndex(delta: number): void {
-    const len = Math.max(1, this._sessions.length)
-    this._sessionIndex = (this._sessionIndex + delta + len) % len
+  cancelConnect(): void { this._secret = ''; this._modelScope = ''; this._modelScopeName = ''; this._modelFilter = ''; this._providerFilter = ''; this._providerListFilter = ''; this._effortOpen = false; this._effortIndex = 0; if (this._panel === 'connect') this._panel = 'conversation'; this.notify() }
+  /** Open the /sessions dialog over the full session list (highlight on the current). */
+  openSessions(sessions: readonly SessionSummary[]): void {
+    this._sessionsDialog = sessions
+    this._sessionsDialogIndex = 0
+    this._sessionsFilter = ''
+    this._sessionsSearch = []
+    this._panel = 'sessions'
     this.notify()
   }
+  /** Refresh the /sessions dialog rows in place, keeping filter and highlight;
+   *  opens the dialog when it is not already open (background title folding). */
+  refreshSessionsDialog(sessions: readonly SessionSummary[]): void {
+    this._sessionsDialog = sessions
+    if (this._panel !== 'sessions') {
+      this._sessionsDialogIndex = 0
+      this._sessionsFilter = ''
+      this._sessionsSearch = []
+      this._panel = 'sessions'
+    }
+    this.notify()
+  }
+  bumpSessionsDialogIndex(delta: number): void {
+    const len = this.sessionsFiltered.length + (this._sessionsFilter !== '' ? this._sessionsSearch.length : 0) + 1
+    this._sessionsDialogIndex = (this._sessionsDialogIndex + delta + Math.max(1, len)) % Math.max(1, len)
+    this.notify()
+  }
+  moveSessionsDialogIndex(target: number): void {
+    const len = this.sessionsFiltered.length + (this._sessionsFilter !== '' ? this._sessionsSearch.length : 0) + 1
+    this._sessionsDialogIndex = len === 0 ? 0 : Math.max(0, Math.min(target, len - 1))
+    this.notify()
+  }
+  sessionsFilterType(char: string): void {
+    this._sessionsFilter = (this._sessionsFilter + char).slice(0, 64)
+    this._sessionsDialogIndex = 0
+    this.notify()
+  }
+  sessionsFilterBackspace(): void {
+    this._sessionsFilter = this._sessionsFilter.slice(0, -1)
+    this._sessionsDialogIndex = 0
+    this.notify()
+  }
+  clearSessionsFilter(): void {
+    if (this._sessionsFilter === '') return
+    this._sessionsFilter = ''
+    this._sessionsSearch = []
+    this._sessionsDialogIndex = 0
+    this.notify()
+  }
+  setSessionsSearch(results: readonly { id: string; snippet: string }[]): void {
+    this._sessionsSearch = results
+    this.notify()
+  }
+  cancelSessions(): void {
+    if (this._panel === 'sessions') this._panel = 'conversation'
+    this.notify()
+  }
+  /** Pick one session from the /sessions dialog and close it. The runtime
+   *  `resumeSessionAction` switches to that session in place (cancel current
+   *  turn → resume the target → dispose the old agent → replay its history),
+   *  exactly like the launch auto-resume. */
+  resumeSession(id: string): void {
+    this._panel = 'conversation'
+    this.cancelSessionsDelete()
+    this.cancelSessionsRename()
+    this.setSessionsNotice('')
+    this.notify()
+    this.resumeSessionAction(id)
+  }
+  /** In-place switch to a persisted session (injected by start()). */
+  resumeSessionAction: (id: string) => void = () => {}
   get workspace(): string { return this._workspace }
   setWorkspace(workspace: string): void { this._workspace = workspace; this.notify() }
   get running(): boolean { return this._running }
@@ -644,923 +1168,61 @@ class Store {
 /** The single UI store; settled plugins and the Ink app share it. */
 export const store = new Store()
 
-/** The current agent's session id, set once the agent is created. */
+/** The live session id, for claim-or-delegate on approval/question listeners. */
 const sessionRef: { current?: SessionId } = {}
 
-/** Injected action callbacks used by the raw-stdin key dispatcher. */
-let submitMessage: (text: string) => void = () => {}
-let cancelAction: () => void = () => {}
-/** Save the /models dialog's chosen provider/model for the live agent. */
-let modelsSaveAction: (provider: string, model: string) => void = () => {}
-/** Submit the add-provider form (validates + writes settings/credential, refreshes the picker). */
-let providerFormSubmit: (input: AddProviderInput) => void = () => {}
-/** Open the "＋ Add provider" list of registered providers missing an API key. */
-let openProviderList: () => void = () => {}
-/** Submit the API-key sub-dialog for one provider. */
-let keyDialogSubmit: (provider: string, name: string, key: string) => void = () => {}
-/** The running agent, for the double-Esc pause. */
-let pauseAgent: () => void = () => {}
-/** Timestamp of the last Esc press (window for the double-Esc pause). */
-let lastEscTime = 0
-/** Submitted (non-command) messages, newest last; browsed with the Up/Down keys. */
-let inputHistory: string[] = []
-/** Index into `inputHistory` being viewed; -1 = not browsing. */
-let historyBrowse = -1
-/** The input saved when browsing started, restored on Down past the newest entry. */
-let historyDraft = ''
+// ── the `tui` service: panel/command registration for plugins ──────────────
 
-/** Load history entry `index` into the composer, caret at its end. */
-function loadHistoryEntry(index: number): void {
-  const entry = inputHistory[index]
-  if (entry === undefined) return
-  historyBrowse = index
-  store.setInput(entry)
-  store.setCursor(entry.length)
+/** How a registered panel participates in the screen layout. */
+export type TuiPanelMode = 'fullscreen' | 'overlay'
+
+/** One registered panel: render + optional key handling. */
+export interface TuiPanelDefinition {
+  /** Panel id; matches `store.panel` when active (`conversation` is the main surface). */
+  id: string
+  /** Fullscreen replaces the whole tree; overlay renders inside the conversation. */
+  mode: TuiPanelMode
+  /** Render the panel from the current store state. */
+  render(store: Store): React.ReactNode
+  /** Consume one key while this panel is active; return true when handled. */
+  handleKey?(key: RawKey, store: Store): boolean
 }
 
-/** Step to an older history entry (start browsing from the newest when idle). */
-function browseOlder(): void {
-  if (inputHistory.length === 0) return
-  if (historyBrowse === -1) {
-    historyDraft = store.input
-    loadHistoryEntry(inputHistory.length - 1)
-  } else {
-    loadHistoryEntry(Math.max(0, historyBrowse - 1))
+/** The surface plugins consume: panels, slash commands, and notifications. */
+export interface TuiService {
+  panels: {
+    register(def: TuiPanelDefinition): void
+    byId(id: string): TuiPanelDefinition | undefined
   }
-}
-
-/** Step to a newer history entry; past the newest, restore the pre-browse draft. */
-function browseNewer(): void {
-  if (historyBrowse === -1) return
-  if (historyBrowse + 1 >= inputHistory.length) {
-    historyBrowse = -1
-    store.setInput(historyDraft)
-    store.setCursor(historyDraft.length)
-  } else {
-    loadHistoryEntry(historyBrowse + 1)
+  commands: {
+    register(cmd: CommandItem): void
+    remove(name: string): void
+    list(): readonly CommandItem[]
   }
+  notify(message: string): void
 }
 
-/** Leave history browsing (used whenever the composer input otherwise changes). */
-function resetHistoryBrowse(): void {
-  historyBrowse = -1
-  historyDraft = ''
+const tuiPanels = new Map<string, TuiPanelDefinition>()
+const tuiCommands: CommandItem[] = []
+
+/** The tui service singleton (provided by apply() as `tui`). */
+export const tui: TuiService = {
+  panels: {
+    register(def) { tuiPanels.set(def.id, def) },
+    byId(id) { return tuiPanels.get(id) },
+  },
+  commands: {
+    register(cmd) { tuiCommands.push(cmd) },
+    remove(name) {
+      const index = tuiCommands.findIndex((c) => c.name === name)
+      if (index >= 0) tuiCommands.splice(index, 1)
+    },
+    list() { return tuiCommands },
+  },
+  notify(message) { store.append('status', message, true) },
 }
 
-/** Commands matching the current filter, prefix matches first (shared by palette + Enter). */
-function filteredCommands(): CommandItem[] {
-  const q = store.commandFilter.toLowerCase()
-  return store.commands
-    .filter((c) => c.name.toLowerCase().includes(q))
-    .sort((a, b) => Number(b.name.toLowerCase().startsWith(q)) - Number(a.name.toLowerCase().startsWith(q)))
-}
-
-/** Measured row heights (actual rendered rows) keyed by item key / 'steps'. */
-const measuredHeights = new Map<string, number>()
-
-/** Last time each key notified, to debounce re-measurement during streaming. */
-const lastMeasuredNotify = new Map<string, number>()
-
-/** Record a measured row height; notifies only when it materially changed and
- *  not too often — a ±1 oscillation or a burst of re-measures during streaming
- *  must not push React past its "Maximum update depth exceeded" guard. */
-function setMeasuredHeight(key: string, rows: number): void {
-  const prev = measuredHeights.get(key)
-  if (prev !== undefined && Math.abs(prev - rows) <= 1) return
-  const now = Date.now()
-  const last = lastMeasuredNotify.get(key)
-  if (last !== undefined && now - last < 250) return
-  lastMeasuredNotify.set(key, now)
-  measuredHeights.set(key, rows)
-  store.touch()
-}
-
-function rowHeight(key: string, fallback: number): number {
-  // The live estimate (fallback) tracks the streaming text exactly, while the
-  // measured value can lag behind it (the measurement effect is debounced, and
-  // the final measure can be skipped inside the debounce window). Taking the
-  // max keeps the layout on the live height: never under-size a growing row,
-  // which would keep old messages on screen and clip the newest text.
-  return Math.max(fallback, measuredHeights.get(key) ?? 0)
-}
-
-/** A transcript row: a real item, or the todo steps block rendered under the task. */
-type Row =
-  | { type: 'item'; item: TranscriptItem }
-  | { type: 'steps' }
-
-/** The transcript content of one item (no key; the wrapper supplies it). */
-function itemContent(item: TranscriptItem, expandReasoning: boolean): React.ReactNode {
-  if (item.kind === 'assistant') return <MarkdownText text={item.text} />
-  if (item.kind === 'reasoning') {
-    return expandReasoning
-      ? <Text dimColor>{item.text}</Text>
-      : (<><Text color={theme.accent}>↓ Think</Text><Text dimColor> · {item.text.split('\n')[0]}</Text></>)
-  }
-  if (item.kind === 'tool') {
-    return <Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text>
-  }
-  return (
-    <Text dimColor={item.dim} color={item.kind === 'user' ? theme.primary : undefined} wrap="wrap">
-      {item.kind === 'user' ? `> ${item.text}` : item.text}
-    </Text>
-  )
-}
-
-/** A measured transcript item (wraps content, reports its real rendered height). */
-function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean }): React.JSX.Element {
-  const ref = React.useRef<DOMElement>(null)
-  // useEffect (not useLayoutEffect): measuring after paint avoids setState-from-
-  // commit-phase nested updates that trip React's update-depth guard.
-  React.useEffect(() => {
-    if (ref.current) setMeasuredHeight(String(props.item.key), measureElement(ref.current).height)
-  }, [props.item.text])
-  return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning)}</Box>
-}
-
-/** A measured todo-steps block (rendered under the task). */
-function StepsRow(props: { steps: readonly StepItem[] }): React.JSX.Element {
-  const ref = React.useRef<DOMElement>(null)
-  React.useEffect(() => {
-    if (ref.current) setMeasuredHeight('steps', measureElement(ref.current).height)
-  }, [props.steps])
-  return <Box ref={ref} flexDirection="column"><StepsBlock steps={props.steps} /></Box>
-}
-
-const SPINNER_FRAMES = ['⠋', '⠙', '⠸', '⠴', '⠦', '⠧', '⠇', '⠏']
-
-/** Animated braille spinner + pause hint while the agent is busy; the ~100ms
- *  tick re-renders only this component, so the screen keeps updating even when
- *  the session is quiet (model thinking / tool running). Stages: "Working · Esc
- *  to pause" → (after one Esc) "Working · Esc again to pause" → (after two Esc)
- *  "Paused". */
-function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.Element | null {
-  const [frame, setFrame] = React.useState(0)
-  React.useEffect(() => {
-    if (!props.animate) return
-    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 100)
-    return () => clearInterval(timer)
-  }, [props.animate])
-  if (props.paused) return <Text color={theme.warning}>⏸ Paused</Text>
-  if (!props.animate) return null
-  const armed = Date.now() - lastEscTime < 800
-  return (
-    <Text color={theme.info}>
-      {SPINNER_FRAMES[frame]}
-      <Text dimColor> Working · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
-    </Text>
-  )
-}
-
-/** Ordered rows for the transcript window: items, with a steps block under the task. */
-function buildRows(items: readonly TranscriptItem[], steps: readonly StepItem[]): Row[] {
-  const out: Row[] = []
-  let inserted = false
-  for (const it of items) {
-    out.push({ type: 'item', item: it })
-    if (steps.length > 0 && !inserted && it.kind === 'user') { out.push({ type: 'steps' }); inserted = true }
-  }
-  if (steps.length > 0 && !inserted) out.push({ type: 'steps' })
-  return out
-}
-
-
-/**
- * Dispatch one decoded key to the active panel or the conversation composer.
- * This replaces Ink's `useInput` (whose parser swallows Alt+Enter/Home/End and
- * appends SGR mouse bytes as literal text).
- */
-function handleKey(k: RawKey): void {
-  const panel = store.panel
-  const char = k.char ?? ''
-  if (panel === 'approval') {
-    const approval = store.approval
-    const decision = (): void => {
-      if (approval === null) return
-      const approve = char.toLowerCase() === 'a' || char.toLowerCase() === 'y'
-      store.setApproval(null)
-      approval.resolve(approve ? 'allowed-once' : 'rejected')
-      cancelAction()
-    }
-    if (char.toLowerCase() === 'y' || char.toLowerCase() === 'a' || char.toLowerCase() === 'n') decision()
-    else if (k.return) decision()
-    else if (k.escape || (k.ctrl && char === 'c')) {
-      store.setApproval(null)
-      if (approval) approval.resolve('rejected')
-      cancelAction()
-    }
-    return
-  }
-  if (panel === 'resume') {
-    const sessions = store.sessions
-    const sessionIndex = store.sessionIndex
-    if (k.upArrow) store.bumpSessionIndex(-1)
-    else if (k.downArrow) store.bumpSessionIndex(1)
-    else if (k.return && sessions.length > 0) {
-      submitMessage(`/resume ${sessions[sessionIndex]?.id}`)
-      store.setPanel('conversation')
-    }
-    else if (k.escape) store.setPanel('conversation')
-    return
-  }
-  if (panel === 'question') {
-    const question = store.question
-    if (question === null) { store.setPanel('conversation'); return }
-    if (question.customMode) {
-      if (k.return) {
-        const custom = question.custom.trim()
-        store.clearQuestion()
-        question.resolve({ id: question.item.id, selected: [], custom: custom === '' ? undefined : custom })
-      } else if (k.backspace || k.delete) {
-        store.setQuestionCustom(question.custom.slice(0, -1), true)
-      } else if (k.escape || (k.ctrl && char === 'c')) {
-        const rejectFn = question.reject; store.clearQuestion(); rejectFn(new Error('ask_user_question was cancelled'))
-      } else if (char) {
-        store.setQuestionCustom(question.custom + char, true)
-      }
-      return
-    }
-    if (k.upArrow) store.bumpQuestionIndex(-1)
-    else if (k.downArrow) store.bumpQuestionIndex(1)
-    else if (k.return) {
-      const options = question.item.options ?? []
-      if (question.index < options.length && options[question.index]) {
-        const label = options[question.index].label
-        store.clearQuestion()
-        question.resolve({ id: question.item.id, selected: [label] })
-      } else {
-        store.setQuestionCustom('', true) // the "Other" row -> type your own
-      }
-    }
-    else if (k.escape || (k.ctrl && char === 'c')) {
-      const rejectFn = question.reject; store.clearQuestion(); rejectFn(new Error('ask_user_question was cancelled'))
-    }
-    else if (char) {
-      store.setQuestionCustom(char, true) // free-text answer
-    }
-    return
-  }
-  if (panel === 'connect') {
-    if (store.keyDialog) {
-      if (k.return) {
-        const done = store.keyDialogDone()
-        if (done !== null) keyDialogSubmit(done.provider, done.name, done.key)
-      } else if (k.backspace || k.delete) {
-        store.popSecret()
-      } else if (k.escape || (k.ctrl && char === 'c')) {
-        store.cancelKeyDialog()
-      } else if (char) {
-        store.pushSecret(char)
-      }
-      return
-    }
-    if (store.providerList) {
-      if (k.upArrow) { store.bumpProviderListIndex(-1); return }
-      if (k.downArrow) { store.bumpProviderListIndex(1); return }
-      if (k.return) {
-        const picked = store.selectProviderList()
-        if (picked !== undefined) store.openKeyDialog(picked.provider, picked.name, picked.configured)
-      } else if (k.escape || (k.ctrl && char === 'c')) {
-        store.cancelProviderList()
-      }
-      return
-    }
-    if (store.providerForm) {
-      if (store.providerField === 0 && (k.upArrow || k.downArrow)) {
-        store.bumpProviderTemplate(k.upArrow ? -1 : 1)
-        return
-      }
-      if (k.return) {
-        if (store.providerFormAdvance()) {
-          const values = store.providerValues
-          store.cancelProviderForm()
-          providerFormSubmit({
-            route: values[0] ?? '',
-            displayName: values[1] ?? '',
-            baseURL: values[2] ?? '',
-            apiKey: values[3] ?? '',
-            models: (values[4] ?? '').split(',').map((s) => s.trim()).filter((s) => s !== ''),
-          })
-        }
-      } else if (k.backspace || k.delete) {
-        store.providerFormBackspace()
-      } else if (k.escape || (k.ctrl && char === 'c')) {
-        store.cancelProviderForm()
-      } else if (char) {
-        store.providerFormType(char)
-      }
-      return
-    }
-    const secret = store.secret
-    if (k.upArrow) { store.bumpModelIndex(-1); return }
-    if (k.downArrow) { store.bumpModelIndex(1); return }
-    if (k.return) {
-      if (store.modelIndex === store.models.length) {
-        // "＋ Add provider": pick a registered provider to set or change its API key.
-        void openProviderList()
-        return
-      }
-      if (store.modelIndex === store.models.length + 1) { store.startProviderForm(PROVIDER_TEMPLATES); return } // "＋ Add a custom provider"
-      store.cancelConnect()
-      const option = store.models[store.modelIndex]
-      if (option !== undefined) modelsSaveAction(option.provider, option.model)
-    } else if (k.escape || (k.ctrl && char === 'c')) {
-      store.cancelConnect()
-    }
-    return
-  }
-  // conversation
-  const input = store.input
-  if (char === '\n' || k.altEnter) { resetHistoryBrowse(); store.insertAtCursor('\n'); return }
-  if (k.return) {
-    const text = input.trim()
-    if (text === '') return
-    store.setInput('')
-    resetHistoryBrowse()
-    store.scrollBottom()
-    const filtered = filteredCommands()
-    const effectiveIndex = filtered.length === 0 ? -1 : (store.commandIndex % filtered.length)
-    if (text.startsWith('/') && filtered.length > 0 && effectiveIndex >= 0) {
-      const chosen = filtered[effectiveIndex]
-      const remainder = text.slice(chosen.name.length).trim()
-      chosen.run(remainder)
-    } else {
-      submitMessage(text)
-    }
-    return
-  }
-  if (k.upArrow) {
-    if (input.startsWith('/')) { store.bumpCommandIndex(-1); return } // command palette navigation
-    if (historyBrowse !== -1) { browseOlder(); return } // browsing: keep going back
-    if (input.includes('\n')) { store.moveCursorUp(); return } // multiline: caret moves between lines
-    if (store.cursor > 0) { store.setCursor(0); return } // single-line: first Up goes to line start
-    browseOlder() // already at line start: pull up the previous entry
-    return
-  }
-  if (k.downArrow) {
-    if (input.startsWith('/')) { store.bumpCommandIndex(1); return } // command palette navigation
-    if (historyBrowse !== -1) { browseNewer(); return } // browsing: keep going forward
-    if (input.includes('\n')) { store.moveCursorDown(); return } // multiline: caret moves between lines
-    if (store.cursor < input.length) { store.setCursor(input.length); return } // single-line: first Down goes to line end
-    browseNewer() // already at line end: pull up the next entry
-    return
-  }
-  if (k.leftArrow) { store.moveCursorLeft(); return }
-  if (k.rightArrow) { store.moveCursorRight(); return }
-  if (k.pageUp) { store.scrollPage(-1); return }
-  if (k.pageDown) { store.scrollPage(1); return }
-  if (k.home) { store.scrollTop(); return }
-  if (k.end) { store.scrollBottom(); return }
-  if (k.wheelUp) { store.scrollLines(-WHEEL_STEP); return }
-  if (k.wheelDown) { store.scrollLines(WHEEL_STEP); return }
-  if (k.mousePress) { store.mousePress(k.mousePress.row, k.mousePress.col); return }
-  if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return }
-  if (k.mouseRelease) {
-    const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
-    if (kind === 'click') {
-      positionCursorByMouse(k.mouseRelease.row, k.mouseRelease.col)
-    } else if (kind === 'drag') {
-      const sel = store.selection
-      if (sel !== null) {
-        const text = selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
-        const trimmed = text.trim()
-        if (trimmed !== '') {
-          writeClipboard(trimmed)
-          store.append('status', `copied: ${trimmed.slice(0, 40)}${trimmed.length > 40 ? '…' : ''}`, true)
-        }
-      }
-    }
-    return
-  }
-  if (k.ctrl && char === 'u') { resetHistoryBrowse(); store.deleteToLineStart(); return }
-  if (k.ctrl && char === 'p') { resetHistoryBrowse(); store.setCommandFilter(''); store.setInput('/'); return }
-  if (k.tab) {
-    if (input.startsWith('/')) { // command palette: accept the highlighted command
-      const filtered = filteredCommands()
-      const chosen = filtered.length === 0 ? undefined : filtered[store.commandIndex % filtered.length]
-      if (chosen !== undefined) { resetHistoryBrowse(); store.setInput(`/${chosen.name} `); return }
-    }
-    const next = store.cyclePermission()
-    const session = store.session
-    if (session !== undefined) {
-      try { setSandboxMode(session, next) } catch { /* best-effort */ }
-    }
-    return
-  }
-  if (k.escape) {
-    store.clearSelection()
-    if (input.startsWith('/')) { resetHistoryBrowse(); store.setInput(''); return } // close the command palette
-    const now = Date.now()
-    if (store.running && now - lastEscTime < 800) { lastEscTime = 0; pauseAgent() }
-    else lastEscTime = now
-    return
-  }
-  if (k.ctrl && char === 'c') { resetHistoryBrowse(); store.setInput(''); cancelAction(); return }
-  if (k.backspace || k.delete) {
-    resetHistoryBrowse()
-    store.backspaceAtCursor()
-    if (store.commandFilter.startsWith('')) store.setCommandFilter(store.input)
-    return
-  }
-  if (char) {
-    resetHistoryBrowse()
-    store.insertAtCursor(char)
-    if (store.input.startsWith('/')) store.setCommandFilter(store.input.slice(1))
-  }
-}
-
-/** The terminal-owning app. */
-export function App(props: { onSubmit(text: string): void; onCancel(): void }): React.JSX.Element {
-  const { isRawModeSupported } = useStdin()
-  // Plain force-render subscription to the store. This deliberately avoids
-  // useSyncExternalStore: its passive-effect consistency check re-renders
-  // DURING the effect flush whenever the store version changed between render
-  // and flush, and under sustained streaming that during-flush re-render chain
-  // trips React's "Maximum update depth exceeded" guard (dsh-tui.log is full of
-  // it). The store already coalesces every burst into one microtask notify, so
-  // a manual subscription renders exactly once per batch — no extra flushes.
-  const [, forceRender] = React.useReducer((c: number) => c + 1, 0)
-  React.useEffect(() => store.subscribe(() => forceRender()), [])
-  const version = store.getVersion()
-  const items = store.getItems()
-  const steps = store.steps
-  const stepsDone = store.stepsDone
-  const stepsTotal = store.stepsTotal
-  const input = store.input
-  const panel = store.panel
-  const commands = store.commands
-  const filter = store.commandFilter
-  const commandIndex = store.commandIndex
-  const approval = store.approval
-  const sessions = store.sessions
-  const sessionIndex = store.sessionIndex
-  const secret = store.secret
-  const sessionIdText = sessionRef.current ? String(sessionRef.current) : ''
-  const question = store.question
-  const sidebarMin = store.sidebarMin
-  const width = store.width
-  const expandReasoning = store.expandReasoning
-  const permissionLabel = store.permissionLabel
-  const permissionColor = store.permissionColor
-  const modelLabel = store.modelLabel
-  // The width is a Store value updated by our own `stdout.on('resize')`
-  // listener (see start()); Ink only re-renders the DOM on resize and would
-  // otherwise keep the boot-time width. Reactive version -> App re-render.
-  const showSidebar = width >= sidebarMin
-
-  const filtered = useMemo(
-    () => filteredCommands(),
-    [commands, filter, version],
-  )
-
-  const isSlash = input.startsWith('/')
-  const [hoverIndex, setHoverIndex] = useState(commandIndex)
-  React.useEffect(() => setHoverIndex(commandIndex), [commandIndex])
-  const effectiveIndex = filtered.length === 0 ? -1 : (hoverIndex % filtered.length)
-
-  const status = isRawModeSupported ? '' : '(raw input unsupported) '
-
-  const composerH = composerHeight(width, input, COMPOSER_MIN_HEIGHT)
-  const modalH = panel === 'approval' ? 5
-    : panel === 'resume' ? Math.min(10, sessions.length) + 4
-    : panel === 'connect' ? 5
-    : panel === 'question' ? (question?.item.options?.length ?? 3) + 3
-    : 0
-  const usable = convUsableWidth(width, showSidebar)
-  // Steps now live inside the transcript (below the task), so the viewport is
-  // the full conversation height; the steps row contributes to `content`.
-  const viewportLines = convViewportLines(composerH, 0, modalH)
-  const rows = useMemo(() => buildRows(items, steps), [items, steps, version])
-  const layout = useMemo(() => {
-    const hts = rows.map((r) =>
-      r.type === 'steps'
-        ? rowHeight('steps', stepsBlockHeight(steps.length))
-        : rowHeight(String(r.item.key), estItemLines(r.item, usable, expandReasoning)))
-    const starts: number[] = []
-    let s = 0
-    for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] + 1 }
-    return { hts, starts, content: s - 1 }
-  }, [rows, usable, expandReasoning, steps, version])
-  const maxScroll = Math.max(0, layout.content - viewportLines)
-  const effectiveScroll = store.followTail ? maxScroll : Math.max(0, Math.min(store.scroll, maxScroll))
-  const topRow = 2 // conversation paddingY only (no pinned StepsBlock)
-  store.setLayout(layout.content, viewportLines, effectiveScroll, topRow)
-  // Line-precise scroll: the window is positioned with a negative margin so the
-  // viewport aligns to `effectiveScroll`. Natural paragraph spacing is preserved
-  // (content is never compressed); overflowing content is clipped by the
-  // viewport. (The earlier "squeeze" was the markdown code-block wrap bug, fixed
-  // by rendering code lines with wrap="truncate".)
-  let first = 0
-  while (first < rows.length && layout.starts[first] + layout.hts[first] <= effectiveScroll) first++
-  if (first >= rows.length) first = Math.max(0, rows.length - 1)
-  let last = rows.length - 1
-  while (last >= 0 && layout.starts[last] >= effectiveScroll + viewportLines) last--
-  if (first > last) first = Math.max(0, last)
-  const shift = first < rows.length ? effectiveScroll - layout.starts[first] : 0
-  const sel = store.selection
-  const selRange = sel !== null ? composerSelectionRange(sel) : null
-
-  const renderRow = (r: Row): React.ReactNode =>
-    r.type === 'steps'
-      ? <StepsRow key="steps" steps={steps} />
-      : <TranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} />
-
-  // During a mouse selection the transcript renders as flat rows so the
-  // highlighted span can be drawn precisely (Markdown styling is suspended).
-  const renderFlatTranscript = (): React.ReactNode => {
-    if (sel === null) return null
-    const tRows = buildTranscriptRows(items, usable, expandReasoning)
-    const selRowMin = Math.min(sel.aRow, sel.cRow)
-    const selRowMax = Math.max(sel.aRow, sel.cRow)
-    const topCell = sel.aRow <= sel.cRow ? { row: sel.aRow, col: sel.aCol } : { row: sel.cRow, col: sel.cCol }
-    const bottomCell = sel.aRow <= sel.cRow ? { row: sel.cRow, col: sel.cCol } : { row: sel.aRow, col: sel.aCol }
-    const nodes: React.ReactNode[] = []
-    for (let r = effectiveScroll; r < Math.min(effectiveScroll + viewportLines, tRows.length); r++) {
-      const terminalRow = topRow + (r - effectiveScroll)
-      const line = tRows[r]!.text
-      if (terminalRow < selRowMin || terminalRow > selRowMax) {
-        nodes.push(<Text key={r} dimColor wrap="wrap">{line}</Text>)
-        continue
-      }
-      let cStart = 0
-      let cEnd = line.length
-      if (terminalRow === selRowMin) cStart = Math.min(colToChar(line, topCell.col - 2), line.length)
-      if (terminalRow === selRowMax) cEnd = Math.min(colToChar(line, bottomCell.col - 2), line.length)
-      if (terminalRow === selRowMin && terminalRow === selRowMax && cStart > cEnd) [cStart, cEnd] = [cEnd, cStart]
-      nodes.push(
-        <Text key={r} dimColor wrap="wrap">
-          {line.slice(0, cStart)}
-          <Text inverse>{line.slice(cStart, cEnd)}</Text>
-          {line.slice(cEnd)}
-        </Text>,
-      )
-    }
-    return nodes
-  }
-
-  const renderComposerText = (): React.ReactNode => {
-    const len = input.length
-    const seg = (a: number, b: number, inv: boolean, k: string): React.ReactNode =>
-      a < b ? <Text key={k} inverse={inv}>{input.slice(a, b)}</Text> : null
-    // The caret is drawn by the REAL terminal cursor (parked at the composer
-    // caret by the patched Ink frame writer), not by a React-drawn block — a
-    // React cursor blinks via setInterval, forcing a whole re-render twice a
-    // second, and macOS Terminal anchors the IME candidate window to the real
-    // cursor anyway.
-    if (selRange === null) return <>{input}</>
-    const s = selRange.start
-    const e = selRange.end
-    return (
-      <>
-        {seg(0, s, false, 's0')}
-        {seg(s, e, true, 's1')}
-        {seg(e, len, false, 's2')}
-      </>
-    )
-  }
-
-  // The connect dialog replaces the whole screen (opencode-style modal), so it
-  // must be the only thing rendered — the overlay needs the full terminal
-  // either way, and replacing the tree keeps the layout trivially centered.
-  if (panel === 'connect') {
-    return <ModelsDialog masked={'•'.repeat(secret.length)} models={store.models} modelIndex={store.modelIndex} keyDialog={store.keyDialog} keyDialogName={store.keyDialogName} keyDialogConfigured={store.keyDialogConfigured} providerForm={store.providerForm} providerField={store.providerField} providerTemplates={store.providerTemplates} providerTemplate={store.providerTemplate} providerValues={store.providerValues} providerFormError={store.providerFormError} providerList={store.providerList} providerListIndex={store.providerListIndex} providerNames={store.providerNames} dialogNotice={store.dialogNotice} />
-  }
-
-  return (
-    <Box flexDirection="column" height={store.rows}>
-      <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="row" width="100%">
-        <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
-          {items.length === 0
-            ? <Text dimColor>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
-            : sel !== null
-              ? (
-                <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
-                  {renderFlatTranscript()}
-                </Box>
-              )
-              : (
-                <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
-                  <Box marginTop={-shift} flexDirection="column" gap={1}>
-                    {rows.slice(first, last + 1).map(renderRow)}
-                  </Box>
-                </Box>
-              )}
-        </Box>
-        {showSidebar && (
-        <Box borderStyle="round" borderColor={theme.border} width="30%" flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
-          <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
-          {steps.length === 0
-            ? <Text dimColor>no plan yet</Text>
-            : <StepRows steps={steps} />}
-          <Text dimColor>session {sessionIdText}</Text>
-          <Box flexGrow={1} />
-          <Text dimColor>dsh-tui {APP_VERSION}</Text>
-        </Box>
-        )}
-      </Box>
-
-      {/* Modals render below the conversation and above the input dock, so a
-          prompt (e.g. a user decision) sits right where you answer it. */}
-      {panel === 'approval' && approval && <ApprovalDialog approval={approval} />}
-      {panel === 'resume' && <ResumePicker sessions={sessions} index={sessionIndex} />}
-      {panel === 'question' && question && <QuestionPanel question={question} />}
-
-      {isSlash && filtered.length > 0 && (
-        <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1}>
-          {filtered.map((c, i) => (
-            <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex}>
-              /{c.name} — {c.hint}
-            </Text>
-          ))}
-        </Box>
-      )}
-
-      {/* Composer: input text pinned to the top edge, permission + model bar
-          pinned to the bottom edge; grows with wrapped content. */}
-      <Box flexShrink={0} borderStyle="round" borderColor={theme.border} paddingX={1} flexDirection="column" justifyContent="space-between"
-        height={composerHeight(width, input, COMPOSER_MIN_HEIGHT)}>
-        <Text color={theme.text} wrap="wrap">{status}{renderComposerText()}</Text>
-        <Box flexDirection="row" gap={2} paddingY={1} marginTop={1}>
-          <Text color={permissionColor}>🔒 {permissionLabel} (Tab)</Text>
-          {modelLabel !== '' && <Text dimColor>Model: {modelLabel}</Text>}
-        </Box>
-      </Box>
-
-      {/* Status bar: workspace left, busy indicator center, command hint right. */}
-      <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} justifyContent="space-between">
-        <Text dimColor wrap="truncate">{store.workspace}</Text>
-        <Box flexGrow={1} justifyContent="center">
-          <BusyIndicator animate={store.running} paused={store.paused} />
-        </Box>
-        <Text dimColor>ctrl+p commands</Text>
-      </Box>
-    </Box>
-  )
-}
-
-/** Composer minimum height (rows); with the bottom bar's padding + margin this
- *  leaves a single row between the input text and the Workspace Write bar. */
-const COMPOSER_MIN_HEIGHT = 5
-
-/** Rows scrolled per mouse-wheel tick. */
-const WHEEL_STEP = 3
-
-/** Height of the composer: at least `min` rows, growing with wrapped input lines. */
-function composerHeight(width: number, input: string, min: number): number {
-  const usable = Math.max(10, width - 4)
-  // Wrap by VISUAL width (CJK/emoji count as two columns, via string-width —
-  // the same rule Ink uses). A code-unit count under-estimates Chinese input's
-  // wrapped rows by up to 2x, so the composer box would lag the real text
-  // height, clip/overflow the border and shift the whole layout at the wrong
-  // keystroke — the worst flicker while typing Chinese.
-  const wrapped = input.split('\n').reduce((sum, seg) => sum + Math.max(1, Math.ceil(visualWidth(seg) / usable)), 0)
-  const cap = Math.max(min, Math.floor(store.rows * 0.4))
-  return Math.min(min + wrapped - 1, cap)
-}
-
-/** Estimated rendered rows for one transcript item at the conversation width. */
-function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
-  if (item.kind === 'reasoning') return expandReasoning ? countWrappedLines(item.text, usable) : 1
-  if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, usable)
-  return countWrappedLines(item.text, usable)
-}
-
-/** Usable text columns for the conversation area (sidebar optional). */
-function convUsableWidth(width: number, showSidebar: boolean): number {
-  const sidebar = showSidebar ? Math.round(width * 0.3) + 2 : 0
-  return Math.max(20, width - 2 - sidebar)
-}
-
-/** Rows the transcript viewport can display given the surrounding fixed parts. */
-function convViewportLines(composerH: number, stepsH: number, modalH: number): number {
-  return Math.max(3, store.rows - composerH - 3 /* status bar: border + row */ - 2 /* conversation paddingY */ - stepsH - modalH)
-}
-
-/** In-band approval prompt over a pending tool call. */
-/** In-band approval prompt over a pending tool call. */
-function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element {
-  const { req } = props.approval
-  return (
-    <Box borderStyle="double" borderColor={theme.warning} flexDirection="column" paddingX={1} paddingY={1}>
-      <Text color={theme.warning} bold>Approval required</Text>
-      <Text>tool: <Text color={theme.secondary}>{req.toolName}</Text>{req.callId ? ` (#${req.callId})` : ''}</Text>
-      {req.reason ? <Text wrap="wrap">{req.reason}</Text> : null}
-      <Text dimColor>y / a = allow this call once · n / Esc = reject</Text>
-    </Box>
-  )
-}
-
-/** Select a persisted session to resume. */
-function ResumePicker(props: { sessions: SessionSummary[]; index: number }): React.JSX.Element {
-  const { sessions, index } = props
-  return (
-    <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1}>
-      <Text color={theme.accent} bold>Resume a session</Text>
-      {sessions.map((s, i) => (
-        <Text key={String(s.id)} color={i === index ? theme.accent : undefined} inverse={i === index}>
-          {String(s.id)} · {s.label}· {s.cwd ?? ''}
-        </Text>
-      ))}
-      <Text dimColor>↑/↓ move · Enter resume · Esc cancel</Text>
-    </Box>
-  )
-}
-
-/** The add-provider form's fields, in entry order (field 1 is the template dropdown). */
-const PROVIDER_FORM_FIELDS: readonly string[] = [
-  'route id (kebab-case)',
-  'display name',
-  'base URL',
-  'API key',
-  'model ids (comma-separated)',
-]
-
-/**
- * The `/models` dialog, matching the harness Settings → Models page's core
- * controls in a TUI: a provider/model picker (↑/↓), the API-key status with a
- * masked input, an "＋ Add provider" entry leading to a sequential form
- * (route / display name / base URL / API key / model ids), and Enter to save.
- * Rendered as an opencode-style dialog that REPLACES the whole screen: a
- * full-terminal backdrop with a centered bordered box. (Ink Boxes cannot
- * paint a background — only Text can — so the backdrop is a wrapping run of
- * spaces with the page color; it is the absolute first child, whose static
- * position is the layout origin, so it covers the screen without offsets.)
- * The input shows a blinking block cursor (React-drawn; the real terminal
- * cursor stays hidden while the dialog is open, see installFrameSuffix). Key
- * input needs no IME, so a React cursor is fine here unlike the composer.
- */
-function ModelsDialog(props: {
-  masked: string
-  models: readonly ModelsOption[]
-  modelIndex: number
-  keyDialog: boolean
-  keyDialogName: string
-  keyDialogConfigured: boolean
-  providerForm: boolean
-  providerField: number
-  providerTemplates: readonly ProviderTemplate[]
-  providerTemplate: number
-  providerValues: readonly string[]
-  providerFormError: string
-  providerList: boolean
-  providerListIndex: number
-  providerNames: readonly { provider: string; name: string; configured: boolean }[]
-  dialogNotice: string
-}): React.JSX.Element {
-  const [cursorOn, setCursorOn] = React.useState(true)
-  React.useEffect(() => {
-    const timer = setInterval(() => setCursorOn((on) => !on), 530)
-    return () => clearInterval(timer)
-  }, [])
-  const block = <Text inverse={cursorOn}> </Text>
-  const fieldCount = PROVIDER_FORM_FIELDS.length + 1 // +1 = the template dropdown
-  return (
-    <Box flexDirection="column" height={store.rows} alignItems="center" justifyContent="center">
-      <Box position="absolute" width="100%" height={store.rows} flexDirection="column">
-        <Text backgroundColor={theme.bg} wrap="wrap">{' '.repeat(Math.max(0, store.width * store.rows))}</Text>
-      </Box>
-      <Box width={72} borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1}>
-        {props.keyDialog ? (
-          <>
-            <Text color={theme.accent} bold>API key for {props.keyDialogName}</Text>
-            <Text color={theme.primary}>{props.masked}{block}</Text>
-            <Text dimColor>{props.keyDialogConfigured ? 'replaces the current key · ' : ''}paste a single-line key · Enter save · Esc cancel</Text>
-          </>
-        ) : props.providerList ? (
-          <>
-            <Text color={theme.accent} bold>Add provider</Text>
-            <Text dimColor>pick a provider to set or change its API key</Text>
-            <Box flexDirection="column" gap={0}>
-              {(() => {
-                // The catalog lists dozens of providers: render only the rows
-                // that fit the dialog, scrolled so the highlighted row stays
-                // in view (centered when possible).
-                const names = props.providerNames
-                const listRows = Math.max(1, store.rows - 8)
-                const start = Math.max(0, Math.min(
-                  props.providerListIndex - Math.floor(listRows / 2),
-                  Math.max(0, names.length - listRows),
-                ))
-                return names.slice(start, start + listRows).map((p, i) => {
-                  const index = start + i
-                  return (
-                    <Text key={p.provider} color={index === props.providerListIndex ? theme.accent : undefined} inverse={index === props.providerListIndex}>
-                      {index === props.providerListIndex ? '› ' : '  '}{p.name}
-                      <Text dimColor>  </Text>
-                      <Text color={p.configured ? theme.success : theme.warning}>{p.configured ? '✓ key set' : 'no key'}</Text>
-                    </Text>
-                  )
-                })
-              })()}
-            </Box>
-            <Text dimColor>↑/↓ choose · Enter select · Esc back</Text>
-          </>
-        ) : props.providerForm ? (
-          <>
-            <Text color={theme.accent} bold>Add a custom provider</Text>
-            <Text color={props.providerField === 0 ? theme.primary : undefined}>
-              1/{fieldCount} provider: {props.providerTemplate < props.providerTemplates.length
-                ? props.providerTemplates[props.providerTemplate]?.name ?? ''
-                : 'Custom provider'}
-              {props.providerField === 0 ? block : null}
-            </Text>
-            {PROVIDER_FORM_FIELDS.map((label, i) => {
-              const field = i + 2
-              return (
-                <Text key={label} color={field === props.providerField ? theme.primary : undefined}>
-                  {field}/{fieldCount} {label}: {props.providerValues[i] ?? ''}
-                  {field === props.providerField ? block : null}
-                </Text>
-              )
-            })}
-            {props.providerFormError !== '' && <Text color={theme.error}>{props.providerFormError}</Text>}
-            <Text dimColor>↑/↓ choose provider · type fields · Enter next · Enter on last saves · Esc cancel</Text>
-          </>
-        ) : (
-          <>
-            <Text color={theme.accent} bold>Models</Text>
-            <Text dimColor>current: {props.modelIndex < props.models.length ? props.models[props.modelIndex]?.label ?? '' : '＋ Add provider'}</Text>
-            <Box flexDirection="column" gap={0}>
-              {props.models.map((m, i) => (
-                <Text key={`${m.provider}/${m.model}`} color={i === props.modelIndex ? theme.accent : undefined} inverse={i === props.modelIndex}>
-                  {i === props.modelIndex ? '› ' : '  '}{m.label}
-                </Text>
-              ))}
-              <Text color={props.modelIndex === props.models.length ? theme.accent : undefined} inverse={props.modelIndex === props.models.length}>
-                {props.modelIndex === props.models.length ? '› ' : '  '}＋ Add provider
-              </Text>
-              <Text color={props.modelIndex === props.models.length + 1 ? theme.accent : undefined} inverse={props.modelIndex === props.models.length + 1}>
-                {props.modelIndex === props.models.length + 1 ? '› ' : '  '}＋ Add a custom provider
-              </Text>
-            </Box>
-            {props.dialogNotice !== '' && <Text color={theme.warning}>{props.dialogNotice}</Text>}
-            <Text dimColor>↑/↓ choose · Enter save · Esc cancel</Text>
-          </>
-        )}
-      </Box>
-    </Box>
-  )
-}
-
-/** In-band user decision (ask_user_question): a menu of options plus a typeable "Other". */
-function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element {
-  const { item, index, custom, customMode } = props.question
-  const options = item.options ?? []
-  return (
-    <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
-      <Text color={theme.accent} bold>Question</Text>
-      <Text wrap="wrap">{item.question}</Text>
-      {item.detail ? <Text dimColor wrap="wrap">{item.detail}</Text> : null}
-      {customMode ? (
-        <Text color={theme.primary}>Your answer: {custom || ''}</Text>
-      ) : (
-        <Box flexDirection="column" gap={1}>
-          {options.map((opt, i) => (
-            <Text key={i} color={i === index ? theme.accent : undefined} inverse={i === index}>
-              {i === index ? '› ' : '  '}{opt.label}{opt.description ? ` — ${opt.description}` : ''}
-            </Text>
-          ))}
-          <Text color={options.length === index ? theme.accent : undefined} inverse={options.length === index}>
-            {options.length === index ? '› ' : '  '}✎ Other…
-          </Text>
-        </Box>
-      )}
-      <Text dimColor>{customMode ? 'type your answer · Enter confirm · Esc cancel' : '↑/↓ move · Enter select · Esc cancel'}</Text>
-    </Box>
-  )
-}
-
-/** Status marker and colour for each step. */
-const STEP_ICON: Record<StepItem['status'], string> = { completed: '✓', in_progress: '→', pending: '·' }
-const STEP_COLOR: Record<StepItem['status'], string | undefined> = { completed: theme.success, in_progress: theme.info, pending: undefined }
-
-/** A list of step rows (capped for the terminal, with a suffix for the rest). */
-function StepRows(props: { steps: readonly StepItem[] }): React.JSX.Element {
-  const visible = props.steps.slice(0, 12)
-  return (
-    <Box flexDirection="column" gap={1}>
-      {visible.map((s, i) => (
-        <Text key={i} color={STEP_COLOR[s.status]} wrap="wrap">
-          {STEP_ICON[s.status]} {s.content}
-        </Text>
-      ))}
-      {props.steps.length > visible.length && <Text dimColor>… +{props.steps.length - visible.length} more</Text>}
-    </Box>
-  )
-}
-
-/** The pinned step-plan block shown at the top of the conversation. */
-function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
-  const done = props.steps.filter((s) => s.status === 'completed').length
-  return (
-    <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
-      <Text color={theme.accent} bold>Steps {done}/{props.steps.length}</Text>
-      <StepRows steps={props.steps} />
-    </Box>
-  )
-}
-
-/** Process-facing effects: the launcher's bounded exit request. */
+/** The current agent's session id, set once the agent is created. */
 interface TuiIo { exit(code: number): void }
 
 function requestExit(io: TuiIo, code: number): void { void io.exit(code) }
@@ -1580,11 +1242,19 @@ async function apiKeyConfigured(ctx: Context): Promise<boolean> {
   }
 }
 
-/** Flatten the models service's providers into picker options (one per model). */
-function buildModelOptions(providers: readonly ModelsProviderOption[]): ModelsOption[] {
-  return providers.flatMap((p) =>
-    p.models.map((m) => ({ provider: p.provider, model: m.id, label: `${p.name} · ${m.name}` })),
-  )
+/** Group the models service's providers into first-level entries (one per provider). */
+function buildProviderEntries(providers: readonly ModelsProviderOption[]): ProviderModelsEntry[] {
+  return providers.map((p) => ({
+    provider: p.provider,
+    name: p.name,
+    models: p.models.map((m) => ({
+      provider: p.provider,
+      model: m.id,
+      label: m.name,
+      ...(m.efforts === undefined ? {} : { efforts: m.efforts }),
+      ...(m.defaultEffort === undefined ? {} : { defaultEffort: m.defaultEffort }),
+    })),
+  }))
 }
 
 /** Map a provider model id to a friendly display name (display only). */
@@ -1596,6 +1266,12 @@ function modelDisplayName(model: string): string {
     'deepseek-v4-flash-vision-exp': 'DeepSeek V4 Flash Vision Exp',
   }
   return known[model] ?? model
+}
+
+/** Map a provider route to a friendly display name (template name or the built-in). */
+function providerDisplayName(provider: string, templates: readonly TuiProviderTemplate[]): string {
+  if (provider === 'deepseek-official') return 'DeepSeek'
+  return templates.find((t) => t.route === provider)?.name ?? provider
 }
 
 /** Heuristic: does this bash command modify the filesystem? (best-effort; the
@@ -1622,7 +1298,77 @@ function bashMutates(command: string): boolean {
  * @param ctx - plugin context carrying the Agent, default model, Session, and launcher IO services.
  * @param config - the resolved invocation flags.
  */
+/** Dispatch one decoded key to the active panel's handler (or the conversation
+ *  panel). This replaces Ink's `useInput` (whose parser swallows Alt+Enter/
+ *  Home/End and appends SGR mouse bytes as literal text). */
+function handleKey(k: RawKey): void {
+  const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
+  def?.handleKey?.(k, store)
+}
+
+/** Captures render-phase errors from the panel tree (e.g. a layout computation
+ *  throwing on unexpected data). React treats such errors as recoverable and
+ *  prints them in ways that bypass the log hooks (bun writes to fd 2 natively;
+ *  Ink drops 'The above error occurred' frames), so the boundary is what puts
+ *  them into `~/.dsh/dsh-tui.log` via `logError('render', ...)`. */
+class RenderErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+  componentDidCatch(error: Error): void {
+    try {
+      logError('render', error)
+    } catch {
+      // best-effort: never throw from the error boundary
+    }
+  }
+  render(): React.ReactNode {
+    if (this.state.error !== null) {
+      return <Text color={theme.error}>⚠ render error: {this.state.error.message}</Text>
+    }
+    return this.props.children
+  }
+}
+
+/** The terminal-owning app: renders the active fullscreen panel, or the
+ *  conversation surface (which embeds its overlay panels). */
+export function App(): React.JSX.Element {
+  const [, forceRender] = React.useReducer((c: number) => c + 1, 0)
+  React.useEffect(() => store.subscribe(() => forceRender()), [])
+  const active = tui.panels.byId(store.panel)
+  // Fullscreen panels replace the tree; overlay panels render inside the
+  // conversation surface, which embeds them (see the overlay() slots).
+  const def = active !== undefined && active.mode === 'fullscreen' ? active : tui.panels.byId('conversation')
+  if (def === undefined) return <></>
+  return <RenderErrorBoundary>{def.render(store)}</RenderErrorBoundary>
+}
+
+/** The /help dialog: points at the ctrl+p command palette (Esc closes). */
+function HelpDialog(): React.JSX.Element {
+  return (
+    <Box flexDirection="column" height={store.rows} alignItems="center" justifyContent="center">
+      <Box position="absolute" width="100%" height={store.rows} flexDirection="column">
+        <Text backgroundColor={theme.bg} wrap="wrap">{' '.repeat(Math.max(0, store.width * store.rows))}</Text>
+      </Box>
+      <Box width={72} borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1}>
+        <Text color={theme.accent} bold>Help</Text>
+        <Box marginTop={1}>
+          <Text>Press ctrl+p to see all available actions and commands in any context.</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text dimColor>Esc close</Text>
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
 export function apply(ctx: Context, config: Config): void {
+  // Surface services for this plugin tree and every panel plugin: the store
+  // (UI state) and the `tui` aggregate (panel/command registration, notify).
+  ctx.provide('tuiStore', store)
+  ctx.provide('tui', tui)
   const exit = ctx.get('appExit')
   if (exit === undefined) {
     throw new Error('tui-runtime: the launcher must provide ctx.appExit before the tree mounts')
@@ -1679,6 +1425,13 @@ export function apply(ctx: Context, config: Config): void {
     if (sessionRef.current === undefined || req.agent.session.id !== sessionRef.current) return next()
     let timer: ReturnType<typeof setTimeout> | undefined
     const result = await new Promise<ApprovalOutcome>((resolve) => {
+      // opencode-style "allow always": a tool the user approved with `a` this
+      // session is auto-allowed without prompting again.
+      if (req.toolName !== undefined && store.isAllowAlways(req.toolName)) {
+        store.append('status', `approval: ${req.toolName} auto-allowed (allow always)`, true)
+        resolve('allowed-once')
+        return
+      }
       store.setApproval({ req, resolve })
       if (req.signal) {
         req.signal.addEventListener('abort', () => resolve('cancelled'), { once: true })
@@ -1713,24 +1466,6 @@ export function apply(ctx: Context, config: Config): void {
   })
 }
 
-/** Install the per-frame suffix hook the patched Ink frame writer (see
- *  apps/tui-bin/build.mjs) appends to every full-screen frame it writes: it
- *  re-shows the REAL terminal cursor and parks it at the composer caret, so the
- *  macOS IME composition/candidate window — which anchors to the real cursor —
- *  stays at the input position instead of jumping on every redraw while typing
- *  Chinese. Called once at startup; exported so the headless verification can
- *  exercise the same wiring. */
-export function installFrameSuffix(): void {
-  const frameSuffix = (): string => {
-    // While the connect dialog is open the composer sits under the overlay
-    // backdrop, so parking the real cursor there would show it mid-backdrop;
-    // the dialog input is drawn as masked dots, so hide the cursor instead.
-    if (store.panel === 'connect') return '\x1b[?25l'
-    const cell = composerCaretCell()
-    return `\x1b[?25h${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
-  }
-  ;(globalThis as unknown as { __dshTuiFrameSuffix?: () => string }).__dshTuiFrameSuffix = frameSuffix
-}
 
 /** The async session lifetime, started from `apply` and owned by this plugin. */
 async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
@@ -1752,25 +1487,109 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     installModelSelection(agentCtx, selected)
   }
 
-  const resumeId = config.resume
-  const handle = resumeId === undefined
-    ? await agents.create({
-        sessionId: SessionId(`session-${randomUUID()}`),
-        meta: { cwd: config.workspace },
-        agentOptions,
-        setup,
-      })
-    : await agents.resume({ resumeSessionId: SessionId(resumeId), agentOptions, setup })
-  const { agent } = handle
-  const sessionId = agent.session.id
+  // Explicit `--resume <id>` wins; otherwise the auto-resume default
+  // (dsh-tui.json `resume_last`, default on) continues the newest session with
+  // real content in this same directory — empty sessions (created and exited
+  // without a message) are skipped, so relaunching picks up the last actual
+  // work rather than a blank transcript.
+  let handle: AgentHandle | undefined
+  let resumed = false
+  if (config.resume !== undefined) {
+    handle = await agents.resume({ resumeSessionId: SessionId(config.resume), agentOptions, setup })
+    resumed = true
+  } else if (resolveResumeLast()) {
+    handle = await autoResumeNewest(ctx, agents, config.workspace, agentOptions, setup)
+    resumed = handle !== undefined
+  }
+  if (handle === undefined) {
+    handle = await agents.create({
+      sessionId: SessionId(`session-${randomUUID()}`),
+      meta: { cwd: config.workspace },
+      agentOptions,
+      setup,
+    })
+  }
+  // `handle` / `agent` / `sessionId` are reassigned by `newSessionAction` when
+  // `/new` switches to a fresh session; every closure below reads them through
+  // the `let` bindings, so the listeners and slots track the live session.
+  let agent = handle.agent
+  let sessionId = agent.session.id
   sessionRef.current = sessionId
   store.setSession(agent.session)
-  // No API key -> surface "not set" in the composer; with a key,
-  // show the model name.
-  const modelLabel = (await apiKeyConfigured(ctx)) ? modelDisplayName(agentOptions.model) : 'not set'
-  store.setModelLabel(modelLabel)
+  // The active session is the most recently used one (drives list ordering and
+  // the launch auto-resume).
+  touchSession(sessionId)
+  // A resumed session carries its full event log; fold it into the transcript
+  // so the UI shows the history, not a blank surface (the live listener below
+  // only receives new events). `/new`-created sessions have no history.
+  if (resumed) {
+    const history = foldHistoryEvents(agent.session.events)
+    store.loadHistory(history.items, history.steps)
+  }
+  // The merged template directory (core + plugin-registered), read live so a
+  // sibling plugin's additions apply without a restart.
+  const templates = (): readonly TuiProviderTemplate[] =>
+    (ctx.get('tuiLlmTemplates') as { list(): readonly TuiProviderTemplate[] } | undefined)?.list() ?? []
+  // No API key -> surface "not set" in the composer; with a key, show the
+  // provider · model name (so the same model id from different gateways is
+  // distinguishable), plus the saved reasoning effort when one is selected.
+  const savedEffort = selection.reasoningEffort === undefined ? undefined : String(selection.reasoningEffort)
+  const effortSuffix = savedEffort === undefined ? '' : ` · ${reasoningEffortName(savedEffort)}`
+  const hasKey = await apiKeyConfigured(ctx)
+  const modelLabel = hasKey
+    ? `${providerDisplayName(agentOptions.provider ?? 'deepseek-official', templates())} · ${modelDisplayName(agentOptions.model)}${effortSuffix}`
+    : 'not set'
+  store.setModelLabel(modelLabel, hasKey ? (savedEffort === undefined ? '' : reasoningEffortName(savedEffort)) : '')
+  // Keep the store's current selection in sync with the persisted default so
+  // the /models dialog preselects the right provider/model/effort on open.
+  store.currentModel = {
+    provider: agentOptions.provider ?? 'deepseek-official',
+    model: agentOptions.model,
+    ...(savedEffort === undefined ? {} : { reasoningEffort: savedEffort }),
+  }
+  // Hidden-provider list (Ctrl+D/Alt+D in the /models first level): seed from
+  // the config file and persist every change back to it.
+  store.seedHiddenProviders(readHiddenProviders())
+  store.onHiddenProvidersChange = (routes) => { setHiddenProviders(routes) }
+  // Belt-and-braces: a session whose current model provider is hidden (e.g. it
+  // was deactivated in an older build, or the default persisted before the
+  // hide) must not keep `current:` pointing at it. Switch to the first still
+  // visible configured provider, else the built-in DeepSeek route.
+  if (store.isProviderHidden(store.currentModel.provider)) {
+    const service = ctx.get('tuiModels') as TuiModelsService | undefined
+    void (service?.listConfigured() ?? Promise.resolve([])).then((providers) => {
+      const visible = providers.filter((p) => !store.isProviderHidden(p.provider))
+      if (visible.length === 0) {
+        // No active (configured + visible) provider remains: show "not set"
+        // rather than pointing at a dead route.
+        store.setModelLabel('not set', '')
+        return
+      }
+      // Prefer the built-in DeepSeek route over a same-brand sibling, so the
+      // composer and `current:` stop showing the hidden provider's family.
+      const fallback = visible.find((p) => p.provider === 'deepseek-official') ?? visible[0]
+      store.modelsSaveAction(
+        fallback.provider,
+        fallback.models[0]?.id ?? 'deepseek-v4-flash',
+      )
+    }).catch(() => { /* best-effort: the /models dialog shows the current provider until the user picks */ })
+  }
 
-  store.append('status', `Session ${sessionId} in ${config.workspace}`, true)
+  store.append('status', `Session ${sessionId} in ${config.workspace}${resumed ? ' (resumed)' : ''}`, true)
+
+  // Warm the title cache shortly after launch so the first /sessions open
+  // already has every title (no visible folding delay).
+  setTimeout(() => {
+    void (async (): Promise<void> => {
+      const persistence = ctx.get('sessionPersistence') as (SessionTitlesPersistence & { list?: (signal?: AbortSignal) => Promise<SessionHeaderLike[]> }) | undefined
+      if (persistence?.list === undefined) return
+      try {
+        await prewarmTitles(persistence, await persistence.list())
+      } catch {
+        // Prewarm is best-effort; a failing list must not disturb the session.
+      }
+    })()
+  }, 500).unref()
 
   ctx.on('session/event', (session, event: SessionEvent) => {
     if (session.id !== sessionId) return
@@ -1811,6 +1630,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         store.toolResult()
         break
       }
+      // The session title (first-task summary) folds in the harness
+      // session-title service; remember it so the /sessions and /resume lists
+      // never need to re-read the log for this session.
+      case 'session/title': {
+        rememberTitle(sessionId, event.data.title)
+        break
+      }
       // Non-user user/message = injected context (e.g. the system prompt),
       // rendered as a "Context injection" notice like dsh web.
       case 'user/message': {
@@ -1826,71 +1652,148 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
 
   store.append('status', 'Ready. Enter to send · Ctrl+C clears the input · /exit quits.', true)
 
-  // Wire the slash commands (built after the agent exists).
-  const commandItems: CommandItem[] = [
-    { name: 'help', hint: 'show this help', run: () => { store.append('status', '/help · /think · /models · /compact · /clear · /resume · /sidebar · /exit', true) } },
-    { name: 'models', hint: 'manage models and the API key', run: () => {
-      if (modelsService === undefined) {
-        store.append('status', 'models: service unavailable', true)
+  // Wire the slash commands (built after the agent exists). Core commands
+  // only; `/models` and `/sessions` register from their panel plugins.
+  tui.panels.register({
+    id: 'help',
+    mode: 'fullscreen',
+    render: () => <HelpDialog />,
+    handleKey: (k) => {
+      if (k.escape || (k.ctrl && (k.char ?? '') === 'c')) store.cancelHelp()
+      return true
+    },
+  })
+  tui.commands.register({ name: 'help', hint: 'show this help', run: () => { store.openHelp() } })
+  tui.commands.register({ name: 'think', hint: 'expand/collapse the Think (reasoning) text', run: () => { store.toggleReasoning() } })
+  tui.commands.register({
+    name: 'compact',
+    hint: 'compact the session history',
+    run: (arg) => {
+      // The harness `/compact` takes no arguments; mirror its usage guard.
+      if (arg.trim() !== '') {
+        store.append('status', 'Usage: /compact (no arguments)', true)
         return
       }
-      void modelsService.listConfigured().then((providers) => {
-        const options = buildModelOptions(providers)
-        store.openModels(options, Math.max(0, options.findIndex((o) => o.provider === selection.provider && o.model === selection.model)))
-      })
-    } },
-    { name: 'think', hint: 'expand/collapse the Think (reasoning) text', run: () => { store.toggleReasoning() } },
-    { name: 'compact', hint: 'compact the session history', run: () => { void compact(ctx, agent, sessionId, selection.provider, selection.model, io) } },
-    { name: 'clear', hint: 'clear the transcript', run: () => { store.clear() } },
-    {
-      name: 'resume',
-      hint: 'pick a persisted session',
-      run: () => { void loadSessions(ctx).then((list) => store.setSessions(list)) },
+      void compact(ctx, agent)
     },
-    {
-      name: 'sidebar',
-      hint: 'show/hide threshold for the right sidebar',
-      run: (arg) => {
-        if (arg.trim() === '') {
-          store.append('status', `sidebar min width: ${store.sidebarMin} columns (default 110, ~/.dsh/dsh-tui.json)`, true)
-          return
-        }
-        const n = Number(arg)
-        if (!Number.isFinite(n) || n < 0) {
-          store.append('status', `sidebar: invalid width "${arg}"`, true)
-          return
-        }
-        store.setSidebarMin(n)
-        store.append('status', `sidebar min width set to ${n} columns (saved to ~/.dsh/dsh-tui.json)`, true)
-      },
-    },
-    { name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } },
-  ]
-  store.setCommands(commandItems)
+  })
+  tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { store.clear() } })
+  tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
 
-  submitMessage = (text) => {
-    if (inputHistory.at(-1) !== text) {
-      inputHistory.push(text)
-      if (inputHistory.length > 100) inputHistory.shift()
+  store.submitMessage = (text) => {
+    if (store.inputHistory.at(-1) !== text) {
+      store.inputHistory.push(text)
+      if (store.inputHistory.length > 100) store.inputHistory.shift()
     }
-    resetHistoryBrowse()
     store.setPaused(false) // any new message resumes; the model decides what to do
     store.append('user', text)
+    touchSession(sessionId)
     agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
   }
-  cancelAction = () => { /* nothing: keep the session open */ }
+  store.cancelAction = () => { /* nothing: keep the session open */ }
   const modelsService = ctx.get('tuiModels') as TuiModelsService | undefined
-  modelsSaveAction = (provider: string, model: string) => {
+  // Fill the Add-provider dropdown from the merged template directory once at
+  // startup (re-fillable by a plugin calling setProviderTemplates again).
+  store.setProviderTemplates(templates().map((t) => ({
+    id: t.route,
+    name: t.name,
+    baseURL: t.baseURL,
+    ...(t.models !== undefined ? { models: t.models } : {}),
+  })))
+  store.modelsSaveAction = (provider: string, model: string, effort?: string) => {
     // The mutable selection ref is read per request by prompt assembly, so
-    // updating it switches the LIVE agent's next request to the new model
-    // (the same mechanism the web Models page uses); saveSelection persists
-    // the default for future runs.
-    selected.current = { provider, model }
-    void defaultModel.saveSelection({ provider, model }).catch(() => { /* best-effort persist */ })
-    void apiKeyConfigured(ctx).then(ok => store.setModelLabel(ok ? modelDisplayName(model) : 'not set'))
-    store.append('status', `models: ${provider} · ${modelDisplayName(model)}`, true)
+    // updating it switches the LIVE agent's next request to the new model and
+    // reasoning effort (the same mechanism the web Models page uses);
+    // saveSelection persists the default for future runs. An absent effort
+    // clears any inherited one, restoring the model's own default behavior.
+    const next: ModelSelection = effort === undefined
+      ? { provider, model }
+      : { provider, model, reasoningEffort: effort as ModelSelection['reasoningEffort'] }
+    selected.current = next
+    store.currentModel = { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
+    void defaultModel.saveSelection(next).catch(() => { /* best-effort persist */ })
+    // Label with the provider name too, so the same model id from different
+    // gateways is distinguishable (OpenCode Zen · DeepSeek V4 Flash vs
+    // DeepSeek · DeepSeek V4 Flash), plus the saved effort when chosen.
+    const providerEntry = modelsService?.listProviders().find((p) => p.provider === provider)
+    const providerName = providerEntry?.name ?? providerDisplayName(provider, templates())
+    const modelName = providerEntry?.models.find((m) => m.id === model)?.name ?? modelDisplayName(model)
+    const effortDisplay = effort === undefined ? '' : reasoningEffortName(effort)
+    const effortSuffix = effortDisplay === '' ? '' : ` · ${effortDisplay}`
+    void apiKeyConfigured(ctx).then(ok => store.setModelLabel(ok ? `${providerName} · ${modelName}${effortSuffix}` : 'not set', ok ? effortDisplay : ''))
+    store.append('status', `models: ${providerName} · ${modelName}${effortSuffix}`, true)
   }
-  openProviderList = () => {
+  // Ctrl+T / Alt+T: cycle the current model's reasoning effort through its
+  // declared levels (wraps), like opencode's variant_cycle; the save path
+  // above persists the new effort and updates the composer label/status.
+  store.cycleEffort = () => {
+    const { provider, model } = store.currentModel
+    const entry = modelsService?.listProviders().find((p) => p.provider === provider)
+    const option = entry?.models.find((m) => m.id === model)
+    const choices = option?.efforts ?? []
+    if (option === undefined || choices.length === 0) {
+      store.append('status', `models: ${model} has no reasoning effort`, true)
+      return
+    }
+    const current = store.currentModel.reasoningEffort
+    const start = current ?? option.defaultEffort ?? ''
+    let index = choices.findIndex((e) => e.id === start)
+    if (index < 0) index = -1
+    const next = choices[(index + 1) % choices.length]
+    if (next !== undefined) store.modelsSaveAction(provider, model, next.id)
+  }
+  // Ctrl+D / Alt+D on a first-level provider: hide it from /models AND remove
+  // its API key (deactivate). An environment-supplied key survives (it cannot
+  // be deleted from here) — the hidden set keeps the provider off the list
+  // until a stored key is set again in "Add provider".
+  store.deactivateProvider = (route: string, name: string) => {
+    const service = ctx.get('tuiModels') as TuiModelsService | undefined
+    void (async (): Promise<void> => {
+      let envNote = ''
+      if (service !== undefined) {
+        const result = await service.removeKey(route)
+        if (!result.ok) {
+          store.setDialogNotice(`hidden ${name} — ${result.error}`)
+          return
+        }
+        if (result.envKey) envNote = ' (the key lives in the environment — remove it there to fully deactivate)'
+      }
+      const wasCurrent = store.currentModel.provider === route
+      // Pick a fallback BEFORE the row disappears from the (visible) list.
+      // Prefer the built-in DeepSeek route (a clearly different brand) over
+      // the first sibling — same-brand gateways (e.g. Moonshot AI vs Moonshot
+      // AI (CN), which share one API key) would otherwise keep the composer
+      // and `current:` looking like the hidden provider.
+      const others = wasCurrent ? store.providers.filter((p) => p.provider !== route) : []
+      const fallback = others.find((p) => p.provider === 'deepseek-official') ?? others[0]
+      store.hideProvider(route)
+      if (wasCurrent && others.length === 0) {
+        // No active (configured + visible) provider remains: clear the model
+        // selection to "not set" instead of pointing at a dead route.
+        store.setModelLabel('not set', '')
+        store.setDialogNotice(
+          `hidden ${name} — API key removed${envNote}; no active providers left — model not set`,
+        )
+        return
+      }
+      if (wasCurrent) {
+        // The deactivated provider was the current model: switch the live
+        // selection away so "current:" never points at a hidden provider (and
+        // later requests do not target a keyless route).
+        const provider = fallback?.provider ?? 'deepseek-official'
+        const model = fallback?.models[0]?.model ?? 'deepseek-v4-flash'
+        store.modelsSaveAction(provider, model)
+        const modelName = fallback?.models[0]?.label ?? modelDisplayName(model)
+        const fallbackName = fallback?.name ?? 'DeepSeek'
+        store.setDialogNotice(
+          `hidden ${name} — API key removed${envNote}; current model switched to ${fallbackName} · ${modelName}`,
+        )
+        return
+      }
+      store.setDialogNotice(`hidden ${name} — API key removed${envNote}; re-add it in "Add provider"`)
+    })()
+  }
+  store.openProviderList = () => {
     if (modelsService === undefined) return
     void modelsService.listAll().then((names) => {
       if (names.length === 0) {
@@ -1901,7 +1804,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       store.startProviderList(names)
     })
   }
-  keyDialogSubmit = (provider: string, name: string, key: string) => {
+  store.keyDialogSubmit = (provider: string, name: string, key: string) => {
     if (modelsService === undefined) return
     void modelsService.setKey(provider, key).then((result) => {
       if (!result.ok) {
@@ -1909,14 +1812,17 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         return
       }
       store.append('status', `models: API key saved for ${name}`, true)
+      // Setting a key through "Add provider" is the re-add path for a hidden
+      // provider: clear its hidden flag so /models lists it again.
+      store.unhideProvider(provider)
       // Activating a dormant catalog route registers asynchronously (settings
       // write → adapter hot re-register), and its model list only resolves
       // once the route is registered, so poll until the picker can show it.
       const refresh = (attempts: number): void => {
         void modelsService.listConfigured().then((providers) => {
-          const options = buildModelOptions(providers)
-          if (options.some((o) => o.provider === provider) || attempts <= 0) {
-            store.openModels(options, Math.max(0, options.findIndex((o) => o.provider === provider)))
+          const entries = buildProviderEntries(providers)
+          if (entries.some((e) => e.provider === provider) || attempts <= 0) {
+            store.openModels(entries, Math.max(0, entries.findIndex((e) => e.provider === provider)))
             return
           }
           setTimeout(() => refresh(attempts - 1), 120)
@@ -1925,7 +1831,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       refresh(25)
     })
   }
-  providerFormSubmit = (input: AddProviderInput) => {
+  store.providerFormSubmit = (input: AddProviderInput) => {
     if (modelsService === undefined) {
       store.showProviderFormError('models service unavailable')
       return
@@ -1938,9 +1844,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // The settings write commits before the pi-ai adapter re-registers the
       // new route, so poll briefly until the picker can see it.
       const refresh = (attempts: number): void => {
-        const options = buildModelOptions(modelsService.listProviders())
-        if (options.some((o) => o.provider === input.route.trim()) || attempts <= 0) {
-          store.openModels(options, Math.max(0, options.findIndex((o) => o.provider === input.route.trim())))
+        const entries = buildProviderEntries(modelsService.listProviders())
+        if (entries.some((e) => e.provider === input.route.trim()) || attempts <= 0) {
+          store.openModels(entries, Math.max(0, entries.findIndex((e) => e.provider === input.route.trim())))
           store.append('status', `models: provider ${input.route.trim()} added`, true)
           return
         }
@@ -1949,19 +1855,90 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       refresh(10)
     })
   }
-  pauseAgent = () => {
+  store.pauseAgent = () => {
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     store.setPaused(true)
+  }
+  store.newSessionAction = () => {
+    // The `/new` command: start a brand-new session in place, modeled on
+    // opencode's command-palette "New session" entry. The harness persists
+    // every session durably (write-behind on session/event), so the old one
+    // stays reachable from /sessions / --resume after it is torn down here.
+    if (store.running) {
+      try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
+    }
+    void (async (): Promise<void> => {
+      try {
+        // Create the next agent BEFORE tearing the old one down: a failed
+        // create leaves the current session untouched.
+        const next = await agents.create({
+          sessionId: SessionId(`session-${randomUUID()}`),
+          meta: { cwd: config.workspace },
+          agentOptions,
+          setup,
+        })
+        // The runtime owns exactly one live handle by the time a user can run
+        // `/new`, so it is always set here.
+        const old = handle
+        if (old === undefined) return
+        try { await old.dispose() } catch (error) { logError('new: disposing the old session failed', error) }
+        handle = next
+        agent = next.agent
+        sessionId = agent.session.id
+        sessionRef.current = sessionId
+        store.setSession(agent.session)
+        touchSession(sessionId)
+        store.clear() // transcript + steps from the old session
+        store.setRunning(false)
+        store.setPaused(false)
+        store.append('status', `New session ${sessionId} in ${config.workspace}`, true)
+      } catch (error) {
+        store.append('status', `new: ${error instanceof Error ? error.message : String(error)}`, true)
+      }
+    })()
+  }
+  store.resumeSessionAction = (id) => {
+    // The /sessions dialog's Enter: switch to the selected persisted session
+    // in place, exactly like the launch auto-resume (agents.resume + history
+    // replay). The target is resumed BEFORE the old agent is disposed, so a
+    // failed load leaves the current session untouched.
+    if (String(id) === String(sessionId)) {
+      store.append('status', `already on session ${sessionId}`, true)
+      return
+    }
+    if (store.running) {
+      try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
+    }
+    void (async (): Promise<void> => {
+      try {
+        const next = await agents.resume({ resumeSessionId: SessionId(id), agentOptions, setup })
+        const old = handle
+        if (old === undefined) return
+        try { await old.dispose() } catch (error) { logError('resume: disposing the old session failed', error) }
+        handle = next
+        agent = next.agent
+        sessionId = agent.session.id
+        sessionRef.current = sessionId
+        store.setSession(agent.session)
+        touchSession(sessionId)
+        const history = foldHistoryEvents(agent.session.events)
+        store.loadHistory(history.items, history.steps)
+        store.setRunning(false)
+        store.setPaused(false)
+        store.append('status', `Session ${sessionId} in ${config.workspace} (resumed)`, true)
+      } catch (error) {
+        store.append('status', `resume: ${error instanceof Error ? error.message : String(error)}`, true)
+      }
+    })()
   }
   store.setWorkspace(config.workspace)
   ctx.on('agent/status', (payload: { agent: { id: SessionId }; status: 'idle' | 'running' }) => {
     if (payload.agent.id !== sessionId) return
-    if (payload.status === 'running') lastEscTime = 0 // fresh turn: clear a stale single-Esc window
+    if (payload.status === 'running') store.lastEscTime = 0 // fresh turn: clear a stale single-Esc window
     store.setRunning(payload.status === 'running')
   })
 
-  // Enable raw mode so the terminal owns no input processing; the TERMINAL
-  // keeps its native mouse behavior (plain-drag selection / wheel scrollback).
+  // Enable raw mode so the terminal owns no input processing.
   if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
     process.stdin.setRawMode(true)
   }
@@ -1974,12 +1951,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // Chinese. The patched Ink frame writer (apps/tui-bin/build.mjs) appends the
   // suffix after all line updates, so the position is never overwritten by the
   // next frame.
-  installFrameSuffix()
+  const app = render(<App />)
 
-  const app = render(<App
-    onSubmit={submitMessage}
-    onCancel={cancelAction}
-  />)
+  // NOTE: mouse tracking is intentionally NOT enabled — the terminal keeps
+  // its default behavior (no mouse events to the app; native selection and
+  // wheel scrollback stay with the terminal).
 
   // Live terminal width: Bun/Node emit 'resize' on process.stdout and update
   // `columns`; Ink only re-renders the DOM, so we drive a reactive Store size.
@@ -2010,9 +1986,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }
   process.stdin.on('data', onStdin)
 
-  if (resumeId === undefined && config.resume === undefined) {
-    void loadSessions(ctx).then((list) => store.setSessions([] as SessionSummary[])).catch(() => {})
-  }
 
   // Restore the terminal on exit. This handler is registered after every other
   // exit-time writer (log.ts's stderr mirror of `dsh-tui exited`, Ink's
@@ -2042,199 +2015,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
  * @param row - the SGR mouse row (1-based).
  * @param col - the SGR mouse column (1-based).
  */
-function positionCursorByMouse(row: number, col: number): void {
-  const index = composerInputIndex(row, col)
-  if (index !== null) store.setCursor(index)
-}
-
-/** Input character index under a terminal cell inside the composer, or null. */
-function composerInputIndex(row: number, col: number): number | null {
-  const width = process.stdout.columns ?? 80
-  const height = process.stdout.rows ?? 24
-  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
-  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
-  const inRow = row - composerTop // 0-based row within the composer (0 = top border)
-  const usable = Math.max(10, width - 4)
-  const visualStarts: number[] = []
-  for (let i = 0; i <= store.input.length; i++) {
-    if (i === 0 || store.input[i - 1] === '\n') visualStarts.push(i)
-  }
-  const lineAt = (start: number): string => {
-    const nl = store.input.indexOf('\n', start)
-    return store.input.slice(start, nl === -1 ? store.input.length : nl)
-  }
-  // Wrapping is counted by visual width, not code units: Chinese lines wrap at
-  // half the characters the composer's box width would suggest.
-  const inputRows = visualStarts.reduce((sum, start) => sum + Math.max(1, Math.ceil(visualWidth(lineAt(start)) / usable)), 0)
-  const clickRow = inRow - 1 // after the top border
-  if (clickRow < 0 || clickRow >= inputRows) return null
-  let acc = 0
-  for (const start of visualStarts) {
-    const line = lineAt(start)
-    const visLines = Math.max(1, Math.ceil(visualWidth(line) / usable))
-    if (clickRow < acc + visLines) {
-      // Map the clicked terminal column to a character index, counting wide
-      // (CJK) characters as two columns (mirrors colToChar).
-      return start + colToChar(line, Math.max(0, col - 3))
-    }
-    acc += visLines
-  }
-  return null
-}
-
-/** Terminal cell (1-based row/col) of the composer caret, or null when the
- *  composer has no laid-out position. Used to park the REAL terminal cursor at
- *  the caret: macOS Terminal anchors the IME composition/candidate window to
- *  that cursor, so keeping it at the input position stops the candidate window
- *  from jumping on every redraw while typing Chinese. */
-function composerCaretCell(): { row: number; col: number } | null {
-  const width = process.stdout.columns ?? 80
-  const height = process.stdout.rows ?? 24
-  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
-  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
-  const usable = Math.max(10, width - 4)
-  const caret = Math.max(0, Math.min(store.cursor, store.input.length))
-  // Visual (row, col) of the caret inside the input text (rows count wrapping):
-  // each '\n'-separated segment occupies ceil(visualWidth/usable) rows, and the
-  // caret's own segment wraps again at `usable` columns within the segment
-  // (mirrors composerInputIndex, the inverse mouse-click mapping).
-  let visRow = 0
-  let visCol = 0
-  let pos = 0
-  while (pos < caret) {
-    const nl = store.input.indexOf('\n', pos)
-    const end = nl === -1 ? store.input.length : nl
-    if (caret <= end) {
-      const upToCaret = visualWidth(store.input.slice(pos, caret))
-      visRow += Math.floor(upToCaret / usable)
-      visCol = upToCaret % usable
-      pos = caret
-    } else {
-      visRow += Math.max(1, Math.ceil(visualWidth(store.input.slice(pos, end)) / usable))
-      pos = end + 1
-    }
-  }
-  // Composer layout: top border at `composerTop`, input text starts on the next
-  // row; text column 0 sits at terminal column 3 (border at 1, paddingX at 2).
-  return { row: composerTop + 1 + visRow, col: 3 + visCol }
-}
-
-/** The composer-input offset range covered by a mouse selection, or null. */
-function composerSelectionRange(sel: { aRow: number; aCol: number; cRow: number; cCol: number }): { start: number; end: number } | null {
-  const a = composerInputIndex(sel.aRow, sel.aCol)
-  const c = composerInputIndex(sel.cRow, sel.cCol)
-  if (a === null && c === null) return null
-  const start = a === null ? 0 : c === null ? a : Math.min(a, c)
-  const end = a === null ? (c ?? 0) : c === null ? store.input.length : Math.max(a, c)
-  if (start >= end) return null
-  return { start, end }
-}
-
-/** The status bar height in terminal rows (bordered single-line bar). */
-const STATUS_BAR_HEIGHT = 3
-
-/** Estimated StepsBlock height (rows); shared by the viewport and mouse mapping. */
-function stepsBlockHeight(count: number): number {
-  return count > 0 ? Math.min(12, 5 + 2 * count) : 0
-}
-
-/** One flat visual row of the transcript (selection model). */
-interface TranscriptRow { readonly text: string; readonly itemIndex: number }
-
-/** Wrap `text` into visual rows at most `usable` columns wide. */
-function wrapRows(text: string, usable: number): string[] {
-  const out: string[] = []
-  for (const seg of text.split('\n')) {
-    if (visualWidth(seg) <= usable) { out.push(seg); continue }
-    let line = ''
-    let lineW = 0
-    for (const ch of seg) {
-      const cw = visualWidth(ch)
-      if (line !== '' && lineW + cw > usable) { out.push(line); line = ''; lineW = 0 }
-      line += ch
-      lineW += cw
-    }
-    out.push(line)
-  }
-  return out
-}
-
-/** Flat visual rows of the whole transcript, mirroring the rendered layout (gap row between items). */
-function buildTranscriptRows(items: readonly TranscriptItem[], usable: number, expandReasoning: boolean): TranscriptRow[] {
-  const rows: TranscriptRow[] = []
-  items.forEach((item, i) => {
-    if (i > 0) rows.push({ text: '', itemIndex: i - 1 })
-    let plain: string
-    if (item.kind === 'reasoning') {
-      plain = expandReasoning ? item.text : `◇ Think · ${item.text.split('\n')[0]}`
-    } else {
-      plain = item.kind === 'assistant' && item.text.length <= 8000 ? markdownPlain(item.text) : item.text
-    }
-    for (const line of wrapRows(plain, usable)) rows.push({ text: line, itemIndex: i })
-  })
-  return rows
-}
-
-/** Map a terminal column into a character index within `line` (wide chars count twice). */
-function colToChar(line: string, col: number): number {
-  let w = 0
-  for (let i = 0; i < line.length; i++) {
-    const cw = visualWidth(line[i]!)
-    if (w + cw > col) return i
-    w += cw
-  }
-  return line.length
-}
-
-/** The plain text between two mouse cells (transcript rows + composer input), for clipboard copy. */
-function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): string {
-  const width = process.stdout.columns ?? 80
-  const height = process.stdout.rows ?? 24
-  const input = store.input
-  const composerH = composerHeight(width, input, COMPOSER_MIN_HEIGHT)
-  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
-  const usable = convUsableWidth(width, store.width >= store.sidebarMin)
-  const rows = buildTranscriptRows(store.getItems(), usable, store.expandReasoning)
-  const joined = rows.map((r) => r.text).join('\n')
-  const inputStart = joined.length + 1 // '\n' separator before the composer input
-  const rowPrefix: number[] = []
-  {
-    let acc = 0
-    for (const r of rows) { rowPrefix.push(acc); acc += r.text.length + 1 }
-  }
-  const composerLastContent = composerTop + composerH - 2
-  const cellIndex = (row: number, col: number): number | null => {
-    if (row > composerTop && row <= composerLastContent) {
-      const ci = composerInputIndex(row, col)
-      return ci === null ? null : inputStart + ci
-    }
-    const flat = store.layoutScroll + (row - store.layoutTopRow)
-    if (flat < 0 || flat >= rows.length) return null
-    const line = rows[flat]!.text
-    return rowPrefix[flat]! + Math.min(colToChar(line, col - 2), line.length)
-  }
-  const a = cellIndex(aRow, aCol)
-  const c = cellIndex(cRow, cCol)
-  if (a === null || c === null) return ''
-  return `${joined}\n${input}`.slice(Math.min(a, c), Math.max(a, c))
-}
-
-/** Write `text` to the system clipboard via OSC 52 (VTE supports set-clipboard). */
-function writeClipboard(text: string): void {
-  process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
-}
-
-/** List persisted sessions (most recent first) for the resume picker. */
-async function loadSessions(ctx: Context): Promise<SessionSummary[]> {
-  const persistence = ctx.get('sessionPersistence') as { list?: (signal?: AbortSignal) => Promise<Array<{ id: SessionId; cwd?: string; createdAt?: number }>> } | undefined
-  if (persistence?.list === undefined) return []
-  const headers = await persistence.list()
-  return headers
-    .map((h) => ({ id: h.id, label: `@${new Date(h.createdAt ?? 0).toLocaleString()}`, cwd: h.cwd }))
-    .sort((a, b) => (b.id === a.id ? 0 : a.id.valueOf() < b.id.valueOf() ? 1 : -1))
-    .slice(0, 40)
-}
-
 /**
  * The user-questions answerer: present each of the model's questions in-band
  * and return the human's answer. Single-select options plus a typeable
@@ -2244,14 +2024,18 @@ async function loadSessions(ctx: Context): Promise<SessionSummary[]> {
  */
 async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
   const answers: AskUserQuestionAnswerItem[] = []
-  for (const item of request.questions) {
+  for (let q = 0; q < request.questions.length; q++) {
+    const item = request.questions[q]
     const answer = await new Promise<AskUserQuestionAnswerItem>((resolve, reject) => {
       // An abort (tool/step cancelled) must reject the pending ask.
       if (request.signal?.aborted) {
         reject(new Error('ask_user_question was cancelled'))
         return
       }
-      store.setQuestion({ item, resolve, reject, index: 0, custom: '', customMode: false })
+      store.setQuestion({
+        item, resolve, reject, index: 0, custom: '', customMode: false,
+        position: q + 1, total: request.questions.length,
+      })
       if (request.signal) {
         request.signal.addEventListener('abort', () => {
           if (store.question !== null) {
@@ -2267,22 +2051,168 @@ async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestion
   return { answers }
 }
 
-/** Best-effort manual history compaction; report failures as status. */
-async function compact(ctx: Context, agent: unknown, sessionId: SessionId, provider: string, model: string, io: TuiIo): Promise<void> {
-  const compaction = ctx.get('compaction') as { compactNow?: (args: unknown, signal: AbortSignal, commandId: string) => Promise<unknown> } | undefined
+/**
+ * Auto-resume: the newest same-directory session that actually has user
+ * content. Empty sessions (created and exited without a message) are skipped
+ * — resuming them would just show a blank transcript — so the relaunch lands
+ * on the last real work. The content check reads the already-resumed session's
+ * in-memory event list (no extra log reads); skipped sessions stay persisted
+ * for manual resume via /sessions.
+ * @param ctx - plugin context carrying sessionPersistence.
+ * @param agents - the agents service (resume).
+ * @param cwd - the directory to match against session headers.
+ * @param agentOptions - model/provider options passed to resume.
+ * @param setup - the model-selection setup callback passed to resume.
+ * @returns the resumed handle, or `undefined` when no candidate has content
+ *   (or persistence is unavailable) — the caller starts fresh.
+ */
+async function autoResumeNewest(
+  ctx: Context,
+  agents: { resume(options: ResumeAgentOptions): Promise<AgentHandle> },
+  cwd: string,
+  agentOptions: { provider: string; model: string },
+  setup: (agentCtx: Context) => void,
+): Promise<AgentHandle | undefined> {
+  const persistence = ctx.get('sessionPersistence') as { list?: (signal?: AbortSignal) => Promise<Array<{ id: SessionId; cwd?: string; createdAt?: number }>> } | undefined
+  if (persistence?.list === undefined) return undefined
+  let list: Array<{ id: SessionId; cwd?: string; createdAt?: number }>
+  try {
+    list = await persistence.list()
+  } catch {
+    return undefined // A failing list must not block a fresh launch.
+  }
+  const candidates = list
+    .filter((h) => h.cwd === cwd)
+    // Most recently used first (last activity, then creation time).
+    .sort((a, b) => {
+      const activityA = lastActivity(a.id) ?? 0
+      const activityB = lastActivity(b.id) ?? 0
+      if (activityA !== activityB) return activityB - activityA
+      return (b.createdAt ?? 0) - (a.createdAt ?? 0)
+    })
+  for (const header of candidates) {
+    try {
+      const handle = await agents.resume({ resumeSessionId: header.id, agentOptions, setup })
+      const hasUserContent = handle.agent.session.events.some(
+        (event) => event.type === 'user/message'
+          && (event.data as { source?: { kind?: string } }).source?.kind === 'user',
+      )
+      if (hasUserContent) return handle
+      await handle.dispose() // Empty session: skip to the next newest.
+    } catch {
+      // Unresumable session (corrupt/unreadable): skip it.
+    }
+  }
+  return undefined
+}
+
+/** Flatten text blocks from a harness message content (mirrors export.tsx). */
+function flattenContentText(content: unknown): string {
+  if (!Array.isArray(content)) return typeof content === 'string' ? content : ''
+  return content
+    .filter((b): b is { type: string; text?: unknown } => b !== null && typeof b === 'object' && (b as { type?: string }).type === 'text')
+    .map((b) => String(b.text ?? ''))
+    .join('')
+}
+
+/**
+ * Fold a persisted session's event log into transcript rows, mirroring what
+ * the live `session/event` listener renders — except assistant text comes from
+ * the settled `assistant/message` events (streaming chunks are dropped) and
+ * the whole result is produced in one pass so a resumed session replays
+ * instantly instead of chunk-by-chunk.
+ * @param events - the resumed session's full event log.
+ * @returns the transcript rows and the latest step list.
+ */
+function foldHistoryEvents(events: readonly SessionEvent[]): { items: TranscriptItem[]; steps: StepItem[] } {
+  const items: TranscriptItem[] = []
+  let key = 0
+  let steps: StepItem[] = []
+  for (const event of events) {
+    switch (event.type) {
+      case 'user/message': {
+        const source = event.data.source as { kind?: string; plugin?: string }
+        if (source.kind === 'user') {
+          const text = flattenContentText(event.data.content)
+          if (text !== '') items.push({ key: key += 1, kind: 'user', text })
+        } else {
+          const label = source.kind === 'plugin' && source.plugin ? source.plugin : (source.kind ?? 'context')
+          items.push({ key: key += 1, kind: 'status', text: `Context injection · ${label}`, dim: true })
+        }
+        break
+      }
+      case 'assistant/message': {
+        // assistant/message carries `{ turn, step, message }` (unlike
+        // user/message, whose data IS the message).
+        const joined = flattenContentText(event.data.message.content)
+        if (joined === '') break
+        items.push({ key: key += 1, kind: 'assistant', text: joined })
+        break
+      }
+      case 'todo/write': {
+        const todos = event.data.todos
+        if (todos.length > 0) steps = todos
+        break
+      }
+      case 'tool/call': {
+        items.push({ key: key += 1, kind: 'tool', text: `│ ${event.data.name}` })
+        break
+      }
+      case 'tool/result': {
+        // Mark the most recent running tool row as completed (toolResult()).
+        for (let i = items.length - 1; i >= 0; i--) {
+          const item = items[i]
+          if (item !== undefined && item.kind === 'tool' && item.text.startsWith('│ ')) {
+            items[i] = { ...item, text: `✓ ${item.text.slice(2)}` }
+            break
+          }
+        }
+        break
+      }
+      default:
+        // assistant/chunk and session/title are skipped: settled messages and
+        // the title cache cover them.
+    }
+  }
+  return { items, steps }
+}
+
+/** The harness manual-compaction failure texts, verbatim from dsh-command-compact. */
+const COMPACTION_FAILURE_TEXT: Record<ManualCompactionErrorCode, string> = {
+  busy: 'Compaction is unavailable because this process has an active compaction, or the agent is not idle.',
+  cancelled: 'Compaction cancelled.',
+  changed: 'The history selected for compaction changed before it could be replaced. The conversation is unchanged; the attempt is recorded in the session log.',
+  summary: 'Compaction could not produce a useful summary. The conversation is unchanged; the attempt is recorded in the session log.',
+  commit: 'Compaction did not finish cleanly; some session history may have changed. Inspect the current session state before retrying.',
+  persistence: 'Compaction finished, but the session could not be saved.',
+}
+
+/** One manual `/compact` request: run the harness compaction seam on the live
+ *  agent and report the outcome the way the harness `/compact` command does. */
+async function compact(ctx: Context, agent: unknown): Promise<void> {
+  const compaction = ctx.get('compaction') as
+    | { compactNow?: (agent: ManualCompactAgentContext, signal: AbortSignal, sourceCommandId: string) => Promise<CompactionResult | null> }
+    | undefined
   if (compaction?.compactNow === undefined) {
     store.append('status', 'compaction service unavailable', true)
     return
   }
   try {
     const result = await compaction.compactNow(
-      { agent, session: sessionId, route: { provider, model } },
+      // The live agent (agent-loop's Agent) implements the compaction contract
+      // (runMaintenance + session + options) even though the public dsh-agent
+      // type only exposes `id`, so the seam's own context type is asserted here.
+      agent as ManualCompactAgentContext,
       new AbortController().signal,
       `tui-${randomUUID()}`,
     )
-    store.append('status', result === null ? 'compaction: nothing to compact' : 'compaction: done', true)
+    store.append('status', result === null
+      ? 'No compactable history yet.'
+      : `Compacted ${result.shadowedSeqs.length} history items (~${result.shadowedTokenCount} tokens).`, true)
   } catch (error) {
-    store.append('status', `compaction: ${error instanceof Error ? error.message : String(error)}`, true)
+    store.append('status', error instanceof ManualCompactionError
+      ? COMPACTION_FAILURE_TEXT[error.code]
+      : `compaction: ${error instanceof Error ? error.message : String(error)}`, true)
   }
 }
 

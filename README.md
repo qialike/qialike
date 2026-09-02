@@ -37,27 +37,122 @@ third-party deps from the harness pnpm store, then `bun build --compile`s `apps/
 ## Run
 
 ```sh
-dist/dsh-tui                              # fresh session in the current directory
-dist/dsh-tui --workspace ~/proj           # operate in ~/proj
-dist/dsh-tui --resume <sessionId>         # resume a persisted session
+dist/dsh-tui                              # continue the newest session in this directory, or start fresh
+dist/dsh-tui --workspace ~/proj           # continue the newest session in ~/proj
+dist/dsh-tui --resume <sessionId>         # resume a specific persisted session
 dist/dsh-tui --model deepseek-v4-flash    # pick a model
 dist/dsh-tui --help
 ```
 
+On launch dsh-tui **auto-resumes the most recently used session in the same
+directory** (last-activity first, `resume_last: true` in `~/.dsh/dsh-tui.json`,
+the default), so a relaunch picks up where the last run left off — resuming a
+session or messaging it marks it most-recently-used. The status line marks the
+resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
+`resume_last: false` (or `DSH_TUI_RESUME_LAST=0`) to always start fresh.
+
 ### Surface features
 
 - **Slash command palette**: type `/` to autocomplete. Commands: `/help`, `/models`,
-  `/compact`, `/clear`, `/resume`, `/exit`. Use `↑/↓` to move, `Enter` to run, `Esc` to dismiss.
+  `/compact`, `/clear`, `/new`, `/sessions`, `/exit`. Use `↑/↓` to move, `Enter` to run, `Esc` to dismiss.
+- **`/compact`**: manually compact the current session's older history into a
+  summary, via the same harness `compaction` seam the web surface uses. It takes
+  no arguments (anything after the command is rejected with
+  `Usage: /compact (no arguments)`). On success it reports
+  `Compacted N history items (~X tokens).`, `No compactable history yet.` when
+  there is nothing to compact, and the harness's classified failure text
+  (busy / cancelled / changed / summary / commit / persistence) otherwise.
+- **`/plan`**: enter or leave **plan mode** (the harness plan-mode state,
+  guidance prompt section, and `exit_plan_mode` review tool come from the
+  base bundle). `/plan` (or `/plan <objective>`, which also hands the message
+  to the agent) enters plan mode — the agent then plans instead of executing
+  until the plan is approved via `exit_plan_mode` or you run `/plan off` to
+  leave. Outcomes mirror the harness command (`Plan mode on/off`, `already
+  inactive`, `applies from the next step`).
+- **`/goal`**: set or view one durable goal for the session, for long-running
+  tasks. `/goal` shows the current goal; `/goal <objective>` creates one
+  (arming the harness round driver, which then works toward it in automatic
+  rounds); `/goal edit <objective>` changes it; `/goal pause`, `/goal resume`
+  and `/goal clear` control it. The model marks the goal complete once the
+  objective is achieved, which stops further rounds. The goal domain, model
+  tools (`get_goal`/`create_goal`/`update_goal`), and round driver come from
+  the harness base bundle — this command is the TUI's human command plane.
 - **`/models`**: manage models and the API key, like the web Models page. It opens an
-  opencode-style full-screen dialog: pick the model (`↑/↓`; DeepSeek V4 Flash / V4 Pro /
-  V4 Flash Vision Exp) and enter the API key (masked; `Enter` saves, `Esc` cancels). Saving
-  switches the live session to the new model on the next request and persists the default
-  (`agentDefaultModel.saveSelection`); the picker shows only providers whose
-  API key is set; an "＋ Add provider" entry lists **every known provider** —
-  the self-hosted adapter's built-in templates (DeepSeek, OpenAI, OpenRouter,
-  Anthropic, Groq, Mistral, Together, Fireworks, xAI, Cerebras — OpenAI-compatible
-  except Anthropic's native Messages protocol) plus routes declared in the
-  `dsh-tui-llm:` settings section — with its key status (`✓ key set` / `no key`).
+  opencode-style full-screen dialog with **two levels**: the first level groups
+  providers (one row per provider with its key set, model count on the right —
+  e.g. `OpenCode Zen · 63 models`; the current selection is shown on top);
+  `↑/↓` moves, `Enter` drills into a provider's **model sub-list** (second
+  level), `Esc` backs out. All three lists (level 1, level 2, Add provider)
+  have **live type-to-filter** (a bordered `⌕ type to filter` box on top — type
+  to narrow, e.g. `gpt` shows only the GPT family), `Backspace` removes a
+  character, `Esc` clears the filter first then backs out; lists longer than a
+  page support **`PgUp`/`PgDn` (page) and `Home`/`End` (first/last)**;
+  picking a model and pressing `Enter` saves — switching the live session on
+  the next request and persisting the default
+  (`agentDefaultModel.saveSelection`). **Models that support reasoning effort**
+  (the built-in DeepSeek V4 Flash / V4 Pro / Vision Exp) first open a third
+  **Effort** picker instead: Off / Low / High / Max with a short description
+  each (default High; `↑/↓` or a number selects, `Enter` confirms, `Esc` back
+  to the model list) — the model choice completes only after an effort is
+  confirmed. The chosen effort persists with the selection
+  (`agent-default-model.reasoningEffort`) and rides on every request as
+  `thinking`/`reasoning_effort` (Off = no thinking, Low/High/Max = increasing
+  reasoning budget); the composer label and status line show it, e.g.
+  `DeepSeek · DeepSeek V4 Flash · Max`. Providers without declared efforts
+  (e.g. OpenCode Zen) skip the step. **Effort sets are fully model-declared and
+  provider-specific**: DeepSeek offers Off/Low/High/Max while another gateway
+  may declare low/medium/high/xhigh/max — the picker list, the default
+  preselection, the Ctrl+T cycle, and the request all follow that model's own
+  declaration (each level id rides verbatim as `reasoning_effort`; the
+  no-thinking level is flagged in the declaration, with `off` as the
+  conventional spelling). dsh-tui also bundles a models.dev-style **effort
+  catalog snapshot** (`src/effort-catalog.ts`, vocabulary
+  `none/minimal/low/medium/high/xhigh/max`) as a fallback data source: static
+  declarations always win, and the catalog only fills in models whose route
+  declares `effortWire: 'reasoning-effort'` (endpoint verified to accept the
+  field; only the built-in DeepSeek route today) — the picker, cycling, and
+  persistence need no changes. From the main window, press
+  **`Ctrl+T`** (or **`Alt+T`** when the terminal takes Ctrl+T) to **cycle** the
+  current model's reasoning effort through its declared levels (wrapping, e.g.
+  Max→Off→Low→High→…; each press persists and applies to later requests);
+  the composer's model label shows the effort as a warning-colored chip
+  (`Model: DeepSeek · DeepSeek V4 Flash · Max`, like opencode's variant
+  badge). The picker shows only providers whose
+  API key is set; on the first level press **`Ctrl+D`** (or **`Alt+D`**) to
+  deactivate the highlighted provider — it removes the provider's API key AND
+  drops it from the /models list (the hidden list persists in `dsh-tui.json`
+  `hidden_providers`; an environment-supplied key cannot be deleted, which is
+  reported, and the hidden list keeps it off the picker anyway). To re-add,
+  pick the provider in the "＋ Add provider" list and set its API key again —
+  saving the key clears the hidden flag and the provider reappears. Hiding the
+  provider that is currently in use switches the selection to another active
+  provider, or shows `not set` when no active provider remains. An "＋ Add
+  provider" entry lists **every known provider** —
+  the self-hosted adapter's built-in templates — 36 catalog entries (OpenAI,
+  OpenRouter, Anthropic, Google Gemini, Groq, Mistral, xAI, Z.ai,
+  OpenCode Zen / OpenCode Go, … — OpenAI-compatible except Anthropic/MiniMax's
+  native Messages protocol, plus 4 deployment-configured ones like Azure OpenAI /
+  Cloudflare Workers AI flagged `endpoint required`; **OpenCode Zen / Go are
+  provided by the loadable `tui-opencode-gateways` sub-plugin** — set
+  `dsh-tui-opencode: { enabled: false }` in the config to unload them entirely
+  (templates AND already-configured routes leave the /models dialog and the
+  adapter; enabled by default); the official DeepSeek
+  endpoint is not in the catalog — the built-in `deepseek-official` default
+  route serves it (3 models, ready out of the box); OpenCode Zen / Go are the
+  opencode team's OpenAI-compatible model gateways — keys from opencode.ai/auth
+  (Zen pay-per-use, Go US$10/mo), set a key to activate) — plus routes declared
+  in the `dsh-tui-llm:` settings
+  section — with its key status (`✓ key set` / `no key`).
+  Configured OpenAI-compatible providers show the gateway's **live model list**
+  in the picker: the adapter fetches `GET {baseURL}/models` (falling back to the
+  template's static catalog on failure/timeout). **OpenCode Zen is a single
+  entry listing all 63 models** (DeepSeek/GLM/Kimi/MiniMax/free + Claude/Qwen +
+  GPT/Grok/Muse + Gemini); on send, the model's family is routed automatically
+  to the right protocol endpoint — `claude-`/`qwen` → Anthropic messages
+  (`x-api-key`), `gpt-`/`grok-`/`muse-` → OpenAI Responses (Bearer),
+  `gemini-` → Google generateContent (`x-goog-api-key`), everything else →
+  chat/completions (Bearer); all four authentications verified against the
+  live gateway.
   Picking any one (already-configured included) opens a sub-dialog that sets or
   **replaces** its API key (the key dialog shows "replaces the current key" when
   a key exists); setting a key on a dormant template route activates it on the
@@ -66,7 +161,7 @@ dist/dsh-tui --help
   appear in the picker). The list scrolls to keep the highlight in view.
   "＋ Add a custom provider"
   opens a sequential form
-  (a provider-template dropdown — DeepSeek, OpenAI, OpenRouter, Groq, … or custom —
+  (a provider-template dropdown — any of the 37 built-in entries, or custom —
   pre-filling route/display name/base URL; then route id / display name / base URL /
   API key / model ids) that writes an
   OpenAI-compatible provider into the `dsh-tui-llm` settings section and its key
@@ -80,9 +175,43 @@ dist/dsh-tui --help
 - **Approval dialog**: when a tool requests approval, an in-band prompt appears with the tool name
   and reason. `y`/`a` allow the call once, `n`/`Esc` reject. (Under the no-sandbox profile no tool
   currently asks, so the dialog stays dormant — wired for when a tool requests approval.)
-- **`--resume` / `/resume` session picker**: lists persisted sessions and resumes the selected one.
+- **`/sessions` session manager**: the one session picker — an opencode-style full-screen dialog
+   listing persisted sessions **of the current working directory only** (same-directory semantics as
+   the auto-resume default)
+   (title / id — no date/time, the day headers carry it) with **live type-to-filter**
+   (title/id/cwd), `Enter` resumes the selection, `Ctrl+R` renames the highlighted
+   session (local, persists across restarts), `Ctrl+F` pins/unpins it (pinned sessions
+   sort to a `📌 Pinned` group on top, also persisted), `Ctrl+D` deletes it (two
+   presses confirm; the live session is protected), `Esc` clears the filter then
+   closes; lists longer than a page support `PgUp`/`PgDn`/`Home`/`End`, sorted
+   **newest first** and grouped by creation day (`Today` / `Yesterday` / date headers). Each row leads with the session's **title — a summary of its first task**
+   (e.g. `你是谁 · @9/1/2026, 5:47:18 PM · /home/pipo/temp`): the harness `session-title` service folds
+   it from the session's first message (deterministic fallback, optionally polished by the LLM
+   title provider), and it persists with the session — including sessions switched away by `/new`.
+   The dialog lists historical session records only — starting a brand-new session is `/new`'s job.
+   Content-level search is not available in the single-file process (the harness exposes
+   session-content search only through its remote client layer, used by the web app).
+ - **`/new` new session**: start a brand-new session in place (opencode's "New session" entry).
+   The current turn is cancelled, a fresh agent is created, and the old agent is disposed — the
+   harness persists every session durably, so the previous conversation stays reachable from
+   `/sessions` / `--resume`. The current model selection and workspace carry over.
+ - **`/export` session export**: bare `/export` opens an **export dialog** (format JSON/Markdown, editable file name, sanitize toggle; `↑/↓` move fields, `←/→` toggle, type the name, `Enter` export); with flags it exports directly: **JSON** (machine-readable, opencode `export` shape) or **Markdown** (human-readable replay): `/export` exports the current session, `/export <sessionId>` a given one, `--markdown` switches format, `--sanitize` redacts content (`[redacted:…]`), `--output <name>` sets a custom file name (extension added; may include subdirectories, e.g. `notes/summary`). Writes `export-<ts>-<id>.(json|md)` into the **workspace root** and shows the path in the status line.
 - **OpenCode-style layout**: a conversation column plus an Activity panel (tool calls/results) and an
   input dock at the bottom.
+
+## Plugin architecture ("everything is a plugin")
+
+The surface is composed of Cordis plugins (like the harness): `tui-startup`
+(CLI flags), `tui-llm` (self-hosted provider layer), `tui-models` (provider
+enumeration / Add-provider writes), `tui-runtime` (the kernel: store, panel
+registry, key dispatch, agent wiring), and feature plugins that register
+against the `tui` service — `tui-panel-conversation` (main surface),
+`tui-panel-approval`, `tui-panel-question`, `tui-panel-models` (`/models`
+dialog), `tui-sessions` (`/sessions` dialog), `tui-export` (`/export` dialog),
+`tui-new` (`/new` in-place session switch). Third-party plugins consume
+`ctx.get('tui')` (`panels.register`, `commands.register`, `notify`) and
+`ctx.get('tuiStore')`; see `packages/dsh-tui-app/src/panels/` for the plugin
+contract and an example.
 
 ## Install as a command
 

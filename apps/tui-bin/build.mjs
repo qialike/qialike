@@ -516,7 +516,7 @@ export function patchInkFullScreen(nm) {
 async function buildBundleLib() {
   const pkgDir = join(ROOT, 'packages/dsh-tui-app')
   const result = await build({
-    entryPoints: [join(pkgDir, 'src/index.tsx'), join(pkgDir, 'src/startup.ts'), join(pkgDir, 'src/models.ts'), join(pkgDir, 'src/llm.ts'), join(pkgDir, 'src/invariant.ts')],
+    entryPoints: [join(pkgDir, 'src/index.tsx'), join(pkgDir, 'src/startup.ts'), join(pkgDir, 'src/models.ts'), join(pkgDir, 'src/llm.ts'), join(pkgDir, 'src/opencode.ts'), join(pkgDir, 'src/panels/conversation.tsx'), join(pkgDir, 'src/panels/approval.tsx'), join(pkgDir, 'src/panels/question.tsx'), join(pkgDir, 'src/panels/models.tsx'), join(pkgDir, 'src/sessions.tsx'), join(pkgDir, 'src/export.tsx'), join(pkgDir, 'src/new.ts'), join(pkgDir, 'src/goal.ts'), join(pkgDir, 'src/plan.ts'), join(pkgDir, 'src/invariant.ts')],
     bundle: true,
     platform: 'node',
     format: 'esm',

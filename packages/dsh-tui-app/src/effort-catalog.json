@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "generatedAt": "2026-09-02",
+  "note": "Per-model effort values (models.dev reasoning_options style: null = no thinking, becomes the 'none' level). Curated seed for verified routes/families; static reasoningEfforts in profile/template rows always win over this file.",
+  "providers": {
+    "deepseek": {
+      "models": {
+        "deepseek-v4-flash": { "effort": [null, "low", "high", "max"] },
+        "deepseek-v4-pro": { "effort": [null, "low", "high", "max"] },
+        "deepseek-v4-flash-vision-exp": { "effort": [null, "low", "high", "max"] }
+      }
+    }
+  }
+}

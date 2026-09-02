@@ -89,6 +89,12 @@
     - id: tui-llm
       name: '@yourname/dsh-tui-app/llm'
 
+    # OpenCode Zen / OpenCode Go gateway templates (loadable): registers the
+    # two gateway providers through tui-llm's `tuiLlmTemplates` extension
+    # point; `dsh-tui-opencode.enabled: false` in settings unloads them.
+    - id: tui-opencode-gateways
+      name: '@yourname/dsh-tui-app/opencode'
+
     - id: tui-models
       name: '@yourname/dsh-tui-app/models'
 
@@ -99,6 +105,44 @@
         workspace: !!js ctx.tuiStartup.workspace
         resume: !!js ctx.tuiStartup.resume
         model: !!js ctx.tuiStartup.model
+
+    # ── surface panels (plugins; register against the `tui` service) ────────
+    - id: tui-panel-conversation
+      name: '@yourname/dsh-tui-app/panels-conversation'
+
+    - id: tui-panel-approval
+      name: '@yourname/dsh-tui-app/panels-approval'
+
+    - id: tui-panel-question
+      name: '@yourname/dsh-tui-app/panels-question'
+
+    - id: tui-panel-models
+      name: '@yourname/dsh-tui-app/panels-models'
+
+    # /sessions dialog: list / search / resume persisted sessions (opencode-style).
+    - id: tui-sessions
+      name: '@yourname/dsh-tui-app/sessions'
+
+    # /export: session transcript export (JSON / --markdown, --sanitize).
+    - id: tui-export
+      name: '@yourname/dsh-tui-app/export'
+
+    # /new: start a brand-new session in place (opencode-style; the old
+    # session is persisted by the harness and stays resumable).
+    - id: tui-new
+      name: '@yourname/dsh-tui-app/new'
+
+    # /goal: human command plane over the harness goal domain (the goal
+    # service, model tools, and round driver are mounted by the base bundle;
+    # only the command reachable from the TUI composer was missing).
+    - id: tui-goal
+      name: '@yourname/dsh-tui-app/goal'
+
+    # /plan: human command plane over the harness plan-mode service (the
+    # plan/mode state, guidance prompt section, and exit_plan_mode review
+    # tool are mounted by the base bundle; only the command was missing).
+    - id: tui-plan
+      name: '@yourname/dsh-tui-app/plan'
 
 # The plugin-package inventory reads every active Loader entry's package.json
 # from disk at each model request; inside the single-file SEA there is no

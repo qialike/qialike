@@ -251,6 +251,21 @@ export function visualWidth(text: string): number {
   return stringWidth(text)
 }
 
+/** Truncate `text` to a visual-width budget, appending an ellipsis when cut
+ *  (never splits a surrogate pair or a wide character across the budget). */
+export function truncateWide(text: string, maxCols: number): string {
+  if (visualWidth(text) <= maxCols) return text
+  let used = 0
+  let out = ''
+  for (const character of text) {
+    const width = visualWidth(character)
+    if (used + width > maxCols - 1) break
+    out += character
+    used += width
+  }
+  return `${out}…`
+}
+
 /** Number of terminal rows a wrapped piece of text occupies at `usable` columns. */
 export function countWrappedLines(text: string, usable: number): number {
   let total = 0

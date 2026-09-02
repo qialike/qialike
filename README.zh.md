@@ -36,23 +36,69 @@ pnpm typecheck
 ## 运行
 
 ```sh
-dist/dsh-tui                              # 在当前目录开启新会话
-dist/dsh-tui --workspace ~/proj           # 在 ~/proj 中操作
-dist/dsh-tui --resume <sessionId>         # 恢复已持久化的会话
+dist/dsh-tui                              # 继续当前目录下最近一次会话，无则开启新会话
+dist/dsh-tui --workspace ~/proj           # 继续 ~/proj 下最近一次会话
+dist/dsh-tui --resume <sessionId>         # 恢复指定持久化会话
 dist/dsh-tui --model deepseek-v4-flash    # 选择模型
 dist/dsh-tui --help
 ```
 
+启动时 dsh-tui **自动恢复当前目录下最近使用过的会话**(最后活动时间优先,`~/.dsh/dsh-tui.json` 的 `resume_last: true`,默认开启),重启后接续上次工作——恢复某会话或向其发消息即标记为最近使用。状态行标注 `(resumed)`。显式 `--resume <sessionId>` 始终优先;设 `resume_last: false`(或 `DSH_TUI_RESUME_LAST=0`)则每次全新开始。
+
 ### 界面特性
 
-- **斜杠命令面板**：输入 `/` 自动补全。命令：`/help`、`/models`、`/compact`、`/clear`、`/resume`、`/exit`。
+- **斜杠命令面板**：输入 `/` 自动补全。命令：`/help`、`/models`、`/compact`、`/clear`、`/new`、`/sessions`、`/exit`。
   `↑/↓` 移动，`Enter` 执行，`Esc` 关闭。
-- **`/models`**：管理模型与 API key，与 web Models 页一致。弹出 opencode 式全屏对话框：`↑/↓` 选择模型
-  （DeepSeek V4 Flash / V4 Pro / V4 Flash Vision Exp），掩码输入 API key，`Enter` 保存、`Esc` 取消。
-  保存后下一次请求即切换为所选模型（`agentDefaultModel.saveSelection` 持久化默认选择）；选择器只显示已配置 API key 的提供商；
-  "＋ Add provider" 列出**所有已知的提供商**——自研适配器内置模板（DeepSeek、OpenAI、OpenRouter、Anthropic、Groq、Mistral、
-  Together、Fireworks、xAI、Cerebras，OpenAI-compatible 为主、Anthropic 走原生 Messages 协议）加上 `dsh-tui-llm:` 设置节声明的路由——并标注 key 状态
-  （`✓ key set` / `no key`）。选中任意一个（已配置的也可以）弹出子对话框设置或**替换**其 API key
+- **`/compact`**：手动把当前会话的较旧历史压缩成一条摘要，与 web 界面共用 harness 的 `compaction` 服务。
+  不接受参数（带参数会提示 `Usage: /compact (no arguments)`）。成功时显示 `Compacted N history items (~X tokens).`，
+  无内容可压缩时显示 `No compactable history yet.`，失败时按分类（busy / cancelled / changed / summary / commit / persistence）显示对应文案。
+- **`/plan`**：进入或退出**规划模式（plan mode）**（plan/mode 状态、提示词段与 `exit_plan_mode` 审批工具来自 harness base bundle）。
+  `/plan`（或 `/plan <目标>`，同时把目标作为消息交给 agent）进入规划模式——agent 只规划不执行，直到计划经 `exit_plan_mode`
+  审批通过或你执行 `/plan off` 退出。结果文案与 harness 命令一致（`Plan mode on/off`、`already inactive`、`applies from the next step`）。
+- **`/goal`**：为会话设置或查看一个**持久的完成目标**（用于长时间运行的任务）。`/goal` 查看当前目标；
+  `/goal <objective>` 创建目标（同时武装 harness 的 round driver，它会自动逐轮朝目标工作）；
+  `/goal edit <objective>` 修改目标；`/goal pause` / `/goal resume` / `/goal clear` 控制目标。
+  模型确认目标达成后会把目标标记为 complete 并停止续跑。目标域、模型工具（`get_goal`/`create_goal`/`update_goal`）与
+  round driver 均来自 harness base bundle——本命令只是补上 TUI 的人类命令平面。
+- **`/models`**：管理模型与 API key，与 web Models 页一致。弹出 opencode 式全屏对话框，**两级导航**：第一级按供应商归类
+  （每个已配置 key 的提供商一行，行尾标注其模型数，如 `OpenCode Zen · 63 models`；当前选择的模型显示在顶部）；
+  `↑/↓` 选择、`Enter` 打开该供应商的**模型子列表**（第二级）、`Esc` 返回一级；
+  **一级/二级/Add provider 三个列表都支持打字即过滤**（顶部边框搜索框 `⌕ type to filter`，直接输入关键字实时过滤，如 `gpt` 只显示 GPT 系列），`Backspace` 删字符、`Esc` 先清过滤再退出；
+  **列表超过一页时支持 `PgUp`/`PgDn`（翻页）、`Home`/`End`（首/尾）**；
+  在子列表选中模型后 `Enter` 保存（下一次请求即切换，`agentDefaultModel.saveSelection` 持久化默认选择）。
+  **支持推理强度的模型**（内置 DeepSeek 的 V4 Flash / V4 Pro / Vision Exp）在子列表按 `Enter` 会先弹出第三级
+  **Effort** 选择框——Off / Low / High / Max（默认 High，各带一句说明；`↑/↓` 或数字键选择、`Enter` 确认、
+  `Esc` 返回模型列表）——**确认推理强度后模型选择才算完成**。选中的强度随选择一起持久化
+  （`agent-default-model.reasoningEffort`），并随每次请求下发 `thinking`/`reasoning_effort`
+  （Off=不思考，Low/High/Max=思考强度递增）；主界面 Model 标签与状态行显示如 `DeepSeek · DeepSeek V4 Flash · Max`。
+  未声明支持推理强度的提供商（如 OpenCode Zen 等）不弹 Effort、行为不变。
+  **档位集完全由模型声明驱动，不同供应商可以不同**：如 DeepSeek 为 Off/Low/High/Max，别的网关可能是
+  low/medium/high/xhigh/max——列表展示、默认档预选、Ctrl+T 循环与请求下发都按该模型自己的声明走
+  （每档 id 原样作为 `reasoning_effort` 发送；"关思考"档在声明里标记，缺省约定 `off`）。
+  dsh-tui 另内置一份 models.dev 风格的 **effort 目录快照**（`src/effort-catalog.ts`，词汇表
+  `none/minimal/low/medium/high/xhigh/max`）作兜底数据源：**静态声明始终优先**；只有端点确认真接受
+  `reasoning_effort` 的路由（模板声明 `effortWire: 'reasoning-effort'`，默认仅内置 DeepSeek）才会使用目录补全
+  未静态声明的模型——UI/循环/持久化零改动。
+  主窗口随时按 **`Ctrl+T`**（终端占用该组合键时用 **`Alt+T`** 备用）可**循环切换**当前模型的推理强度
+  （按声明档位 wrap，如 Max→Off→Low→High→…；切换即持久化并作用于后续请求）；
+  composer 的 Model 标签里档名以警示色高亮显示（如 `Model: DeepSeek · DeepSeek V4 Flash · Max`，对齐 opencode 的 variant 角标）。
+  选择器只显示已配置 API key 的提供商；一级列表按 **`Ctrl+D`（备用 `Alt+D`）可停用高亮供应商**
+  ——**同步移除其 API key** 并从 /models 一级消失（隐藏列表持久化于 `dsh-tui.json` 的 `hidden_providers`；
+  key 来自环境变量时无法删除、会提示，隐藏集仍使其不显示）；重新加入 = 到 "Add provider" 列表选择该家并
+  **重新设置 API key**（保存后自动恢复显示）；隐藏的是当前所用供应商时自动切换到其它已配置供应商，**隐藏后无任何激活供应商则当前模型显示 `not set`**；
+  "＋ Add provider" 列出**所有已知的提供商**——自研适配器内置模板（36 家目录：OpenAI、OpenRouter、Anthropic、
+  Google Gemini、Groq、Mistral、xAI、Z.ai、OpenCode Zen / OpenCode Go 等，
+  OpenAI-compatible 为主、Anthropic/MiniMax 走原生 Messages 协议；
+  **OpenCode Zen / Go 由可加载的 `tui-opencode-gateways` 子插件提供**——配置文件
+  `dsh-tui-opencode: { enabled: false }` 可整体卸载（模板与已配置路由都从 /models 与适配器消失，默认开启）；
+  DeepSeek 官方端点不在模板目录——由内置 `deepseek-official` 默认路由提供（3 模型，免配置即用）；
+  另有 4 家部署型如 Azure OpenAI / Cloudflare Workers AI 标记 `endpoint required`；OpenCode Zen / Go 是 opencode 团队的
+  OpenAI 兼容模型网关，key 取自 opencode.ai/auth（Zen 按量付费、Go 为 $10/月订阅），设 key 即可用）加上 `dsh-tui-llm:` 设置节声明的路由——并标注 key 状态
+  （`✓ key set` / `no key`）。**已配置的 OpenAI 兼容提供商显示网关实时模型列表**：动态 `GET {baseURL}/models`
+  拉取（失败/超时回退模板预置模型）——**OpenCode Zen 是单个条目,展示全部 63 个模型**(DeepSeek/GLM/Kimi/MiniMax/
+  免费 + Claude/Qwen + GPT/Grok/Muse + Gemini),选中任一模型保存后,请求时**按模型自动路由到正确协议端点**：
+  `claude-/qwen` → Anthropic messages(`x-api-key`)、`gpt-/grok-/muse-` → OpenAI Responses(Bearer)、`gemini-` → Google
+  generateContent(`x-goog-api-key`)、其余 → chat/completions(Bearer);四种认证均已实测通过。选中任意一个（已配置的也可以）弹出子对话框设置或**替换**其 API key
   （已有 key 时对话框提示 "replaces the current key"）；给休眠的模板路由设 key 会**当场激活**
   （把模板的完整 profile——端点与模型目录——写入 `dsh-tui-llm` 设置节并热注册路由，其模型随即出现在选择器）；
   列表支持滚动（高亮始终可见）。
@@ -64,8 +110,20 @@ dist/dsh-tui --help
   可接收会话中附带的图片，适配器转成 OpenAI `image_url` parts 或 Anthropic base64 source 块。
 - **审批对话框**：某工具请求审批时，带内弹窗显示工具名与原因。`y`/`a` 允许一次，`n`/`Esc` 拒绝。
   （无沙箱 profile 下当前无工具会请求审批，故对话框默认休眠——已在需要时接线就绪。）
-- **`--resume` / `/resume` 会话选择**：列出持久化会话并恢复所选。
+- **`/sessions` 会话管理器（唯一的会话选择入口）**：opencode 风格全屏对话框——列出持久化会话（**仅当前工作目录**，与自动恢复同目录语义一致）（**标题**/id，不显示日期时间——日期由分组组头承载），**打字即过滤**（标题/id/cwd），`Enter` 恢复所选、`Ctrl+R` 改名所选（本地持久，重启仍有效）、`Ctrl+F` 置顶/取消置顶（置顶会话在顶部 `📌 Pinned` 组，持久）、`Ctrl+D` 删除所选历史会话（两次确认；当前会话受保护）、`Esc` 两级退出；列表超页支持 `PgUp`/`PgDn`/`Home`/`End`，**按创建时间倒序（最新在前）并按创建日期分组**（`Today` / `Yesterday` / 日期组头）。每行以会话**标题**打头——即**第一个任务的摘要**（如 `你是谁 · @9/1/2026, 5:47:18 PM · /home/pipo/temp`）：harness 的 `session-title` 服务从会话第一条消息折叠生成（确定性 fallback，可被 LLM 标题提供者润色），随会话持久化——包括 `/new` 切换掉的旧会话。该对话框只承载历史会话记录——开启全新会话由 `/new` 负责。内容级搜索暂不可用（harness 单文件进程无 remote 层的会话内容搜索 API）。
+- **`/new` 新会话**：就地开启一个全新会话（对应 opencode 的 "New session" 入口）。取消当前回合、创建新 agent、拆除旧 agent——harness 对所有会话自动持久化，因此之前的对话仍可从 `/sessions` / `--resume` 找回；当前模型选择与工作目录保留。
+- **`/export` 会话导出**：输入 `/export` 弹出**导出对话框**（格式 JSON/Markdown、文件名可编辑、脱敏开关；`↑/↓` 移动字段、`←/→` 切换、输入文件名、`Enter` 导出）；带参数直达：导出会话为 **JSON**（机器可读，opencode `export` 同型）或 **Markdown**（人类可读回放）。`/export` 导出当前会话、`/export <sessionId>` 指定会话、`--markdown` 切换格式、`--sanitize` 脱敏（文本/工具输出替换为 `[redacted:…]`）、`--output <名称>` 自定义文件名（自动加扩展名,可含子目录,如 `notes/summary`）。写入**工作区根目录** `export-<时间>-<id>.(json|md)`，状态行显示路径。
 - **opencode 式布局**：对话列 + Activity 面板（工具调用/结果）+ 底部输入框。
+
+## 插件化架构（"一切皆插件"）
+
+界面由 Cordis 插件组合而成（与 harness 一致）：`tui-startup`（CLI 参数）、`tui-llm`（自研供应商层）、
+`tui-models`（提供商枚举 / Add-provider 写入）、`tui-runtime`（内核：Store、面板注册表、按键分发、agent 接线），
+以及向 `tui` 服务注册的功能插件——`tui-panel-conversation`（主界面）、
+`tui-panel-approval`、`tui-panel-question`、`tui-panel-models`（`/models` 对话框）、
+`tui-sessions`（`/sessions` 对话框）、`tui-export`（`/export` 对话框）、`tui-new`（`/new` 就地切换会话）。
+第三方插件通过 `ctx.get('tui')`（`panels.register` / `commands.register` / `notify`）与
+`ctx.get('tuiStore')` 接入；插件契约与示例见 `packages/dsh-tui-app/src/panels/`。
 
 ## 安装为命令
 

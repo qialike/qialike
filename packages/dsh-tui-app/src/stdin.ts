@@ -22,6 +22,8 @@ export interface RawKey {
   return?: boolean
   escape?: boolean
   ctrl?: boolean
+  /** Alt (meta) modifier, e.g. Alt+T = ESC + 't'. */
+  meta?: boolean
   tab?: boolean
   backspace?: boolean
   delete?: boolean
@@ -94,7 +96,11 @@ export class StdinDecoder {
       if (b === 0x08 || b === 0x7f) { this.buf.shift(); out.push({ backspace: true }); continue }
       if (b === 0x15) { this.buf.shift(); out.push({ char: 'u', ctrl: true }); continue }
       if (b === 0x10) { this.buf.shift(); out.push({ char: 'p', ctrl: true }); continue }
+      if (b === 0x04) { this.buf.shift(); out.push({ char: 'd', ctrl: true }); continue }
+      if (b === 0x12) { this.buf.shift(); out.push({ char: 'r', ctrl: true }); continue }
+      if (b === 0x06) { this.buf.shift(); out.push({ char: 'f', ctrl: true }); continue }
       if (b === 0x03) { this.buf.shift(); out.push({ char: 'c', ctrl: true }); continue }
+      if (b === 0x14) { this.buf.shift(); out.push({ char: 't', ctrl: true }); continue } // Ctrl+T
       if (b >= 0x01 && b <= 0x1a) { this.buf.shift(); continue } // unhandled control char: ignore
       const len = utf8Len(b)
       if (this.buf.length < len) break
@@ -134,6 +140,16 @@ export class StdinDecoder {
       else if (final === 0x46) out.push({ end: true }) // \x1bOF
       // other SS3 (F1-F4 = P/Q/R/S, etc.): discarded
       return 3
+    }
+    if (buf[1] === 0x74) { // Alt+T (the Ctrl+T fallback for terminals that swallow Ctrl+T)
+      buf.splice(0, 2)
+      out.push({ char: 't', meta: true })
+      return 2
+    }
+    if (buf[1] === 0x64) { // Alt+D (the Ctrl+D fallback for hiding a provider)
+      buf.splice(0, 2)
+      out.push({ char: 'd', meta: true })
+      return 2
     }
     // Unknown ESC prefix. If the next byte is itself ESC, consume only this ESC
     // and leave the next as a lone pending ESC (two Esc presses = double-Esc),

@@ -38,6 +38,18 @@ describe('StdinDecoder', () => {
     expect(d.push(Buffer.from([0x10]))).toEqual([{ char: 'p', ctrl: true }])
   })
 
+  test('ctrl+t and alt+t decode (reasoning-effort cycle keys)', () => {
+    const d = new StdinDecoder()
+    expect(d.push(Buffer.from([0x14]))).toEqual([{ char: 't', ctrl: true }]) // Ctrl+T
+    expect(d.push(esc('1b 74'))).toEqual([{ char: 't', meta: true }]) // Alt+T
+  })
+
+  test('ctrl+d and alt+d decode (hide-provider keys)', () => {
+    const d = new StdinDecoder()
+    expect(d.push(Buffer.from([0x04]))).toEqual([{ char: 'd', ctrl: true }]) // Ctrl+D
+    expect(d.push(esc('1b 64'))).toEqual([{ char: 'd', meta: true }]) // Alt+D
+  })
+
   test('arrows, home, end, page up/down', () => {
     const d = new StdinDecoder()
     expect(d.push(esc('1b 5b 41'))).toEqual([{ upArrow: true }])

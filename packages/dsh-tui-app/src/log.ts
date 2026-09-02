@@ -66,6 +66,7 @@ export function initErrorLog(): void {
           if (clean !== null) {
             writeLine(`[stderr] ${clean}`)
           }
+        } else {
         }
       } catch {
         // ignore
@@ -79,8 +80,22 @@ export function initErrorLog(): void {
 
 /** Log an uncaught error/tag (the error text + its stack when available). */
 export function logError(tag: string, error: unknown): void {
+  logErrorImpl(tag, error, true)
+}
+
+/**
+ * Log an error to the file only — no stderr mirror. Use for routine stream or
+ * request failures the UI already surfaces (e.g. the status line): the mirror
+ * scribbles the line onto the terminal at the input row, which reads as the
+ * TUI "showing an error in the input box".
+ */
+export function logErrorFileOnly(tag: string, error: unknown): void {
+  logErrorImpl(tag, error, false)
+}
+
+function logErrorImpl(tag: string, error: unknown, mirror: boolean): void {
   const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
-  writeLine(`[${tag}] ${detail}`)
+  writeLine(`[${tag}] ${detail}`, mirror)
 }
 
 /** Log a captured console.error message (e.g. a React warning). */
@@ -88,7 +103,7 @@ export function logConsoleError(text: string): void {
   writeLine(`[console.error] ${text}`)
 }
 
-function writeLine(line: string): void {
+function writeLine(line: string, mirror = true): void {
   const stamp = new Date().toISOString()
   try {
     rotateIfNeeded()
@@ -96,6 +111,7 @@ function writeLine(line: string): void {
   } catch {
     // Ignore (e.g. unwritable home).
   }
+  if (!mirror) return
   try {
     process.stderr.write(`[${stamp}] ${line}\n`)
   } catch {
