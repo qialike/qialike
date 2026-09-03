@@ -170,6 +170,12 @@
     - id: tui-plan
       name: '@yourname/dsh-tui-app/plan'
 
+    # /selftest: in-process read-only self checks (theme registry, stdin
+    # decoder, provider templates, panel/command completeness) + optional
+    # `bun test tests/` when a checkout with bun is nearby.
+    - id: tui-selftest
+      name: '@yourname/dsh-tui-app/selftest'
+
 # The plugin-package inventory reads every active Loader entry's package.json
 # from disk at each model request; inside the single-file SEA there is no
 # on-disk node_modules to resolve, so its prepare step rejects every request
