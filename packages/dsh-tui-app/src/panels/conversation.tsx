@@ -151,8 +151,11 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     const w = Math.max(1, usable - USER_RAIL_COLS)
     const lines = wrapRows(item.text, w)
     return (
-      <Box flexDirection="column">
-        <Box height={1} />
+      // paddingY (not empty <Box>s) creates the blank rows above/below: Ink
+      // always includes Box padding in the measured height, so the layout and
+      // the rendered height stay in sync (empty <Box>s could be dropped, making
+      // the measured height one row short and drifting on scroll).
+      <Box flexDirection="column" paddingY={USER_SPACER_ROWS}>
         {lines.map((line, i) => {
           const text = `${'┃'.padEnd(USER_RAIL_COLS)}${line}`
           const pad = Math.max(0, usable - visualWidth(text))
@@ -162,7 +165,6 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
             </Text>
           )
         })}
-        <Box height={1} />
       </Box>
     )
   }
