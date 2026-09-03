@@ -125,7 +125,7 @@ type Row =
   | { type: 'item'; item: TranscriptItem }
   | { type: 'steps' }
 
-function itemContent(item: TranscriptItem, expandReasoning: boolean): React.ReactNode {
+function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number): React.ReactNode {
   if (item.kind === 'assistant') {
     // opencode-style assistant: indent the markdown a few columns.
     return <Box paddingLeft={ASSISTANT_INDENT_COLS}><MarkdownText text={item.text} /></Box>
@@ -139,15 +139,24 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean): React.Reac
     return <Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text>
   }
   if (item.kind === 'user') {
-    // opencode-style user block: a primary left rail + text column (hanging
-    // indent), so wrapped continuation lines align under the text instead of
-    // jumping back to column 0.
+    // opencode-style user block: a continuous primary left border (┃) with the
+    // text on a panel background. Ink's Box has no background, so each wrapped
+    // line is its own <Text> with backgroundColor={theme.panel}; the ┃ prefix
+    // runs down every line (opencode's border=["left"]) and the line is padded
+    // to the full column width so the panel block spans edge to edge.
+    const w = Math.max(1, usable - USER_RAIL_COLS)
+    const lines = wrapRows(item.text, w)
     return (
-      <Box flexDirection="row" width="100%">
-        <Text color={theme.primary}>{'┃'.padEnd(USER_RAIL_COLS)}</Text>
-        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
-          <Text color={theme.text} wrap="wrap">{item.text}</Text>
-        </Box>
+      <Box flexDirection="column">
+        {lines.map((line, i) => {
+          const text = `${'┃'.padEnd(USER_RAIL_COLS)}${line}`
+          const pad = Math.max(0, usable - visualWidth(text))
+          return (
+            <Text key={i} color={theme.text} backgroundColor={theme.panel} wrap="truncate">
+              {text}{' '.repeat(pad)}
+            </Text>
+          )
+        })}
       </Box>
     )
   }
@@ -161,12 +170,12 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean): React.Reac
 /** Memoized transcript row: unchanged item objects (stable references, only
  *  the streaming tail is replaced) skip re-render/parse on typing, scroll and
  *  other notify cycles. */
-const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean; themeEpoch: number }): React.JSX.Element {
+const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean; themeEpoch: number; usable: number }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
     if (ref.current) setMeasuredHeight(String(props.item.key), measureElement(ref.current).height)
   }, [props.item.text])
-  return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning)}</Box>
+  return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning, props.usable)}</Box>
 })
 
 function StepsRow(props: { steps: readonly StepItem[] }): React.JSX.Element {
@@ -670,7 +679,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const renderRow = (r: Row): React.ReactNode =>
     r.type === 'steps'
       ? <StepsRow key="steps" steps={steps} />
-      : <MemoTranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} />
+      : <MemoTranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} usable={usable} />
 
   const renderFlatTranscript = (): React.ReactNode => {
     if (sel === null) return null
