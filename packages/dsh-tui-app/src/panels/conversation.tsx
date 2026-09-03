@@ -128,6 +128,7 @@ function rowHeight(key: string, fallback: number): number {
 type Row =
   | { type: 'item'; item: TranscriptItem }
   | { type: 'steps' }
+  | { type: 'spacer' }
 
 function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number): React.ReactNode {
   if (item.kind === 'assistant') {
@@ -235,13 +236,23 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
 }
 
 function buildRows(items: readonly TranscriptItem[], steps: readonly StepItem[]): Row[] {
-  const out: Row[] = []
+  const base: Row[] = []
   let inserted = false
   for (const it of items) {
-    out.push({ type: 'item', item: it })
-    if (steps.length > 0 && !inserted && it.kind === 'user') { out.push({ type: 'steps' }); inserted = true }
+    base.push({ type: 'item', item: it })
+    if (steps.length > 0 && !inserted && it.kind === 'user') { base.push({ type: 'steps' }); inserted = true }
   }
-  if (steps.length > 0 && !inserted) out.push({ type: 'steps' })
+  if (steps.length > 0 && !inserted) base.push({ type: 'steps' })
+  // A real SPACER row between consecutive rows (instead of Ink's virtual Box
+  // `gap`): a gap tied to the Box is dropped together with the scrolled-out row,
+  // so the layout (which adds one per row) drifts one row off — the item renders
+  // one row high/low depending on scroll direction. A real row is measured and
+  // always emitted, keeping the layout and the render aligned.
+  const out: Row[] = []
+  for (let i = 0; i < base.length; i++) {
+    if (i > 0) out.push({ type: 'spacer' })
+    out.push(base[i] as Row)
+  }
   return out
 }
 
@@ -685,6 +696,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // of re-estimating every row's wrapped-line count (O(total chars) each
     // render on long sessions).
     const hts = rows.map((r) => {
+      if (r.type === 'spacer') return 1 // real one-row gap (no measurement)
       const key = r.type === 'steps' ? 'steps' : String(r.item.key)
       if (r.type === 'steps') return rowHeight(key, stepsBlockHeight(steps.length))
       const measured = measuredHeights.get(key)
@@ -695,8 +707,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     })
     const starts: number[] = []
     let s = 0
-    for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] + 1 }
-    return { hts, starts, content: s - 1 }
+    // No hidden +1 between rows: the real spacer rows supply the separation.
+    for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] }
+    return { hts, starts, content: s }
   }, [rows, usable, expandReasoning, steps, version, themeEpoch])
   const maxScroll = Math.max(0, layout.content - viewportLines)
   const effectiveScroll = store.followTail ? maxScroll : Math.max(0, Math.min(store.scroll, maxScroll))
@@ -712,10 +725,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const sel = store.selection
   const selRange = sel !== null ? composerSelectionRange(sel) : null
 
-  const renderRow = (r: Row): React.ReactNode =>
+  const renderRow = (r: Row, idx: number): React.ReactNode =>
     r.type === 'steps'
       ? <StepsRow key="steps" steps={steps} />
-      : <MemoTranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} usable={usable} />
+      : r.type === 'spacer'
+        ? <Text key={`sp-${idx}`} backgroundColor={theme.bg}> </Text>
+        : <MemoTranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} usable={usable} />
 
   const renderFlatTranscript = (): React.ReactNode => {
     if (sel === null) return null
@@ -788,8 +803,8 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               )
               : (
                 <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
-                  <Box marginTop={-shift} flexDirection="column" gap={1}>
-                    {rows.slice(first, last + 1).map(renderRow)}
+                  <Box marginTop={-shift} flexDirection="column">
+                    {rows.slice(first, last + 1).map((r, idx) => renderRow(r, idx))}
                   </Box>
                 </Box>
               )}
