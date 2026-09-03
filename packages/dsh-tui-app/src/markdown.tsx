@@ -371,7 +371,19 @@ export function MarkdownText(props: { text: string }): React.JSX.Element {
   // messages on screen while new content is clipped below the viewport.
   const tree = useMemo(() => parse(props.text), [props.text])
   if (props.text.length > 8_000) return <Text wrap="wrap">{props.text}</Text>
-  // `gap` separates each block-level node (paragraph/heading/list/code block/
-  // quote) with one empty row so paragraphs are visually distinct, not flush.
-  return <Box flexDirection="column" gap={1}>{renderRoot(tree)}</Box>
+  // Blank lines between blocks are EXPLICIT one-space rows (not Box `gap`):
+  // a gap lives only in the layout model, and under partial-item rendering / the
+  // scroll `-shift` clipping it can be skipped, making a heading flush against
+  // the content above. A real text row always renders, so the separation
+  // survives every paint path.
+  return (
+    <Box flexDirection="column">
+      {(tree.children ?? []).map((node, i) => (
+        <React.Fragment key={i}>
+          {i > 0 ? <Text> </Text> : null}
+          {renderBlock(node, i)}
+        </React.Fragment>
+      ))}
+    </Box>
+  )
 }
