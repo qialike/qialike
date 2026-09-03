@@ -798,10 +798,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           <Text dimColor>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
           <Text dimColor>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
-          {/* Version sits two rows above the workspace path, which now lives at
-              the sidebar bottom. Explicit blank rows (not an empty <Box>, which
-              Ink can collapse) keep the separation visible. */}
-          <Text> </Text>
+          {/* Version sits one row above the workspace path, which now lives at
+              the sidebar bottom. Explicit blank row (not an empty <Box>, which
+              Ink can collapse) keeps the separation visible. */}
           <Text> </Text>
           <Text dimColor wrap="truncate">{store.workspace}</Text>
         </Box>
