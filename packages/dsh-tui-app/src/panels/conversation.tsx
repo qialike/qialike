@@ -799,8 +799,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           <Box flexGrow={1} />
           <Text dimColor>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
           {/* Version sits two rows above the workspace path, which now lives at
-              the sidebar bottom. */}
-          <Box height={2} />
+              the sidebar bottom. Explicit blank rows (not an empty <Box>, which
+              Ink can collapse) keep the separation visible. */}
+          <Text> </Text>
+          <Text> </Text>
           <Text dimColor wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
@@ -811,6 +813,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Text color={theme.text} wrap="wrap">{status}{renderComposerText()}</Text>
         <Box flexDirection="row" gap={2} paddingY={1} marginTop={1}>
           <Text color={permissionColor}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} (Tab)</Text>
+          <Box flexGrow={1} />
           {modelLabel !== '' && (
             <Text dimColor>Model: {modelBaseLabel}
               {effortName !== '' && <Text color={theme.warning} bold> · {effortName}</Text>}
