@@ -40,6 +40,14 @@ export const inject = ['tui']
 
 const COMPOSER_MIN_HEIGHT = 5
 
+// opencode-style message area (mirrors ~/opencode routes/session/index.tsx):
+// a USER message is a left colored rail (┃ + space) with the text in a column
+// next to it (hanging indent), and an ASSISTANT message is indented by a few
+// columns before its markdown. Both reduce the text column width by the same
+// amount, so estItemLines/layout stay in sync.
+const USER_RAIL_COLS = 2
+const ASSISTANT_INDENT_COLS = 3
+
 /** Rows scrolled per mouse-wheel tick. */
 const WHEEL_STEP = 3
 
@@ -118,7 +126,10 @@ type Row =
   | { type: 'steps' }
 
 function itemContent(item: TranscriptItem, expandReasoning: boolean): React.ReactNode {
-  if (item.kind === 'assistant') return <MarkdownText text={item.text} />
+  if (item.kind === 'assistant') {
+    // opencode-style assistant: indent the markdown a few columns.
+    return <Box paddingLeft={ASSISTANT_INDENT_COLS}><MarkdownText text={item.text} /></Box>
+  }
   if (item.kind === 'reasoning') {
     return expandReasoning
       ? <Text dimColor>{item.text}</Text>
@@ -127,9 +138,22 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean): React.Reac
   if (item.kind === 'tool') {
     return <Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text>
   }
+  if (item.kind === 'user') {
+    // opencode-style user block: a primary left rail + text column (hanging
+    // indent), so wrapped continuation lines align under the text instead of
+    // jumping back to column 0.
+    return (
+      <Box flexDirection="row" width="100%">
+        <Text color={theme.primary}>{'┃'.padEnd(USER_RAIL_COLS)}</Text>
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text color={theme.text} wrap="wrap">{item.text}</Text>
+        </Box>
+      </Box>
+    )
+  }
   return (
-    <Text dimColor={item.dim} color={item.kind === 'user' ? theme.primary : undefined} wrap="wrap">
-      {item.kind === 'user' ? `> ${item.text}` : item.text}
+    <Text dimColor={item.dim} wrap="wrap">
+      {item.text}
     </Text>
   )
 }
@@ -220,7 +244,8 @@ function composerHeight(width: number, input: string, min: number): number {
 
 function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
   if (item.kind === 'reasoning') return expandReasoning ? countWrappedLines(item.text, usable) : 1
-  if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, usable)
+  if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, Math.max(1, usable - ASSISTANT_INDENT_COLS))
+  if (item.kind === 'user') return countWrappedLines(item.text, Math.max(1, usable - USER_RAIL_COLS))
   return countWrappedLines(item.text, usable)
 }
 
@@ -272,7 +297,11 @@ function buildTranscriptRows(items: readonly TranscriptItem[], usable: number, e
     } else {
       plain = item.kind === 'assistant' && item.text.length <= 8000 ? markdownPlain(item.text) : item.text
     }
-    for (const line of wrapRows(plain, usable)) rows.push({ text: line, itemIndex: i })
+    // Wrap breadth mirrors the rendered layout (user left rail / assistant indent).
+    const w = item.kind === 'assistant' ? Math.max(1, usable - ASSISTANT_INDENT_COLS)
+      : item.kind === 'user' ? Math.max(1, usable - USER_RAIL_COLS)
+      : usable
+    for (const line of wrapRows(plain, w)) rows.push({ text: line, itemIndex: i })
   })
   return rows
 }
