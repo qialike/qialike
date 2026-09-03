@@ -371,23 +371,16 @@ export function MarkdownText(props: { text: string }): React.JSX.Element {
   // messages on screen while new content is clipped below the viewport.
   const tree = useMemo(() => parse(props.text), [props.text])
   if (props.text.length > 8_000) return <Text wrap="wrap">{props.text}</Text>
-  // Blank lines between blocks are EXPLICIT one-space rows (not Box `gap`):
-  // a gap lives only in the layout model, and under partial-item rendering / the
-  // scroll `-shift` clipping it can be skipped, making a heading flush against
-  // the content above. A real text row always renders, so the separation
-  // survives every paint path.
+  // Block separation is a LAYOUT MARGIN on each block (opencode's margin
+  // model), never a painted blank row: a painted blank can measure 0 rows in a
+  // scroll re-layout and merge into the next line (the glyph overwrites the
+  // next line's first cell, deleting the gap); a margin is pure layout and
+  // survives every paint path. estimateMarkdownHeight adds the same +1 per
+  // block boundary, so the estimate matches the real layout.
   return (
     <Box flexDirection="column">
       {(tree.children ?? []).map((node, i) => (
-        <React.Fragment key={i}>
-          {i > 0
-            // theme.bg-painted NON-breaking space so Ink measures and always
-            // emits the row (a bare/space row collapses to 0 height in the
-            // scroll re-render, making a heading flush against the content above).
-            ? <Text backgroundColor={theme.bg}>{'\u2800'}</Text>
-            : null}
-          {renderBlock(node, i)}
-        </React.Fragment>
+        <Box key={i} marginTop={i > 0 ? 1 : 0} flexShrink={0}>{renderBlock(node, i)}</Box>
       ))}
     </Box>
   )

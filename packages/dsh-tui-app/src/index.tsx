@@ -1248,13 +1248,19 @@ export class Store {
   }
   private _maxScroll(): number { return Math.max(0, this._layoutContent - this._layoutViewport) }
   scrollPage(dir: -1 | 1): void {
-    this._followTail = false
     const page = Math.max(1, this._layoutViewport)
+    // While following the tail, _scroll is never kept in sync (the effective
+    // scroll IS maxScroll), so a first PgUp would page from stale 0 and clamp
+    // to the TOP of the transcript. Sync to the tail first: opencode's sticky
+    // scroll pages up from the bottom edge, one viewport at a time.
+    if (this._followTail) this._scroll = this._maxScroll()
+    this._followTail = false
     this._scroll = Math.max(0, Math.min(this._scroll + dir * page, this._maxScroll()))
     this.notify()
   }
   /** Scroll the transcript by a small line delta (mouse wheel). */
   scrollLines(delta: number): void {
+    if (this._followTail) this._scroll = this._maxScroll()
     this._followTail = false
     this._scroll = Math.max(0, Math.min(this._scroll + delta, this._maxScroll()))
     this.notify()

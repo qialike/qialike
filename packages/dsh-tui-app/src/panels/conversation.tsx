@@ -45,12 +45,24 @@ const COMPOSER_MIN_HEIGHT = 5
 // next to it (hanging indent), and an ASSISTANT message is indented by a few
 // columns before its markdown. Both reduce the text column width by the same
 // amount, so estItemLines/layout stay in sync.
+//
+// Spacing is LAYOUT MARGINS on the message blocks (opencode's model), never
+// painted blank rows: a blank row rendered as text can measure 0 rows in a
+// scroll re-layout and merge into the next line (the glyph overwrites the next
+// line's first cell — the observed PgUp gap collapse), while a margin is pure
+// layout and cannot collapse. Margins per base row (see buildRows):
+//   user message content: 1 blank above (top rail pad; 2 when not the first
+//                          row, where a between-message pad also applies) and
+//                          1 blank below (bottom rail pad);
+//   every other row      : 1 blank above (between-message pad), none below.
 const USER_RAIL_COLS = 2
 const ASSISTANT_INDENT_COLS = 3
-// Extra blank rows rendered above and below a USER message (opencode keeps user
-// messages visually separated); the layout/estimate add the same so scroll and
-// clipping stay consistent.
-const USER_SPACER_ROWS = 1
+// Between-message pad rows (opencode marginTop={1} between messages).
+const MESSAGE_PAD_ROWS = 1
+// Rail pads above/below a user message's text (opencode keeps user messages
+// visually separated); these plus MESSAGE_PAD_ROWS give the user block its
+// 2 blank rows above and below (matches the legacy blank-row layout).
+const USER_PAD_ROWS = 1
 
 /** Rows scrolled per mouse-wheel tick. */
 const WHEEL_STEP = 3
@@ -126,9 +138,8 @@ function rowHeight(key: string, fallback: number): number {
 // ── transcript rendering helpers ────────────────────────────────────────────
 
 type Row =
-  | { type: 'item'; item: TranscriptItem }
-  | { type: 'steps' }
-  | { type: 'spacer' }
+  | { type: 'item'; item: TranscriptItem; top: number; bottom: number }
+  | { type: 'steps'; top: number; bottom: number }
 
 function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number): React.ReactNode {
   if (item.kind === 'assistant') {
@@ -149,15 +160,13 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     // line is its own <Text> with backgroundColor={theme.panel}; the ┃ prefix
     // runs down every line (opencode's border=["left"]) and the line is padded
     // to the full column width so the panel block spans edge to edge.
+    // The blank rows above/below the block are LAYOUT MARGINS on the row's
+    // wrapper (see buildRows), not painted rows: painted blanks collapse in
+    // scroll re-layouts (the PgUp gap bug); margins always survive.
     const w = Math.max(1, usable - USER_RAIL_COLS)
     const lines = wrapRows(item.text, w)
     return (
-      // theme.bg-painted blank rows above/below (NOT transparent padding): Ink
-      // treats them as non-blank and always emits them, so the gap to the
-      // message above/below survives scrolling. They are real rows, so the
-      // measured height equals the estimate (+USER_SPACER_ROWS*2).
       <Box flexDirection="column">
-        <Text backgroundColor={theme.bg}>{'\u2800'}</Text>
         {lines.map((line, i) => {
           const text = `${'┃'.padEnd(USER_RAIL_COLS)}${line}`
           const pad = Math.max(0, usable - visualWidth(text))
@@ -167,7 +176,6 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
             </Text>
           )
         })}
-        <Text backgroundColor={theme.bg}>{'\u2800'}</Text>
       </Box>
     )
   }
@@ -236,22 +244,29 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
 }
 
 function buildRows(items: readonly TranscriptItem[], steps: readonly StepItem[]): Row[] {
-  const base: Row[] = []
+  const base: ({ type: 'item'; item: TranscriptItem } | { type: 'steps' })[] = []
   let inserted = false
   for (const it of items) {
     base.push({ type: 'item', item: it })
     if (steps.length > 0 && !inserted && it.kind === 'user') { base.push({ type: 'steps' }); inserted = true }
   }
   if (steps.length > 0 && !inserted) base.push({ type: 'steps' })
-  // A real SPACER row between consecutive rows (instead of Ink's virtual Box
-  // `gap`): a gap tied to the Box is dropped together with the scrolled-out row,
-  // so the layout (which adds one per row) drifts one row off — the item renders
-  // one row high/low depending on scroll direction. A real row is measured and
-  // always emitted, keeping the layout and the render aligned.
+  // Spacing is LAYOUT MARGINS on the rows (opencode's margin model), never
+  // blank text rows: a painted blank collapses to 0 rows in a scroll
+  // re-layout and merges into the next line, deleting the gap. Margins are
+  // pure layout, so they survive every paint path. Each row's wrapper carries
+  // marginTop/marginBottom; the layout hts add the same rows so scroll and
+  // clipping stay consistent. Visual contract (same as the old blank rows):
+  // a USER message keeps USER_PAD_ROWS blanks above and below its text, and
+  // every consecutive pair of rows keeps MESSAGE_PAD_ROWS blanks between them.
   const out: Row[] = []
   for (let i = 0; i < base.length; i++) {
-    if (i > 0) out.push({ type: 'spacer' })
-    out.push(base[i] as Row)
+    const entry = base[i] as { type: 'item'; item: TranscriptItem } | { type: 'steps' }
+    const isUser = entry.type === 'item' && entry.item.kind === 'user'
+    const top = (i === 0 ? 0 : MESSAGE_PAD_ROWS) + (isUser ? USER_PAD_ROWS : 0)
+    const bottom = isUser ? USER_PAD_ROWS : 0
+    if (entry.type === 'steps') out.push({ type: 'steps', top, bottom })
+    else out.push({ type: 'item', item: entry.item, top, bottom })
   }
   return out
 }
@@ -295,7 +310,7 @@ function composerHeight(width: number, input: string, min: number): number {
 function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
   if (item.kind === 'reasoning') return expandReasoning ? countWrappedLines(item.text, usable) : 1
   if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, Math.max(1, usable - ASSISTANT_INDENT_COLS))
-  if (item.kind === 'user') return countWrappedLines(item.text, Math.max(1, usable - USER_RAIL_COLS)) + USER_SPACER_ROWS * 2
+  if (item.kind === 'user') return countWrappedLines(item.text, Math.max(1, usable - USER_RAIL_COLS))
   return countWrappedLines(item.text, usable)
 }
 
@@ -696,23 +711,29 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // of re-estimating every row's wrapped-line count (O(total chars) each
     // render on long sessions).
     const hts = rows.map((r) => {
-      if (r.type === 'spacer') return 1 // real one-row gap (no measurement)
-      const key = r.type === 'steps' ? 'steps' : String(r.item.key)
-      if (r.type === 'steps') return rowHeight(key, stepsBlockHeight(steps.length))
-      // The ESTIMATE is deterministic and correct; the measureElement height is
-      // flaky during scroll (a diff-rendered item can measure a collapsed height,
-      // e.g. 1 instead of 3). Use the measured value only when it stays within 1
-      // of the estimate — a wildly-off reading is a scroll artifact, so fall back
-      // to the estimate to keep every gap stable while scrolling.
-      const est = estItemLines(r.item, usable, expandReasoning)
-      const measured = measuredHeights.get(key)
-      if (measured !== undefined && Math.abs(measured - est) <= 1) return measured
-      measuredHeights.set(key, est)
-      return est
+      // Content rows first (estimated; the measured cache only overrides when
+      // it stays within 1 of the estimate — a wildly-off reading is a scroll
+      // artifact), then the row's layout margins add their rows so starts[]
+      // tracks the real rendered extent (content + spacing).
+      const content = r.type === 'steps'
+        ? rowHeight('steps', stepsBlockHeight(steps.length))
+        : (() => {
+          const key = String(r.item.key)
+          // The ESTIMATE is deterministic and correct; the measureElement height
+          // is flaky during scroll (a diff-rendered item can measure a collapsed
+          // height, e.g. 1 instead of 3). Use the measured value only when it
+          // stays within 1 of the estimate — a wildly-off reading is a scroll
+          // artifact, so fall back to the estimate to keep every gap stable.
+          const est = estItemLines(r.item, usable, expandReasoning)
+          const measured = measuredHeights.get(key)
+          if (measured !== undefined && Math.abs(measured - est) <= 1) return measured
+          measuredHeights.set(key, est)
+          return est
+        })()
+      return content + r.top + r.bottom
     })
     const starts: number[] = []
     let s = 0
-    // No hidden +1 between rows: the real spacer rows supply the separation.
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] }
     return { hts, starts, content: s }
   }, [rows, usable, expandReasoning, steps, version, themeEpoch])
@@ -730,12 +751,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const sel = store.selection
   const selRange = sel !== null ? composerSelectionRange(sel) : null
 
-  const renderRow = (r: Row, idx: number): React.ReactNode =>
+  const renderRow = (r: Row): React.ReactNode =>
     r.type === 'steps'
-      ? <StepsRow key="steps" steps={steps} />
-      : r.type === 'spacer'
-        ? <Text key={`sp-${idx}`} backgroundColor={theme.bg}>{'\u2800'}</Text>
-        : <MemoTranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} usable={usable} />
+      ? <Box key="steps" marginTop={r.top} marginBottom={r.bottom}><StepsRow steps={steps} /></Box>
+      : (
+        <Box key={r.item.key} marginTop={r.top} marginBottom={r.bottom} flexShrink={0}>
+          <MemoTranscriptItemView item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} usable={usable} />
+        </Box>
+      )
 
   const renderFlatTranscript = (): React.ReactNode => {
     if (sel === null) return null
@@ -809,7 +832,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               : (
                 <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
                   <Box marginTop={-shift} flexDirection="column">
-                    {rows.slice(first, last + 1).map((r, idx) => renderRow(r, idx))}
+                    {rows.slice(first, last + 1).map((r) => renderRow(r))}
                   </Box>
                 </Box>
               )}
