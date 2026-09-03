@@ -380,7 +380,12 @@ export function MarkdownText(props: { text: string }): React.JSX.Element {
     <Box flexDirection="column">
       {(tree.children ?? []).map((node, i) => (
         <React.Fragment key={i}>
-          {i > 0 ? <Text> </Text> : null}
+          {i > 0
+            // theme.bg-painted so Ink treats the row as non-blank and always
+            // emits it (a bare space row can be dropped in the scroll line-diff,
+            // making a heading flush against the content above).
+            ? <Text backgroundColor={theme.bg}> </Text>
+            : null}
           {renderBlock(node, i)}
         </React.Fragment>
       ))}

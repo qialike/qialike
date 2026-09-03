@@ -151,11 +151,12 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     const w = Math.max(1, usable - USER_RAIL_COLS)
     const lines = wrapRows(item.text, w)
     return (
-      // paddingY (not empty <Box>s) creates the blank rows above/below: Ink
-      // always includes Box padding in the measured height, so the layout and
-      // the rendered height stay in sync (empty <Box>s could be dropped, making
-      // the measured height one row short and drifting on scroll).
-      <Box flexDirection="column" paddingY={USER_SPACER_ROWS}>
+      // theme.bg-painted blank rows above/below (NOT transparent padding): Ink
+      // treats them as non-blank and always emits them, so the gap to the
+      // message above/below survives scrolling. They are real rows, so the
+      // measured height equals the estimate (+USER_SPACER_ROWS*2).
+      <Box flexDirection="column">
+        <Text backgroundColor={theme.bg}> </Text>
         {lines.map((line, i) => {
           const text = `${'┃'.padEnd(USER_RAIL_COLS)}${line}`
           const pad = Math.max(0, usable - visualWidth(text))
@@ -165,6 +166,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
             </Text>
           )
         })}
+        <Text backgroundColor={theme.bg}> </Text>
       </Box>
     )
   }
