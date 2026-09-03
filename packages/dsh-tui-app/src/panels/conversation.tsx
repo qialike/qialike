@@ -157,7 +157,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
       // message above/below survives scrolling. They are real rows, so the
       // measured height equals the estimate (+USER_SPACER_ROWS*2).
       <Box flexDirection="column">
-        <Text backgroundColor={theme.bg}> </Text>
+        <Text backgroundColor={theme.bg}>{'\u2800'}</Text>
         {lines.map((line, i) => {
           const text = `${'┃'.padEnd(USER_RAIL_COLS)}${line}`
           const pad = Math.max(0, usable - visualWidth(text))
@@ -167,7 +167,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
             </Text>
           )
         })}
-        <Text backgroundColor={theme.bg}> </Text>
+        <Text backgroundColor={theme.bg}>{'\u2800'}</Text>
       </Box>
     )
   }
@@ -699,10 +699,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       if (r.type === 'spacer') return 1 // real one-row gap (no measurement)
       const key = r.type === 'steps' ? 'steps' : String(r.item.key)
       if (r.type === 'steps') return rowHeight(key, stepsBlockHeight(steps.length))
-      const measured = measuredHeights.get(key)
-      if (measured !== undefined) return measured
+      // The ESTIMATE is deterministic and correct; the measureElement height is
+      // flaky during scroll (a diff-rendered item can measure a collapsed height,
+      // e.g. 1 instead of 3). Use the measured value only when it stays within 1
+      // of the estimate — a wildly-off reading is a scroll artifact, so fall back
+      // to the estimate to keep every gap stable while scrolling.
       const est = estItemLines(r.item, usable, expandReasoning)
-      measuredHeights.set(key, est) // estimate placeholder; real measure overwrites on paint
+      const measured = measuredHeights.get(key)
+      if (measured !== undefined && Math.abs(measured - est) <= 1) return measured
+      measuredHeights.set(key, est)
       return est
     })
     const starts: number[] = []
@@ -729,7 +734,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     r.type === 'steps'
       ? <StepsRow key="steps" steps={steps} />
       : r.type === 'spacer'
-        ? <Text key={`sp-${idx}`} backgroundColor={theme.bg}> </Text>
+        ? <Text key={`sp-${idx}`} backgroundColor={theme.bg}>{'\u2800'}</Text>
         : <MemoTranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} usable={usable} />
 
   const renderFlatTranscript = (): React.ReactNode => {
