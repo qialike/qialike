@@ -797,11 +797,8 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             : <StepRows steps={steps} />}
           <Text dimColor>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
+          {/* Version sits flush against the workspace path at the sidebar bottom. */}
           <Text dimColor>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
-          {/* Version sits one row above the workspace path, which now lives at
-              the sidebar bottom. Explicit blank row (not an empty <Box>, which
-              Ink can collapse) keeps the separation visible. */}
-          <Text> </Text>
           <Text dimColor wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
@@ -818,7 +815,6 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               {effortName !== '' && <Text color={theme.warning} bold> · {effortName}</Text>}
             </Text>
           )}
-          <Box flexGrow={1} />
         </Box>
       </Box>
 
