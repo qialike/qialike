@@ -22,6 +22,7 @@ import {
 } from '../index.tsx'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
 import { SIDEBAR_MIN_WIDTH, dockInnerWidth } from '../config.ts'
+import { formatSessionStats } from '../session-stats.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 
@@ -528,6 +529,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const permissionLabel = store.permissionLabel
   const permissionColor = store.permissionColor
   const modelLabel = store.modelLabel
+  // Bottom-bar session stats text (steps/turns · LLM/Tool · tokens); '' until
+  // the session has any activity.
+  const statsLine = formatSessionStats(store.stats)
   // The composer shows the model with its reasoning effort as a separate
   // warning-colored chip (like opencode's variant); the full label embeds the
   // effort as ` · <name>`, so the base part strips that suffix.
@@ -721,7 +725,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box flexGrow={1} justifyContent="center">
           <BusyIndicator animate={store.running} paused={store.paused} />
         </Box>
-        <Text dimColor>ctrl+p commands</Text>
+        {statsLine !== '' && <Text dimColor wrap="truncate">{statsLine}</Text>}
       </Box>
     </Box>
   )

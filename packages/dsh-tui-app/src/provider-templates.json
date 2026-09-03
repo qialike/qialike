@@ -344,7 +344,7 @@
   },
   {
     "route": "kimi-coding",
-    "name": "Kimi Coding",
+    "name": "Kimi For Coding",
     "baseURL": "https://api.kimi.com/coding",
     "apiKeyEnv": "KIMI_API_KEY",
     "models": [
@@ -455,20 +455,26 @@
     "apiKeyEnv": "MOONSHOT_API_KEY",
     "models": [
       {
-        "id": "kimi-k2-0711-preview",
-        "name": "Kimi K2 0711",
-        "contextWindow": 131072,
-        "maxTokens": 16384
+        "id": "kimi-k3",
+        "name": "Kimi K3",
+        "contextWindow": 1048576,
+        "maxTokens": 131072
       },
       {
-        "id": "kimi-k2-0905-preview",
-        "name": "Kimi K2 0905",
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
         "contextWindow": 262144,
         "maxTokens": 262144
       },
       {
-        "id": "kimi-k2-thinking",
-        "name": "Kimi K2 Thinking",
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "kimi-k2.7-code-highspeed",
+        "name": "Kimi K2.7 Code HighSpeed",
         "contextWindow": 262144,
         "maxTokens": 262144
       }
@@ -476,25 +482,31 @@
   },
   {
     "route": "moonshotai-cn",
-    "name": "Moonshot AI (CN)",
+    "name": "Moonshot AI (China)",
     "baseURL": "https://api.moonshot.cn/v1",
     "apiKeyEnv": "MOONSHOT_API_KEY",
     "models": [
       {
-        "id": "kimi-k2-0711-preview",
-        "name": "Kimi K2 0711",
-        "contextWindow": 131072,
-        "maxTokens": 16384
+        "id": "kimi-k3",
+        "name": "Kimi K3",
+        "contextWindow": 1048576,
+        "maxTokens": 131072
       },
       {
-        "id": "kimi-k2-0905-preview",
-        "name": "Kimi K2 0905",
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
         "contextWindow": 262144,
         "maxTokens": 262144
       },
       {
-        "id": "kimi-k2-thinking",
-        "name": "Kimi K2 Thinking",
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "kimi-k2.7-code-highspeed",
+        "name": "Kimi K2.7 Code HighSpeed",
         "contextWindow": 262144,
         "maxTokens": 262144
       }
@@ -840,25 +852,19 @@
   },
   {
     "route": "zai",
-    "name": "Z.ai",
+    "name": "Z.AI Coding Plan",
     "baseURL": "https://api.z.ai/api/coding/paas/v4",
     "apiKeyEnv": "ZAI_API_KEY",
     "models": [
       {
-        "id": "glm-4.7",
-        "name": "GLM-4.7",
-        "contextWindow": 204800,
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "contextWindow": 1000000,
         "maxTokens": 131072
       },
       {
-        "id": "glm-5-turbo",
-        "name": "GLM-5-Turbo",
-        "contextWindow": 200000,
-        "maxTokens": 131072
-      },
-      {
-        "id": "glm-5.2",
-        "name": "GLM-5.2",
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
         "contextWindow": 1000000,
         "maxTokens": 131072
       }
@@ -866,13 +872,87 @@
   },
   {
     "route": "zai-coding-cn",
-    "name": "Z.ai Coding (CN)",
+    "name": "Zhipu AI Coding Plan",
     "baseURL": "https://open.bigmodel.cn/api/coding/paas/v4",
     "apiKeyEnv": "ZAI_API_KEY",
     "models": [
       {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      }
+    ]
+  },
+  {
+    "route": "zai-paas",
+    "name": "Z.AI",
+    "baseURL": "https://api.z.ai/api/paas/v4",
+    "apiKeyEnv": "ZAI_API_KEY",
+    "models": [
+      {
+        "id": "glm-4.5",
+        "name": "GLM-4.5",
+        "contextWindow": 131072,
+        "maxTokens": 98304
+      },
+      {
+        "id": "glm-4.5-air",
+        "name": "GLM-4.5-Air",
+        "contextWindow": 131072,
+        "maxTokens": 98304
+      },
+      {
+        "id": "glm-4.5-flash",
+        "name": "GLM-4.5-Flash",
+        "contextWindow": 131072,
+        "maxTokens": 98304
+      },
+      {
+        "id": "glm-4.5v",
+        "name": "GLM-4.5V",
+        "contextWindow": 64000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "glm-4.6",
+        "name": "GLM-4.6",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-4.6v",
+        "name": "GLM-4.6V",
+        "contextWindow": 128000,
+        "maxTokens": 32768
+      },
+      {
         "id": "glm-4.7",
         "name": "GLM-4.7",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-4.7-flash",
+        "name": "GLM-4.7-Flash",
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-4.7-flashx",
+        "name": "GLM-4.7-FlashX",
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
         "contextWindow": 204800,
         "maxTokens": 131072
       },
@@ -883,9 +963,131 @@
         "maxTokens": 131072
       },
       {
+        "id": "glm-5.1",
+        "name": "GLM-5.1",
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      },
+      {
         "id": "glm-5.2",
         "name": "GLM-5.2",
         "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5v-turbo",
+        "name": "GLM-5V-Turbo",
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      }
+    ]
+  },
+  {
+    "route": "zai-paas-cn",
+    "name": "Zhipu AI",
+    "baseURL": "https://open.bigmodel.cn/api/paas/v4",
+    "apiKeyEnv": "ZAI_API_KEY",
+    "models": [
+      {
+        "id": "glm-4.5",
+        "name": "GLM-4.5",
+        "contextWindow": 131072,
+        "maxTokens": 98304
+      },
+      {
+        "id": "glm-4.5-air",
+        "name": "GLM-4.5-Air",
+        "contextWindow": 131072,
+        "maxTokens": 98304
+      },
+      {
+        "id": "glm-4.5-flash",
+        "name": "GLM-4.5-Flash",
+        "contextWindow": 131072,
+        "maxTokens": 98304
+      },
+      {
+        "id": "glm-4.5v",
+        "name": "GLM-4.5V",
+        "contextWindow": 64000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "glm-4.6",
+        "name": "GLM-4.6",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-4.6v",
+        "name": "GLM-4.6V",
+        "contextWindow": 128000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "glm-4.7",
+        "name": "GLM-4.7",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-4.7-flash",
+        "name": "GLM-4.7-Flash",
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-4.7-flashx",
+        "name": "GLM-4.7-FlashX",
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.1",
+        "name": "GLM-5.1",
+        "contextWindow": 200000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.2",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5.3-flash",
+        "name": "GLM-5.3-Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "glm-5v-turbo",
+        "name": "GLM-5V-Turbo",
+        "contextWindow": 200000,
         "maxTokens": 131072
       }
     ]

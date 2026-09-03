@@ -86,8 +86,8 @@ dist/dsh-tui --help
   ——**同步移除其 API key** 并从 /models 一级消失（隐藏列表持久化于 `dsh-tui.json` 的 `hidden_providers`；
   key 来自环境变量时无法删除、会提示，隐藏集仍使其不显示）；重新加入 = 到 "Add provider" 列表选择该家并
   **重新设置 API key**（保存后自动恢复显示）；隐藏的是当前所用供应商时自动切换到其它已配置供应商，**隐藏后无任何激活供应商则当前模型显示 `not set`**；
-  "＋ Add provider" 列出**所有已知的提供商**——自研适配器内置模板（36 家目录：OpenAI、OpenRouter、Anthropic、
-  Google Gemini、Groq、Mistral、xAI、Z.ai、OpenCode Zen / OpenCode Go 等，
+  "＋ Add provider" 列出**所有已知的提供商**——自研适配器内置模板（38 家目录：OpenAI、OpenRouter、Anthropic、
+  Google Gemini、Groq、Mistral、xAI、Z.AI / Zhipu AI、OpenCode Zen / OpenCode Go 等，
   OpenAI-compatible 为主、Anthropic/MiniMax 走原生 Messages 协议；
   **OpenCode Zen / Go 由可加载的 `tui-opencode-gateways` 子插件提供**——配置文件
   `dsh-tui-opencode: { enabled: false }` 可整体卸载（模板与已配置路由都从 /models 与适配器消失，默认开启）；

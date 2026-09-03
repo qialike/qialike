@@ -42,6 +42,7 @@ import type {} from '@deepseek-ai/dsh-cmdline'
 import { TUI_STARTUP_SERVICE } from './startup.ts'
 import { TUI_MODELS_SERVICE, type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
 import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
+import { emptySessionStats, foldSessionStats, type SessionStats } from './session-stats.ts'
 
 import { readHiddenProviders, resolveResumeLast, setHiddenProviders } from './config.ts'
 import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
@@ -290,6 +291,42 @@ export class Store {
   get stepsTotal(): number { return this._steps.length }
   get stepsActive(): boolean { return this._steps.length > 0 }
   setSteps(steps: StepItem[]): void { this._steps = steps; this.notify() }
+  // ── bottom-bar session stats (web StatsLine subset) ──
+  private _stats: SessionStats = emptySessionStats()
+  private _turnSeen = new Set<number>()
+  get stats(): SessionStats { return this._stats }
+  /** Replace stats wholesale (durable-log fold on resume); turns assumed 0..n-1. */
+  setStats(stats: SessionStats): void {
+    this._stats = stats
+    this._turnSeen = new Set(Array.from({ length: stats.turns }, (_, i) => i))
+    this.notify()
+  }
+  /** Reset for a brand-new session. */
+  resetStats(): void {
+    this._stats = emptySessionStats()
+    this._turnSeen.clear()
+  }
+  /** One assistant step settled: counts + LLM wall time + provider usage. */
+  accrueMessage(turn: number, llmMs: number, usage?: { inputTokens?: number; outputTokens?: number }): void {
+    this._turnSeen.add(turn)
+    const current = this._stats
+    this._stats = {
+      turns: this._turnSeen.size,
+      steps: current.steps + 1,
+      llmMs: current.llmMs + Math.max(0, llmMs),
+      toolMs: current.toolMs,
+      inputTokens: current.inputTokens + (usage?.inputTokens ?? 0),
+      outputTokens: current.outputTokens + (usage?.outputTokens ?? 0),
+    }
+    this.notify()
+  }
+  /** One tool result settled: add its wall time. */
+  accrueTool(ms: number): void {
+    if (ms <= 0) return
+    const current = this._stats
+    this._stats = { ...current, toolMs: current.toolMs + ms }
+    this.notify()
+  }
   get input(): string { return this._input }
   get panel() { return this._panel }
   get commandFilter() { return this._commandFilter }
@@ -1516,15 +1553,27 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   let sessionId = agent.session.id
   sessionRef.current = sessionId
   store.setSession(agent.session)
+  // Bottom-bar session stats (web StatsLine subset): per-step/per-tool timing
+  // buckets live here; on session switches both are cleared and the durable
+  // log is re-folded for counts + tokens.
+  const stepStartAt = new Map<string, number>()
+  const toolCallsAt = new Map<string, number[]>()
+  const resetSessionStats = (): void => {
+    stepStartAt.clear()
+    toolCallsAt.clear()
+    store.resetStats()
+  }
   // The active session is the most recently used one (drives list ordering and
   // the launch auto-resume).
   touchSession(sessionId)
   // A resumed session carries its full event log; fold it into the transcript
   // so the UI shows the history, not a blank surface (the live listener below
   // only receives new events). `/new`-created sessions have no history.
+  resetSessionStats()
   if (resumed) {
     const history = foldHistoryEvents(agent.session.events)
     store.loadHistory(history.items, history.steps)
+    store.setStats(foldSessionStats(agent.session.events))
   }
   // The merged template directory (core + plugin-registered), read live so a
   // sibling plugin's additions apply without a restart.
@@ -1604,6 +1653,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         break
       }
       case 'assistant/message': {
+        const data = event.data as {
+          turn?: number
+          step?: number
+          usage?: { inputTokens?: number; outputTokens?: number }
+        }
+        // Bottom-bar stats: one assistant step, its LLM wall time (measured
+        // from the step/start event) and the provider-reported usage tokens.
+        const started = stepStartAt.get(`${data.turn}:${data.step}`)
+        const llmMs = started === undefined ? 0 : Date.now() - started
+        store.accrueMessage(data.turn ?? 0, llmMs, data.usage)
         const joined = event.data.message.content
           .filter((block) => block.type === 'text')
           .map((block) => block.text)
@@ -1614,6 +1673,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         store.append('assistant', joined)
         break
       }
+      case 'step/start': {
+        const data = event.data as { turn?: number; step?: number }
+        if (typeof data.turn === 'number' && typeof data.step === 'number') {
+          stepStartAt.set(`${data.turn}:${data.step}`, Date.now())
+        }
+        break
+      }
       // The model's step-by-step plan and progress: latest write wins (sidebar
       // Steps + pinned block). The tool rows below are separate.
       case 'todo/write': {
@@ -1621,12 +1687,22 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         if (todos.length > 0) store.setSteps(todos)
         break
       }
-      // Tool calls/results shown inline like opencode (icon + name rows).
+      // Tool calls/results shown inline like opencode (icon + name rows); the
+      // result also closes the tool's wall-time bucket (FIFO per turn:step).
       case 'tool/call': {
+        const data = event.data as { turn?: number; step?: number }
+        const key = `${data.turn}:${data.step}`
+        const queue = toolCallsAt.get(key) ?? []
+        queue.push(Date.now())
+        toolCallsAt.set(key, queue)
         store.toolCall(event.data.name)
         break
       }
       case 'tool/result': {
+        const data = event.data as { turn?: number; step?: number }
+        const key = `${data.turn}:${data.step}`
+        const started = toolCallsAt.get(key)?.shift()
+        if (started !== undefined) store.accrueTool(Date.now() - started)
         store.toolResult()
         break
       }
@@ -1888,6 +1964,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         sessionRef.current = sessionId
         store.setSession(agent.session)
         touchSession(sessionId)
+        resetSessionStats()
         store.clear() // transcript + steps from the old session
         store.setRunning(false)
         store.setPaused(false)
@@ -1921,8 +1998,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         sessionRef.current = sessionId
         store.setSession(agent.session)
         touchSession(sessionId)
+        resetSessionStats()
         const history = foldHistoryEvents(agent.session.events)
         store.loadHistory(history.items, history.steps)
+        store.setStats(foldSessionStats(agent.session.events))
         store.setRunning(false)
         store.setPaused(false)
         store.append('status', `Session ${sessionId} in ${config.workspace} (resumed)`, true)

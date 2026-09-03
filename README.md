@@ -128,8 +128,8 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   provider that is currently in use switches the selection to another active
   provider, or shows `not set` when no active provider remains. An "＋ Add
   provider" entry lists **every known provider** —
-  the self-hosted adapter's built-in templates — 36 catalog entries (OpenAI,
-  OpenRouter, Anthropic, Google Gemini, Groq, Mistral, xAI, Z.ai,
+  the self-hosted adapter's built-in templates — 38 catalog entries (OpenAI,
+  OpenRouter, Anthropic, Google Gemini, Groq, Mistral, xAI, Z.AI / Zhipu AI,
   OpenCode Zen / OpenCode Go, … — OpenAI-compatible except Anthropic/MiniMax's
   native Messages protocol, plus 4 deployment-configured ones like Azure OpenAI /
   Cloudflare Workers AI flagged `endpoint required`; **OpenCode Zen / Go are
@@ -161,7 +161,7 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   appear in the picker). The list scrolls to keep the highlight in view.
   "＋ Add a custom provider"
   opens a sequential form
-  (a provider-template dropdown — any of the 37 built-in entries, or custom —
+  (a provider-template dropdown — any of the 39 built-in entries, or custom —
   pre-filling route/display name/base URL; then route id / display name / base URL /
   API key / model ids) that writes an
   OpenAI-compatible provider into the `dsh-tui-llm` settings section and its key
