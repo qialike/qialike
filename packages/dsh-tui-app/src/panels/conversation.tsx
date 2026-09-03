@@ -798,6 +798,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           <Text dimColor>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
           <Text dimColor>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
+          {/* Version sits two rows above the workspace path, which now lives at
+              the sidebar bottom. */}
+          <Box height={2} />
+          <Text dimColor wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
       </Box>
@@ -813,12 +817,6 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             </Text>
           )}
           <Box flexGrow={1} />
-          {/* Workspace path, right-aligned next to the permission/model row;
-              truncated to ~20% of the terminal width (≥ 24 cols) so a long
-              path never crowds the composer or wraps onto a second line. */}
-          <Box width={Math.max(24, Math.floor(width * 0.2))} justifyContent="flex-end">
-            <Text dimColor wrap="truncate">{store.workspace}</Text>
-          </Box>
         </Box>
       </Box>
 
