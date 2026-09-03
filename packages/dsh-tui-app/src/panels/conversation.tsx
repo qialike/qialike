@@ -200,7 +200,8 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
     return () => clearInterval(timer)
   }, [props.animate])
   if (props.paused) return <Text color={theme.warning}>⏸ Paused</Text>
-  if (!props.animate) return <Text dimColor>Waiting</Text>
+  // Idle: a STATIC marker (⠿, not an animated spinner frame) + "Idle".
+  if (!props.animate) return <Text dimColor>⠿ Idle</Text>
   const armed = Date.now() - store.lastEscTime < 800
   return (
     <Text color={theme.info}>
