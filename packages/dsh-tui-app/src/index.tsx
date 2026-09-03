@@ -491,6 +491,29 @@ export class Store {
     this.notify()
   }
 
+  /** Replace the (streamed) assistant item with the authoritative message text
+   *  — the same source a resume replays. Streaming `text-delta` chunks can split
+   *  a `\n\n` at a chunk boundary, leaving the live copy missing blank lines
+   *  between a heading/label and the content above (looks flush live, but normal
+   *  after resume). Settling on `assistant/message` makes live byte-identical to
+   *  resume. Falls back to appending when there is no assistant item. */
+  settleAssistantText(text: string): void {
+    let idx = -1
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      if (this.items[i]?.kind === 'assistant') { idx = i; break }
+    }
+    if (idx === -1) {
+      this.items = [...this.items, { key: this.key += 1, kind: 'assistant', text }]
+      this.notify()
+      return
+    }
+    if (this.items[idx]!.text === text) return
+    const next = [...this.items]
+    next[idx] = { ...next[idx]!, text }
+    this.items = next
+    this.notify()
+  }
+
   /** Accumulate reasoning deltas into one `reasoning` block (a collapsed Think). */
   streamReasoning(text: string): void {
     const tail = this.items.at(-1)
@@ -1696,9 +1719,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           .map((block) => block.text)
           .join('')
         if (joined === '') break
-        const tail = store.getItems().at(-1)
-        if (tail?.kind === 'assistant') break
-        store.append('assistant', joined)
+        // Authoritative text: replace (or create) the assistant row so a
+        // streamed, possibly newline-incomplete copy never lingers (headings
+        // flush against the content above), and live matches a resumed replay.
+        store.settleAssistantText(joined)
         break
       }
       case 'step/start': {
