@@ -1,7 +1,7 @@
 {
   "name": "@yourname/dsh-tui-app",
   "description": "The dsh TUI bundle: a full-screen Ink/React terminal surface over dsh-base, with a single interactive agent session.",
-  "version": "0.2.1",
+  "version": "0.2.2-beta",
   "publishConfig": {
     "access": "public"
   },
@@ -29,6 +29,22 @@
     "./opencode": {
       "types": "./lib/types/opencode.d.ts",
       "default": "./lib/opencode.js"
+    },
+    "./china-gateways": {
+      "types": "./lib/types/china-gateways.d.ts",
+      "default": "./lib/china-gateways.js"
+    },
+    "./foreign-gateways": {
+      "types": "./lib/types/foreign-gateways.d.ts",
+      "default": "./lib/foreign-gateways.js"
+    },
+    "./azure": {
+      "types": "./lib/types/azure.d.ts",
+      "default": "./lib/azure.js"
+    },
+    "./theme-plugin": {
+      "types": "./lib/types/theme-plugin.d.ts",
+      "default": "./lib/theme-plugin.js"
     },
     "./sessions": {
       "types": "./lib/types/sessions.d.ts",

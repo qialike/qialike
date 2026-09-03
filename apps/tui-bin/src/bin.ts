@@ -228,7 +228,7 @@ async function main(): Promise<void> {
   if (args[0] === 'uninstall') {
     process.exit(uninstallSelf())
   }
-  if (args.includes('--version') || args.includes('-V')) {
+  if (args.includes('--version') || args.includes('-V') || args.includes('-v')) {
     process.stdout.write(`${NAME} ${readVersion()}\n`)
     process.exit(0)
   }

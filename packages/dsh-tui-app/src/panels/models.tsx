@@ -60,7 +60,6 @@ function ModelsDialog(): React.JSX.Element {
     return () => clearInterval(timer)
   }, [])
   const block = <Text inverse={cursorOn}> </Text>
-  const fieldCount = PROVIDER_FORM_FIELDS.length + 1 // +1 = the template dropdown
   const masked = '•'.repeat(store.secret.length)
   return (
     <Box flexDirection="column" height={store.rows} alignItems="center" justifyContent="center">
@@ -119,21 +118,23 @@ function ModelsDialog(): React.JSX.Element {
         ) : store.providerForm ? (
           <>
             <Text color={theme.accent} bold>Add a custom provider</Text>
-            <Text color={store.providerField === 0 ? theme.primary : undefined}>
-              1/{fieldCount} provider: {store.providerTemplate < store.providerTemplates.length
-                ? store.providerTemplates[store.providerTemplate]?.name ?? ''
-                : 'Custom provider'}
-              {store.providerField === 0 ? block : null}
-            </Text>
-            {PROVIDER_FORM_FIELDS.map((label, i) => {
-              const field = i + 2
-              return (
-                <Text key={label} color={field === store.providerField ? theme.primary : undefined}>
-                  {field}/{fieldCount} {label}: {store.providerValues[i] ?? ''}
-                  {field === store.providerField ? block : null}
-                </Text>
-              )
-            })}
+            <Box flexDirection="column" marginTop={1}>
+              <Text color={store.providerField === 0 ? theme.primary : undefined}>
+                [ 1 ] provider: {store.providerTemplate < store.providerTemplates.length
+                  ? store.providerTemplates[store.providerTemplate]?.name ?? ''
+                  : 'Custom provider'}
+                {store.providerField === 0 ? block : null}
+              </Text>
+              {PROVIDER_FORM_FIELDS.map((label, i) => {
+                const field = i + 2
+                return (
+                  <Text key={label} color={field === store.providerField ? theme.primary : undefined}>
+                    [ {field} ] {label}: {store.providerValues[i] ?? ''}
+                    {field === store.providerField ? block : null}
+                  </Text>
+                )
+              })}
+            </Box>
             {store.providerFormError !== '' && <Text color={theme.error}>{store.providerFormError}</Text>}
             <Box marginTop={1}>
               <Text dimColor>↑/↓ choose provider · type fields · Enter next · Enter on last saves · Esc cancel</Text>
@@ -234,6 +235,9 @@ function ModelsDialog(): React.JSX.Element {
                   rows.push(
                     <Text key="__add" color={store.providerIndex === store.providers.length ? theme.accent : undefined} inverse={store.providerIndex === store.providers.length}>
                       {store.providerIndex === store.providers.length ? '› ' : '  '}＋ Add provider
+                      {store.providerTotal > 0 && (
+                        <Text dimColor>  · {store.providerTotal} provider{store.providerTotal === 1 ? '' : 's'}</Text>
+                      )}
                     </Text>,
                   )
                   rows.push(
@@ -448,6 +452,8 @@ export function apply(ctx: Context): void {
       void modelsService.listConfigured().then((providers) => {
         const entries = buildProviderEntries(providers)
         store.openModels(entries, Math.max(0, entries.findIndex((e) => e.provider === current.provider)))
+        // Refresh the total-provider count shown after ＋ Add provider.
+        void modelsService.listAll().then((names) => store.setProviderTotal(names.length)).catch(() => {})
       })
     },
   })

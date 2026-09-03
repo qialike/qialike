@@ -86,13 +86,18 @@ dist/dsh-tui --help
   ——**同步移除其 API key** 并从 /models 一级消失（隐藏列表持久化于 `dsh-tui.json` 的 `hidden_providers`；
   key 来自环境变量时无法删除、会提示，隐藏集仍使其不显示）；重新加入 = 到 "Add provider" 列表选择该家并
   **重新设置 API key**（保存后自动恢复显示）；隐藏的是当前所用供应商时自动切换到其它已配置供应商，**隐藏后无任何激活供应商则当前模型显示 `not set`**；
-  "＋ Add provider" 列出**所有已知的提供商**——自研适配器内置模板（38 家目录：OpenAI、OpenRouter、Anthropic、
+  "＋ Add provider" 列出**所有已知的提供商**——自研适配器内置模板 + 可加载网关子插件（61 家目录：OpenAI、OpenRouter、Anthropic、
   Google Gemini、Groq、Mistral、xAI、Z.AI / Zhipu AI、OpenCode Zen / OpenCode Go 等，
   OpenAI-compatible 为主、Anthropic/MiniMax 走原生 Messages 协议；
   **OpenCode Zen / Go 由可加载的 `tui-opencode-gateways` 子插件提供**——配置文件
   `dsh-tui-opencode: { enabled: false }` 可整体卸载（模板与已配置路由都从 /models 与适配器消失，默认开启）；
+  **中国网关 七牛（`qiniu-ai`）与硅基流动（`siliconflow` / `siliconflow-cn`）由可加载的 `tui-china-gateways` 子插件提供**——
+  `dsh-tui-china-gateways: { enabled: false }` 可整体卸载（默认开启）；
+  **国外多模型网关/托管平台（OpenRouter、Vercel AI Gateway、Cloudflare(AI Gateway/Workers AI)、Hugging Face、Baseten、
+  Fireworks AI、Together AI、Nvidia、Groq、Cerebras）由可加载的 `tui-foreign-gateways` 子插件提供**——
+  `dsh-tui-foreign-gateways: { enabled: false }` 可整体卸载（默认开启）；
   DeepSeek 官方端点不在模板目录——由内置 `deepseek-official` 默认路由提供（3 模型，免配置即用）；
-  另有 4 家部署型如 Azure OpenAI / Cloudflare Workers AI 标记 `endpoint required`；OpenCode Zen / Go 是 opencode 团队的
+  另有部署型（目录内 Vertex AI / Databricks / Snowflake Cortex，Azure 与 Cloudflare 行由可加载插件提供）标记 `endpoint required`；OpenCode Zen / Go 是 opencode 团队的
   OpenAI 兼容模型网关，key 取自 opencode.ai/auth（Zen 按量付费、Go 为 $10/月订阅），设 key 即可用）加上 `dsh-tui-llm:` 设置节声明的路由——并标注 key 状态
   （`✓ key set` / `no key`）。**已配置的 OpenAI 兼容提供商显示网关实时模型列表**：动态 `GET {baseURL}/models`
   拉取（失败/超时回退模板预置模型）——**OpenCode Zen 是单个条目,展示全部 63 个模型**(DeepSeek/GLM/Kimi/MiniMax/
@@ -102,7 +107,9 @@ dist/dsh-tui --help
   （已有 key 时对话框提示 "replaces the current key"）；给休眠的模板路由设 key 会**当场激活**
   （把模板的完整 profile——端点与模型目录——写入 `dsh-tui-llm` 设置节并热注册路由，其模型随即出现在选择器）；
   列表支持滚动（高亮始终可见）。
-  "＋ Add a custom provider" 进入逐字段表单（第一步为提供商模板下拉——DeepSeek / OpenAI / OpenRouter / Groq 等
+  配色方案（vim 风格 `:colorscheme`）：直接输入 `/theme`（不带参数）弹出**主题选择对话框**（类 opencode 的 Themes 列表）——`↑/↓` 移动、直接打字过滤、移动时**实时预览**、`Enter` 应用并持久化、`Esc` 取消并还原；也支持 `/theme dark`（或唯一前缀 `d`/`da`…）、`/theme <name>`、`/theme <role> <hex>` 快捷路径。内置 **12 套**方案：`dark`/`light`（opencode 官方双态）+ **10 套经典皮肤** `catppuccin`/`dracula`/`everforest`/`gruvbox`/`jellybeans`/`kanagawa`/`monokai`/`nord`/`rosepine`/`solarized`（9 套解析自 opencode 自带主题资产、`jellybeans` 按 MIT vim colorscheme 语义映射；**全部 MIT/宽松许可**，来源与许可见 `classic-schemes.ts` 与 THIRD_PARTY_NOTICES），外加 `~/.dsh/themes/*.json` 用户文件；`dsh-tui-theme: { colorscheme: light }` 持久化。方案的 `bg` 会作为全屏背景层涂色，字素由补丁帧写入器强制 `theme.bg`/`theme.text`，切换 dark/light 时整屏底色与字色（不止边框/文字）随之变化。
+  Add-provider 列表按显示名 A–Z 排序，一级列表 `＋ Add provider` 行尾显示可加供应商总数。
+  "＋ Add a custom provider" 进入逐字段表单（步骤以 `[ N ]` 标示；第一步为提供商模板下拉——DeepSeek / OpenAI / OpenRouter / Groq 等
   或自定义，自动预填 route/显示名/base URL；再填 API key / 模型 id），写入
   `dsh-tui-llm` 设置节的 OpenAI 兼容提供商并存入凭据，适配器热注册后立即可选；key 经 credentials
   服务写入 `~/.dsh/.credentials.yaml`（按各提供商的引用名）按需解析。key 不会进入 transcript/发给模型。

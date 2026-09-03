@@ -14,6 +14,7 @@ import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import {
   APP_VERSION,
+  BETA_FOOTER_SUFFIX,
   type Store,
   type TranscriptItem,
   type StepItem,
@@ -92,6 +93,7 @@ function filteredCommands(tui: TuiService): readonly CommandItem[] {
 // ── row measurement ─────────────────────────────────────────────────────────
 
 const measuredHeights = new Map<string, number>()
+let lastLayoutWidth = -1 // last width the row-height cache was computed for
 const lastMeasuredNotify = new Map<string, number>()
 
 function setMeasuredHeight(key: string, rows: number): void {
@@ -132,13 +134,16 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean): React.Reac
   )
 }
 
-function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean }): React.JSX.Element {
+/** Memoized transcript row: unchanged item objects (stable references, only
+ *  the streaming tail is replaced) skip re-render/parse on typing, scroll and
+ *  other notify cycles. */
+const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean; themeEpoch: number }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
     if (ref.current) setMeasuredHeight(String(props.item.key), measureElement(ref.current).height)
   }, [props.item.text])
   return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning)}</Box>
-}
+})
 
 function StepsRow(props: { steps: readonly StepItem[] }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
@@ -178,13 +183,16 @@ function buildRows(items: readonly TranscriptItem[], steps: readonly StepItem[])
 }
 
 const STEP_ICON: Record<StepItem['status'], string> = { completed: '✓', in_progress: '→', pending: '·' }
-const STEP_COLOR: Record<StepItem['status'], string | undefined> = { completed: theme.success, in_progress: theme.info, pending: undefined }
+/** Step colors read the LIVE theme at render time (theme switches repaint). */
+function stepColor(status: StepItem['status']): string | undefined {
+  return status === 'completed' ? theme.success : status === 'in_progress' ? theme.info : undefined
+}
 
 function StepRows(props: { steps: readonly StepItem[] }): React.JSX.Element {
   return (
     <Box flexDirection="column">
       {props.steps.map((step, i) => (
-        <Text key={i} color={STEP_COLOR[step.status]}>
+        <Text key={i} color={stepColor(step.status)}>
           {STEP_ICON[step.status]} {step.content}
         </Text>
       ))}
@@ -514,6 +522,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const [, forceRender] = React.useReducer((c: number) => c + 1, 0)
   React.useEffect(() => store.subscribe(() => forceRender()), [])
   const version = store.getVersion()
+  const themeEpoch = store.themeEpoch
   const items = store.getItems()
   const steps = store.steps
   const stepsDone = store.stepsDone
@@ -529,8 +538,8 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const permissionLabel = store.permissionLabel
   const permissionColor = store.permissionColor
   const modelLabel = store.modelLabel
-  // Bottom-bar session stats text (steps/turns · LLM/Tool · tokens); '' until
-  // the session has any activity.
+  // Bottom-bar session stats text (steps/turns · tokens; LLM/Tool durations
+  // are folded but not displayed); '' until the session has any activity.
   const statsLine = formatSessionStats(store.stats)
   // The composer shows the model with its reasoning effort as a separate
   // warning-colored chip (like opencode's variant); the full label embeds the
@@ -579,17 +588,33 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     : 0
   const usable = convUsableWidth(width, showSidebar)
   const viewportLines = convViewportLines(composerH, 0, modalH)
-  const rows = useMemo(() => buildRows(items, steps), [items, steps, version])
+  const rows = useMemo(() => buildRows(items, steps), [items, steps, version, themeEpoch])
   const layout = useMemo(() => {
-    const hts = rows.map((r) =>
-      r.type === 'steps'
-        ? rowHeight('steps', stepsBlockHeight(steps.length))
-        : rowHeight(String(r.item.key), estItemLines(r.item, usable, expandReasoning)))
+    // A width change invalidates every cached row height (wrap counts differ);
+    // drop the cache so the next pass re-estimates before anything is measured.
+    if (usable !== lastLayoutWidth) {
+      measuredHeights.clear()
+      lastLayoutWidth = usable
+    }
+    // Row heights come from the measured cache first; a row that has not been
+    // painted yet (scrolled out / long history) gets ONE estimated pass that
+    // is cached in place, so later notify cycles only walk the cache instead
+    // of re-estimating every row's wrapped-line count (O(total chars) each
+    // render on long sessions).
+    const hts = rows.map((r) => {
+      const key = r.type === 'steps' ? 'steps' : String(r.item.key)
+      if (r.type === 'steps') return rowHeight(key, stepsBlockHeight(steps.length))
+      const measured = measuredHeights.get(key)
+      if (measured !== undefined) return measured
+      const est = estItemLines(r.item, usable, expandReasoning)
+      measuredHeights.set(key, est) // estimate placeholder; real measure overwrites on paint
+      return est
+    })
     const starts: number[] = []
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] + 1 }
     return { hts, starts, content: s - 1 }
-  }, [rows, usable, expandReasoning, steps, version])
+  }, [rows, usable, expandReasoning, steps, version, themeEpoch])
   const maxScroll = Math.max(0, layout.content - viewportLines)
   const effectiveScroll = store.followTail ? maxScroll : Math.max(0, Math.min(store.scroll, maxScroll))
   const topRow = 2
@@ -607,7 +632,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const renderRow = (r: Row): React.ReactNode =>
     r.type === 'steps'
       ? <StepsRow key="steps" steps={steps} />
-      : <TranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} />
+      : <MemoTranscriptItemView key={r.item.key} item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} />
 
   const renderFlatTranscript = (): React.ReactNode => {
     if (sel === null) return null
@@ -661,6 +686,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
 
   return (
     <Box flexDirection="column" height={store.rows}>
+      {/* Background layer: paints theme.bg so colorscheme switches are
+          visible (the transcript/composer are transparent and would otherwise
+          show the terminal background). The painted text is static — Ink's
+          line diff skips rewriting after the first frame. */}
+      <Box position="absolute" width="100%" height={store.rows} flexDirection="column">
+        <Text backgroundColor={theme.bg} wrap="wrap">{' '.repeat(Math.max(0, store.width * store.rows))}</Text>
+      </Box>
       <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="row" width="100%">
         <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           {items.length === 0
@@ -692,7 +724,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             : <StepRows steps={steps} />}
           <Text dimColor>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
-          <Text dimColor>dsh-tui {APP_VERSION}</Text>
+          <Text dimColor>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
         </Box>
         )}
       </Box>
@@ -717,15 +749,28 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               {effortName !== '' && <Text color={theme.warning} bold> · {effortName}</Text>}
             </Text>
           )}
+          <Box flexGrow={1} />
+          {/* Workspace path, right-aligned next to the permission/model row;
+              truncated to ~20% of the terminal width (≥ 24 cols) so a long
+              path never crowds the composer or wraps onto a second line. */}
+          <Box width={Math.max(24, Math.floor(width * 0.2))} justifyContent="flex-end">
+            <Text dimColor wrap="truncate">{store.workspace}</Text>
+          </Box>
         </Box>
       </Box>
 
-      <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} justifyContent="space-between">
-        <Text dimColor wrap="truncate">{store.workspace}</Text>
-        <Box flexGrow={1} justifyContent="center">
-          <BusyIndicator animate={store.running} paused={store.paused} />
-        </Box>
-        {statsLine !== '' && <Text dimColor wrap="truncate">{statsLine}</Text>}
+      <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} height={STATUS_BAR_HEIGHT}>
+        <BusyIndicator animate={store.running} paused={store.paused} />
+        {/* The steps/turns · tokens stats are pinned to the RIGHT edge of the
+            status bar regardless of the busy indicator's width: an explicit
+            flex spacer pushes the stats group flush right, and the group
+            truncates instead of wrapping if the terminal is narrow. */}
+        <Box flexGrow={1} />
+        {statsLine !== '' && (
+          <Box flexShrink={0}>
+            <Text dimColor wrap="truncate">{statsLine}</Text>
+          </Box>
+        )}
       </Box>
     </Box>
   )

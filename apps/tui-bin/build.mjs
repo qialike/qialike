@@ -463,6 +463,14 @@ function patchInkYoga(nm) {
  *    because the macOS IME composition/candidate window anchors to that cursor —
  *    a hidden or wandering cursor makes the candidate window jump on every
  *    redraw while typing Chinese.
+ * A third behavior rides on the same patch: **theme-background fill**. Ink paints
+ * text/border glyph cells without a background color, so a full-screen space
+ * layer in `theme.bg` still leaves glyph cells showing the terminal's default
+ * background (two-tone after a colorscheme switch). The frame writer rewrites
+ * each changed line so every glyph cell carries the current theme background
+ * (`globalThis.__dshTuiBgColor`, mirrored from the shared palette by
+ * `src/theme.ts`); inverse spans (text selection) keep the terminal's default
+ * inversion so their contrast is unaffected.
  * Upgrade-safe (replaces any previous helper version) and fails loudly if Ink's
  * internals move so the patch is never silently skipped.
  * @param nm - the resolve-farm `node_modules` root.
@@ -475,7 +483,96 @@ export function patchInkFullScreen(nm) {
   const anchor = "import App from './components/App.js';"
   const helperStart = '// dsh-tui patch: overwrite full-screen frames in place'
   const helperEnd = 'const isCi ='
-  const helper = `\n${helperStart} (no clearTerminal flash), rewriting only the lines that\n// changed (line-level diff), so a keystroke in the composer repaints just the\n// composer instead of the whole screen. A per-frame suffix hook lets the app park\n// the real terminal cursor at the composer caret — the macOS IME composition/\n// candidate window anchors to that position instead of jumping around.\nconst writeFullScreenFrame = (stdout, output) => {\n    const lines = output.split('\\n');\n    const prev = writeFullScreenFrame._prev;\n    let frame = '';\n    if (prev === undefined || prev.length !== lines.length) {\n        // first frame or a resize: rewrite every line\n        for (let i = 0; i < lines.length; i++) {\n            frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + lines[i];\n        }\n        if (lines.length > 0) frame += '\\x1b[0J'; // clear residue below (shrink)\n    } else {\n        for (let i = 0; i < lines.length; i++) {\n            if (prev[i] === lines[i]) continue;\n            frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + lines[i];\n        }\n    }\n    writeFullScreenFrame._prev = lines;\n    const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';\n    if (suffix) frame += suffix;\n    if (frame !== '') stdout.write(frame);\n};\n`
+  const helper = `// dsh-tui patch: overwrite full-screen frames in place (no clearTerminal flash),
+// rewriting only the lines that changed (line-level diff), so a keystroke in the
+// composer repaints just the composer instead of the whole screen. A per-frame
+// suffix hook lets the app park the real terminal cursor at the composer caret -
+// the macOS IME composition/candidate window anchors to that position instead of
+// jumping around.
+// Theme fill: Ink paints text/border glyph cells without a background, and
+// uncolored text relies on the terminal's default foreground - invisible when a
+// light scheme paints a white background. __dshForceBg rewrites each changed line
+// so every glyph cell carries the current theme background and, where Ink left
+// the foreground unset, the theme text color (globalThis.__dshTuiBgColor and
+// __dshTuiTextColor, mirrored by src/theme.ts). Inverse spans (selection) keep
+// the terminal's default inversion for contrast.
+const __dshSgrRe = /\\x1b\\[([0-9;]*)m/g;
+const __dshRgb = (hex) => {
+    if (typeof hex !== 'string') return null;
+    const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+    if (!m) return null;
+    const n = parseInt(m[1], 16);
+    return ((n >> 16) & 255) + ';' + ((n >> 8) & 255) + ';' + (n & 255);
+};
+const __dshForceBg = (line, bgRgb, fgRgb) => {
+    const bgCode = '\\x1b[48;2;' + bgRgb + 'm';
+    const fgCode = '\\x1b[38;2;' + fgRgb + 'm';
+    let out = '';
+    let last = 0;
+    let bgOn = false;
+    let fgOn = false;
+    let inverse = false;
+    __dshSgrRe.lastIndex = 0;
+    for (let m; (m = __dshSgrRe.exec(line)) !== null;) {
+        const seg = line.slice(last, m.index);
+        if (seg.length > 0) {
+            if (fgRgb && !fgOn && !inverse) { out += fgCode; fgOn = true; }
+            if (bgRgb && !bgOn && !inverse) { out += bgCode; bgOn = true; }
+        }
+        out += seg;
+        const p = m[1] === '' ? ['0'] : m[1].split(';');
+        let i = 0;
+        while (i < p.length) {
+            const c = p[i];
+            if (c === '0') { bgOn = false; fgOn = false; inverse = false; i++; }
+            else if (c === '39') { fgOn = false; i++; }
+            else if (c === '49') { bgOn = false; i++; }
+            else if (c === '7') { inverse = true; i++; }
+            else if (c === '27') { inverse = false; i++; }
+            else if (c === '38') { if (p[i + 1] === '5') { fgOn = true; i += 3; } else if (p[i + 1] === '2') { fgOn = true; i += 5; } else i++; }
+            else if (c === '48') { if (p[i + 1] === '5') { bgOn = true; i += 3; } else if (p[i + 1] === '2') { bgOn = true; i += 5; } else i++; }
+            else i++;
+        }
+        out += m[0];
+        last = m.index + m[0].length;
+    }
+    const tail = line.slice(last);
+    if (tail.length > 0) {
+        if (fgRgb && !fgOn && !inverse) out += fgCode;
+        if (bgRgb && !bgOn && !inverse) out += bgCode;
+    }
+    out += tail;
+    return out;
+};
+const __dshLineRgb = (key) => {
+    const hex = (typeof globalThis[key] === 'string' && globalThis[key]) || null;
+    return hex ? __dshRgb(hex) : null;
+};
+const writeFullScreenFrame = (stdout, output) => {
+    const lines = output.split('\\n');
+    const prev = writeFullScreenFrame._prev;
+    const bgRgb = __dshLineRgb('__dshTuiBgColor');
+    const fgRgb = __dshLineRgb('__dshTuiTextColor');
+    const paint = (line) => (bgRgb || fgRgb) ? __dshForceBg(line, bgRgb, fgRgb) : line;
+    let frame = '';
+    if (prev === undefined || prev.length !== lines.length) {
+        // first frame or a resize: rewrite every line
+        for (let i = 0; i < lines.length; i++) {
+            frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(lines[i]);
+        }
+        if (lines.length > 0) frame += (bgRgb ? '\\x1b[48;2;' + bgRgb + 'm' : '') + '\\x1b[0J'; // clear residue below (shrink)
+    } else {
+        for (let i = 0; i < lines.length; i++) {
+            if (prev[i] === lines[i]) continue;
+            frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(lines[i]);
+        }
+    }
+    writeFullScreenFrame._prev = lines;
+    const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
+    if (suffix) frame += suffix;
+    if (frame !== '') stdout.write(frame);
+};
+`
   const branchRe = /if \(outputHeight >= this\.options\.stdout\.rows\) \{\s*this\.options\.stdout\.write\(ansiEscapes\.clearTerminal \+ this\.fullStaticOutput \+ output\);/
   const branchNew = 'if (outputHeight >= this.options.stdout.rows) {\n                    writeFullScreenFrame(this.options.stdout, output);'
   for (const dir of dirs) {
@@ -516,7 +613,7 @@ export function patchInkFullScreen(nm) {
 async function buildBundleLib() {
   const pkgDir = join(ROOT, 'packages/dsh-tui-app')
   const result = await build({
-    entryPoints: [join(pkgDir, 'src/index.tsx'), join(pkgDir, 'src/startup.ts'), join(pkgDir, 'src/models.ts'), join(pkgDir, 'src/llm.ts'), join(pkgDir, 'src/opencode.ts'), join(pkgDir, 'src/panels/conversation.tsx'), join(pkgDir, 'src/panels/approval.tsx'), join(pkgDir, 'src/panels/question.tsx'), join(pkgDir, 'src/panels/models.tsx'), join(pkgDir, 'src/sessions.tsx'), join(pkgDir, 'src/export.tsx'), join(pkgDir, 'src/new.ts'), join(pkgDir, 'src/goal.ts'), join(pkgDir, 'src/plan.ts'), join(pkgDir, 'src/invariant.ts')],
+    entryPoints: [join(pkgDir, 'src/index.tsx'), join(pkgDir, 'src/startup.ts'), join(pkgDir, 'src/models.ts'), join(pkgDir, 'src/llm.ts'), join(pkgDir, 'src/opencode.ts'), join(pkgDir, 'src/china-gateways.ts'), join(pkgDir, 'src/foreign-gateways.ts'), join(pkgDir, 'src/azure.ts'), join(pkgDir, 'src/theme-plugin.ts'), join(pkgDir, 'src/panels/conversation.tsx'), join(pkgDir, 'src/panels/approval.tsx'), join(pkgDir, 'src/panels/question.tsx'), join(pkgDir, 'src/panels/models.tsx'), join(pkgDir, 'src/sessions.tsx'), join(pkgDir, 'src/export.tsx'), join(pkgDir, 'src/new.ts'), join(pkgDir, 'src/goal.ts'), join(pkgDir, 'src/plan.ts'), join(pkgDir, 'src/invariant.ts')],
     bundle: true,
     platform: 'node',
     format: 'esm',

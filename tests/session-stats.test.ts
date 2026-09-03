@@ -66,15 +66,16 @@ describe('formatting', () => {
   test('groups drop when empty', () => {
     expect(formatSessionStats(emptySessionStats())).toBe('')
     expect(formatSessionStats({ ...emptySessionStats(), steps: 3, turns: 2 })).toBe('3 steps · 2 turns')
+    // LLM/Tool durations are folded but deliberately NOT shown in the bar.
     expect(formatSessionStats({
       turns: 2, steps: 3, llmMs: 12_300, toolMs: 1_600, inputTokens: 0, outputTokens: 0,
-    })).toBe('3 steps · 2 turns | LLM 12.3s · Tool 1.6s')
+    })).toBe('3 steps · 2 turns')
     expect(formatSessionStats({
       turns: 1, steps: 1, llmMs: 0, toolMs: 0, inputTokens: 1_200, outputTokens: 3_400,
     })).toBe('1 step · 1 turn | 1.2k tok in · 3.4k tok out')
     expect(formatSessionStats({
       turns: 1, steps: 1, llmMs: 500, toolMs: 0, inputTokens: 10, outputTokens: 20,
-    })).toBe('1 step · 1 turn | LLM 0.5s | 10 tok in · 20 tok out')
+    })).toBe('1 step · 1 turn | 10 tok in · 20 tok out')
   })
 })
 

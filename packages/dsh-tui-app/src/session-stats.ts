@@ -1,7 +1,8 @@
 /**
  * Bottom-bar session stats for the conversation view — a dsh-tui port of the
- * dsh web StatsLine subset: steps/turns, LLM & tool wall time, and provider
- * reported input/output tokens.
+ * dsh web StatsLine subset: steps/turns and provider-reported input/output
+ * tokens. (LLM & tool wall times are folded for debugging/telemetry but not
+ * shown in the bar — see {@link formatSessionStats}.)
  *
  * Tokens come from the harness-normalized `usage` carried on each
  * `assistant/message` session event (adapters fill `TokenUsage` regardless of
@@ -124,6 +125,11 @@ export function formatStatTokens(n: number): string {
 /**
  * The bottom-bar text (web StatsLine style, ` | `-separated groups; a group
  * with no data drops out whole). Empty when nothing happened yet.
+ *
+ * LLM/Tool wall durations are still folded into {@link SessionStats}
+ * (`llmMs`/`toolMs`, kept for debugging/telemetry), but are NOT shown in the
+ * bottom bar: cumulative whole-session durations carry little actionable
+ * meaning, so the bar stays compact with steps/turns · tokens only.
  * @param stats - the session stats.
  * @returns display string, or '' for a session with no activity.
  */
@@ -131,10 +137,6 @@ export function formatSessionStats(stats: SessionStats): string {
   const groups: string[] = []
   if (stats.steps > 0) {
     groups.push(`${stats.steps} step${stats.steps === 1 ? '' : 's'} · ${stats.turns} turn${stats.turns === 1 ? '' : 's'}`)
-    const durations: string[] = []
-    if (stats.llmMs > 0) durations.push(`LLM ${formatStatDuration(stats.llmMs)}`)
-    if (stats.toolMs > 0) durations.push(`Tool ${formatStatDuration(stats.toolMs)}`)
-    if (durations.length > 0) groups.push(durations.join(' · '))
   }
   if (stats.inputTokens > 0 || stats.outputTokens > 0) {
     groups.push(`${formatStatTokens(stats.inputTokens)} tok in · ${formatStatTokens(stats.outputTokens)} tok out`)

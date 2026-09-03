@@ -31,8 +31,10 @@ describe('bundled provider-templates.json', () => {
     }
   })
 
-  test('keeps the four deployment-configured (needsBaseURL) templates', () => {
-    expect(PROVIDER_TEMPLATES.filter((t) => t.needsBaseURL === true)).toHaveLength(4)
+  test('keeps the three main-catalog deployment-configured (needsBaseURL) templates', () => {
+    // Vertex, Databricks, Snowflake Cortex stay in the main catalog; Azure and
+    // the Cloudflare rows are provided by loadable plugins.
+    expect(PROVIDER_TEMPLATES.filter((t) => t.needsBaseURL === true)).toHaveLength(3)
   })
 
   test('every model entry carries an id and a name', () => {
@@ -49,8 +51,9 @@ describe('bundled provider-templates.json', () => {
     for (const template of PROVIDER_TEMPLATES) {
       if (template.api !== undefined) expect(apis.has(template.api)).toBe(true)
     }
-    // anthropic + minimax (x2) ride the native Messages protocol
-    expect(PROVIDER_TEMPLATES.filter((t) => t.api === 'anthropic-messages')).toHaveLength(3)
+    // anthropic + minimax (x4: minimax / minimax-cn / minimax-coding-plan /
+    // minimax-cn-coding-plan) ride the native Messages protocol
+    expect(PROVIDER_TEMPLATES.filter((t) => t.api === 'anthropic-messages')).toHaveLength(5)
   })
 
   test('the built-in deepseek route stays code-owned (not a template row)', () => {

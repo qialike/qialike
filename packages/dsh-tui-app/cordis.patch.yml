@@ -95,6 +95,32 @@
     - id: tui-opencode-gateways
       name: '@yourname/dsh-tui-app/opencode'
 
+    # China multi-model gateways (loadable): Qiniu (qiniu-ai) and SiliconFlow
+    # (siliconflow / siliconflow-cn) aggregate many vendors' models, so they
+    # are registered through `tuiLlmTemplates` instead of the built-in
+    # catalog; `dsh-tui-china-gateways.enabled: false` in settings unloads them.
+    - id: tui-china-gateways
+      name: '@yourname/dsh-tui-app/china-gateways'
+
+    # Foreign multi-model gateways / hosting platforms (loadable): OpenRouter,
+    # Vercel/Cloudflare gateways, Hugging Face, Baseten, Fireworks, Together,
+    # Nvidia, Groq, Cerebras — registered through `tuiLlmTemplates`;
+    # `dsh-tui-foreign-gateways.enabled: false` unloads them all.
+    - id: tui-foreign-gateways
+      name: '@yourname/dsh-tui-app/foreign-gateways'
+
+    # Azure provider (loadable, deployment-configured): registers the Azure
+    # catalog row (models.dev `azure`) through `tuiLlmTemplates`;
+    # `dsh-tui-azure.enabled: false` unloads it.
+    - id: tui-azure
+      name: '@yourname/dsh-tui-app/azure'
+
+    # Color scheme (loadable, vim-style `:colorscheme`): built-in + user
+    # ~/.dsh/themes/*.json palettes; /theme switches live and persists.
+    - id: tui-theme
+      name: '@yourname/dsh-tui-app/theme-plugin'
+
+
     - id: tui-models
       name: '@yourname/dsh-tui-app/models'
 

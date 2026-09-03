@@ -128,15 +128,24 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   provider that is currently in use switches the selection to another active
   provider, or shows `not set` when no active provider remains. An "＋ Add
   provider" entry lists **every known provider** —
-  the self-hosted adapter's built-in templates — 38 catalog entries (OpenAI,
+  the self-hosted adapter's built-in templates plus the loadable gateway
+  sub-plugins — 61 catalog entries (OpenAI,
   OpenRouter, Anthropic, Google Gemini, Groq, Mistral, xAI, Z.AI / Zhipu AI,
   OpenCode Zen / OpenCode Go, … — OpenAI-compatible except Anthropic/MiniMax's
-  native Messages protocol, plus 4 deployment-configured ones like Azure OpenAI /
-  Cloudflare Workers AI flagged `endpoint required`; **OpenCode Zen / Go are
+  native Messages protocol, plus deployment-configured rows (Vertex AI,
+  Databricks and Snowflake Cortex in the catalog; Azure and the Cloudflare rows
+  are provided by loadable plugins) flagged `endpoint required`; **OpenCode Zen / Go are
   provided by the loadable `tui-opencode-gateways` sub-plugin** — set
   `dsh-tui-opencode: { enabled: false }` in the config to unload them entirely
   (templates AND already-configured routes leave the /models dialog and the
-  adapter; enabled by default); the official DeepSeek
+  adapter; enabled by default); **the China gateways Qiniu (`qiniu-ai`) and
+  SiliconFlow (`siliconflow` / `siliconflow-cn`) are provided by the loadable
+  `tui-china-gateways` sub-plugin** (`dsh-tui-china-gateways.enabled: false`
+  unloads them); **the international model gateways / hosting platforms —
+  OpenRouter, Vercel AI Gateway, Cloudflare (AI Gateway + Workers AI),
+  Hugging Face, Baseten, Fireworks AI, Together AI, Nvidia, Groq, Cerebras —
+  are provided by the loadable `tui-foreign-gateways` sub-plugin**
+  (`dsh-tui-foreign-gateways.enabled: false` unloads them); the official DeepSeek
   endpoint is not in the catalog — the built-in `deepseek-official` default
   route serves it (3 models, ready out of the box); OpenCode Zen / Go are the
   opencode team's OpenAI-compatible model gateways — keys from opencode.ai/auth
@@ -159,9 +168,25 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   spot (writes the template's profile — endpoint and model catalog — into the
   `dsh-tui-llm` settings section and hot-registers the route, so its models
   appear in the picker). The list scrolls to keep the highlight in view.
+  Color schemes (vim-style `:colorscheme`): bare `/theme` opens a theme
+  **picker dialog** (opencode-style Themes list): ↑/↓ to move, type to filter,
+  **live preview** while moving, `Enter` applies + persists, `Esc` cancels and
+  restores. Fast paths remain: `/theme dark` (or a unique prefix), and
+  `/theme <role> <hex>` overrides. **12 built-ins**: `dark`/`light` (opencode's
+  official pair) plus 10 classic skins — catppuccin, dracula, everforest,
+  gruvbox, jellybeans, kanagawa, monokai, nord, rosepine, solarized (9 resolved
+  from opencode's bundled theme assets, jellybeans mapped from an MIT vim
+  colorscheme; the whole classic set is MIT/permissive — see
+  `classic-schemes.ts` and THIRD_PARTY_NOTICES.md) — plus user files in
+  `~/.dsh/themes/*.json`; `dsh-tui-theme: { colorscheme: light }` persists the
+  choice. The scheme's `bg` is painted full-screen and
+  glyph cells are filled by the patched frame writer, so switching recolors the
+  whole surface (background + text + borders), not just accents.
+  The Add-provider list is sorted A–Z by display name, and the
+  `＋ Add provider` entry shows the total number of providers available to add.
   "＋ Add a custom provider"
-  opens a sequential form
-  (a provider-template dropdown — any of the 39 built-in entries, or custom —
+  opens a sequential form (steps labeled `[ 1 ]`, `[ 2 ]`, …)
+  (a provider-template dropdown — any of the 61 catalog entries, or custom —
   pre-filling route/display name/base URL; then route id / display name / base URL /
   API key / model ids) that writes an
   OpenAI-compatible provider into the `dsh-tui-llm` settings section and its key

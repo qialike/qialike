@@ -263,7 +263,11 @@ export function apply(ctx: Context): void {
           needsBaseURL: template?.needsBaseURL === true,
         }
       }))
-      return out
+      // The Add-provider list reads alphabetically by display name (route as
+      // tie-break), so scanning stays predictable as the catalog grows.
+      return out.sort((a, b) =>
+        a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+        || a.provider.localeCompare(b.provider))
     },
     async addProvider(input) {
       const route = input.route.trim()

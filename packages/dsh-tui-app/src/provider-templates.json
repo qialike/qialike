@@ -1,92 +1,89 @@
 [
   {
-    "route": "azure-openai-responses",
-    "name": "Azure OpenAI",
+    "route": "google-vertex",
+    "name": "Vertex",
     "baseURL": "",
-    "apiKeyEnv": "AZURE_OPENAI_API_KEY",
+    "apiKeyEnv": "GOOGLE_VERTEX_PROJECT",
     "needsBaseURL": true,
     "models": [
       {
-        "id": "gpt-4",
-        "name": "GPT-4",
-        "contextWindow": 8192,
-        "maxTokens": 8192
+        "id": "claude-fable-5-1@default",
+        "name": "Claude Fable 5.1",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
       },
       {
-        "id": "gpt-4-turbo",
-        "name": "GPT-4 Turbo",
-        "contextWindow": 128000,
-        "maxTokens": 4096
-      },
-      {
-        "id": "gpt-4.1",
-        "name": "GPT-4.1",
-        "contextWindow": 1047576,
-        "maxTokens": 32768
-      }
-    ]
-  },
-  {
-    "route": "cloudflare-ai-gateway",
-    "name": "Cloudflare AI Gateway",
-    "baseURL": "",
-    "apiKeyEnv": "CLOUDFLARE_API_TOKEN",
-    "needsBaseURL": true,
-    "models": [
-      {
-        "id": "claude-fable-5",
+        "id": "claude-fable-5@default",
         "name": "Claude Fable 5",
         "contextWindow": 1000000,
         "maxTokens": 128000
       },
       {
-        "id": "claude-haiku-4-5",
-        "name": "Claude Haiku 4.5 (latest)",
+        "id": "claude-haiku-4-5@20251001",
+        "name": "Claude Haiku 4.5",
         "contextWindow": 200000,
         "maxTokens": 64000
       },
       {
-        "id": "claude-opus-4-5",
-        "name": "Claude Opus 4.5 (latest)",
+        "id": "claude-opus-4-5@20251101",
+        "name": "Claude Opus 4.5",
         "contextWindow": 200000,
         "maxTokens": 64000
-      }
-    ]
-  },
-  {
-    "route": "cloudflare-workers-ai",
-    "name": "Cloudflare Workers AI",
-    "baseURL": "",
-    "apiKeyEnv": "CLOUDFLARE_API_TOKEN",
-    "needsBaseURL": true,
-    "models": [
-      {
-        "id": "@cf/google/gemma-4-26b-a4b-it",
-        "name": "Gemma 4 26B A4B IT",
-        "contextWindow": 256000,
-        "maxTokens": 16384
       },
       {
-        "id": "@cf/ibm-granite/granite-4.0-h-micro",
-        "name": "Granite 4.0 H Micro",
-        "contextWindow": 131000,
-        "maxTokens": 131000
+        "id": "claude-opus-4-6@default",
+        "name": "Claude Opus 4.6",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
       },
       {
-        "id": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-        "name": "Llama 3.3 70B Instruct fp8 Fast",
-        "contextWindow": 24000,
-        "maxTokens": 24000
-      }
-    ]
-  },
-  {
-    "route": "google-vertex",
-    "name": "Google Vertex AI",
-    "baseURL": "",
-    "apiKeyEnv": "GOOGLE_VERTEX_API_KEY",
-    "needsBaseURL": true,
-    "models": [
+        "id": "claude-opus-4-7@default",
+        "name": "Claude Opus 4.7",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-opus-4-8@default",
+        "name": "Claude Opus 4.8",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-opus-5@default",
+        "name": "Claude Opus 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-sonnet-4-5@20250929",
+        "name": "Claude Sonnet 4.5",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "claude-sonnet-4-6@default",
+        "name": "Claude Sonnet 4.6",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-sonnet-5@default",
+        "name": "Claude Sonnet 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "deepseek-ai/deepseek-v3.1-maas",
+        "name": "DeepSeek V3.1",
+        "contextWindow": 163840,
+        "maxTokens": 32768
+      },
+      {
+        "id": "deepseek-ai/deepseek-v3.2-maas",
+        "name": "DeepSeek V3.2",
+        "contextWindow": 163840,
+        "maxTokens": 65536
+      },
       {
         "id": "gemini-2.5-flash",
         "name": "Gemini 2.5 Flash",
@@ -104,6 +101,108 @@
         "name": "Gemini 2.5 Pro",
         "contextWindow": 1048576,
         "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3-flash-preview",
+        "name": "Gemini 3 Flash Preview",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.1-flash-lite",
+        "name": "Gemini 3.1 Flash Lite",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.1-pro-preview",
+        "name": "Gemini 3.1 Pro Preview",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.1-pro-preview-customtools",
+        "name": "Gemini 3.1 Pro Preview Custom Tools",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.5-flash-lite",
+        "name": "Gemini 3.5 Flash Lite",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.6-flash",
+        "name": "Gemini 3.6 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "name": "Gemini 3.8 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "meta/llama-3.3-70b-instruct-maas",
+        "name": "Llama 3.3 70B Instruct",
+        "contextWindow": 128000,
+        "maxTokens": 8192
+      },
+      {
+        "id": "meta/llama-4-maverick-17b-128e-instruct-maas",
+        "name": "Llama 4 Maverick 17B 128E Instruct",
+        "contextWindow": 524288,
+        "maxTokens": 8192
+      },
+      {
+        "id": "moonshotai/kimi-k2-thinking-maas",
+        "name": "Kimi K2 Thinking",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "openai/gpt-oss-120b-maas",
+        "name": "GPT OSS 120B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "openai/gpt-oss-20b-maas",
+        "name": "GPT OSS 20B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen/qwen3-235b-a22b-instruct-2507-maas",
+        "name": "Qwen3 235B A22B Instruct",
+        "contextWindow": 262144,
+        "maxTokens": 16384
+      },
+      {
+        "id": "zai-org/glm-4.7-maas",
+        "name": "GLM-4.7",
+        "contextWindow": 200000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "zai-org/glm-5-maas",
+        "name": "GLM-5",
+        "contextWindow": 202752,
+        "maxTokens": 131072
       }
     ]
   },
@@ -136,13 +235,19 @@
   {
     "route": "anthropic",
     "name": "Anthropic",
-    "baseURL": "https://api.anthropic.com",
+    "baseURL": "",
     "apiKeyEnv": "ANTHROPIC_API_KEY",
     "api": "anthropic-messages",
     "models": [
       {
         "id": "claude-fable-5",
         "name": "Claude Fable 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-fable-5-1",
+        "name": "Claude Fable 5.1",
         "contextWindow": 1000000,
         "maxTokens": 128000
       },
@@ -157,93 +262,81 @@
         "name": "Claude Haiku 4.5",
         "contextWindow": 200000,
         "maxTokens": 64000
-      }
-    ]
-  },
-  {
-    "route": "baseten",
-    "name": "Baseten",
-    "baseURL": "https://inference.baseten.co/v1",
-    "apiKeyEnv": "BASETEN_API_KEY",
-    "models": [
-      {
-        "id": "deepseek-ai/DeepSeek-V4-Flash-0731",
-        "name": "Deepseek V4 Flash 0731",
-        "contextWindow": 1048576,
-        "maxTokens": 1048576
       },
       {
-        "id": "deepseek-ai/DeepSeek-V4-Pro",
-        "name": "Deepseek V4 Pro",
-        "contextWindow": 262144,
-        "maxTokens": 262144
+        "id": "claude-opus-4-5",
+        "name": "Claude Opus 4.5 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 64000
       },
       {
-        "id": "deepseek-ai/DeepSeek-V4-Pro-0813",
-        "name": "Deepseek V4 Pro 0813",
+        "id": "claude-opus-4-5-20251101",
+        "name": "Claude Opus 4.5",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
         "contextWindow": 1000000,
-        "maxTokens": 262144
-      }
-    ]
-  },
-  {
-    "route": "cerebras",
-    "name": "Cerebras",
-    "baseURL": "https://api.cerebras.ai/v1",
-    "apiKeyEnv": "CEREBRAS_API_KEY",
-    "models": [
-      {
-        "id": "gemma-4-31b",
-        "name": "Gemma 4 31B IT",
-        "contextWindow": 131072,
-        "maxTokens": 40960
+        "maxTokens": 128000
       },
       {
-        "id": "gpt-oss-120b",
-        "name": "GPT OSS 120B",
-        "contextWindow": 131072,
-        "maxTokens": 40960
-      },
-      {
-        "id": "zai-glm-4.7",
-        "name": "Z.AI GLM-4.7",
-        "contextWindow": 131072,
-        "maxTokens": 40960
-      }
-    ]
-  },
-  {
-    "route": "fireworks",
-    "name": "Fireworks",
-    "baseURL": "https://api.fireworks.ai/inference",
-    "apiKeyEnv": "FIREWORKS_API_KEY",
-    "models": [
-      {
-        "id": "accounts/fireworks/models/deepseek-v4-flash",
-        "name": "DeepSeek V4 Flash",
+        "id": "claude-opus-4-7",
+        "name": "Claude Opus 4.7",
         "contextWindow": 1000000,
-        "maxTokens": 384000
+        "maxTokens": 128000
       },
       {
-        "id": "accounts/fireworks/models/deepseek-v4-flash-0731",
-        "name": "DeepSeek V4 Flash 0731",
+        "id": "claude-opus-4-8",
+        "name": "Claude Opus 4.8",
         "contextWindow": 1000000,
-        "maxTokens": 384000
+        "maxTokens": 128000
       },
       {
-        "id": "accounts/fireworks/models/deepseek-v4-pro",
-        "name": "DeepSeek V4 Pro",
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
         "contextWindow": 1000000,
-        "maxTokens": 384000
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-sonnet-4-5",
+        "name": "Claude Sonnet 4.5 (latest)",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "claude-sonnet-4-5-20250929",
+        "name": "Claude Sonnet 4.5",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
       }
     ]
   },
   {
     "route": "github-copilot",
     "name": "GitHub Copilot",
-    "baseURL": "https://api.individual.githubcopilot.com",
+    "baseURL": "https://api.githubcopilot.com",
     "apiKeyEnv": "GITHUB_TOKEN",
     "models": [
+      {
+        "id": "claude-fable-5",
+        "name": "Claude Fable 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
       {
         "id": "claude-haiku-4.5",
         "name": "Claude Haiku 4.5 (latest)",
@@ -251,94 +344,210 @@
         "maxTokens": 64000
       },
       {
-        "id": "claude-opus-4.5",
-        "name": "Claude Opus 4.5 (latest)",
+        "id": "claude-opus-4.7",
+        "name": "Claude Opus 4.7",
         "contextWindow": 200000,
         "maxTokens": 32000
       },
       {
-        "id": "claude-opus-4.6",
-        "name": "Claude Opus 4.6",
+        "id": "claude-opus-4.8",
+        "name": "Claude Opus 4.8",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
         "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "gemini-3.6-flash",
+        "name": "Gemini 3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "gpt-5-mini",
+        "name": "GPT-5 Mini",
+        "contextWindow": 264000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "name": "GPT-5.3 Codex",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "name": "GPT-5.4 mini",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "name": "GPT-5.4 nano",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "name": "GPT-5.6 Terra",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "grok-4.5",
+        "name": "Grok 4.5",
+        "contextWindow": 500000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "grok-4.6",
+        "name": "Grok 4.6",
+        "contextWindow": 500000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 256000,
         "maxTokens": 32000
+      },
+      {
+        "id": "kimi-k3",
+        "name": "Kimi K3",
+        "contextWindow": 1048576,
+        "maxTokens": 131072
+      },
+      {
+        "id": "mai-code-1.1-flash",
+        "name": "MAI-Code-1.1-Flash",
+        "contextWindow": 256000,
+        "maxTokens": 128000
       }
     ]
   },
   {
     "route": "google",
-    "name": "Google Gemini",
-    "baseURL": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "name": "Google",
+    "baseURL": "",
     "apiKeyEnv": "GOOGLE_API_KEY",
     "models": [
       {
-        "id": "deep-research-max-preview-04-2026",
-        "name": "Deep Research Max Preview (Apr-21-2026)",
-        "contextWindow": 131072,
+        "id": "gemini-2.5-flash",
+        "name": "Gemini 2.5 Flash",
+        "contextWindow": 1048576,
         "maxTokens": 65536
       },
       {
-        "id": "deep-research-preview-04-2026",
-        "name": "Deep Research Preview (Apr-21-2026)",
-        "contextWindow": 131072,
+        "id": "gemini-2.5-flash-lite",
+        "name": "Gemini 2.5 Flash-Lite",
+        "contextWindow": 1048576,
         "maxTokens": 65536
       },
       {
-        "id": "gemini-2.5-computer-use-preview-10-2025",
-        "name": "Gemini 2.5 Computer Use Preview 10-2025",
-        "contextWindow": 131072,
+        "id": "gemini-2.5-pro",
+        "name": "Gemini 2.5 Pro",
+        "contextWindow": 1048576,
         "maxTokens": 65536
-      }
-    ]
-  },
-  {
-    "route": "groq",
-    "name": "Groq",
-    "baseURL": "https://api.groq.com/openai/v1",
-    "apiKeyEnv": "GROQ_API_KEY",
-    "models": [
-      {
-        "id": "llama-3.1-8b-instant",
-        "name": "Llama 3.1 8B",
-        "contextWindow": 131072,
-        "maxTokens": 131072
       },
       {
-        "id": "llama-3.3-70b-versatile",
-        "name": "Llama 3.3 70B",
-        "contextWindow": 131072,
-        "maxTokens": 32768
-      },
-      {
-        "id": "openai/gpt-oss-120b",
-        "name": "GPT OSS 120B",
-        "contextWindow": 131072,
+        "id": "gemini-3-flash-preview",
+        "name": "Gemini 3 Flash Preview",
+        "contextWindow": 1048576,
         "maxTokens": 65536
-      }
-    ]
-  },
-  {
-    "route": "huggingface",
-    "name": "Hugging Face",
-    "baseURL": "https://router.huggingface.co/v1",
-    "apiKeyEnv": "HUGGINGFACE_API_KEY",
-    "models": [
-      {
-        "id": "MiniMaxAI/MiniMax-M2",
-        "name": "MiniMax-M2",
-        "contextWindow": 204800,
-        "maxTokens": 128000
       },
       {
-        "id": "MiniMaxAI/MiniMax-M2.1",
-        "name": "MiniMax-M2.1",
-        "contextWindow": 204800,
-        "maxTokens": 131072
+        "id": "gemini-3.1-flash-lite",
+        "name": "Gemini 3.1 Flash Lite",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
       },
       {
-        "id": "MiniMaxAI/MiniMax-M2.5",
-        "name": "MiniMax-M2.5",
-        "contextWindow": 204800,
-        "maxTokens": 131072
+        "id": "gemini-3.1-pro-preview",
+        "name": "Gemini 3.1 Pro Preview",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.1-pro-preview-customtools",
+        "name": "Gemini 3.1 Pro Preview Custom Tools",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.5-flash",
+        "name": "Gemini 3.5 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.5-flash-lite",
+        "name": "Gemini 3.5 Flash Lite",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.6-flash",
+        "name": "Gemini 3.6 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.7-flash",
+        "name": "Gemini 3.7 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "gemini-3.8-flash",
+        "name": "Gemini 3.8 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
       }
     ]
   },
@@ -370,11 +579,35 @@
   },
   {
     "route": "minimax",
-    "name": "MiniMax",
-    "baseURL": "https://api.minimax.io/anthropic",
+    "name": "MiniMax (minimax.io)",
+    "baseURL": "https://api.minimax.io/anthropic/v1",
     "apiKeyEnv": "MINIMAX_API_KEY",
     "api": "anthropic-messages",
     "models": [
+      {
+        "id": "MiniMax-M2",
+        "name": "MiniMax-M2",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "name": "MiniMax-M2.1",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5-highspeed",
+        "name": "MiniMax-M2.5-highspeed",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
       {
         "id": "MiniMax-M2.7",
         "name": "MiniMax-M2.7",
@@ -390,18 +623,42 @@
       {
         "id": "MiniMax-M3",
         "name": "MiniMax-M3",
-        "contextWindow": 1000000,
-        "maxTokens": 128000
+        "contextWindow": 1048576,
+        "maxTokens": 512000
       }
     ]
   },
   {
     "route": "minimax-cn",
-    "name": "MiniMax (CN)",
-    "baseURL": "https://api.minimaxi.com/anthropic",
+    "name": "MiniMax (minimaxi.com)",
+    "baseURL": "https://api.minimaxi.com/anthropic/v1",
     "apiKeyEnv": "MINIMAX_API_KEY",
     "api": "anthropic-messages",
     "models": [
+      {
+        "id": "MiniMax-M2",
+        "name": "MiniMax-M2",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "name": "MiniMax-M2.1",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5-highspeed",
+        "name": "MiniMax-M2.5-highspeed",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
       {
         "id": "MiniMax-M2.7",
         "name": "MiniMax-M2.7",
@@ -417,15 +674,15 @@
       {
         "id": "MiniMax-M3",
         "name": "MiniMax-M3",
-        "contextWindow": 1000000,
-        "maxTokens": 128000
+        "contextWindow": 1048576,
+        "maxTokens": 512000
       }
     ]
   },
   {
     "route": "mistral",
     "name": "Mistral",
-    "baseURL": "https://api.mistral.ai",
+    "baseURL": "",
     "apiKeyEnv": "MISTRAL_API_KEY",
     "models": [
       {
@@ -435,16 +692,52 @@
         "maxTokens": 4096
       },
       {
-        "id": "devstral-2512",
-        "name": "Devstral 2",
+        "id": "ministral-3b-latest",
+        "name": "Ministral 3B (latest)",
+        "contextWindow": 128000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "ministral-8b-latest",
+        "name": "Ministral 8B (latest)",
+        "contextWindow": 128000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "mistral-large-2512",
+        "name": "Mistral Large 3",
         "contextWindow": 262144,
         "maxTokens": 262144
       },
       {
-        "id": "devstral-latest",
-        "name": "Devstral 2",
+        "id": "mistral-large-latest",
+        "name": "Mistral Large (latest)",
         "contextWindow": 262144,
         "maxTokens": 262144
+      },
+      {
+        "id": "mistral-medium-latest",
+        "name": "Mistral Medium (latest)",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "mistral-small-2603",
+        "name": "Mistral Small 4",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "mistral-small-latest",
+        "name": "Mistral Small (latest)",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "zai-glm-5-2",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
       }
     ]
   },
@@ -513,88 +806,132 @@
     ]
   },
   {
-    "route": "nvidia",
-    "name": "NVIDIA",
-    "baseURL": "https://integrate.api.nvidia.com/v1",
-    "apiKeyEnv": "NVIDIA_API_KEY",
-    "models": [
-      {
-        "id": "google/gemma-3-12b-it",
-        "name": "Gemma 3 12B IT",
-        "contextWindow": 131072,
-        "maxTokens": 16384
-      },
-      {
-        "id": "google/gemma-3-4b-it",
-        "name": "Gemma 3 4B IT",
-        "contextWindow": 131072,
-        "maxTokens": 16384
-      },
-      {
-        "id": "meta/llama-3.1-70b-instruct",
-        "name": "Llama 3.1 70b Instruct",
-        "contextWindow": 128000,
-        "maxTokens": 4096
-      }
-    ]
-  },
-  {
     "route": "openai",
     "name": "OpenAI",
-    "baseURL": "https://api.openai.com/v1",
+    "baseURL": "",
     "apiKeyEnv": "OPENAI_API_KEY",
     "models": [
-      {
-        "id": "gpt-4",
-        "name": "GPT-4",
-        "contextWindow": 8192,
-        "maxTokens": 8192
-      },
-      {
-        "id": "gpt-4-turbo",
-        "name": "GPT-4 Turbo",
-        "contextWindow": 128000,
-        "maxTokens": 4096
-      },
       {
         "id": "gpt-4.1",
         "name": "GPT-4.1",
         "contextWindow": 1047576,
         "maxTokens": 32768
-      }
-    ]
-  },
-  {
-    "route": "openrouter",
-    "name": "OpenRouter",
-    "baseURL": "https://openrouter.ai/api/v1",
-    "apiKeyEnv": "OPENROUTER_API_KEY",
-    "models": [
-      {
-        "id": "ai21/jamba-large-1.7",
-        "name": "AI21: Jamba Large 1.7",
-        "contextWindow": 256000,
-        "maxTokens": 4096
       },
       {
-        "id": "aion-labs/aion-2.0",
-        "name": "AionLabs: Aion-2.0",
-        "contextWindow": 131072,
+        "id": "gpt-4.1-mini",
+        "name": "GPT-4.1 mini",
+        "contextWindow": 1047576,
         "maxTokens": 32768
       },
       {
-        "id": "aion-labs/aion-3.0",
-        "name": "AionLabs: Aion-3.0",
-        "contextWindow": 131072,
-        "maxTokens": 32768
+        "id": "gpt-4o",
+        "name": "GPT-4o",
+        "contextWindow": 128000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "gpt-4o-2024-08-06",
+        "name": "GPT-4o (2024-08-06)",
+        "contextWindow": 128000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "gpt-4o-2024-11-20",
+        "name": "GPT-4o (2024-11-20)",
+        "contextWindow": 128000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "gpt-4o-mini",
+        "name": "GPT-4o mini",
+        "contextWindow": 128000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "gpt-5.1",
+        "name": "GPT-5.1",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.2",
+        "name": "GPT-5.2",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.2-pro",
+        "name": "GPT-5.2 Pro",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "name": "GPT-5.3 Codex",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "name": "GPT-5.4 mini",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "name": "GPT-5.4 nano",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.4-pro",
+        "name": "GPT-5.4 Pro",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.5-pro",
+        "name": "GPT-5.5 Pro",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "name": "GPT-5.6 Terra",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
       }
     ]
   },
   {
     "route": "qwen-token-plan",
-    "name": "Qwen Token Plan",
+    "name": "Alibaba Token Plan",
     "baseURL": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-    "apiKeyEnv": "DASHSCOPE_API_KEY",
+    "apiKeyEnv": "ALIBABA_TOKEN_PLAN_API_KEY",
     "models": [
       {
         "id": "MiniMax-M2.5",
@@ -603,51 +940,11 @@
         "maxTokens": 32768
       },
       {
-        "id": "deepseek-v3.2",
-        "name": "DeepSeek V3.2",
-        "contextWindow": 131072,
-        "maxTokens": 65536
-      },
-      {
         "id": "deepseek-v4-flash",
         "name": "DeepSeek V4 Flash",
         "contextWindow": 1000000,
         "maxTokens": 384000
-      }
-    ]
-  },
-  {
-    "route": "qwen-token-plan-cn",
-    "name": "Qwen Token Plan (CN)",
-    "baseURL": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
-    "apiKeyEnv": "DASHSCOPE_API_KEY",
-    "models": [
-      {
-        "id": "MiniMax-M2.5",
-        "name": "MiniMax-M2.5",
-        "contextWindow": 196608,
-        "maxTokens": 32768
       },
-      {
-        "id": "deepseek-v3.2",
-        "name": "DeepSeek V3.2",
-        "contextWindow": 131072,
-        "maxTokens": 65536
-      },
-      {
-        "id": "deepseek-v4-flash",
-        "name": "DeepSeek V4 Flash",
-        "contextWindow": 1000000,
-        "maxTokens": 384000
-      }
-    ]
-  },
-  {
-    "route": "qwen-token-plan-individual",
-    "name": "Qwen Token Plan (IND)",
-    "baseURL": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-    "apiKeyEnv": "DASHSCOPE_API_KEY",
-    "models": [
       {
         "id": "deepseek-v4-flash-0731",
         "name": "DeepSeek V4 Flash 0731",
@@ -661,76 +958,436 @@
         "maxTokens": 384000
       },
       {
+        "id": "deepseek-v4-pro-0813",
+        "name": "DeepSeek V4 Pro 0813",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
+        "id": "glm-5.1",
+        "name": "GLM-5.1",
+        "contextWindow": 202752,
+        "maxTokens": 128000
+      },
+      {
         "id": "glm-5.2",
         "name": "GLM-5.2",
         "contextWindow": 1000000,
         "maxTokens": 131072
-      }
-    ]
-  },
-  {
-    "route": "together",
-    "name": "Together",
-    "baseURL": "https://api.together.ai/v1",
-    "apiKeyEnv": "TOGETHER_API_KEY",
-    "models": [
+      },
       {
-        "id": "MiniMaxAI/MiniMax-M2.7",
-        "name": "MiniMax-M2.7",
-        "contextWindow": 202752,
+        "id": "happyhorse-1.1-i2v",
+        "name": "HappyHorse 1.1 Image-to-Video"
+      },
+      {
+        "id": "happyhorse-1.1-r2v",
+        "name": "HappyHorse 1.1 Reference-to-Video"
+      },
+      {
+        "id": "happyhorse-1.1-t2v",
+        "name": "HappyHorse 1.1 Text-to-Video"
+      },
+      {
+        "id": "kimi-k2.5",
+        "name": "Kimi K2.5",
+        "contextWindow": 262144,
+        "maxTokens": 98304
+      },
+      {
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "qwen-image-2.0",
+        "name": "Qwen Image 2.0",
+        "contextWindow": 8192
+      },
+      {
+        "id": "qwen-image-2.0-pro",
+        "name": "Qwen Image 2.0 Pro",
+        "contextWindow": 8192
+      },
+      {
+        "id": "qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
         "maxTokens": 131072
       },
       {
-        "id": "MiniMaxAI/MiniMax-M3",
-        "name": "MiniMax-M3",
-        "contextWindow": 524288,
-        "maxTokens": 250000
+        "id": "qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
       },
       {
-        "id": "Qwen/Qwen2.5-7B-Instruct-Turbo",
-        "name": "Qwen 2.5 7B Instruct Turbo",
-        "contextWindow": 32768,
-        "maxTokens": 32768
+        "id": "qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwen3.8-max",
+        "name": "Qwen3.8 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "wan2.7-image",
+        "name": "Wan2.7 Image",
+        "contextWindow": 8192
+      },
+      {
+        "id": "wan2.7-image-pro",
+        "name": "Wan2.7 Image Pro",
+        "contextWindow": 8192
       }
     ]
   },
   {
-    "route": "vercel-ai-gateway",
-    "name": "Vercel AI Gateway",
-    "baseURL": "https://ai-gateway.vercel.sh",
-    "apiKeyEnv": "VERCEL_AI_GATEWAY_API_KEY",
+    "route": "qwen-token-plan-cn",
+    "name": "Alibaba Token Plan (China)",
+    "baseURL": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "apiKeyEnv": "ALIBABA_TOKEN_PLAN_API_KEY",
     "models": [
       {
-        "id": "alibaba/qwen-3-14b",
-        "name": "Qwen3-14B",
-        "contextWindow": 40960,
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 196608,
+        "maxTokens": 32768
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-flash-0731",
+        "name": "DeepSeek V4 Flash 0731",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-pro-0813",
+        "name": "DeepSeek V4 Pro 0813",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
+        "contextWindow": 202752,
         "maxTokens": 16384
       },
       {
-        "id": "alibaba/qwen-3-235b",
-        "name": "Qwen3 235B A22B",
+        "id": "glm-5.1",
+        "name": "GLM-5.1",
+        "contextWindow": 202752,
+        "maxTokens": 128000
+      },
+      {
+        "id": "glm-5.2",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "happyhorse-1.1-i2v",
+        "name": "HappyHorse 1.1 Image-to-Video"
+      },
+      {
+        "id": "happyhorse-1.1-r2v",
+        "name": "HappyHorse 1.1 Reference-to-Video"
+      },
+      {
+        "id": "happyhorse-1.1-t2v",
+        "name": "HappyHorse 1.1 Text-to-Video"
+      },
+      {
+        "id": "kimi-k2.5",
+        "name": "Kimi K2.5",
         "contextWindow": 262144,
+        "maxTokens": 98304
+      },
+      {
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "qwen-image-2.0",
+        "name": "Qwen Image 2.0",
+        "contextWindow": 8192
+      },
+      {
+        "id": "qwen-image-2.0-pro",
+        "name": "Qwen Image 2.0 Pro",
+        "contextWindow": 8192
+      },
+      {
+        "id": "qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwen3.8-max",
+        "name": "Qwen3.8 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "wan2.7-image",
+        "name": "Wan2.7 Image",
+        "contextWindow": 8192
+      },
+      {
+        "id": "wan2.7-image-pro",
+        "name": "Wan2.7 Image Pro",
+        "contextWindow": 8192
+      }
+    ]
+  },
+  {
+    "route": "qwen-token-plan-individual",
+    "name": "Alibaba Token Plan (Individual)",
+    "baseURL": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    "apiKeyEnv": "ALIBABA_TOKEN_PLAN_API_KEY",
+    "models": [
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 196608,
+        "maxTokens": 32768
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-flash-0731",
+        "name": "DeepSeek V4 Flash 0731",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-pro-0813",
+        "name": "DeepSeek V4 Pro 0813",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
+        "contextWindow": 202752,
         "maxTokens": 16384
       },
       {
-        "id": "alibaba/qwen-3-30b",
-        "name": "Qwen3-30B-A3B",
-        "contextWindow": 40960,
-        "maxTokens": 16384
+        "id": "glm-5.1",
+        "name": "GLM-5.1",
+        "contextWindow": 202752,
+        "maxTokens": 128000
+      },
+      {
+        "id": "glm-5.2",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "happyhorse-1.1-i2v",
+        "name": "HappyHorse 1.1 Image-to-Video"
+      },
+      {
+        "id": "happyhorse-1.1-r2v",
+        "name": "HappyHorse 1.1 Reference-to-Video"
+      },
+      {
+        "id": "happyhorse-1.1-t2v",
+        "name": "HappyHorse 1.1 Text-to-Video"
+      },
+      {
+        "id": "kimi-k2.5",
+        "name": "Kimi K2.5",
+        "contextWindow": 262144,
+        "maxTokens": 98304
+      },
+      {
+        "id": "kimi-k2.6",
+        "name": "Kimi K2.6",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "qwen-image-2.0",
+        "name": "Qwen Image 2.0",
+        "contextWindow": 8192
+      },
+      {
+        "id": "qwen-image-2.0-pro",
+        "name": "Qwen Image 2.0 Pro",
+        "contextWindow": 8192
+      },
+      {
+        "id": "qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwen3.8-max",
+        "name": "Qwen3.8 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "wan2.7-image",
+        "name": "Wan2.7 Image",
+        "contextWindow": 8192
+      },
+      {
+        "id": "wan2.7-image-pro",
+        "name": "Wan2.7 Image Pro",
+        "contextWindow": 8192
       }
     ]
   },
   {
     "route": "xai",
     "name": "xAI",
-    "baseURL": "https://api.x.ai/v1",
+    "baseURL": "",
     "apiKeyEnv": "XAI_API_KEY",
     "models": [
+      {
+        "id": "grok-4.20-0309-non-reasoning",
+        "name": "Grok 4.20 (Non-Reasoning)",
+        "contextWindow": 1000000,
+        "maxTokens": 30000
+      },
+      {
+        "id": "grok-4.20-0309-reasoning",
+        "name": "Grok 4.20 (Reasoning)",
+        "contextWindow": 1000000,
+        "maxTokens": 30000
+      },
+      {
+        "id": "grok-4.20-multi-agent-0309",
+        "name": "Grok 4.20 Multi-Agent",
+        "contextWindow": 1000000,
+        "maxTokens": 30000
+      },
       {
         "id": "grok-4.3",
         "name": "Grok 4.3",
         "contextWindow": 1000000,
         "maxTokens": 30000
+      },
+      {
+        "id": "grok-4.5",
+        "name": "Grok 4.5",
+        "contextWindow": 500000,
+        "maxTokens": 500000
       },
       {
         "id": "grok-4.6",
@@ -748,25 +1405,19 @@
   },
   {
     "route": "xiaomi",
-    "name": "Xiaomi MiMo",
+    "name": "Xiaomi",
     "baseURL": "https://api.xiaomimimo.com/v1",
     "apiKeyEnv": "XIAOMI_API_KEY",
     "models": [
       {
-        "id": "mimo-v2-flash",
-        "name": "MiMo-V2-Flash",
-        "contextWindow": 262144,
-        "maxTokens": 65536
-      },
-      {
-        "id": "mimo-v2-omni",
-        "name": "MiMo-V2-Omni",
-        "contextWindow": 262144,
+        "id": "mimo-v2.5",
+        "name": "MiMo-V2.5",
+        "contextWindow": 1048576,
         "maxTokens": 131072
       },
       {
-        "id": "mimo-v2-pro",
-        "name": "MiMo-V2-Pro",
+        "id": "mimo-v2.5-pro",
+        "name": "MiMo-V2.5-Pro",
         "contextWindow": 1048576,
         "maxTokens": 131072
       }
@@ -774,16 +1425,10 @@
   },
   {
     "route": "xiaomi-token-plan-ams",
-    "name": "Xiaomi Token Plan (AMS)",
+    "name": "Xiaomi Token Plan (Europe)",
     "baseURL": "https://token-plan-ams.xiaomimimo.com/v1",
     "apiKeyEnv": "XIAOMI_API_KEY",
     "models": [
-      {
-        "id": "mimo-v2-pro",
-        "name": "MiMo-V2-Pro",
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
       {
         "id": "mimo-v2.5",
         "name": "MiMo-V2.5",
@@ -800,16 +1445,10 @@
   },
   {
     "route": "xiaomi-token-plan-cn",
-    "name": "Xiaomi Token Plan (CN)",
+    "name": "Xiaomi Token Plan (China)",
     "baseURL": "https://token-plan-cn.xiaomimimo.com/v1",
     "apiKeyEnv": "XIAOMI_API_KEY",
     "models": [
-      {
-        "id": "mimo-v2-pro",
-        "name": "MiMo-V2-Pro",
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
       {
         "id": "mimo-v2.5",
         "name": "MiMo-V2.5",
@@ -826,16 +1465,10 @@
   },
   {
     "route": "xiaomi-token-plan-sgp",
-    "name": "Xiaomi Token Plan (SGP)",
+    "name": "Xiaomi Token Plan (Singapore)",
     "baseURL": "https://token-plan-sgp.xiaomimimo.com/v1",
     "apiKeyEnv": "XIAOMI_API_KEY",
     "models": [
-      {
-        "id": "mimo-v2-pro",
-        "name": "MiMo-V2-Pro",
-        "contextWindow": 1048576,
-        "maxTokens": 131072
-      },
       {
         "id": "mimo-v2.5",
         "name": "MiMo-V2.5",
@@ -1091,5 +1724,1711 @@
         "maxTokens": 131072
       }
     ]
+  },
+  {
+    "route": "minimax-coding-plan",
+    "name": "MiniMax Token Plan (minimax.io)",
+    "baseURL": "https://api.minimax.io/anthropic",
+    "apiKeyEnv": "MINIMAX_API_KEY",
+    "models": [
+      {
+        "id": "MiniMax-M2",
+        "name": "MiniMax-M2",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "name": "MiniMax-M2.1",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5-highspeed",
+        "name": "MiniMax-M2.5-highspeed",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.7",
+        "name": "MiniMax-M2.7",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.7-highspeed",
+        "name": "MiniMax-M2.7-highspeed",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M3",
+        "name": "MiniMax-M3",
+        "contextWindow": 1048576,
+        "maxTokens": 512000
+      }
+    ],
+    "api": "anthropic-messages"
+  },
+  {
+    "route": "minimax-cn-coding-plan",
+    "name": "MiniMax Token Plan (minimaxi.com)",
+    "baseURL": "https://api.minimaxi.com/anthropic",
+    "apiKeyEnv": "MINIMAX_API_KEY",
+    "models": [
+      {
+        "id": "MiniMax-M2",
+        "name": "MiniMax-M2",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.1",
+        "name": "MiniMax-M2.1",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.5-highspeed",
+        "name": "MiniMax-M2.5-highspeed",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.7",
+        "name": "MiniMax-M2.7",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M2.7-highspeed",
+        "name": "MiniMax-M2.7-highspeed",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "MiniMax-M3",
+        "name": "MiniMax-M3",
+        "contextWindow": 1048576,
+        "maxTokens": 512000
+      }
+    ],
+    "api": "anthropic-messages"
+  },
+  {
+    "route": "stepfun",
+    "name": "StepFun (China)",
+    "baseURL": "https://api.stepfun.com/v1",
+    "apiKeyEnv": "STEPFUN_API_KEY",
+    "models": [
+      {
+        "id": "step-3.5-flash",
+        "name": "Step 3.5 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.5-flash-2603",
+        "name": "Step 3.5 Flash 2603",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.7-flash",
+        "name": "Step 3.7 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      }
+    ]
+  },
+  {
+    "route": "stepfun-ai",
+    "name": "StepFun (Global)",
+    "baseURL": "https://api.stepfun.ai/v1",
+    "apiKeyEnv": "STEPFUN_API_KEY",
+    "models": [
+      {
+        "id": "step-3.5-flash",
+        "name": "Step 3.5 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.5-flash-2603",
+        "name": "Step 3.5 Flash 2603",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.7-flash",
+        "name": "Step 3.7 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      }
+    ]
+  },
+  {
+    "route": "stepfun-step-plan",
+    "name": "StepFun Step Plan (China)",
+    "baseURL": "https://api.stepfun.com/step_plan/v1",
+    "apiKeyEnv": "STEPFUN_API_KEY",
+    "models": [
+      {
+        "id": "step-3.5-flash",
+        "name": "Step 3.5 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.5-flash-2603",
+        "name": "Step 3.5 Flash 2603",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.7-flash",
+        "name": "Step 3.7 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-router-v1",
+        "name": "Step Router v1",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      }
+    ]
+  },
+  {
+    "route": "stepfun-ai-step-plan",
+    "name": "StepFun Step Plan (Global)",
+    "baseURL": "https://api.stepfun.ai/step_plan/v1",
+    "apiKeyEnv": "STEPFUN_API_KEY",
+    "models": [
+      {
+        "id": "step-3.5-flash",
+        "name": "Step 3.5 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.5-flash-2603",
+        "name": "Step 3.5 Flash 2603",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "step-3.7-flash",
+        "name": "Step 3.7 Flash",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      }
+    ]
+  },
+  {
+    "route": "volcengine",
+    "name": "Volcengine Ark",
+    "baseURL": "https://ark.cn-beijing.volces.com/api/v3",
+    "apiKeyEnv": "ARK_API_KEY",
+    "models": [
+      {
+        "id": "deepseek-v4-flash-ga-260731",
+        "name": "DeepSeek V4 Flash 0731",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-pro-ga-260813",
+        "name": "DeepSeek V4 Pro 0813",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "doubao-seed-2-0-code-preview-260215",
+        "name": "Seed 2.0 Code",
+        "contextWindow": 262144,
+        "maxTokens": 131072
+      },
+      {
+        "id": "doubao-seed-2-0-lite-260428",
+        "name": "Seed 2.0 Lite",
+        "contextWindow": 256000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "doubao-seed-2-0-mini-260428",
+        "name": "Seed 2.0 Mini",
+        "contextWindow": 256000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "doubao-seed-2-0-pro-260215",
+        "name": "Seed 2.0 Pro",
+        "contextWindow": 256000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "doubao-seed-2-1-pro-260628",
+        "name": "Seed 2.1 Pro",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "doubao-seed-2-1-turbo-260628",
+        "name": "Seed 2.1 Turbo",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "doubao-seed-character-260628",
+        "name": "Seed Character",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "doubao-seed-evolving",
+        "name": "Seed Evolving",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "glm-5-2-260617",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      }
+    ]
+  },
+  {
+    "route": "volcengine-coding-plan",
+    "name": "Volcengine Ark Coding Plan",
+    "baseURL": "https://ark.cn-beijing.volces.com/api/coding/v3",
+    "apiKeyEnv": "ARK_CODING_PLAN_API_KEY",
+    "models": [
+      {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "doubao-seed-2.0-lite",
+        "name": "Seed 2.0 Lite",
+        "contextWindow": 256000,
+        "maxTokens": 32000
+      },
+      {
+        "id": "doubao-seed-2.1-turbo",
+        "name": "Seed 2.1 Turbo",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "doubao-seed-evolving",
+        "name": "Seed Evolving",
+        "contextWindow": 256000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "glm-5.3",
+        "name": "GLM-5.3",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "kimi-k2.7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "minimax-m3",
+        "name": "MiniMax-M3",
+        "contextWindow": 1048576,
+        "maxTokens": 512000
+      }
+    ]
+  },
+  {
+    "route": "alibaba",
+    "name": "Alibaba",
+    "baseURL": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "apiKeyEnv": "DASHSCOPE_API_KEY",
+    "models": [
+      {
+        "id": "deepseek-v4-flash-0731",
+        "name": "DeepSeek V4 Flash 0731",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "glm-5.2",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qvq-max",
+        "name": "QVQ Max",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-flash",
+        "name": "Qwen Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen-max",
+        "name": "Qwen Max",
+        "contextWindow": 32768,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-mt-plus",
+        "name": "Qwen-MT Plus",
+        "contextWindow": 16384,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-mt-turbo",
+        "name": "Qwen-MT Turbo",
+        "contextWindow": 16384,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-omni-turbo",
+        "name": "Qwen-Omni Turbo",
+        "contextWindow": 32768,
+        "maxTokens": 2048
+      },
+      {
+        "id": "qwen-omni-turbo-realtime",
+        "name": "Qwen-Omni Turbo Realtime",
+        "contextWindow": 32768,
+        "maxTokens": 2048
+      },
+      {
+        "id": "qwen-plus",
+        "name": "Qwen Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen-plus-character-ja",
+        "name": "Qwen Plus Character (Japanese)",
+        "contextWindow": 8192,
+        "maxTokens": 512
+      },
+      {
+        "id": "qwen-turbo",
+        "name": "Qwen Turbo",
+        "contextWindow": 1000000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen-vl-max",
+        "name": "Qwen-VL Max",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-vl-ocr",
+        "name": "Qwen-VL OCR",
+        "contextWindow": 34096,
+        "maxTokens": 4096
+      },
+      {
+        "id": "qwen-vl-plus",
+        "name": "Qwen-VL Plus",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen2-5-omni-7b",
+        "name": "Qwen2.5-Omni 7B",
+        "contextWindow": 32768,
+        "maxTokens": 2048
+      },
+      {
+        "id": "qwen3-14b",
+        "name": "Qwen3 14B",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen3-235b-a22b",
+        "name": "Qwen3 235B-A22B",
+        "contextWindow": 131072,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-32b",
+        "name": "Qwen3 32B",
+        "contextWindow": 131072,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-8b",
+        "name": "Qwen3 8B",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen3-asr-flash",
+        "name": "Qwen3-ASR Flash",
+        "contextWindow": 53248,
+        "maxTokens": 4096
+      },
+      {
+        "id": "qwen3-coder-30b-a3b-instruct",
+        "name": "Qwen3-Coder 30B-A3B Instruct",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-480b-a35b-instruct",
+        "name": "Qwen3-Coder 480B-A35B Instruct",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-flash",
+        "name": "Qwen3 Coder Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-plus",
+        "name": "Qwen3 Coder Plus",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-livetranslate-flash-realtime",
+        "name": "Qwen3-LiveTranslate Flash Realtime",
+        "contextWindow": 53248,
+        "maxTokens": 4096
+      },
+      {
+        "id": "qwen3-max",
+        "name": "Qwen3 Max",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-next-80b-a3b-instruct",
+        "name": "Qwen3-Next 80B-A3B Instruct",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-next-80b-a3b-thinking",
+        "name": "Qwen3-Next 80B-A3B (Thinking)",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-omni-flash",
+        "name": "Qwen3-Omni Flash",
+        "contextWindow": 65536,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-omni-flash-realtime",
+        "name": "Qwen3-Omni Flash Realtime",
+        "contextWindow": 65536,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-vl-235b-a22b",
+        "name": "Qwen3-VL 235B-A22B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-vl-30b-a3b",
+        "name": "Qwen3-VL 30B-A3B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-vl-plus",
+        "name": "Qwen3-VL Plus",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3.5-122b-a10b",
+        "name": "Qwen3.5 122B-A10B",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.5-27b",
+        "name": "Qwen3.5 27B",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.5-35b-a3b",
+        "name": "Qwen3.5 35B-A3B",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.5-397b-a17b",
+        "name": "Qwen3.5 397B-A17B",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.5-plus",
+        "name": "Qwen3.5 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-27b",
+        "name": "Qwen3.6 27B",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-35b-a3b",
+        "name": "Qwen3.6 35B-A3B",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-max-preview",
+        "name": "Qwen3.6 Max Preview",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwen3.8-max",
+        "name": "Qwen3.8 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwq-plus",
+        "name": "QwQ Plus",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      }
+    ]
+  },
+  {
+    "route": "alibaba-cn",
+    "name": "Alibaba (China)",
+    "baseURL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "apiKeyEnv": "DASHSCOPE_API_KEY",
+    "models": [
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 204800,
+        "maxTokens": 131072
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
+        "id": "glm-5.1",
+        "name": "GLM-5.1",
+        "contextWindow": 202752,
+        "maxTokens": 128000
+      },
+      {
+        "id": "glm-5.2",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "kimi-k2-thinking",
+        "name": "Moonshot Kimi K2 Thinking",
+        "contextWindow": 262144,
+        "maxTokens": 16384
+      },
+      {
+        "id": "kimi-k2.5",
+        "name": "Moonshot Kimi K2.5",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "kimi-k2.6",
+        "name": "Moonshot Kimi K2.6",
+        "contextWindow": 262144,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qvq-max",
+        "name": "QVQ Max",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-deep-research",
+        "name": "Qwen Deep Research",
+        "contextWindow": 1000000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen-doc-turbo",
+        "name": "Qwen Doc Turbo",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-flash",
+        "name": "Qwen Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen-long",
+        "name": "Qwen Long",
+        "contextWindow": 10000000,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-math-plus",
+        "name": "Qwen Math Plus",
+        "contextWindow": 4096,
+        "maxTokens": 3072
+      },
+      {
+        "id": "qwen-math-turbo",
+        "name": "Qwen Math Turbo",
+        "contextWindow": 4096,
+        "maxTokens": 3072
+      },
+      {
+        "id": "qwen-max",
+        "name": "Qwen Max",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-mt-plus",
+        "name": "Qwen-MT Plus",
+        "contextWindow": 16384,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-mt-turbo",
+        "name": "Qwen-MT Turbo",
+        "contextWindow": 16384,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-omni-turbo",
+        "name": "Qwen-Omni Turbo",
+        "contextWindow": 32768,
+        "maxTokens": 2048
+      },
+      {
+        "id": "qwen-omni-turbo-realtime",
+        "name": "Qwen-Omni Turbo Realtime",
+        "contextWindow": 32768,
+        "maxTokens": 2048
+      },
+      {
+        "id": "qwen-plus",
+        "name": "Qwen Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen-plus-character",
+        "name": "Qwen Plus Character",
+        "contextWindow": 32768,
+        "maxTokens": 4096
+      },
+      {
+        "id": "qwen-turbo",
+        "name": "Qwen Turbo",
+        "contextWindow": 1000000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen-vl-max",
+        "name": "Qwen-VL Max",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen-vl-ocr",
+        "name": "Qwen-VL OCR",
+        "contextWindow": 34096,
+        "maxTokens": 4096
+      },
+      {
+        "id": "qwen-vl-plus",
+        "name": "Qwen-VL Plus",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen2-5-omni-7b",
+        "name": "Qwen2.5-Omni 7B",
+        "contextWindow": 32768,
+        "maxTokens": 2048
+      },
+      {
+        "id": "qwen3-14b",
+        "name": "Qwen3 14B",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen3-235b-a22b",
+        "name": "Qwen3 235B-A22B",
+        "contextWindow": 131072,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-32b",
+        "name": "Qwen3 32B",
+        "contextWindow": 131072,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-8b",
+        "name": "Qwen3 8B",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "qwen3-asr-flash",
+        "name": "Qwen3-ASR Flash",
+        "contextWindow": 53248,
+        "maxTokens": 4096
+      },
+      {
+        "id": "qwen3-coder-30b-a3b-instruct",
+        "name": "Qwen3-Coder 30B-A3B Instruct",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-480b-a35b-instruct",
+        "name": "Qwen3-Coder 480B-A35B Instruct",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-flash",
+        "name": "Qwen3 Coder Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-plus",
+        "name": "Qwen3 Coder Plus",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-max",
+        "name": "Qwen3 Max",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-next-80b-a3b-instruct",
+        "name": "Qwen3-Next 80B-A3B Instruct",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-next-80b-a3b-thinking",
+        "name": "Qwen3-Next 80B-A3B (Thinking)",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-omni-flash",
+        "name": "Qwen3-Omni Flash",
+        "contextWindow": 65536,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-omni-flash-realtime",
+        "name": "Qwen3-Omni Flash Realtime",
+        "contextWindow": 65536,
+        "maxTokens": 16384
+      },
+      {
+        "id": "qwen3-vl-235b-a22b",
+        "name": "Qwen3-VL 235B-A22B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-vl-30b-a3b",
+        "name": "Qwen3-VL 30B-A3B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-vl-plus",
+        "name": "Qwen3-VL Plus",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3.5-397b-a17b",
+        "name": "Qwen3.5 397B-A17B",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.5-flash",
+        "name": "Qwen3.5 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.5-plus",
+        "name": "Qwen3.5 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-max-preview",
+        "name": "Qwen3.6 Max Preview",
+        "contextWindow": 245800,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-flash",
+        "name": "Qwen3.7 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "qwen3.8-flash",
+        "name": "Qwen3.8 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwen3.8-max",
+        "name": "Qwen3.8 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "qwq-plus",
+        "name": "QwQ Plus",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "tongyi-intent-detect-v3",
+        "name": "Tongyi Intent Detect V3",
+        "contextWindow": 8192,
+        "maxTokens": 1024
+      }
+    ]
+  },
+  {
+    "route": "alibaba-coding-plan",
+    "name": "Alibaba Coding Plan",
+    "baseURL": "https://coding-intl.dashscope.aliyuncs.com/v1",
+    "apiKeyEnv": "ALIBABA_CODING_PLAN_API_KEY",
+    "models": [
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 196608,
+        "maxTokens": 24576
+      },
+      {
+        "id": "glm-4.7",
+        "name": "GLM-4.7",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
+        "id": "kimi-k2.5",
+        "name": "Kimi K2.5",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-coder-next",
+        "name": "Qwen3 Coder Next",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-plus",
+        "name": "Qwen3 Coder Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-max-2026-01-23",
+        "name": "Qwen3 Max",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3.5-plus",
+        "name": "Qwen3.5 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      }
+    ]
+  },
+  {
+    "route": "alibaba-coding-plan-cn",
+    "name": "Alibaba Coding Plan (China)",
+    "baseURL": "https://coding.dashscope.aliyuncs.com/v1",
+    "apiKeyEnv": "ALIBABA_CODING_PLAN_API_KEY",
+    "models": [
+      {
+        "id": "MiniMax-M2.5",
+        "name": "MiniMax-M2.5",
+        "contextWindow": 196608,
+        "maxTokens": 24576
+      },
+      {
+        "id": "glm-4.7",
+        "name": "GLM-4.7",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
+        "id": "glm-5",
+        "name": "GLM-5",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
+        "id": "kimi-k2.5",
+        "name": "Kimi K2.5",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3-coder-next",
+        "name": "Qwen3 Coder Next",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-coder-plus",
+        "name": "Qwen3 Coder Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3-max-2026-01-23",
+        "name": "Qwen3 Max",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3.5-plus",
+        "name": "Qwen3.5 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-flash",
+        "name": "Qwen3.6 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.6-plus",
+        "name": "Qwen3.6 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-max",
+        "name": "Qwen3.7 Max",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "Qwen3.7 Plus",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      }
+    ]
+  },
+  {
+    "route": "meta",
+    "name": "Meta",
+    "baseURL": "https://api.meta.ai/v1",
+    "apiKeyEnv": "META_MODEL_API_KEY",
+    "models": [
+      {
+        "id": "muse-spark-1.1",
+        "name": "Muse Spark 1.1",
+        "contextWindow": 1048576,
+        "maxTokens": 32000
+      },
+      {
+        "id": "muse-spark-1.2",
+        "name": "Muse Spark 1.2",
+        "contextWindow": 1048576,
+        "maxTokens": 131072
+      },
+      {
+        "id": "muse-spark-1.2-contributor",
+        "name": "Muse Spark 1.2 Contributor",
+        "contextWindow": 1048576,
+        "maxTokens": 131072
+      }
+    ]
+  },
+  {
+    "route": "sakana",
+    "name": "Sakana AI",
+    "baseURL": "https://api.sakana.ai/v1",
+    "apiKeyEnv": "SAKANA_API_KEY",
+    "models": [
+      {
+        "id": "fugu",
+        "name": "Fugu",
+        "contextWindow": 1000000,
+        "maxTokens": 1000000
+      },
+      {
+        "id": "fugu-ultra",
+        "name": "Fugu Ultra",
+        "contextWindow": 1000000,
+        "maxTokens": 1000000
+      },
+      {
+        "id": "fugu-ultra-20260615",
+        "name": "Fugu Ultra",
+        "contextWindow": 1000000,
+        "maxTokens": 1000000
+      },
+      {
+        "id": "sakana-namazu",
+        "name": "Sakana Namazu",
+        "contextWindow": 262144,
+        "maxTokens": 65536
+      }
+    ]
+  },
+  {
+    "route": "poolside",
+    "name": "Poolside",
+    "baseURL": "https://inference.poolside.ai/v1",
+    "apiKeyEnv": "POOLSIDE_API_KEY",
+    "models": [
+      {
+        "id": "poolside/laguna-m.1",
+        "name": "Laguna M.1",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "poolside/laguna-s-2.1",
+        "name": "Laguna S 2.1",
+        "contextWindow": 1048576,
+        "maxTokens": 32768
+      },
+      {
+        "id": "poolside/laguna-xs-2.1",
+        "name": "Laguna XS 2.1",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      }
+    ]
+  },
+  {
+    "route": "upstage",
+    "name": "Upstage",
+    "baseURL": "https://api.upstage.ai/v1/solar",
+    "apiKeyEnv": "UPSTAGE_API_KEY",
+    "models": [
+      {
+        "id": "solar-mini",
+        "name": "solar-mini",
+        "contextWindow": 32768,
+        "maxTokens": 4096
+      },
+      {
+        "id": "solar-pro2",
+        "name": "solar-pro2",
+        "contextWindow": 65536,
+        "maxTokens": 8192
+      },
+      {
+        "id": "solar-pro3",
+        "name": "solar-pro3",
+        "contextWindow": 131072,
+        "maxTokens": 8192
+      },
+      {
+        "id": "solar-pro4",
+        "name": "Solar Pro 4",
+        "contextWindow": 524288,
+        "maxTokens": 131072
+      }
+    ]
+  },
+  {
+    "route": "arcee",
+    "name": "Arcee",
+    "baseURL": "https://api.arcee.ai/api/v1",
+    "apiKeyEnv": "ARCEE_API_KEY",
+    "models": [
+      {
+        "id": "deepseek/deepseek-v4-flash-latest",
+        "name": "DeepSeek V4 Flash Latest",
+        "contextWindow": 1048576,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek/deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 512000,
+        "maxTokens": 384000
+      },
+      {
+        "id": "deepseek/deepseek-v4-pro-0813",
+        "name": "DeepSeek V4 Pro 0813",
+        "contextWindow": 1048576,
+        "maxTokens": 384000
+      },
+      {
+        "id": "moonshotai/kimi-k3",
+        "name": "Kimi K3",
+        "contextWindow": 1048576,
+        "maxTokens": 131072
+      },
+      {
+        "id": "thinkingmachines/inkling-small",
+        "name": "Inkling Small",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "trinity-large-thinking",
+        "name": "Trinity Large Thinking",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "zai-org/glm-5.2",
+        "name": "GLM-5.2",
+        "contextWindow": 262144,
+        "maxTokens": 131072
+      }
+    ]
+  },
+  {
+    "route": "perplexity",
+    "name": "Perplexity",
+    "baseURL": "https://api.perplexity.ai/v1",
+    "apiKeyEnv": "PERPLEXITY_API_KEY",
+    "models": [
+      {
+        "id": "sonar",
+        "name": "Sonar",
+        "contextWindow": 128000,
+        "maxTokens": 4096
+      },
+      {
+        "id": "sonar-deep-research",
+        "name": "Perplexity Sonar Deep Research",
+        "contextWindow": 128000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "sonar-pro",
+        "name": "Sonar Pro",
+        "contextWindow": 200000,
+        "maxTokens": 8192
+      },
+      {
+        "id": "sonar-reasoning-pro",
+        "name": "Sonar Reasoning Pro",
+        "contextWindow": 128000,
+        "maxTokens": 4096
+      }
+    ]
+  },
+  {
+    "route": "databricks",
+    "name": "Databricks",
+    "baseURL": "",
+    "apiKeyEnv": "DATABRICKS_HOST",
+    "models": [
+      {
+        "id": "databricks-claude-haiku-4-5",
+        "name": "Claude Haiku 4.5 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "databricks-claude-opus-4-1",
+        "name": "Claude Opus 4.1 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 32000
+      },
+      {
+        "id": "databricks-claude-opus-4-5",
+        "name": "Claude Opus 4.5 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "databricks-claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-claude-opus-4-7",
+        "name": "Claude Opus 4.7",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-claude-sonnet-4",
+        "name": "Claude Sonnet 4.5",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "databricks-claude-sonnet-4-5",
+        "name": "Claude Sonnet 4.5 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "databricks-claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "databricks-gemini-2-5-flash",
+        "name": "Gemini 2.5 Flash",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "databricks-gemini-2-5-pro",
+        "name": "Gemini 2.5 Pro",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "databricks-gemini-3-1-flash-lite",
+        "name": "Gemini 3.1 Flash Lite Preview",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "databricks-gemini-3-1-pro",
+        "name": "Gemini 3.1 Pro Preview Custom Tools",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "databricks-gemini-3-flash",
+        "name": "Gemini 3 Flash Preview",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "databricks-gemini-3-pro",
+        "name": "Gemini 3 Pro Preview",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "databricks-glm-5-2",
+        "name": "GLM-5.2",
+        "contextWindow": 1000000,
+        "maxTokens": 131072
+      },
+      {
+        "id": "databricks-gpt-5",
+        "name": "GPT-5",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-1",
+        "name": "GPT-5.1",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-2",
+        "name": "GPT-5.2",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-4",
+        "name": "GPT-5.4",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-4-mini",
+        "name": "GPT-5.4 mini",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-4-nano",
+        "name": "GPT-5.4 nano",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-5",
+        "name": "GPT-5.5",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-6-luna",
+        "name": "GPT-5.6 Luna",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-6-sol",
+        "name": "GPT-5.6 Sol",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-6-terra",
+        "name": "GPT-5.6 Terra",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-mini",
+        "name": "GPT-5 Mini",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-5-nano",
+        "name": "GPT-5 Nano",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "databricks-gpt-oss-120b",
+        "name": "GPT OSS 120B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "databricks-gpt-oss-20b",
+        "name": "GPT OSS 20B",
+        "contextWindow": 131072,
+        "maxTokens": 32768
+      },
+      {
+        "id": "databricks-kimi-k2-7-code",
+        "name": "Kimi K2.7 Code",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      }
+    ],
+    "needsBaseURL": true
+  },
+  {
+    "route": "snowflake-cortex",
+    "name": "Snowflake Cortex",
+    "baseURL": "",
+    "apiKeyEnv": "SNOWFLAKE_ACCOUNT",
+    "models": [
+      {
+        "id": "claude-fable-5",
+        "name": "Claude Fable 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-haiku-4-5",
+        "name": "Claude Haiku 4.5 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "claude-opus-4-5",
+        "name": "Claude Opus 4.5 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 64000
+      },
+      {
+        "id": "claude-opus-4-6",
+        "name": "Claude Opus 4.6",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-opus-4-7",
+        "name": "Claude Opus 4.7",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-opus-4-8",
+        "name": "Claude Opus 4.8",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-opus-5",
+        "name": "Claude Opus 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "claude-sonnet-4-5",
+        "name": "Claude Sonnet 4.5 (latest)",
+        "contextWindow": 200000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "claude-sonnet-4-6",
+        "name": "Claude Sonnet 4.6",
+        "contextWindow": 1000000,
+        "maxTokens": 16384
+      },
+      {
+        "id": "claude-sonnet-5",
+        "name": "Claude Sonnet 5",
+        "contextWindow": 1000000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "deepseek-r1",
+        "name": "DeepSeek-R1",
+        "contextWindow": 128000,
+        "maxTokens": 32768
+      },
+      {
+        "id": "gemini-3.1-pro",
+        "name": "Gemini 3.1 Pro Preview",
+        "contextWindow": 1048576,
+        "maxTokens": 65536
+      },
+      {
+        "id": "mistral-large2",
+        "name": "Mistral Large (latest)",
+        "contextWindow": 262144,
+        "maxTokens": 262144
+      },
+      {
+        "id": "openai-gpt-4.1",
+        "name": "GPT-4.1",
+        "contextWindow": 1047576,
+        "maxTokens": 32768
+      },
+      {
+        "id": "openai-gpt-5",
+        "name": "GPT-5",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5-mini",
+        "name": "GPT-5 Mini",
+        "contextWindow": 272000,
+        "maxTokens": 8192
+      },
+      {
+        "id": "openai-gpt-5-nano",
+        "name": "GPT-5 Nano",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5.1",
+        "name": "GPT-5.1",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5.2",
+        "name": "GPT-5.2",
+        "contextWindow": 400000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5.4",
+        "name": "GPT-5.4",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5.5",
+        "name": "GPT-5.5",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "openai-gpt-5.6-terra",
+        "name": "GPT-5.6 Terra",
+        "contextWindow": 1050000,
+        "maxTokens": 128000
+      },
+      {
+        "id": "snowflake-llama3.3-70b",
+        "name": "Llama-3.3-70B-Instruct",
+        "contextWindow": 128000,
+        "maxTokens": 4096
+      }
+    ],
+    "needsBaseURL": true
   }
 ]

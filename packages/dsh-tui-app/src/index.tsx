@@ -47,7 +47,7 @@ import { emptySessionStats, foldSessionStats, type SessionStats } from './sessio
 import { readHiddenProviders, resolveResumeLast, setHiddenProviders } from './config.ts'
 import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastActivity, touchSession } from './session-activity.ts'
-import { theme } from './theme.ts'
+import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initErrorLog, logError, logConsoleError } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
@@ -57,6 +57,19 @@ export const name = 'tui-runtime'
 
 /** Project version (single source of truth: the root package.json). */
 export const APP_VERSION = (pkg as { version?: string }).version ?? '0.0.0'
+
+/** Whether this build is a beta/preview: true when the version carries a
+ *  prerelease tag (`0.2.2-beta.1`, `-rc`, `-alpha`, `-preview`) or
+ *  `DSH_TUI_BETA=1` is set at launch. Release builds (plain semver) show no
+ *  beta marker in the sidebar footer. */
+export const IS_BETA_BUILD = /[-.]?(beta|rc|alpha|preview)[-.]?/i.test(APP_VERSION)
+  || process.env.DSH_TUI_BETA?.trim() === '1'
+
+/** Footer suffix appended ONLY when beta is forced by `DSH_TUI_BETA=1` on a
+ *  plain (non-prerelease) version. A version that already spells it out
+ *  (`0.2.2-beta`) shows as-is — no redundant " beta" word (GitHub semver
+ *  convention). */
+export const BETA_FOOTER_SUFFIX = process.env.DSH_TUI_BETA?.trim() === '1' ? ' beta' : ''
 
 /** Core services required before the terminal session can start. */
 export const inject = ['agentDefaultModel', 'agents', 'sessions', 'tuiModels']
@@ -133,10 +146,11 @@ const PERMISSION_LABEL: Record<SandboxMode, string> = {
   'workspace-write': 'Workspace Write',
   'danger-full-access': 'Full access · no approval',
 }
-const PERMISSION_COLOR: Record<SandboxMode, string> = {
-  'read-only': theme.error,
-  'workspace-write': theme.warning,
-  'danger-full-access': theme.success,
+/** Sandbox-mode → theme role; resolved LIVE (theme changes must repaint it). */
+const PERMISSION_ROLE: Record<SandboxMode, keyof ThemePalette> = {
+  'read-only': 'error',
+  'workspace-write': 'warning',
+  'danger-full-access': 'success',
 }
 
 /** A selectable persisted session for the /sessions dialog. */
@@ -188,7 +202,7 @@ export class Store {
   private listeners = new Set<() => void>()
   private _input = ''
   private _cursor = 0
-  private _panel: 'conversation' | 'approval' | 'connect' | 'question' | 'sessions' | 'export' | 'help' = 'conversation'
+  private _panel: 'conversation' | 'approval' | 'connect' | 'question' | 'sessions' | 'export' | 'help' | 'themes' = 'conversation'
   private _commandFilter = ''
   private _commandIndex = 0
   private _approval: PendingApproval | null = null
@@ -258,6 +272,11 @@ export class Store {
   }
 
   getVersion = (): number => this.version
+
+  private _themeEpoch = 0
+  /** Bumped on every theme (re)apply so memoized rows re-render with new colors. */
+  get themeEpoch(): number { return this._themeEpoch }
+  bumpTheme(): void { this._themeEpoch += 1; this.notify() }
 
   // ── action slots (injected by start(); panels call them through the store) ──
   /** Sent-message history (shared with the conversation panel's browse). */
@@ -624,7 +643,7 @@ export class Store {
   }
   get permission(): SandboxMode { return this._permission }
   get permissionLabel(): string { return PERMISSION_LABEL[this._permission] }
-  get permissionColor(): string { return PERMISSION_COLOR[this._permission] }
+  get permissionColor(): string { return theme[PERMISSION_ROLE[this._permission]] }
   cyclePermission(): SandboxMode {
     const i = SANDBOX_CYCLE.indexOf(this._permission)
     this._permission = SANDBOX_CYCLE[(i + 1) % SANDBOX_CYCLE.length] ?? 'workspace-write'
@@ -661,6 +680,7 @@ export class Store {
   private _providerFormError = ''
   private _providerList = false
   private _providerListIndex = 0
+  private _providerTotal = 0 // total known providers, for the ＋ Add provider row
   private _providerNames: readonly { provider: string; name: string; configured: boolean; needsBaseURL: boolean }[] = []
   private _keyDialog = false
   private _keyDialogProvider = ''
@@ -738,6 +758,13 @@ export class Store {
   get providerList(): boolean { return this._providerList }
   get providerListIndex(): number { return this._providerListIndex }
   get providerNames(): readonly { provider: string; name: string; configured: boolean; needsBaseURL: boolean }[] { return this._providerNames }
+  /** Total known providers (the Add-provider list size), shown after ＋ Add provider. */
+  get providerTotal(): number { return this._providerTotal }
+  setProviderTotal(count: number): void {
+    if (this._providerTotal === count) return
+    this._providerTotal = count
+    this.notify()
+  }
   get keyDialog(): boolean { return this._keyDialog }
   get keyDialogProvider(): string { return this._keyDialogProvider }
   get keyDialogName(): string { return this._keyDialogName }
@@ -901,6 +928,7 @@ export class Store {
   /** Show the registered-provider list (pick one to set or change its API key). */
   startProviderList(names: readonly { provider: string; name: string; configured: boolean; needsBaseURL: boolean }[]): void {
     this._providerList = true
+    this._providerTotal = names.length
     this._providerListIndex = 0
     this._providerListFilter = ''
     this._providerNames = names
@@ -1899,6 +1927,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           const entries = buildProviderEntries(providers)
           if (entries.some((e) => e.provider === provider) || attempts <= 0) {
             store.openModels(entries, Math.max(0, entries.findIndex((e) => e.provider === provider)))
+            // Refresh the total-provider count shown after ＋ Add provider.
+            void modelsService.listAll().then((names) => store.setProviderTotal(names.length)).catch(() => {})
             return
           }
           setTimeout(() => refresh(attempts - 1), 120)
@@ -1923,6 +1953,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         const entries = buildProviderEntries(modelsService.listProviders())
         if (entries.some((e) => e.provider === input.route.trim()) || attempts <= 0) {
           store.openModels(entries, Math.max(0, entries.findIndex((e) => e.provider === input.route.trim())))
+          // Refresh the total-provider count shown after ＋ Add provider.
+          void modelsService.listAll().then((names) => store.setProviderTotal(names.length)).catch(() => {})
           store.append('status', `models: provider ${input.route.trim()} added`, true)
           return
         }
