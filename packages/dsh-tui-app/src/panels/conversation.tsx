@@ -55,8 +55,15 @@ const COMPOSER_MIN_HEIGHT = 5
 //                          row, where a between-message pad also applies) and
 //                          1 blank below (bottom rail pad);
 //   every other row      : 1 blank above (between-message pad), none below.
-const USER_RAIL_COLS = 2
-const ASSISTANT_INDENT_COLS = 3
+// Message-body alignment (opencode-style, mirrored from the /sessions screenshot):
+// the content text starts 4 char-widths from the terminal line start (column 5)
+// and leaves 4 char-widths blank at the right, so user and assistant bodies land
+// on the SAME left column and never hug the right edge. The message column's
+// paddingX=1 supplies one col of each margin; these two insets cover the rest.
+const MESSAGE_LEFT_COLS = 3
+const MESSAGE_RIGHT_COLS = 3
+const MESSAGE_TEXT_WIDTH = (usable: number): number =>
+  Math.max(1, usable - MESSAGE_LEFT_COLS - MESSAGE_RIGHT_COLS)
 // Between-message pad rows (opencode marginTop={1} between messages).
 const MESSAGE_PAD_ROWS = 1
 // Rail pads above/below a user message's text (opencode keeps user messages
@@ -143,36 +150,36 @@ type Row =
 
 function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number): React.ReactNode {
   if (item.kind === 'assistant') {
-    // opencode-style assistant: indent the markdown a few columns.
-    return <Box paddingLeft={ASSISTANT_INDENT_COLS}><MarkdownText text={item.text} /></Box>
+    // opencode-style assistant: indent the markdown to the shared content column.
+    return <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
   }
   if (item.kind === 'reasoning') {
     return expandReasoning
-      ? <Text dimColor>{item.text}</Text>
-      : (<><Text color={theme.accent}>↓ Think</Text><Text dimColor> · {item.text.split('\n')[0]}</Text></>)
+      ? <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text dimColor wrap="wrap">{item.text}</Text></Box>
+      : (<Box paddingLeft={MESSAGE_LEFT_COLS}>{<><Text color={theme.accent}>↓ Think</Text><Text dimColor> · {item.text.split('\n')[0]}</Text></>}</Box>)
   }
   if (item.kind === 'tool') {
-    return <Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text>
+    return <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text></Box>
   }
   if (item.kind === 'user') {
-    // opencode-style user block: a continuous primary left border (┃) with the
-    // text on a panel background. Ink's Box has no background, so each wrapped
-    // line is its own <Text> with backgroundColor={theme.panel}; the ┃ prefix
-    // runs down every line (opencode's border=["left"]) and the line is padded
-    // to the full column width so the panel block spans edge to edge.
+    // opencode-style user block: a primary left border (┃) with the text on a
+    // panel background. Ink's Box has no background, so each wrapped line is its
+    // own pair of <Text> spans; the ┃ rail runs down every line (opencode's
+    // border=["left"]) and the text is padded to the content width so the panel
+    // block spans from the content column to the right margin.
     // The blank rows above/below the block are LAYOUT MARGINS on the row's
     // wrapper (see buildRows), not painted rows: painted blanks collapse in
     // scroll re-layouts (the PgUp gap bug); margins always survive.
-    const w = Math.max(1, usable - USER_RAIL_COLS)
+    const w = MESSAGE_TEXT_WIDTH(usable)
     const lines = wrapRows(item.text, w)
     return (
       <Box flexDirection="column">
         {lines.map((line, i) => {
-          const text = `${'┃'.padEnd(USER_RAIL_COLS)}${line}`
-          const pad = Math.max(0, usable - visualWidth(text))
+          const pad = Math.max(0, w - visualWidth(line))
           return (
-            <Text key={i} color={theme.text} backgroundColor={theme.panel} wrap="truncate">
-              {text}{' '.repeat(pad)}
+            <Text key={i} wrap="truncate">
+              <Text backgroundColor={theme.bg}>{'┃'.padEnd(MESSAGE_LEFT_COLS)}</Text>
+              <Text color={theme.text} backgroundColor={theme.panel}>{line}{' '.repeat(pad)}</Text>
             </Text>
           )
         })}
@@ -180,9 +187,11 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     )
   }
   return (
-    <Text dimColor={item.dim} wrap="wrap">
-      {item.text}
-    </Text>
+    <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
+      <Text dimColor={item.dim} wrap="wrap">
+        {item.text}
+      </Text>
+    </Box>
   )
 }
 
@@ -308,10 +317,11 @@ function composerHeight(width: number, input: string, min: number): number {
 }
 
 function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
-  if (item.kind === 'reasoning') return expandReasoning ? countWrappedLines(item.text, usable) : 1
-  if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, Math.max(1, usable - ASSISTANT_INDENT_COLS))
-  if (item.kind === 'user') return countWrappedLines(item.text, Math.max(1, usable - USER_RAIL_COLS))
-  return countWrappedLines(item.text, usable)
+  const w = MESSAGE_TEXT_WIDTH(usable)
+  if (item.kind === 'reasoning') return expandReasoning ? countWrappedLines(item.text, w) : 1
+  if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, w)
+  if (item.kind === 'user') return countWrappedLines(item.text, w)
+  return countWrappedLines(item.text, w)
 }
 
 function convUsableWidth(width: number, showSidebar: boolean): number {
@@ -362,10 +372,8 @@ function buildTranscriptRows(items: readonly TranscriptItem[], usable: number, e
     } else {
       plain = item.kind === 'assistant' && item.text.length <= 8000 ? markdownPlain(item.text) : item.text
     }
-    // Wrap breadth mirrors the rendered layout (user left rail / assistant indent).
-    const w = item.kind === 'assistant' ? Math.max(1, usable - ASSISTANT_INDENT_COLS)
-      : item.kind === 'user' ? Math.max(1, usable - USER_RAIL_COLS)
-      : usable
+    // Wrap breadth mirrors the rendered layout (one shared content column).
+    const w = MESSAGE_TEXT_WIDTH(usable)
     for (const line of wrapRows(plain, w)) rows.push({ text: line, itemIndex: i })
   })
   return rows
