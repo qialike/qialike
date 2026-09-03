@@ -181,7 +181,26 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
 const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean; themeEpoch: number; usable: number }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
-    if (ref.current) setMeasuredHeight(String(props.item.key), measureElement(ref.current).height)
+    const key = String(props.item.key)
+    // Measure immediately (setMeasuredHeight is throttled to 250 ms, so a
+    // per-delta notify storm is avoided) so the very next frame lays out with
+    // the current height and no content overlaps. Ink can finish laying out a
+    // frame AFTER React commits, so also re-measure at 60/400/900 ms through
+    // the UN-throttled path: without it a stale (smaller) height would linger
+    // in the cache and drift the scroll — the clip boundary lands one row off
+    // and a block/heading separator row gets cut (heading looks flush).
+    if (ref.current) setMeasuredHeight(key, measureElement(ref.current).height)
+    const sample = (): void => {
+      if (!ref.current) return
+      const rows = measureElement(ref.current).height
+      const prev = measuredHeights.get(key)
+      if (prev === undefined || Math.abs(prev - rows) > 1) {
+        measuredHeights.set(key, rows)
+        store.touch()
+      }
+    }
+    const timers = [setTimeout(sample, 60), setTimeout(sample, 400), setTimeout(sample, 900)]
+    return () => { for (const t of timers) clearTimeout(t) }
   }, [props.item.text])
   return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning, props.usable)}</Box>
 })
