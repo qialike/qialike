@@ -225,7 +225,11 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
 }
 
 function convUsableWidth(width: number, showSidebar: boolean): number {
-  const sidebar = showSidebar ? Math.round(width * 0.3) + 2 : 0
+  // Same numeric sidebar width the renderer uses (see `sidebarWidth` below):
+  // a percentage would let Ink round it independently of this math, flipping
+  // the wrap width by ±1 column and churning the measured row heights (the
+  // sidebar "jump"/re-layout feedback loop).
+  const sidebar = showSidebar ? Math.max(20, Math.round(width * 0.3)) : 0
   return Math.max(20, width - 2 - sidebar)
 }
 
@@ -587,6 +591,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     : store.panel === 'question' ? questionH
     : 0
   const usable = convUsableWidth(width, showSidebar)
+  // Deterministic numeric sidebar width (same formula convUsableWidth uses for
+  // the message wrap width). A percentage would let Ink round independently of
+  // the layout math, flipping the wrap width by ±1 column and churning the
+  // measured row heights (sidebar width jump / re-layout feedback).
+  const sidebarWidth = showSidebar ? Math.max(20, Math.round(width * 0.3)) : 0
   const viewportLines = convViewportLines(composerH, 0, modalH)
   const rows = useMemo(() => buildRows(items, steps), [items, steps, version, themeEpoch])
   const layout = useMemo(() => {
@@ -737,7 +746,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           )}
         </Box>
         {showSidebar && (
-        <Box borderStyle="round" borderColor={theme.border} width="30%" flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
+        <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
           {steps.length === 0
             ? <Text dimColor>no plan yet</Text>
