@@ -1599,9 +1599,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // only receives new events). `/new`-created sessions have no history.
   resetSessionStats()
   if (resumed) {
-    const history = foldHistoryEvents(agent.session.events)
+    const history = foldHistoryEvents(agent.session.snapshotEvents())
     store.loadHistory(history.items, history.steps)
-    store.setStats(foldSessionStats(agent.session.events))
+    store.setStats(foldSessionStats(agent.session.snapshotEvents()))
   }
   // The merged template directory (core + plugin-registered), read live so a
   // sibling plugin's additions apply without a restart.
@@ -2031,9 +2031,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         store.setSession(agent.session)
         touchSession(sessionId)
         resetSessionStats()
-        const history = foldHistoryEvents(agent.session.events)
+        const history = foldHistoryEvents(agent.session.snapshotEvents())
         store.loadHistory(history.items, history.steps)
-        store.setStats(foldSessionStats(agent.session.events))
+        store.setStats(foldSessionStats(agent.session.snapshotEvents()))
         store.setRunning(false)
         store.setPaused(false)
         store.append('status', `Session ${sessionId} in ${config.workspace} (resumed)`, true)
@@ -2204,7 +2204,7 @@ async function autoResumeNewest(
   for (const header of candidates) {
     try {
       const handle = await agents.resume({ resumeSessionId: header.id, agentOptions, setup })
-      const hasUserContent = handle.agent.session.events.some(
+      const hasUserContent = handle.agent.session.snapshotEvents().some(
         (event) => event.type === 'user/message'
           && (event.data as { source?: { kind?: string } }).source?.kind === 'user',
       )

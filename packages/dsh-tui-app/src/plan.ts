@@ -11,7 +11,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { foldPlanMode } from '@deepseek-ai/dsh-plan-mode'
+import type {} from '@deepseek-ai/dsh-plan-mode'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { TuiService, Store } from './index.tsx'
 
@@ -52,11 +52,15 @@ export function apply(ctx: Context): void {
           case 'committed': text = 'Plan mode off.'; break
           case 'queued': text = 'Leaving plan mode (applies from the next step).'; break
           case 'cancelled': text = 'Plan mode entry cancelled.'; break
-          case 'noop':
-            text = foldPlanMode(agent.session.events)
+          case 'noop': {
+            // Distinguish an already-inactive session from one whose logged
+            // state is active; get() reports the logged projection state.
+            const { active } = ctx.planMode.get(agent)
+            text = active
               ? 'Leaving plan mode (applies from the next step).'
               : 'Plan mode is already inactive.'
             break
+          }
         }
         store.append('status', text, true)
         return

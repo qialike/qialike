@@ -19,7 +19,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { TuiProviderTemplate } from './llm.ts'
 
@@ -30,7 +30,7 @@ export const name = 'tui-opencode-gateways'
 export const inject = ['settings', 'tuiLlmTemplates']
 
 /** The `dsh-tui-opencode:` settings namespace holding the enabled switch. */
-const NS = settingsNamespace('dsh-tui-opencode')
+const NS = 'dsh-tui-opencode'
 
 /** Schema: `enabled` defaults to true when absent (explicit false unloads). */
 const OpenCodeSchema = z.object({ enabled: z.boolean() })

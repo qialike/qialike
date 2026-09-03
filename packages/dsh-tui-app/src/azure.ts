@@ -19,7 +19,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { TuiProviderTemplate } from './llm.ts'
 import azureData from './azure-templates.json' with { type: 'json' }
@@ -31,7 +31,7 @@ export const name = 'tui-azure'
 export const inject = ['settings', 'tuiLlmTemplates']
 
 /** The `dsh-tui-azure:` settings namespace holding the enabled switch. */
-const NS = settingsNamespace('dsh-tui-azure')
+const NS = 'dsh-tui-azure'
 
 /** Schema: `enabled` defaults to true when absent (explicit false unloads). */
 const AzureSchema = z.object({ enabled: z.boolean() })

@@ -34,7 +34,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import { settingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { theme, type ThemePalette } from './theme.ts'
 import type { Store, TuiPanelDefinition } from './index.tsx'
@@ -48,7 +48,7 @@ export const name = 'tui-theme'
 export const inject = ['settings', 'tui', 'tuiStore']
 
 /** The `dsh-tui-theme:` settings namespace (vimrc-analogous persistence). */
-const NS = settingsNamespace('dsh-tui-theme')
+const NS = 'dsh-tui-theme'
 
 /** Schema: `colorscheme` name + optional per-role overrides. */
 const ThemeSchema = z.object({

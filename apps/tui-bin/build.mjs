@@ -43,7 +43,7 @@ const ENTRY = join(ROOT, 'apps/tui-bin/src/bin.ts')
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.1.2-alpha.1'
+const HARNESS_VERSION_MAX = '0.1.2-rc.1'
 
 /** Cross-compile targets (`name` -> `bun build --compile --target` value). */
 const ALL_TARGETS = [

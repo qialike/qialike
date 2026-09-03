@@ -16,7 +16,7 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { logErrorFileOnly } from './log.ts'
@@ -45,7 +45,7 @@ export const name = 'tui-llm'
 export const inject = ['settings', 'credentials', 'llm']
 
 /** The `dsh-tui-llm:` settings namespace holding user provider profiles. */
-export const TUI_LLM_NS = settingsNamespace('dsh-tui-llm')
+export const TUI_LLM_NS = 'dsh-tui-llm'
 
 /** One provider route profile as configured under `dsh-tui-llm.providers`. */
 export interface TuiProviderProfile {

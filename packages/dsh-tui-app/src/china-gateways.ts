@@ -21,7 +21,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { settingsNamespace, type SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import type { TuiProviderTemplate } from './llm.ts'
 import gatewayData from './china-gateway-templates.json' with { type: 'json' }
@@ -33,7 +33,7 @@ export const name = 'tui-china-gateways'
 export const inject = ['settings', 'tuiLlmTemplates']
 
 /** The `dsh-tui-china-gateways:` settings namespace holding the enabled switch. */
-const NS = settingsNamespace('dsh-tui-china-gateways')
+const NS = 'dsh-tui-china-gateways'
 
 /** Schema: `enabled` defaults to true when absent (explicit false unloads). */
 const GatewaysSchema = z.object({ enabled: z.boolean() })
