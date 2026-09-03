@@ -715,6 +715,26 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               sidebar. */}
           {overlay('approval')}
           {overlay('question')}
+          {/* Command palette as a bottom-anchored ABSOLUTE overlay inside the
+              message column: it takes no layout height, so the transcript keeps
+              its full viewport (no compression) and the palette floats just
+              above the composer. Each row is opaque (theme.bg) so the
+              underlying transcript text never shows through between rows. */}
+          {isSlash && filtered.length > 0 && (
+            <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end">
+              <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={0}>
+                {filtered.map((c, i) => {
+                  const line = `/${c.name} — ${c.hint}`
+                  const pad = Math.max(1, Math.max(0, usable) - visualWidth(line) - 1)
+                  return (
+                    <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex} backgroundColor={theme.bg} wrap="truncate">
+                      {line}{' '.repeat(pad)}
+                    </Text>
+                  )
+                })}
+              </Box>
+            </Box>
+          )}
         </Box>
         {showSidebar && (
         <Box borderStyle="round" borderColor={theme.border} width="30%" flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
@@ -728,16 +748,6 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         </Box>
         )}
       </Box>
-
-      {isSlash && filtered.length > 0 && (
-        <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1}>
-          {filtered.map((c, i) => (
-            <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex}>
-              /{c.name} — {c.hint}
-            </Text>
-          ))}
-        </Box>
-      )}
 
       <Box flexShrink={0} borderStyle="round" borderColor={theme.border} paddingX={1} flexDirection="column" justifyContent="space-between"
         height={composerHeight(width, input, COMPOSER_MIN_HEIGHT)}>
