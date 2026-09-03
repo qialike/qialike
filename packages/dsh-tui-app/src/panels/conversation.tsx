@@ -47,6 +47,10 @@ const COMPOSER_MIN_HEIGHT = 5
 // amount, so estItemLines/layout stay in sync.
 const USER_RAIL_COLS = 2
 const ASSISTANT_INDENT_COLS = 3
+// Extra blank rows rendered above and below a USER message (opencode keeps user
+// messages visually separated); the layout/estimate add the same so scroll and
+// clipping stay consistent.
+const USER_SPACER_ROWS = 1
 
 /** Rows scrolled per mouse-wheel tick. */
 const WHEEL_STEP = 3
@@ -148,6 +152,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     const lines = wrapRows(item.text, w)
     return (
       <Box flexDirection="column">
+        <Box height={1} />
         {lines.map((line, i) => {
           const text = `${'┃'.padEnd(USER_RAIL_COLS)}${line}`
           const pad = Math.max(0, usable - visualWidth(text))
@@ -157,6 +162,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
             </Text>
           )
         })}
+        <Box height={1} />
       </Box>
     )
   }
@@ -254,7 +260,7 @@ function composerHeight(width: number, input: string, min: number): number {
 function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
   if (item.kind === 'reasoning') return expandReasoning ? countWrappedLines(item.text, usable) : 1
   if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, Math.max(1, usable - ASSISTANT_INDENT_COLS))
-  if (item.kind === 'user') return countWrappedLines(item.text, Math.max(1, usable - USER_RAIL_COLS))
+  if (item.kind === 'user') return countWrappedLines(item.text, Math.max(1, usable - USER_RAIL_COLS)) + USER_SPACER_ROWS * 2
   return countWrappedLines(item.text, usable)
 }
 
