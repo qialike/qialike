@@ -914,7 +914,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
  *  connect dialog hides the cursor instead (its input is masked dots). */
 export function installFrameSuffix(): void {
   const frameSuffix = (): string => {
-    if (store.panel === 'connect') return '\x1b[?25l'
+    // Park the REAL cursor at the composer caret only while the conversation is
+    // the active panel (the macOS IME candidate window anchors to it). Any
+    // other panel (/sessions, /models, /theme, /help, /export, connect) has its
+    // own surface and draws its own caret; re-showing the hardware cursor there
+    // would park it at the (hidden) composer caret cell — which can land ON a
+    // list row and look like a stray cursor jumping around. Hide it instead.
+    if (store.panel !== 'conversation') return '\x1b[?25l'
     const cell = composerCaretCell()
     return `\x1b[?25h${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
   }

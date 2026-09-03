@@ -107,7 +107,11 @@ function SessionsDialog(): React.JSX.Element {
               const d = disp[k]
               if (d === undefined) continue
               if (d.kind === 'header') {
-                out.push(<Text key={`g-${d.label}`} color={theme.accent} bold>{d.label}</Text>)
+                // Unique key per header: the same day label would otherwise
+                // repeat if the list were unsorted, and duplicate keys make
+                // React reconcile incorrectly (the separate *component* for a
+                // sibling text can end up duplicated — the doubled filter line).
+                out.push(<Text key={`g-${k}-${d.label}`} color={theme.accent} bold>{d.label}</Text>)
                 continue
               }
               const s = rows[d.i]

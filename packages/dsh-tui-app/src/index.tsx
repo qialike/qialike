@@ -453,8 +453,14 @@ export class Store {
         (s.label).toLowerCase().includes(filter)
         || String(s.id).toLowerCase().includes(filter)
         || (s.cwd ?? '').toLowerCase().includes(filter))
-    // Pinned sessions sort to the top (stable: createdAt order within groups).
-    return [...base].sort((a, b) => (isPinned(b.id) ? 1 : 0) - (isPinned(a.id) ? 1 : 0))
+    // Pinned sessions sort to the top; within each group, newest first. The
+    // /sessions day grouping (sessions.tsx dayLabel) requires chronological
+    // order — without it the same day label recurs non-contiguously, producing
+    // duplicate group-header React keys whose reconciliation corrupts the
+    // dialog (a doubled filter line / garbled rows). Sort by createdAt DESC.
+    return [...base].sort((a, b) =>
+      (isPinned(b.id) ? 1 : 0) - (isPinned(a.id) ? 1 : 0)
+      || (b.createdAt ?? 0) - (a.createdAt ?? 0))
   }
   get secret() { return this._secret }
 
