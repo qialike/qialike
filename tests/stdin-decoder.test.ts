@@ -62,6 +62,7 @@ describe('StdinDecoder', () => {
     expect(d.push(esc('1b 4f 46'))).toEqual([{ end: true }]) // SS3 \x1bOF
     expect(d.push(esc('1b 5b 35 7e'))).toEqual([{ pageUp: true }])
     expect(d.push(esc('1b 5b 36 7e'))).toEqual([{ pageDown: true }])
+    expect(d.push(esc('1b 5b 33 7e'))).toEqual([{ delete: true }]) // Delete \x1b[3~
   })
 
   test('alt+enter', () => {

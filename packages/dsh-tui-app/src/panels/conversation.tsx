@@ -554,9 +554,15 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     return
   }
   if (k.ctrl && char === 'c') { resetHistoryBrowse(); store.setInput(''); store.cancelAction(); return }
-  if (k.backspace || k.delete) {
+  if (k.backspace) {
     resetHistoryBrowse()
     store.backspaceAtCursor()
+    if (store.commandFilter.startsWith('')) store.setCommandFilter(store.input)
+    return
+  }
+  if (k.delete) {
+    resetHistoryBrowse()
+    store.deleteForward()
     if (store.commandFilter.startsWith('')) store.setCommandFilter(store.input)
     return
   }

@@ -200,6 +200,7 @@ export class StdinDecoder {
     // PgUp/PgDn come as "\x1b[5~"/"\x1b[6~": params are ['5','~'] etc. with final '~'.
     if (final === 0x7e && p0 === 0x35) { out.push({ pageUp: true }); return }
     if (final === 0x7e && p0 === 0x36) { out.push({ pageDown: true }); return }
+    if (final === 0x7e && p0 === 0x33) { out.push({ delete: true }); return } // Delete: "\x1b[3~"
     // Everything else (cursor-position, color SGR, modified arrows, etc.) is discarded.
   }
 

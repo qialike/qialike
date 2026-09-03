@@ -585,6 +585,16 @@ export class Store {
     this._cursor -= 1
     this.notify()
   }
+  /** Delete the character at the cursor (the Delete key, not Backspace), so it
+   *  removes the char AFTER the caret. Deletes a full code point to never split
+   *  a surrogate pair (emoji). */
+  deleteForward(): void {
+    if (this._cursor >= this._input.length) return
+    const cp = this._input.codePointAt(this._cursor)
+    const len = cp !== undefined && cp > 0xffff ? 2 : 1
+    this._input = this._input.slice(0, this._cursor) + this._input.slice(this._cursor + len)
+    this.notify()
+  }
   deleteToLineStart(): void {
     const start = this._lineStart(this._cursor)
     if (start === 0) {
