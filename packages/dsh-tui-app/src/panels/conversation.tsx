@@ -974,12 +974,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       </Box>
 
       <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} height={STATUS_BAR_HEIGHT}>
-        <BusyIndicator animate={store.running} paused={store.paused} />
-        {/* Transient status-bar message (e.g. "copied: …"); NOT a transcript
-            row, so it cannot re-layout the transcript or slide the highlight. */}
-        {store.statusFlash && (
-          <Text color={theme.success} wrap="truncate"> {store.statusFlash.text}</Text>
-        )}
+        {/* The busy indicator (Working/Paused/Idle + icon) is REPLACED on the
+            left while a transient status message (e.g. "copied: …") flashes —
+            so the confirmation takes the Idle slot for ~2.5s, then Idle returns.
+            NOT a transcript row, so it cannot re-layout the transcript or slide
+            the selection highlight. */}
+        {store.statusFlash
+          ? <Text color={theme.success} wrap="truncate">{store.statusFlash.text}</Text>
+          : <BusyIndicator animate={store.running} paused={store.paused} />}
         {/* The steps/turns · tokens stats are pinned to the RIGHT edge of the
             status bar regardless of the busy indicator's width: an explicit
             flex spacer pushes the stats group flush right, and the group
