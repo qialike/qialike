@@ -83,7 +83,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   const questionLines = questionAll.slice(0, questionCapLines)
   const questionTruncated = questionAll.length > questionCapLines
   return (
-    <Box flexShrink={0} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={1} paddingY={1}>
+    <Box flexShrink={0} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={2} paddingY={1}>
       <Text color={theme.accent} bold wrap="truncate">{title}</Text>
       {questionLines.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
