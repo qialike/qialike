@@ -626,7 +626,13 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     } else if (kind === 'drag') {
       const sel = store.selection
       if (sel !== null) {
-        const text = selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
+        // Prefer the text extracted from the screen cells the frame controller
+        // just highlighted — it matches the visible selection exactly. Fall back
+        // to the flat-model selectionText (which drifts across item margins and
+        // can return '' for tall multi-item selections).
+        const fc = (globalThis as unknown as { __dshFrameController?: { copiedText?: string } }).__dshFrameController
+        const framed = fc && fc.copiedText ? fc.copiedText : ''
+        const text = framed || selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
         const trimmed = text.trim()
         if (trimmed !== '') {
           writeClipboard(trimmed)

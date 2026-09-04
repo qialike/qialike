@@ -638,24 +638,30 @@ export function patchInkFrameController(nm) {
     // selected cell gets a NEW styles array (never mutate in place: a shared
     // StyledChar could render elsewhere on screen, and in-place mutation would
     // leak the highlight onto that identical text).
-    const __dshSel = (typeof globalThis !== 'undefined' && globalThis.__dshFrameController && globalThis.__dshFrameController.selection) ? globalThis.__dshFrameController.selection : null;
-    const __dshBg = (typeof globalThis !== 'undefined' && globalThis.__dshFrameController && globalThis.__dshFrameController.bg) ? globalThis.__dshFrameController.bg : null;
-    if (__dshSel && __dshBg) {
+    const __fc = (typeof globalThis !== 'undefined' && globalThis.__dshFrameController) ? globalThis.__dshFrameController : null;
+    const __dshSel = __fc ? __fc.selection : null;
+    if (__fc) __fc.copiedText = '';
+    if (__dshSel) {
         // Inverse (SGR 7/27) rather than a background override: a cell may already
         // carry a background (code/panel/diff), and a later-applied bg would be
         // shadowed by it. Inverse is orthogonal to fg/bg and never strips styles.
         const __code = '\\x1b[7m';
         const __end = '\\x1b[27m';
+        let __copied = '';
         for (let y = __dshSel.y1; y <= __dshSel.y2; y++) {
             const row = output[y];
             if (!row) continue;
+            let __line = '';
             for (let x = __dshSel.x1; x <= __dshSel.x2; x++) {
                 const cell = row[x];
                 if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null) continue;
                 if (cell.styles.some((s) => s.code === __code)) continue;
                 cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }];
+                __line += cell.value;
             }
+            __copied += __line.replace(/\\s+$/, '') + '\\n';
         }
+        __fc.copiedText = __copied.replace(/\\n+$/, '');
     }
     `
   for (const dir of dirs) {
