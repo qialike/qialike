@@ -13,8 +13,8 @@
  * @module @yourname/dsh-tui/bin
  */
 
-import { dirname, join } from 'node:path'
-import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve, sep } from 'node:path'
+import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
 import { Context, FiberState } from '@deepseek-ai/cordis'
@@ -23,7 +23,7 @@ import Include from '@deepseek-ai/cordis-plugin-include'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Group from '@deepseek-ai/cordis-plugin-group'
 import { assertEntriesActivated, installFailLoud, loadLayeredEnv, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
-import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { DSH_HOME_DIR_NAME, dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH } from '../generated/config-embed.js'
 import { PLUGIN_BUILTINS } from '../generated/plugins.js'
@@ -138,50 +138,117 @@ function readVersion(): string {
   return (pkg as { version?: string }).version ?? '0.0.0'
 }
 
+/** Absolute path of the executable running this process, or `undefined` when
+ *  unavailable. The SEA bundle is a Bun single-file binary, so `process.argv[1]`
+ *  is a `$bunfs` virtual path that never matches a real file; `process.execPath`
+ *  is the real executable, so the running-binary guard keys on it. */
+function argvScript(): string | undefined {
+  try {
+    const p = process.execPath
+    return typeof p === 'string' && p !== '' ? resolve(p) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether it is safe to `rm -rf` the given directory. The harness home is
+ *  named `.dsh`; refusing anything else (a bare ancestor, the OS home, `/`,
+ *  or an arbitrary `$DSH_HOME`) keeps a destructive clear from ever touching
+ *  an un-scoped path. */
+function canClearHome(dir: string): boolean {
+  if (!dir) return false
+  const home = homedir()
+  if (dir === '/' || dir === home) return false
+  return basename(dir) === DSH_HOME_DIR_NAME
+}
+
 /**
- * Uninstall dsh-tui: remove the dsh-tui-owned user files (`~/.dsh/dsh-tui.log`,
- * `~/.dsh/dsh-tui.json`), drop the PATH export line the repo-root `install`
- * script appended to the shell profiles, and point at the production binary
- * copy at `~/.dsh/bin/dsh-tui` for manual removal — that file is the running
- * binary, so it cannot delete itself. The dev-install symlink at
- * `~/.local/bin` is managed by `scripts/uninstall.sh` (`pnpm uninstall:local`),
- * not here. Sessions under `~/.dsh/sessions` are shared with dsh and are
- * intentionally kept; the repo checkout is never touched.
+ * Uninstall dsh-tui completely: clear the entire harness home
+ * (`$DSH_HOME`, default `~/.dsh`) — every dsh-tui-owned file (config, logs,
+ * title/activity/pinned caches, custom themes) **and** the harness/dsh shared
+ * data under the same root (settings.yaml, sessions, profiles, storages,
+ * attachments, exports). All of it is optional user state, never required for
+ * startup: each is regenerated on the next run (settings load as defaults,
+ * a fresh anonymous id is minted, storage/attachments dirs are recreated). The
+ * only file kept is the currently-executing binary, which cannot be unlinked
+ * on every platform; it is pointed at for removal after this process exits. The
+ * dev-install symlink at `~/.local/bin` and the PATH export line the repo-root
+ * `install` script appended to the shell profiles are removed too. The repo
+ * checkout is never touched.
  * @returns the process exit code: 0 on success or when nothing was installed,
- * 1 when a removal failed.
+ * 1 when a removal failed or the home was refused as unsafe.
  */
 function uninstallSelf(): number {
   let removed = 0
   let failed = false
-  // The production binary copy (the repo-root `install` script copies
-  // dist/dsh-tui here). It IS the running binary, so the command only points
-  // at it and lets the user finish the removal by hand.
-  const copyPath = join(homedir(), '.dsh', 'bin', NAME)
-  let copyPresent = false
-  try {
-    const stat = lstatSync(copyPath)
-    copyPresent = stat.isFile() || stat.isSymbolicLink()
-  } catch {
-    // Nothing installed at the production path.
-  }
-  if (copyPresent) {
-    process.stdout.write(`${NAME}: the running binary at ${copyPath} cannot delete itself; `
-      + `remove it manually, e.g. \`rm ${copyPath}\`\n`)
-  }
-  // dsh-tui-owned user files (written by log.ts / config.ts at the same
-  // dshHomePath anchors). Both are regenerated on the next run; sessions under
-  // ~/.dsh/sessions are shared with dsh and are intentionally kept.
-  for (const file of [dshHomePath('dsh-tui.log'), dshHomePath('dsh-tui.json')]) {
+  let clearedHome = false
+  let refusedHome = false
+  const running = argvScript()
+
+  // Clear the entire harness home. On Unix a full recursive remove succeeds
+  // even when it deletes the currently-executing binary (the unlinked inode
+  // stays alive for the running process), so try that first. Only a locked
+  // entry — on some platforms the running binary — blocks it; then remove every
+  // other entry and advise on the binary.
+  const home = dshHomePath()
+  if (!canClearHome(home)) {
+    // Never rm -rf a path we cannot prove is the dsh data home.
+    refusedHome = true
+    failed = true
+    process.stderr.write(`${NAME}: refusing to clear harness home "${home}" — not a recognized dsh data directory. Remove it manually.\n`)
+  } else {
+    let entries: string[] | undefined
     try {
-      rmSync(file)
-      process.stdout.write(`${NAME}: removed ${file}\n`)
-      removed += 1
-    } catch (error) {
-      if ((error as { code?: string }).code === 'ENOENT') continue // already gone
-      failed = true
-      process.stderr.write(`${NAME}: failed to remove ${file}: ${error instanceof Error ? error.message : String(error)}\n`)
+      entries = readdirSync(home)
+    } catch {
+      entries = undefined // home absent -> nothing installed
+    }
+    if (entries !== undefined) {
+      clearedHome = true
+      let fullRemove: string | undefined
+      try {
+        rmSync(home, { recursive: true, force: true })
+        fullRemove = home
+      } catch {
+        // Fall through to the per-entry skip below.
+      }
+      if (fullRemove !== undefined) {
+        process.stdout.write(`${NAME}: removed ${fullRemove}\n`)
+        removed += 1
+      } else {
+        for (const entry of entries) {
+          const p = join(home, entry)
+          if (running !== undefined && (p === running || running.startsWith(p + sep))) {
+            process.stdout.write(`${NAME}: keeping running binary at ${p}; remove it after this process exits.\n`)
+            continue
+          }
+          try {
+            rmSync(p, { recursive: true, force: true })
+            process.stdout.write(`${NAME}: removed ${p}\n`)
+            removed += 1
+          } catch (error) {
+            failed = true
+            process.stderr.write(`${NAME}: failed to remove ${p}: ${error instanceof Error ? error.message : String(error)}\n`)
+          }
+        }
+      }
     }
   }
+
+  // The dev-install symlink at ~/.local/bin (created by scripts/install). It is
+  // not the production copy, so it can be unlinked directly.
+  const localLink = join(homedir(), '.local', 'bin', NAME)
+  try {
+    const stat = lstatSync(localLink)
+    if (stat.isFile() || stat.isSymbolicLink()) {
+      rmSync(localLink, { force: true })
+      process.stdout.write(`${NAME}: removed ${localLink}\n`)
+      removed += 1
+    }
+  } catch {
+    // No dev symlink installed.
+  }
+
   // The PATH export line the repo-root `install` script appends to the shell
   // profiles. Drop it together with its `# dsh-tui` marker comment and the
   // blank line before it, so uninstall restores the profiles it touched.
@@ -214,10 +281,12 @@ function uninstallSelf(): number {
       process.stderr.write(`${NAME}: failed to remove PATH entry from ${rc}: ${error instanceof Error ? error.message : String(error)}\n`)
     }
   }
-  if (!copyPresent && removed === 0 && !failed) {
-    process.stdout.write(`${NAME}: nothing to remove (no dsh-tui user files or PATH entry found)\n`)
+  if (refusedHome) {
+    process.stdout.write(`${NAME}: harness home "${home}" left in place (unsafe path refused). Remove it manually.\n`)
+  } else if (removed === 0 && !failed) {
+    process.stdout.write(`${NAME}: nothing to remove (harness home and PATH entry not found)\n`)
   } else {
-    process.stdout.write(`${NAME}: uninstalled. Reinstall with \`bash scripts/install\` (repo root).\n`)
+    process.stdout.write(`${NAME}: uninstalled${clearedHome ? ' (harness home cleared)' : ''}. Reinstall with \`bash scripts/install\` (repo root).\n`)
   }
   return failed ? 1 : 0
 }
