@@ -9,18 +9,26 @@
  */
 
 import { Box, Text } from 'ink'
+import type { DOMElement } from 'ink'
 import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TuiService, ModelsOption, ProviderModelsEntry, Store } from '../index.tsx'
 import { TUI_MODELS_SERVICE, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from '../models.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
+import { useListGeometry, dialogListIndexFromRow } from '../list-geometry.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-models'
 
 /** The store service (see panels/conversation.tsx for the why-behind-the-seam). */
 let store!: Store
+
+// The ACTIVE list row's scroll offset (visible-start index) and rendered row
+// count for the current dialog mode, captured during render so the hover
+// handler (`connectKey`) can map a hovered screen row back to a flat index.
+let modelsScrollStart = 0
+let modelsVisibleCount = 1
 
 /** The `tui` service (panel registration) and the models capability service. */
 export const inject = ['tui', 'tuiModels']
@@ -49,6 +57,43 @@ function buildProviderEntries(providers: readonly ModelsProviderOption[]): Provi
   }))
 }
 
+/** The windowed-count + scroll-start of the default (first-level) provider list. */
+function providerGeomCount(): number {
+  const list = store.providerFiltered
+  const filtered = list.length < store.providers.length
+  const listRows = Math.max(1, store.rows - 15)
+  const start = Math.max(0, Math.min(
+    store.providerIndex - Math.floor(listRows / 2),
+    Math.max(0, list.length - listRows),
+  ))
+  modelsScrollStart = start
+  let count = Math.min(listRows, list.length)
+  if (!filtered) count = count + 2
+  return Math.max(1, count)
+}
+/** The windowed-count + scroll-start of the Add-provider picker list. */
+function providerListGeomCount(): number {
+  const names = store.providerListFiltered
+  const listRows = Math.max(1, store.rows - 15)
+  const start = Math.max(0, Math.min(
+    store.providerListIndex - Math.floor(listRows / 2),
+    Math.max(0, names.length - listRows),
+  ))
+  modelsScrollStart = start
+  return Math.max(1, Math.min(listRows, names.length))
+}
+/** The windowed-count + scroll-start of the open provider's model list. */
+function modelListGeomCount(): number {
+  const list = store.modelFiltered
+  const listRows = Math.max(1, store.rows - 15)
+  const start = Math.max(0, Math.min(
+    store.modelIndex - Math.floor(listRows / 2),
+    Math.max(0, list.length - listRows),
+  ))
+  modelsScrollStart = start
+  return Math.max(1, Math.min(listRows, list.length))
+}
+
 /**
  * The `/models` dialog (opencode-style fullscreen modal): provider/model
  * picker, key status, "Add provider" flows. Reads all state from the store.
@@ -59,6 +104,28 @@ function ModelsDialog(): React.JSX.Element {
     const timer = setInterval(() => setCursorOn((on) => !on), 530)
     return () => clearInterval(timer)
   }, [])
+  const listRef = React.useRef<DOMElement>(null)
+  // One shared ref is attached to whichever list Box is active; only one mode
+  // renders at a time, so register the active list's geometry (top row + count).
+  const geomCount = store.providerList
+    ? providerListGeomCount()
+    : store.effortOpen
+      ? Math.max(1, store.effortChoices.length)
+      : store.modelScope !== ''
+        ? modelListGeomCount()
+        : providerGeomCount()
+  useListGeometry(listRef, geomCount, 1, [
+    store.providerList,
+    store.effortOpen,
+    store.modelScope,
+    store.providerListIndex,
+    store.modelIndex,
+    store.effortIndex,
+    store.providerIndex,
+    store.providerListFilter,
+    store.modelFilter,
+    store.providerFilter,
+  ])
   const block = <Text inverse={cursorOn}> </Text>
   const masked = '•'.repeat(store.secret.length)
   return (
@@ -85,7 +152,7 @@ function ModelsDialog(): React.JSX.Element {
                 {block}
               </Text>
             </Box>
-            <Box flexDirection="column" gap={0}>
+            <Box flexDirection="column" gap={0} ref={listRef}>
               {(() => {
                 const names = store.providerListFiltered
                 // rows-15: the bordered filter box plus the two title lines and
@@ -147,7 +214,7 @@ function ModelsDialog(): React.JSX.Element {
           <>
             <Text color={theme.accent} bold>Effort</Text>
             <Text dimColor>{store.effortLabel} · reasoning effort</Text>
-            <Box flexDirection="column" gap={0} marginTop={1}>
+            <Box flexDirection="column" gap={0} marginTop={1} ref={listRef}>
               {store.effortChoices.map((effort, i) => (
                 <Text key={effort.id} wrap="truncate"
                   color={i === store.effortIndex ? theme.accent : undefined}
@@ -175,7 +242,7 @@ function ModelsDialog(): React.JSX.Element {
                 {block}
               </Text>
             </Box>
-            <Box flexDirection="column" gap={0}>
+            <Box flexDirection="column" gap={0} ref={listRef}>
               {(() => {
                 const list = store.modelFiltered
                 // rows-15: the bordered filter box (marginY adds 2 rows) plus
@@ -213,7 +280,7 @@ function ModelsDialog(): React.JSX.Element {
                 {block}
               </Text>
             </Box>
-            <Box flexDirection="column" gap={0}>
+            <Box flexDirection="column" gap={0} ref={listRef}>
               {(() => {
                 const list = store.providerFiltered
                 const filtered = list.length < store.providers.length
@@ -270,6 +337,22 @@ function connectKey(k: RawKey): boolean {
   if (k.mousePress) return true
   if (k.mouseRelease) {
     if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return connectKey({ return: true })
+    return true
+  }
+  // Hover (no-button move) highlights the list entry under the cursor in the
+  // active /models list (first-level providers, Add-provider picker, the open
+  // provider's model list, or the Effort picker). Only one list renders per
+  // mode, and its geometry (top row/count) was registered during render.
+  if (k.mouseMove) {
+    if (store.keyDialog || store.providerForm) return true
+    const vi = dialogListIndexFromRow(k.mouseMove.row)
+    if (vi >= 0) {
+      const idx = modelsScrollStart + vi
+      if (store.providerList) store.moveProviderListIndex(idx)
+      else if (store.effortOpen) store.bumpEffortIndex(idx - store.effortIndex)
+      else if (store.modelScope !== '') store.moveModelIndex(idx)
+      else store.moveProviderIndex(idx)
+    }
     return true
   }
   if (store.keyDialog) {
