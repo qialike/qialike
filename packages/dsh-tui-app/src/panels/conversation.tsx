@@ -839,8 +839,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     for (let r = effectiveScroll; r < Math.min(effectiveScroll + viewportLines, tRows.length); r++) {
       const terminalRow = topRow + (r - effectiveScroll)
       const line = tRows[r]!.text
+      // Empty rows (item separators / markdown blank lines) must be a real
+      // row: a bare '' Text collapses to 0 height in Ink, so every blank line
+      // would vanish when the selection view takes over. Paint a braille blank
+      // with theme.bg — the same technique the transcript spacer rows use —
+      // which keeps the blank line visible and the row grid stable (so the
+      // selection coordinates still line up).
+      const rowText = line === '' ? '\u2800' : line
       if (terminalRow < selRowMin || terminalRow > selRowMax) {
-        nodes.push(<Text key={r} dimColor wrap="wrap">{line}</Text>)
+        nodes.push(<Text key={r} dimColor backgroundColor={line === '' ? theme.bg : undefined} wrap="wrap">{rowText}</Text>)
         continue
       }
       let cStart = 0
@@ -849,10 +856,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       if (terminalRow === selRowMax) cEnd = Math.min(colToChar(line, bottomCell.col - 2), line.length)
       if (terminalRow === selRowMin && terminalRow === selRowMax && cStart > cEnd) [cStart, cEnd] = [cEnd, cStart]
       nodes.push(
-        <Text key={r} dimColor wrap="wrap">
-          {line.slice(0, cStart)}
-          <Text inverse>{line.slice(cStart, cEnd)}</Text>
-          {line.slice(cEnd)}
+        <Text key={r} dimColor backgroundColor={line === '' ? theme.bg : undefined} wrap="wrap">
+          {rowText.slice(0, cStart)}
+          <Text inverse>{rowText.slice(cStart, cEnd)}</Text>
+          {rowText.slice(cEnd)}
         </Text>,
       )
     }
