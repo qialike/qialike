@@ -664,8 +664,12 @@ export function patchInkFrameController(nm) {
             const rEnd = (y) => { const row = output[y]; if (!row) return C; let e = C; for (let x = C; x < row.length - 1; x++) { const c = row[x]; if (c && c.value !== '' && c.value != null && !/^\\s*$/.test(c.value)) e = x; } return e; };
             for (let y = sR; y <= eR; y++) {
                 const row = output[y]; if (!row) { __txt += '\\n'; continue; }
-                const from = (y === sR) ? Math.min(sC, row.length - 1) : C;
-                const to = (y === eR) ? Math.min(eC, row.length - 1) : rEnd(y);
+                // Clamp the per-row cell range to the CONTENT column [C .. content end]
+                // so neither the highlight nor the copy reaches past the text into the
+                // right-side padding/margin (the trailing blank the user wants to skip).
+                const end = rEnd(y);
+                const from = (y === sR) ? Math.max(C, Math.min(sC, end)) : C;
+                const to = (y === eR) ? Math.min(eC, end) : end;
                 const line = { v: '' };
                 for (let x = from; x <= to; x++) { __invAppend(row[x], line); }
                 __txt += line.v.replace(/\\s+$/, '') + '\\n';
