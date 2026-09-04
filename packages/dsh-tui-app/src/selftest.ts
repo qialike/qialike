@@ -200,7 +200,7 @@ export function apply(ctx: Context): void {
 
   tui.commands.register({
     name: 'selftest',
-    hint: 'run built-in self checks (+ bun test when a checkout is nearby)',
+    hint: 'run built-in self checks',
     run: (arg) => {
       const text = (arg ?? '').trim().toLowerCase()
       const checks = syncChecks({
