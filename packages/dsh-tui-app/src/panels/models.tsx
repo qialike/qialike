@@ -285,6 +285,8 @@ function connectKey(k: RawKey): boolean {
     if (k.end) { store.moveProviderListIndex(store.providerListFiltered.length - 1); return true }
     if (k.upArrow) { store.bumpProviderListIndex(-1); return true }
     if (k.downArrow) { store.bumpProviderListIndex(1); return true }
+    if (k.wheelUp) { store.bumpProviderListIndex(-1); return true }
+    if (k.wheelDown) { store.bumpProviderListIndex(1); return true }
     if (k.return) {
       const picked = store.selectProviderList()
       if (picked !== undefined) {
@@ -305,8 +307,8 @@ function connectKey(k: RawKey): boolean {
     return true
   }
   if (store.providerForm) {
-    if (store.providerField === 0 && (k.upArrow || k.downArrow)) {
-      store.bumpProviderTemplate(k.upArrow ? -1 : 1)
+    if (store.providerField === 0 && (k.upArrow || k.downArrow || k.wheelUp || k.wheelDown)) {
+      store.bumpProviderTemplate(k.upArrow || k.wheelUp ? -1 : 1)
       return true
     }
     if (k.return) {
@@ -336,6 +338,8 @@ function connectKey(k: RawKey): boolean {
     const choices = store.effortChoices
     if (k.upArrow) { store.bumpEffortIndex(-1); return true }
     if (k.downArrow) { store.bumpEffortIndex(1); return true }
+    if (k.wheelUp) { store.bumpEffortIndex(-1); return true }
+    if (k.wheelDown) { store.bumpEffortIndex(1); return true }
     if (k.return) {
       const option = store.modelFiltered[store.modelIndex]
       const effort = choices[store.effortIndex]?.id
@@ -366,6 +370,8 @@ function connectKey(k: RawKey): boolean {
     if (k.end) { store.moveModelIndex(store.modelFiltered.length - 1); return true }
     if (k.upArrow) { store.bumpModelIndex(-1); return true }
     if (k.downArrow) { store.bumpModelIndex(1); return true }
+    if (k.wheelUp) { store.bumpModelIndex(-1); return true }
+    if (k.wheelDown) { store.bumpModelIndex(1); return true }
     if (k.return) {
       // Read the selection BEFORE closing: cancelConnect clears the filter,
       // which would otherwise widen `modelFiltered` back to the full list.
@@ -404,6 +410,8 @@ function connectKey(k: RawKey): boolean {
   if (k.end) { store.moveProviderIndex(store.providerFiltered.length - 1); return true }
   if (k.upArrow) { store.bumpProviderIndex(-1); return true }
   if (k.downArrow) { store.bumpProviderIndex(1); return true }
+  if (k.wheelUp) { store.bumpProviderIndex(-1); return true }
+  if (k.wheelDown) { store.bumpProviderIndex(1); return true }
   if (k.return) {
     const filtered = store.providerFiltered.length < store.providers.length
     if (!filtered && store.providerIndex === store.providers.length) {

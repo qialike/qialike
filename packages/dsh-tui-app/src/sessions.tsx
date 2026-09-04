@@ -190,6 +190,8 @@ function sessionsKey(k: RawKey, reload: () => void): void {
   if (k.end) { store.cancelSessionsDelete(); clearNotice(); store.moveSessionsDialogIndex(store.sessionsFiltered.length); return }
   if (k.upArrow) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(-1); return }
   if (k.downArrow) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(1); return }
+  if (k.wheelUp) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(-1); return }
+  if (k.wheelDown) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(1); return }
   if (k.return) {
     const rows = store.sessionsFiltered
     const index = store.sessionsDialogIndex

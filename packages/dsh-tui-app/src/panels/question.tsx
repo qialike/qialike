@@ -149,6 +149,8 @@ function questionKey(k: RawKey): boolean {
   }
   if (k.upArrow) store.bumpQuestionIndex(-1)
   else if (k.downArrow) store.bumpQuestionIndex(1)
+  else if (k.wheelUp) store.bumpQuestionIndex(-1)
+  else if (k.wheelDown) store.bumpQuestionIndex(1)
   else if (k.pageUp) store.scrollQuestion(-5)
   else if (k.pageDown) store.scrollQuestion(5)
   else if (k.return) {

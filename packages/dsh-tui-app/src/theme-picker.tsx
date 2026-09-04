@@ -111,9 +111,10 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
     return true
   }
   const names = filterSchemes(api.schemes(), state.filter)
-  if (k.upArrow || k.downArrow) {
+  if (k.upArrow || k.downArrow || k.wheelUp || k.wheelDown) {
     if (names.length > 0) {
-      state.index = clampIndex(state.index + (k.downArrow ? 1 : -1), names.length)
+      const dir = (k.downArrow || k.wheelDown) ? 1 : -1
+      state.index = clampIndex(state.index + dir, names.length)
       preview()
     }
     return true
