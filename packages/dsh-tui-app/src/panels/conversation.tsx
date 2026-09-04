@@ -562,23 +562,31 @@ function writeClipboard(text: string): void {
 
 /** Copy the currently active mouse selection (the one the frame controller is
  *  highlighting) to the system clipboard. Shared by the mouse-release handler and
- *  the Ctrl+Y keyboard fallback; prefers the frame-buffer `copiedText` (matches
- *  the highlight exactly, no drift across item margins) and falls back to the
- *  flat-model `selectionText`. No-op unless the selection spans a real drag. */
+ *  the Ctrl+Y keyboard fallback.
+ *
+ *  The frame-buffer `copiedText` is the reliable source (it reproduces the exact
+ *  highlighted cells, no drift across item margins); the flat-model
+ *  `selectionText` is only a last-resort fallback (its screen→row mapping drifts
+ *  across margins and can resolve to '' or the wrong line). No-op unless the
+ *  selection spans a real drag. */
 function copyCurrentSelection(): void {
   const sel = store.selection
   if (sel === null || (Math.abs(sel.aRow - sel.cRow) + Math.abs(sel.aCol - sel.cCol)) <= 2) return
   const fc = (globalThis as unknown as { __dshFrameController?: { copiedText?: string } }).__dshFrameController
-  const framed = fc && fc.copiedText ? fc.copiedText : ''
-  const text = framed || selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
+  const rect = fc && fc.copiedText ? fc.copiedText : ''
+  const text = rect || selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
   const trimmed = text.trim()
   if (trimmed !== '') {
     writeClipboard(trimmed)
+    const long = trimmed.length > 40
+    const preview = long ? trimmed.slice(0, 40) + '…' : trimmed
     // Show the feedback in the bottom STATUS BAR (transient, not a transcript
     // item): a `status` transcript row would re-layout / follow-tail auto-scroll
     // the transcript and slide the screen-coordinate highlight onto the next
-    // block below (the user saw this as the highlight jumping to下文).
-    store.flashStatus(`copied: ${trimmed.slice(0, 40)}${trimmed.length > 40 ? '…' : ''}`)
+    // block below (the user saw this as the highlight jumping to下文). For a
+    // large selection the status shows the char count, so the FULL copy (which
+    // goes to the clipboard, never truncated) can be trusted.
+    store.flashStatus(long ? `Copied: ${preview} (${trimmed.length} chars)` : `Copied: ${preview}`)
   }
 }
 
