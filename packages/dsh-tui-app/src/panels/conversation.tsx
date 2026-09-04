@@ -985,15 +985,23 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               underlying transcript text never shows through between rows. */}
           {isSlash && filtered.length > 0 && (
             <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end">
-              <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={2}>
+              <Box borderStyle="round" borderColor={theme.border} flexDirection="column">
                 {filtered.map((c, i) => {
                   const line = `/${c.name} — ${c.hint}`
-                  // 2-col pad each side is the Box paddingX; the rows fill the
-                  // remaining width (usable minus the two 2-char margins).
-                  const pad = Math.max(1, Math.max(0, usable - 4) - visualWidth(line) - 1)
+                  // Ink Box has NO background, so a Box paddingX would leave the
+                  // transcript visible through the 2-char left/right margin. The
+                  // whole row is instead ONE bg-colored Text that paints its own
+                  // opaque 2-char margin on each side and fills the rest — the
+                  // popup completely hides what is behind it. The row spans exactly
+                  // the box's content width (usable minus the round border's 2
+                  // cols), so it does NOT overflow and never truncates to "...".
+                  const contentW = Math.max(20, usable - 2)
+                  const lead = '  '
+                  const trail = '  '
+                  const fill = Math.max(1, contentW - visualWidth(line) - visualWidth(lead) - visualWidth(trail))
                   return (
                     <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex} backgroundColor={theme.bg} wrap="truncate">
-                      {line}{' '.repeat(pad)}
+                      {lead}{line}{' '.repeat(fill)}{trail}
                     </Text>
                   )
                 })}
