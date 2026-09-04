@@ -647,7 +647,14 @@ export function patchInkFrameController(nm) {
         // shadowed by it. Inverse is orthogonal to fg/bg and never strips styles.
         const __code = '\\x1b[7m';
         const __end = '\\x1b[27m';
-        const __invAppend = (cell, line) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; line.v += cell.value; };
+        // Markdown/terminal DECORATION characters (box-drawing + the user ┃ rail)
+        // must not enter the copy or the highlight: a code block / table / blockquote
+        // borders (│ ╭ ╮ ╰ ╯ ─ …) and the user rail ┃ are chrome, not the text the
+        // user wants (opencode excludes these via selectable metadata; we use a
+        // box-drawing-range heuristic). Skips them so e.g. copying a code block yields
+        // the code, not its border box.
+        const __deco = /^[\\u2500-\\u257F]$/;
+        const __invAppend = (cell, line) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code) || __deco.test(cell.value)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; line.v += cell.value; };
         // LINE/FLOW selection (opencode-style): walk from the anchor cell to the
         // focus cell following the text flow. Highlighting + copying both use the
         // SAME flow, so a drag from the start of a line into the middle of the next
@@ -655,13 +662,13 @@ export function patchInkFrameController(nm) {
         // column-aligned box. Falls back to a rectangle when endpoints are absent.
         const __a = __fc.anchor, __f = __fc.focus;
         let __txt = '';
-        const __rect = () => { const inv = (cell) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; }; let t = ''; for (let y = __dshSel.y1; y <= __dshSel.y2; y++) { const row = output[y]; if (!row) continue; let l = ''; for (let x = __dshSel.x1; x <= __dshSel.x2; x++) { const cell = row[x]; inv(cell); if (cell && cell.value !== '') l += cell.value; } t += l.replace(/\\s+$/, '') + '\\n'; } return t.replace(/\\n+$/, ''); };
+        const __rect = () => { const inv = (cell) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; }; let t = ''; for (let y = __dshSel.y1; y <= __dshSel.y2; y++) { const row = output[y]; if (!row) continue; let l = ''; for (let x = __dshSel.x1; x <= __dshSel.x2; x++) { const cell = row[x]; if (!cell || __deco.test(cell.value)) continue; inv(cell); l += cell.value; } t += l.replace(/\\s+$/, '') + '\\n'; } return t.replace(/\\n+$/, ''); };
         if (__a && __f && typeof __a.row === 'number' && typeof __f.row === 'number') {
             const ar = __a.row - 1, ac = __a.col - 1, fr = __f.row - 1, fc2 = __f.col - 1;
             let sR = ar, sC = ac, eR = fr, eC = fc2;
             if (ar > fr || (ar === fr && ac > fc2)) { sR = fr; sC = fc2; eR = ar; eC = ac; }
             const C = 4; // grid content column (paddingX 1 + MESSAGE_LEFT_COLS 3)
-            const rEnd = (y) => { const row = output[y]; if (!row) return C; let e = C; for (let x = C; x < row.length - 1; x++) { const c = row[x]; if (c && c.value !== '' && c.value != null && !/^\\s*$/.test(c.value)) e = x; } return e; };
+            const rEnd = (y) => { const row = output[y]; if (!row) return C; let e = C; for (let x = C; x < row.length - 1; x++) { const c = row[x]; if (c && c.value !== '' && c.value != null && !/^\\s*$/.test(c.value) && !__deco.test(c.value)) e = x; } return e; };
             for (let y = sR; y <= eR; y++) {
                 const row = output[y]; if (!row) { __txt += '\\n'; continue; }
                 // Clamp the per-row cell range to the CONTENT column [C .. content end]
