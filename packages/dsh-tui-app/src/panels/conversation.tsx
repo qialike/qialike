@@ -9,7 +9,7 @@
 
 import { Box, Text, useStdin, measureElement, type DOMElement } from 'ink'
 import React, { useMemo, useState } from 'react'
-import { spawn } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
@@ -525,27 +525,25 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
 }
 
 function writeClipboard(text: string): void {
-  // Platform clipboard command. macOS Terminal.app has no OSC 52, so `pbcopy`
-  // is the only reliable path — use the ABSOLUTE path (a Node SEA binary can
-  // resolve `pbcopy` via PATH, but a restricted/parse PATH would otherwise make
-  // the spawn fail silently and leave the clipboard unchanged, which reads as
-  // "copying did nothing"). OSC 52 is the fallback for terminals that support it.
-  const isMac = process.platform === 'darwin'
-  const cmd = isMac ? '/usr/bin/pbcopy'
-    : process.platform === 'win32' ? 'clip'
-    : 'wl-copy' // Wayland; X11 uses OSC 52 (below) as the fallback
-  const child = spawn(cmd, [], { stdio: ['pipe', 'ignore', 'ignore'] })
-  child.on('error', () => { /* spawn failed (no binary); fall through to OSC 52 */ })
-  child.on('close', (code) => {
-    if (code !== 0) {
-      // The clipboard command failed — send OSC 52 as the terminal fallback.
-      process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
+  // macOS Terminal.app has no OSC 52, so `pbcopy` is the only reliable path; use
+  // the ABSOLUTE path and BLOCK until it has consumed stdin (spawnSync), so a
+  // Node single-executable binary is guaranteed to deliver the bytes — an async
+  // `spawn` + `stdin.end` race under a busy event loop can leave the child
+  // reading EOF before the text is flushed, silently setting nothing.
+  if (process.platform === 'darwin') {
+    for (const cmd of ['/usr/bin/pbcopy', 'pbcopy']) {
+      const res = spawnSync(cmd, [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
+      if (!res.error && res.status === 0) return
     }
-  })
-  child.stdin.end(text)
-  // On macOS the OSC 52 write above is skipped (Terminal.app ignores it); the
-  // pbcopy child is what actually sets the system clipboard.
-  if (!isMac) process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
+    process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
+    return
+  }
+  const cmd = process.platform === 'win32' ? 'clip' : 'wl-copy'
+  const res = spawnSync(cmd, [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
+  if (res.error || res.status !== 0) {
+    // No clipboard command; send OSC 52 (iTerm2 / Kitty / Alacritty / Windows Terminal).
+    process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
+  }
 }
 
 /** Copy the currently active mouse selection (the one the frame controller is
