@@ -538,12 +538,26 @@ function writeClipboard(text: string): void {
     process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
     return
   }
-  const cmd = process.platform === 'win32' ? 'clip' : 'wl-copy'
-  const res = spawnSync(cmd, [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
-  if (res.error || res.status !== 0) {
-    // No clipboard command; send OSC 52 (iTerm2 / Kitty / Alacritty / Windows Terminal).
-    process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
+  // Linux: no single clipboard tool is guaranteed (X11 vs Wayland). Try the
+  // Wayland tool and the two X11 tools in order — opencode does the same
+  // (wl-copy / xclip / xsel) — so whichever is installed and matches the session
+  // sets the system clipboard. xclip/xsel default to the PRIMARY selection, so
+  // the -selection clipboard / --clipboard flag is required for Ctrl+V paste.
+  if (process.platform === 'win32') {
+    const r = spawnSync('clip', [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
+    if (!r.error && r.status === 0) return
+  } else if (process.platform === 'linux') {
+    for (const [cmd, args] of [
+      ['wl-copy', []],
+      ['xclip', ['-selection', 'clipboard']],
+      ['xsel', ['--clipboard', '--input']],
+    ] as const) {
+      const r = spawnSync(cmd, [...args], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
+      if (!r.error && r.status === 0) return
+    }
   }
+  // No clipboard command succeeded; send OSC 52 (iTerm2 / Kitty / Alacritty / Windows Terminal).
+  process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
 }
 
 /** Copy the currently active mouse selection (the one the frame controller is
