@@ -525,17 +525,27 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
 }
 
 function writeClipboard(text: string): void {
-  // OSC 52 terminal clipboard (iTerm2 / Kitty / Alacritty / Windows Terminal).
-  process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
-  // Platform clipboard command — macOS Terminal.app has no OSC 52, so pipe the
-  // text to the system clipboard directly. Fire-and-forget; if no tool exists
-  // the OSC 52 write above is the fallback.
-  const cmd = process.platform === 'darwin' ? 'pbcopy'
+  // Platform clipboard command. macOS Terminal.app has no OSC 52, so `pbcopy`
+  // is the only reliable path — use the ABSOLUTE path (a Node SEA binary can
+  // resolve `pbcopy` via PATH, but a restricted/parse PATH would otherwise make
+  // the spawn fail silently and leave the clipboard unchanged, which reads as
+  // "copying did nothing"). OSC 52 is the fallback for terminals that support it.
+  const isMac = process.platform === 'darwin'
+  const cmd = isMac ? '/usr/bin/pbcopy'
     : process.platform === 'win32' ? 'clip'
-    : 'wl-copy' // Wayland; X11 needs xclip (OSC 52 remains as the fallback)
+    : 'wl-copy' // Wayland; X11 uses OSC 52 (below) as the fallback
   const child = spawn(cmd, [], { stdio: ['pipe', 'ignore', 'ignore'] })
-  child.on('error', () => { /* no clipboard command; OSC 52 still sent */ })
+  child.on('error', () => { /* spawn failed (no binary); fall through to OSC 52 */ })
+  child.on('close', (code) => {
+    if (code !== 0) {
+      // The clipboard command failed — send OSC 52 as the terminal fallback.
+      process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
+    }
+  })
   child.stdin.end(text)
+  // On macOS the OSC 52 write above is skipped (Terminal.app ignores it); the
+  // pbcopy child is what actually sets the system clipboard.
+  if (!isMac) process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
 }
 
 /** Copy the currently active mouse selection (the one the frame controller is
@@ -553,6 +563,11 @@ function copyCurrentSelection(): void {
   if (trimmed !== '') {
     writeClipboard(trimmed)
     store.append('status', `copied: ${trimmed.slice(0, 40)}${trimmed.length > 40 ? '…' : ''}`, true)
+    // The status append re-renders/possibly re-lays the transcript (and the
+    // screen-coordinate highlight would then point at shifted content), so drop
+    // the highlight now that the text is captured — otherwise it visibly slides
+    // onto the next block below.
+    store.clearSelection()
   }
 }
 
