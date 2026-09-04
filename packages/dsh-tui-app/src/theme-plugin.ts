@@ -1,3 +1,4 @@
+import React from 'react'
 /**
  * The color-scheme plugin (`tui-theme`) — modeled on vim's `:colorscheme`:
  *
@@ -38,7 +39,7 @@ import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { theme, type ThemePalette } from './theme.ts'
 import type { Store, TuiPanelDefinition } from './index.tsx'
-import { openThemePicker, renderThemePicker, themePickerKey, type ThemePickerApi } from './theme-picker.tsx'
+import { openThemePicker, ThemePicker, themePickerKey, type ThemePickerApi } from './theme-picker.tsx'
 import { CLASSIC_SCHEMES } from './classic-schemes.ts'
 
 /** Stable Cordis plugin name. */
@@ -210,7 +211,7 @@ export function apply(ctx: Context): void {
   tui.panels?.register({
     id: 'themes',
     mode: 'fullscreen',
-    render: (s) => renderThemePicker(s, api),
+    render: (s) => React.createElement(ThemePicker, { store: s, api }),
     handleKey: (k, s) => themePickerKey(k, s, api),
   })
 

@@ -18,8 +18,10 @@
  * @module @yourname/dsh-tui-app/theme-picker
  */
 
-import React from 'react'
+import React, { useRef } from 'react'
 import { Box, Text } from 'ink'
+import type { DOMElement } from 'ink'
+import { useListGeometry, dialogListIndexFromRow } from './list-geometry.ts'
 import type { Store } from './index.tsx'
 import type { RawKey } from './stdin.ts'
 import { theme, type ThemePalette } from './theme.ts'
@@ -50,9 +52,11 @@ interface ThemePickerState {
   previous: string
   filter: string
   index: number
+  /** Scroll offset of the visible list (set during render; used to map a hover). */
+  top: number
 }
 
-const state: ThemePickerState = { open: false, snapshot: null, previous: '', filter: '', index: 0 }
+const state: ThemePickerState = { open: false, snapshot: null, previous: '', filter: '', index: 0, top: 0 }
 
 /** Case-insensitive substring filter over scheme names. */
 export function filterSchemes(names: readonly string[], filter: string): string[] {
@@ -81,9 +85,24 @@ export function openThemePicker(store: Store, api: ThemePickerApi): void {
 export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): boolean {
   if (!state.open) return false
   const close = (): void => { state.open = false; store.setPanel('conversation') }
+  const preview = (): void => {
+    const pick = filterSchemes(api.schemes(), state.filter)[state.index]
+    if (pick !== undefined) api.apply(pick)
+  }
   // Mouse: consume press (no selection); a left-click runs the current highlight
   // (== Enter) by re-dispatching as a return key.
   if (k.mousePress) return true
+  if (k.mouseMove) {
+    // HOVER: highlight the scheme under the cursor (map the screen row to the
+    // visible index, then add the scroll offset to the flat index).
+    const vi = dialogListIndexFromRow(k.mouseMove.row)
+    if (vi >= 0) {
+      const names = filterSchemes(api.schemes(), state.filter)
+      state.index = clampIndex(state.top + vi, names.length)
+      preview()
+    }
+    return true
+  }
   if (k.mouseRelease) {
     if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return themePickerKey({ return: true } as RawKey, store, api)
     return true
@@ -92,10 +111,6 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
     if (state.snapshot !== null) api.restore(state.snapshot, state.previous)
     state.snapshot = null
     close()
-  }
-  const preview = (): void => {
-    const pick = filterSchemes(api.schemes(), state.filter)[state.index]
-    if (pick !== undefined) api.apply(pick)
   }
   if (k.escape) {
     if (state.filter !== '') { state.filter = ''; state.index = 0; preview() }
@@ -148,7 +163,8 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
 }
 
 /** Render the fullscreen picker (mirrors the models/connect dialog layout). */
-export function renderThemePicker(store: Store, api: ThemePickerApi): React.ReactNode {
+export function ThemePicker({ store, api }: { store: Store; api: ThemePickerApi }): React.ReactNode {
+  const listRef = useRef<DOMElement>(null)
   if (!state.open) return null
   const names = filterSchemes(api.schemes(), state.filter)
   const allNames = api.schemes()
@@ -157,6 +173,8 @@ export function renderThemePicker(store: Store, api: ThemePickerApi): React.Reac
   const selectedIndex = total > 0 ? Math.min(state.index, total - 1) : -1
   const top = total === 0 ? 0 : Math.max(0, Math.min(selectedIndex - Math.floor(listRows / 2), Math.max(0, total - listRows)))
   const visible = names.slice(top, top + listRows)
+  state.top = top
+  useListGeometry(listRef, visible.length, 1, [state.filter, state.index, names.length])
   const boxWidth = Math.min(72, Math.max(40, store.width - 10))
   return (
     <Box flexDirection="column" height={store.rows} alignItems="center" justifyContent="center">
@@ -171,7 +189,7 @@ export function renderThemePicker(store: Store, api: ThemePickerApi): React.Reac
         <Box flexDirection="row">
           <Text color={state.filter === '' ? theme.textMuted : theme.text}>⌕ {state.filter === '' ? 'type to filter' : state.filter}</Text>
         </Box>
-        <Box flexDirection="column">
+        <Box flexDirection="column" ref={listRef}>
           {visible.map((name) => {
             const selected = name === names[selectedIndex]
             return (
