@@ -9,6 +9,7 @@
 
 import { Box, Text, useStdin, measureElement, type DOMElement } from 'ink'
 import React, { useMemo, useState } from 'react'
+import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
@@ -517,7 +518,17 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
 }
 
 function writeClipboard(text: string): void {
+  // OSC 52 terminal clipboard (iTerm2 / Kitty / Alacritty / Windows Terminal).
   process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
+  // Platform clipboard command — macOS Terminal.app has no OSC 52, so pipe the
+  // text to the system clipboard directly. Fire-and-forget; if no tool exists
+  // the OSC 52 write above is the fallback.
+  const cmd = process.platform === 'darwin' ? 'pbcopy'
+    : process.platform === 'win32' ? 'clip'
+    : 'wl-copy' // Wayland; X11 needs xclip (OSC 52 remains as the fallback)
+  const child = spawn(cmd, [], { stdio: ['pipe', 'ignore', 'ignore'] })
+  child.on('error', () => { /* no clipboard command; OSC 52 still sent */ })
+  child.stdin.end(text)
 }
 
 // ── the conversation key handler ────────────────────────────────────────────
