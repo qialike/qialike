@@ -5,10 +5,12 @@
 #
 # This surface is single-session and composes its agent process-wide, so the
 # base rows the Web surface moves behind agent presets stay mounted here (the
-# base bundle deliberately keeps them for the TUI). Only the OS-process sandbox
-# is not used: the SEA single-file binary carries no native addon, so reads and
-# writes are fenced by the sandbox-policy (workspace-write), the approval flow
-# (ask), and the permission presets instead.
+# base bundle deliberately keeps them for the TUI). The OS-process sandbox is
+# used, running bwrap (Linux) / Seatbelt (macOS) / ACL (Windows) — the
+# Linux-only landlock native addon is not bundle-able in the SEA single file,
+# so it is stubbed to `unusable` and the sandbox falls to bwrap. The file-effect
+# boundary is additionally fenced by the sandbox-policy (workspace-write), the
+# approval flow (ask), and the permission presets.
 
 # ── surface-specific values the base deliberately omits ─────────────────────
 
@@ -28,29 +30,28 @@
     # surfaces. Unset keeps the schema default (native).
     mode: !!js process.env.DSH_TOOLS_MODE
 
-# ── no native sandbox: swap the OS sandbox rows for local providers ─────────
+# ── OS-level sandbox: bwrap (Linux) / Seatbelt (macOS) / ACL (Windows) ──────
 #
-# `sandbox` runs the process sandbox backend (bwrap / landlock-run native
-# addon / seatbelt / restricted token). The SEA binary embeds no native addon,
-# and a terminal surface is most useful with the workspace reachable, so these
-# rows are disabled and the local bash/fs providers take their place. The file
-# effect boundary still holds: sandbox-policy (workspace-write), approval
-# (ask), permission presets, and fs-observation-policy stay enabled.
+# The SEA single file cannot bundle the Linux-only landlock native addon, so
+# `node-addon-landlock-run` is stubbed to report `unusable` (see build.mjs) and
+# `dsh-sandbox-local` runs on Linux's **bwrap** rung, macOS's built-in seatbelt
+# rung, or the Windows ACL restricted-token runner — real OS process isolation
+# without a native addon. The file-effect boundary still holds: sandbox-policy
+# (workspace-write), approval (ask), permission presets, and
+# fs-observation-policy stay enabled. Bash now runs via the confined executor,
+# so each bash call is wrapped through `ctx.sandbox.confine()`.
 
 - id: sandbox
-  disabled: true
 
 # The permission presets row is sandbox-coupled (it needs a confined bash
-# executor), so it stays disabled. The sandbox-POLICY service is policy-only
-# and mounts standalone: it owns the session's `sandbox:mode` and the
-# model-facing policy context, so the TUI's Tab permission switch really
-# changes the session policy (and feeds the sandbox_permissions + approval
-# escalation path) like the web surface.
+# executor), so it is enabled alongside the OS sandbox; the sandbox-POLICY
+# service still owns the session `sandbox:mode` that the TUI's Tab switch
+# writes, feeding the sandbox_permissions + approval escalation path.
 - id: permission
-  disabled: true
 
 - id: bash-sandbox
-  disabled: true
+  config:
+    timeoutMs: 60000
 
 - id: pwsh-sandbox
   disabled: true
@@ -65,12 +66,6 @@
     mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
 
 - insert:
-    # Local, non-sandboxed bash provider (the OS bash sandbox is native and
-    # stubbed in the single file). File mutations via bash are fenced by the
-    # TUI's `tools/pre-execute` gate instead.
-    - id: bash-local
-      name: '@deepseek-ai/dsh-bash-local'
-
     # Gives the model the `ask_user_question` tool, which asks the user for a
     # decision (e.g. which language). The TUI registers a UserQuestionProvider
     # that renders the question and returns the choice; without this row the

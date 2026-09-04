@@ -58,11 +58,42 @@ const BUN_TARGET = Object.fromEntries(ALL_TARGETS.map((name) => [name, `bun-${na
 
 /** Packages that load a native `.node` addon; stubbed (never activated by the TUI patch). */
 const NATIVE_PACKAGES = new Set([
-  '@deepseek-ai/dsh-sandbox-local',
-  '@deepseek-ai/dsh-bash-sandbox',
   '@deepseek-ai/dsh-pwsh-sandbox',
   '@deepseek-ai/node-addon-landlock-run',
+  '@deepseek-ai/dsh-sandbox-windows-acl',
 ])
+
+/**
+ * Stub source for a {@link NATIVE_PACKAGES} entry whose real module carries a
+ * native addon but whose callers only need it to be importable and to report
+ * "unusable". `node-addon-landlock-run` is Linux-only, so the OS sandbox must
+ * run on Linux's **bwrap** rung; this stub keeps the module bundle-able and
+ * makes the landlock probe return `unusable` so the `dsh-sandbox-local` chain
+ * never selects it (macOS Seatbelt / Windows ACL never touch it either).
+ * Keyed by package name; the link loop uses it in place of the generic proxy.
+ */
+const NATIVE_STUB_SOURCE = {
+  '@deepseek-ai/node-addon-landlock-run': [
+    'export const LAUNCHER_BIN = "landlock-run"',
+    'export const LAUNCHER_FAILURE_EXIT = 125',
+    'export const launcherPath = () => ""',
+    'export const grantArgs = () => []',
+    'export const probe = () => "unusable"',
+    'export default ""',
+    '',
+  ].join('\n'),
+  // Windows-only restricted-token runner; it pulls the native koffi-backed
+  // `dsh-win32-process` whose struct size checks crash at module scope on
+  // Linux. The bwrap (Linux) / Seatbelt (macOS) rungs never touch it, so a
+  // no-op keeps the bundle importable; Windows ACL confinement stays off.
+  '@deepseek-ai/dsh-sandbox-windows-acl': [
+    'export class AclWriteGrant {}',
+    'export const assertTempRootOutsideWorkspace = () => {}',
+    'export const tempWriteSid = ""',
+    'export const workspaceWriteSid = ""',
+    '',
+  ].join('\n'),
+}
 
 /**
  * Third-party modules that load a native binding (or an optional dev-only
@@ -371,7 +402,19 @@ function createResolveFarm() {
     const target = join(nm, ...name.split('/')) // @scope/name -> node_modules/@scope/name
     mkdirSync(dirname(target), { recursive: true })
     if (NATIVE_PACKAGES.has(name)) {
-      symlinkSync(STUB_DIR, target, 'dir')
+      const custom = NATIVE_STUB_SOURCE[name]
+      if (custom !== undefined) {
+        // A package-specific stub (the generic proxy does not export the names
+        // its callers import, and esbuild would fail on a missing export).
+        const dir = join(ROOT, 'apps/tui-bin/stub-native', `pkg-${name.replace(/[^A-Za-z0-9_-]/g, '_')}`)
+        rmSync(dir, { recursive: true, force: true })
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, type: 'module', main: 'index.js' }, null, 2))
+        writeFileSync(join(dir, 'index.js'), custom)
+        symlinkSync(dir, target, 'dir')
+      } else {
+        symlinkSync(STUB_DIR, target, 'dir')
+      }
       console.log(`dsh-tui: stubbed native ${name}`)
     } else {
       symlinkSync(dir, target, 'dir')
@@ -388,6 +431,29 @@ function createResolveFarm() {
     link(name, transformPackageCopy(name, dir))
   }
   link('@yourname/dsh-tui-app', join(ROOT, 'packages/dsh-tui-app'))
+
+  // `@deepseek-ai/node-addon-landlock-run` lives under the harness's `native/`
+  // tree, which scanPackages() does not walk, so the link loop above never
+  // re-created it (the `rmSync(@deepseek-ai)` drop wiped the mirror's copy).
+  // Install its custom stub explicitly so the un-stubbed `dsh-sandbox-local`
+  // bundle can import it; it reports landlock `unusable`, pushing the Linux
+  // sandbox to the bwrap rung.
+  {
+    const stubName = '@deepseek-ai/node-addon-landlock-run'
+    const stubSrc = NATIVE_STUB_SOURCE[stubName]
+    if (stubSrc !== undefined) {
+      const dir = join(ROOT, 'apps/tui-bin/stub-native', 'pkg-node-addon-landlock-run')
+      rmSync(dir, { recursive: true, force: true })
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: stubName, type: 'module', main: 'index.js' }, null, 2))
+      writeFileSync(join(dir, 'index.js'), stubSrc)
+      const target = join(nm, ...stubName.split('/'))
+      rmSync(target, { recursive: true, force: true })
+      mkdirSync(dirname(target), { recursive: true })
+      symlinkSync(dir, target, 'dir')
+      console.log('dsh-tui: stubbed native ' + stubName)
+    }
+  }
 
   // On Windows, pnpm creates directory symlinks with relative targets (e.g.
   // `..\..\..\node_modules\.pnpm\...`) that `realpath`/`stat` cannot traverse
