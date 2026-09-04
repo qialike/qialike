@@ -148,7 +148,7 @@ type Row =
   | { type: 'item'; item: TranscriptItem; top: number; bottom: number }
   | { type: 'steps'; top: number; bottom: number }
 
-function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number): React.ReactNode {
+function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number, active: boolean): React.ReactNode {
   if (item.kind === 'assistant') {
     // opencode-style assistant: indent the markdown to the shared content column.
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
@@ -157,13 +157,13 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     // Collapsed: a "↓ Think" label then the thinking text as its own wrapped
     // paragraph at the shared content column. Keeping the label inline would
     // hang-indent the wrapped lines (they'd start after "↓ Think · " instead of
-    // the column), breaking the left alignment. Both the label and every line
-    // of the text start at column 5 and wrap inside the 4-col right margin.
+    // the column), breaking the left alignment. The leading glyph is an
+    // animated spinner while the model is actively thinking (ThinkingIcon).
     return expandReasoning
       ? <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text dimColor wrap="wrap">{item.text}</Text></Box>
       : (
         <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
-          <Text color={theme.accent}>↓ Think</Text>
+          <Text color={theme.accent}><ThinkingIcon active={active} /> Think</Text>
           <Text dimColor wrap="wrap">{item.text.split('\n')[0]}</Text>
         </Box>
       )
@@ -208,7 +208,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
 /** Memoized transcript row: unchanged item objects (stable references, only
  *  the streaming tail is replaced) skip re-render/parse on typing, scroll and
  *  other notify cycles. */
-const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean; themeEpoch: number; usable: number }): React.JSX.Element {
+const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean; themeEpoch: number; usable: number; active: boolean }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
     const key = String(props.item.key)
@@ -232,7 +232,7 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { i
     const timers = [setTimeout(sample, 60), setTimeout(sample, 400), setTimeout(sample, 900)]
     return () => { for (const t of timers) clearTimeout(t) }
   }, [props.item.text])
-  return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning, props.usable)}</Box>
+  return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning, props.usable, props.active)}</Box>
 })
 
 function StepsRow(props: { steps: readonly StepItem[] }): React.JSX.Element {
@@ -260,6 +260,20 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
       <Text dimColor> Working · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
     </Text>
   )
+}
+
+/** The reasoning ("Think") leading glyph: an animated spinner (the same frames
+ *  as the status-bar "Working") while the model is actively thinking, a static
+ *  ↓ otherwise. The glyph owns its timer so only this leaf re-renders on a tick
+ *  (the reasoning text beside it is a sibling and stays put). */
+function ThinkingIcon(props: { active: boolean }): React.JSX.Element {
+  const [frame, setFrame] = React.useState(0)
+  React.useEffect(() => {
+    if (!props.active) { setFrame(0); return }
+    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 100)
+    return () => clearInterval(timer)
+  }, [props.active])
+  return <Text color={props.active ? theme.info : theme.accent}>{props.active ? SPINNER_FRAMES[frame] : '↓'}</Text>
 }
 
 function buildRows(items: readonly TranscriptItem[], steps: readonly StepItem[]): Row[] {
@@ -769,12 +783,24 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const sel = store.selection
   const selRange = sel !== null ? composerSelectionRange(sel) : null
 
+  // The reasoning row animates its leading glyph while the model is actively
+  // producing it: the agent is running (not paused) and the tail item is that
+  // reasoning row (it is the streaming target). Once thinking ends and an
+  // assistant body follows, the tail changes and the glyph goes static.
+  const tailItem = items.at(-1)
+  const reasoningActive = store.running && !store.paused && tailItem?.kind === 'reasoning'
   const renderRow = (r: Row): React.ReactNode =>
     r.type === 'steps'
       ? <Box key="steps" marginTop={r.top} marginBottom={r.bottom}><StepsRow steps={steps} /></Box>
       : (
         <Box key={r.item.key} marginTop={r.top} marginBottom={r.bottom} flexShrink={0}>
-          <MemoTranscriptItemView item={r.item} expandReasoning={expandReasoning} themeEpoch={themeEpoch} usable={usable} />
+          <MemoTranscriptItemView
+            item={r.item}
+            expandReasoning={expandReasoning}
+            themeEpoch={themeEpoch}
+            usable={usable}
+            active={reasoningActive && r.item.key === tailItem?.key}
+          />
         </Box>
       )
 
