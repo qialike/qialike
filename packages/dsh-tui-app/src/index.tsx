@@ -247,6 +247,24 @@ export class Store {
   private _layoutTopRow = 1
   private _selection: { aRow: number; aCol: number; cRow: number; cCol: number } | null = null
   private _selectionActive = false
+  /** Transient status-bar message (e.g. "copied: …"), shown in the bottom status
+   *  bar and auto-cleared. Unlike a `status` TRANSCRIPT item it never adds a
+   *  transcript row, so it cannot re-layout / follow-tail auto-scroll the
+   *  transcript and slide the (screen-coordinate) selection highlight onto the
+   *  next block below. */
+  private _statusFlash: { text: string; at: number } | null = null
+  private _statusFlashTimer: ReturnType<typeof setTimeout> | null = null
+  get statusFlash(): { text: string; at: number } | null { return this._statusFlash }
+  flashStatus(text: string, ms = 2500): void {
+    this._statusFlash = { text, at: Date.now() }
+    if (this._statusFlashTimer) clearTimeout(this._statusFlashTimer)
+    this._statusFlashTimer = setTimeout(() => {
+      this._statusFlash = null
+      this._statusFlashTimer = null
+      this.notify()
+    }, ms)
+    this.notify()
+  }
   /** Optional predicate registered by the conversation panel: maps a mouse
    *  selection to the 0-based GRID rectangle the Ink frame controller should
    *  highlight, or null to suppress it. The panel clamps to the transcript

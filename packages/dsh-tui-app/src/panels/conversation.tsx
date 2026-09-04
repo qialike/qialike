@@ -562,12 +562,11 @@ function copyCurrentSelection(): void {
   const trimmed = text.trim()
   if (trimmed !== '') {
     writeClipboard(trimmed)
-    store.append('status', `copied: ${trimmed.slice(0, 40)}${trimmed.length > 40 ? '…' : ''}`, true)
-    // The status append re-renders/possibly re-lays the transcript (and the
-    // screen-coordinate highlight would then point at shifted content), so drop
-    // the highlight now that the text is captured — otherwise it visibly slides
-    // onto the next block below.
-    store.clearSelection()
+    // Show the feedback in the bottom STATUS BAR (transient, not a transcript
+    // item): a `status` transcript row would re-layout / follow-tail auto-scroll
+    // the transcript and slide the screen-coordinate highlight onto the next
+    // block below (the user saw this as the highlight jumping to下文).
+    store.flashStatus(`copied: ${trimmed.slice(0, 40)}${trimmed.length > 40 ? '…' : ''}`)
   }
 }
 
@@ -964,6 +963,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
 
       <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} height={STATUS_BAR_HEIGHT}>
         <BusyIndicator animate={store.running} paused={store.paused} />
+        {/* Transient status-bar message (e.g. "copied: …"); NOT a transcript
+            row, so it cannot re-layout the transcript or slide the highlight. */}
+        {store.statusFlash && (
+          <Text color={theme.success} wrap="truncate"> {store.statusFlash.text}</Text>
+        )}
         {/* The steps/turns · tokens stats are pinned to the RIGHT edge of the
             status bar regardless of the busy indicator's width: an explicit
             flex spacer pushes the stats group flush right, and the group
