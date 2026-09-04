@@ -2157,9 +2157,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // next frame.
   const app = render(<App />)
 
-  // NOTE: mouse tracking is intentionally NOT enabled — the terminal keeps
-  // its default behavior (no mouse events to the app; native selection and
-  // wheel scrollback stay with the terminal).
+  // Enable SGR mouse tracking so the terminal sends press/drag/release/wheel
+  // events to the app. The stdin decoder turns wheel bytes (64/65) into
+  // wheelUp/wheelDown → `store.scrollLines` (rolls the transcript), and
+  // press/drag/release into the in-app selection handlers. This takes over the
+  // terminal's NATIVE selection and wheel scrollback, which the full-screen
+  // surface replaces (the transcript scrolls in-app; dsh-tui draws its own
+  // selection). Restored in the exit handler below.
+  if (process.stdout.isTTY) {
+    process.stdout.write('\x1b[?1006h\x1b[?1002h') // SGR + button-motion
+  }
 
   // Live terminal width: Bun/Node emit 'resize' on process.stdout and update
   // `columns`; Ink only re-renders the DOM, so we drive a reactive Store size.
@@ -2204,6 +2211,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
       process.stdin.setRawMode(false)
     }
+    if (process.stdout.isTTY) process.stdout.write('\x1b[?1006l\x1b[?1002l') // disable mouse tracking
     process.stdout.off('resize', onResize)
     process.stdin.off('data', onStdin)
     void app.unmount()
