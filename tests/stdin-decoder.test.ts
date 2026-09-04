@@ -136,3 +136,16 @@ describe('StdinDecoder', () => {
     expect(d.push(esc('41'))).toEqual([]) // now complete -> discarded
   })
 })
+
+test('bracketed paste is assembled into one paste event', () => {
+  const d = new StdinDecoder()
+  expect(d.push(Buffer.from('\x1b[200~'))).toEqual([])
+  expect(d.push(Buffer.from('/tmp/photo.png'))).toEqual([])
+  expect(d.push(Buffer.from('\x1b[201~'))).toEqual([{ paste: '/tmp/photo.png' }])
+})
+
+test('bracketed paste splits cleanly around surrounding text', () => {
+  const d = new StdinDecoder()
+  expect(d.push(Buffer.from('a\x1b[200~/x/y.png\x1b[201~b')))
+    .toEqual([{ char: 'a' }, { paste: '/x/y.png' }, { char: 'b' }])
+})

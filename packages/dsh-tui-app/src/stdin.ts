@@ -41,6 +41,8 @@ export interface RawKey {
   mousePress?: { row: number; col: number }
   mouseDrag?: { row: number; col: number }
   mouseRelease?: { row: number; col: number }
+  /** Bracketed-paste text (`ESC[200~ … ESC[201~`), assembled as one event. */
+  paste?: string
 }
 
 /** CSI final bytes terminate an escape sequence's parameter string. */
@@ -53,6 +55,10 @@ function utf8Len(b: number): number {
   return b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1
 }
 
+/** Bracketed-paste delimiters: `ESC[200~` opens, `ESC[201~` closes. */
+const PASTE_START = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]
+const PASTE_END = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]
+
 /**
  * A stateful raw-stdin decoder. Feed it chunks with {@link push}; complete
  * sequences become events, incomplete ones stay buffered for the next chunk,
@@ -60,6 +66,8 @@ function utf8Len(b: number): number {
  */
 export class StdinDecoder {
   private buf: number[] = []
+  /** Accumulated bracketed-paste bytes while a `ESC[200~ … ESC[201~` region is open. */
+  private paste: number[] | null = null
 
   /** True when a lone `ESC` is awaiting disambiguation (nothing after it yet). */
   get pendingEscape(): boolean {
@@ -83,7 +91,27 @@ export class StdinDecoder {
   private parse(): RawKey[] {
     const out: RawKey[] = []
     while (this.buf.length > 0) {
+      // Bracketed paste in progress: collect bytes until the ESC[201~ terminator.
+      if (this.paste !== null) {
+        const term = PASTE_END
+        if (this.buf.length >= term.length && this.buf.slice(0, term.length).every((v, i) => v === term[i])) {
+          this.buf.splice(0, term.length)
+          const text = Buffer.from(this.paste).toString('utf8')
+          this.paste = null
+          out.push({ paste: text })
+          continue
+        }
+        this.paste.push(this.buf.shift()!)
+        continue
+      }
       const b = this.buf[0]!
+      // Paste start: ESC[200~ (bracketed paste) — before the generic escape handler.
+      if (b === 0x1b && this.buf.length >= PASTE_START.length
+        && this.buf.slice(0, PASTE_START.length).every((v, i) => v === PASTE_START[i])) {
+        this.buf.splice(0, PASTE_START.length)
+        this.paste = []
+        continue
+      }
       if (b === 0x1b) {
         if (this.buf.length === 1) break // lone ESC pending; caller arms the timer
         const n = this.escapeEvent(out)

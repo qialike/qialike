@@ -526,6 +526,18 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   const input = store.input
   const char = k.char ?? ''
   if (char === '\n' || k.altEnter) { resetHistoryBrowse(); store.insertAtCursor('\n'); return }
+  // Bracketed paste: if it is a local image path, attach it (opencode-style);
+  // otherwise insert the pasted text at the cursor.
+  if (k.paste !== undefined) {
+    resetHistoryBrowse()
+    const path = tui.imageAttach?.imagePathFor(k.paste) ?? null
+    if (path !== null) {
+      void tui.imageAttach!.attachLocalImage(path)
+    } else {
+      store.insertAtCursor(k.paste)
+    }
+    return
+  }
   // Ctrl+T (Alt+T fallback) cycles the current model's reasoning effort,
   // opencode-style (`variant_cycle`); no-op status for models without one.
   if ((k.ctrl && char === 't') || (k.meta && char === 't')) {
@@ -626,6 +638,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   }
   if (k.escape) {
     store.clearSelection()
+    if (store.composerImage !== null) { store.clearComposerImage(); return }
     if (input.startsWith('/')) { resetHistoryBrowse(); store.setInput(''); return }
     const now = Date.now()
     if (store.running && now - store.lastEscTime < 800) { store.lastEscTime = 0; store.pauseAgent() }
@@ -922,8 +935,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       </Box>
 
       <Box flexShrink={0} borderStyle="round" borderColor={theme.border} paddingX={1} flexDirection="column" justifyContent="space-between"
-        height={composerHeight(width, input, COMPOSER_MIN_HEIGHT)}>
-        <Text color={theme.text} wrap="wrap">{status}{renderComposerText()}</Text>
+        height={composerHeight(width, input, COMPOSER_MIN_HEIGHT) + (store.composerImage !== null ? 1 : 0)}>
+        <Box flexDirection="column">
+          {store.composerImage !== null && (
+            <Text color={theme.primary}>
+              [Image: {store.composerImage.name}] <Text dimColor>· Esc to remove</Text>
+            </Text>
+          )}
+          <Text color={theme.text} wrap="wrap">{status}{renderComposerText()}</Text>
+        </Box>
         <Box flexDirection="row" gap={2} paddingY={1} marginTop={1}>
           <Text color={permissionColor}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} (Tab)</Text>
           <Box flexGrow={1} />

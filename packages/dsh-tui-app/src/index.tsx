@@ -23,6 +23,7 @@ import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
@@ -202,6 +203,7 @@ export class Store {
   private listeners = new Set<() => void>()
   private _input = ''
   private _cursor = 0
+  private _composerImage: ComposerImage | null = null
   private _panel: 'conversation' | 'approval' | 'connect' | 'question' | 'sessions' | 'export' | 'help' | 'themes' = 'conversation'
   private _commandFilter = ''
   private _commandIndex = 0
@@ -346,6 +348,7 @@ export class Store {
     this._stats = { ...current, toolMs: current.toolMs + ms }
     this.notify()
   }
+  get composerImage(): ComposerImage | null { return this._composerImage }
   get input(): string { return this._input }
   get panel() { return this._panel }
   get commandFilter() { return this._commandFilter }
@@ -554,6 +557,17 @@ export class Store {
   setInput(value: string): void {
     this._input = value
     if (this._cursor > value.length) this._cursor = value.length
+    this.notify()
+  }
+  /** Attach a composer image (set from a dragged/pasted image file path). */
+  setComposerImage(image: ComposerImage): void {
+    this._composerImage = image
+    this.notify()
+  }
+  /** Clear the composer image chip (backspace/Esc, or after submit). */
+  clearComposerImage(): void {
+    if (this._composerImage === null) return
+    this._composerImage = null
     this.notify()
   }
   get cursor(): number { return this._cursor }
@@ -1275,6 +1289,32 @@ export class Store {
   scrollBottom(): void { this._followTail = true; this._scroll = this._maxScroll(); this.notify() }
 }
 
+/** Durable image attachment reference (derived from the harness message block,
+ *  so no direct dsh-attachment import is needed). */
+type ImageRef = Extract<ContentBlock, { type: 'image' }>['attachment']
+
+/** A file dragged into the composer (its path is pasted by the terminal emulator)
+ *  that the image-attach plugin resolved to a durable image reference. The
+ *  conversation renders it as an attachment chip; submit includes it as an image
+ *  content block. */
+export interface ComposerImage {
+  readonly ref: ImageRef
+  readonly name: string
+  readonly mediaType: string
+}
+
+/** The tui-image-attach plugin's public API (mounted on `tui.imageAttach`). */
+export interface ImageAttachApi {
+  /** If `text` is a local image file path (quotes/file:// stripped, known image
+   *  extension), return that path; otherwise `null`. */
+  imagePathFor(text: string): string | null
+  /** Read `path`, save via the attachment store, and set the composer image
+   *  chip. Returns the durable reference, or `undefined` on failure. */
+  attachLocalImage(path: string): Promise<ImageRef | undefined>
+  /** Clear the composer image chip. */
+  clear(): void
+}
+
 /** The single UI store; settled plugins and the Ink app share it. */
 export const store = new Store()
 
@@ -1309,6 +1349,8 @@ export interface TuiService {
     remove(name: string): void
     list(): readonly CommandItem[]
   }
+  /** Image drag-in attachment (mounted by the tui-image-attach plugin). */
+  imageAttach?: ImageAttachApi
   notify(message: string): void
 }
 
@@ -1838,7 +1880,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.setPaused(false) // any new message resumes; the model decides what to do
     store.append('user', text)
     touchSession(sessionId)
-    agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+    // A dragged/pasted image becomes an image content block beside the text.
+    const image = store.composerImage
+    const content: ContentBlock[] = [{ type: 'text', text }]
+    if (image !== null) content.push({ type: 'image', attachment: image.ref })
+    agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
+    store.clearComposerImage()
   }
   store.cancelAction = () => { /* nothing: keep the session open */ }
   const modelsService = ctx.get('tuiModels') as TuiModelsService | undefined

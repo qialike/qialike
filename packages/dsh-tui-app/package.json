@@ -70,6 +70,10 @@
       "types": "./lib/types/selftest.d.ts",
       "default": "./lib/selftest.js"
     },
+    "./image-attach": {
+      "types": "./lib/types/image-attach.d.ts",
+      "default": "./lib/image-attach.js"
+    },
     "./panels-conversation": {
       "types": "./lib/types/panels/conversation.d.ts",
       "default": "./lib/panels/conversation.js"

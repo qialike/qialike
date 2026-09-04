@@ -176,6 +176,12 @@
     - id: tui-selftest
       name: '@yourname/dsh-tui-app/selftest'
 
+    # Image drag-in: detects a dragged image file (the terminal pastes its path),
+    # reads + saves it through the attachment store, and presents a composer
+    # [Image: name] chip; submit emits an image content block (opencode-style).
+    - id: tui-image-attach
+      name: '@yourname/dsh-tui-app/image-attach'
+
 # The plugin-package inventory reads every active Loader entry's package.json
 # from disk at each model request; inside the single-file SEA there is no
 # on-disk node_modules to resolve, so its prepare step rejects every request
