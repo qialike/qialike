@@ -65,6 +65,13 @@ const MESSAGE_LEFT_COLS = 3
 const MESSAGE_RIGHT_COLS = 3
 const MESSAGE_TEXT_WIDTH = (usable: number): number =>
   Math.max(1, usable - MESSAGE_LEFT_COLS - MESSAGE_RIGHT_COLS)
+// The flat selection view sits in the SAME content column as the normal
+// transcript (col 5 with the message column's paddingX=1, i.e. the 1-based
+// column of the first selectable char is 2 + MESSAGE_LEFT_COLS). The `-2` that
+// the original flat view used addressed the old left-aligned (no rail/indent)
+// rendering; once the flat rows carry the same rail/indent as the normal view
+// the selectable span is offset by the inset, so column→char maps with this.
+const FLAT_COL_OFFSET = 2 + MESSAGE_LEFT_COLS
 // Between-message pad rows (opencode marginTop={1} between messages).
 const MESSAGE_PAD_ROWS = 1
 // Rail pads above/below a user message's text (opencode keeps user messages
@@ -509,7 +516,7 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
     const flat = store.layoutScroll + (row - store.layoutTopRow)
     if (flat < 0 || flat >= rows.length) return null
     const line = rows[flat]!.text
-    return rowPrefix[flat]! + Math.min(colToChar(line, col - 2), line.length)
+    return rowPrefix[flat]! + Math.min(colToChar(line, col - FLAT_COL_OFFSET), line.length)
   }
   const a = cellIndex(aRow, aCol)
   const c = cellIndex(cRow, cCol)
@@ -844,7 +851,19 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     const nodes: React.ReactNode[] = []
     for (let r = effectiveScroll; r < Math.min(effectiveScroll + viewportLines, tRows.length); r++) {
       const terminalRow = topRow + (r - effectiveScroll)
-      const line = tRows[r]!.text
+      const row = tRows[r]!
+      const line = row.text
+      const blank = line === ''
+      const isUser = !blank && row.itemIndex >= 0 && items[row.itemIndex]?.kind === 'user'
+      // Leading decoration mirrors the NORMAL transcript geometry so the flat
+      // view can't "collapse" to the left edge mid-drag: user rows keep the ┃
+      // rail (theme.bg) and every row is pushed to the shared content column
+      // (col 5), exactly where itemContent/MarkdownText put their text. The
+      // rail/indent is decoration, not part of the selectable text, so it
+      // renders only before the selectable span and never enters the copy.
+      const leading = isUser
+        ? <Text key="rail" backgroundColor={theme.bg}>{'┃'.padEnd(MESSAGE_LEFT_COLS)}</Text>
+        : <Text key="pad">{' '.repeat(MESSAGE_LEFT_COLS)}</Text>
       // Empty rows (item separators / markdown blank lines) must be a real
       // row: a bare '' Text collapses to 0 height in Ink, so every blank line
       // would vanish when the selection view takes over. Paint a braille blank
@@ -853,16 +872,17 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       // selection coordinates still line up).
       const rowText = line === '' ? '\u2800' : line
       if (terminalRow < selRowMin || terminalRow > selRowMax) {
-        nodes.push(<Text key={r} dimColor backgroundColor={line === '' ? theme.bg : undefined} wrap="wrap">{rowText}</Text>)
+        nodes.push(<Text key={r} dimColor backgroundColor={blank ? theme.bg : undefined} wrap="wrap">{leading}{rowText}</Text>)
         continue
       }
       let cStart = 0
       let cEnd = line.length
-      if (terminalRow === selRowMin) cStart = Math.min(colToChar(line, topCell.col - 2), line.length)
-      if (terminalRow === selRowMax) cEnd = Math.min(colToChar(line, bottomCell.col - 2), line.length)
+      if (terminalRow === selRowMin) cStart = Math.min(colToChar(line, topCell.col - FLAT_COL_OFFSET), line.length)
+      if (terminalRow === selRowMax) cEnd = Math.min(colToChar(line, bottomCell.col - FLAT_COL_OFFSET), line.length)
       if (terminalRow === selRowMin && terminalRow === selRowMax && cStart > cEnd) [cStart, cEnd] = [cEnd, cStart]
       nodes.push(
-        <Text key={r} dimColor backgroundColor={line === '' ? theme.bg : undefined} wrap="wrap">
+        <Text key={r} dimColor backgroundColor={blank ? theme.bg : undefined} wrap="wrap">
+          {leading}
           {rowText.slice(0, cStart)}
           <Text inverse>{rowText.slice(cStart, cEnd)}</Text>
           {rowText.slice(cEnd)}
@@ -906,7 +926,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             ? <Text dimColor>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
             : selectionPresent
               ? (
-                <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
+                <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column" width="100%">
                   {renderFlatTranscript()}
                 </Box>
               )
