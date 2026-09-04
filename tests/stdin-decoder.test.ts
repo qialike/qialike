@@ -81,6 +81,7 @@ describe('StdinDecoder', () => {
     expect(d.push(esc('1b 5b 3c 30 3b 35 3b 31 30 6d'))).toEqual([{ mouseRelease: { row: 10, col: 5 } }])
     expect(d.push(esc('1b 5b 3c 33 3b 35 3b 31 30 4d'))).toEqual([{ mouseRelease: { row: 10, col: 5 } }]) // X10-style button 3
     expect(d.push(esc('1b 5b 3c 33 32 3b 35 3b 31 30 4d'))).toEqual([{ mouseDrag: { row: 10, col: 5 } }]) // button 32 = left+motion
+    expect(d.push(esc('1b 5b 3c 33 35 3b 35 3b 31 30 4d'))).toEqual([{ mouseMove: { row: 10, col: 5 } }]) // button 35 = motion no button (?1003 hover)
     expect(d.push(esc('1b 5b 3c 36 34 3b 35 3b 31 30 4d'))).toEqual([{ wheelUp: true }])
     expect(d.push(esc('1b 5b 3c 36 35 3b 35 3b 31 30 4d'))).toEqual([{ wheelDown: true }])
   })

@@ -39,6 +39,7 @@ export interface RawKey {
   wheelUp?: boolean
   wheelDown?: boolean
   mousePress?: { row: number; col: number }
+  mouseMove?: { row: number; col: number }
   mouseDrag?: { row: number; col: number }
   mouseRelease?: { row: number; col: number }
   /** Bracketed-paste text (`ESC[200~ … ESC[201~`), assembled as one event. */
@@ -242,6 +243,7 @@ export class StdinDecoder {
     if (isRelease) { out.push({ mouseRelease: { row, col } }); return }
     if (raw === 0) out.push({ mousePress: { row, col } })
     else if (raw === 32) out.push({ mouseDrag: { row, col } }) // left + motion (drag)
+    else if (raw === 35) out.push({ mouseMove: { row, col } }) // motion without button (hover, ?1003)
     else if (raw === 3) out.push({ mouseRelease: { row, col } }) // X10-style release button
     else if (raw === 64) out.push({ wheelUp: true })
     else if (raw === 65) out.push({ wheelDown: true })

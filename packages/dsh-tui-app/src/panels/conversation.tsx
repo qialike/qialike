@@ -717,6 +717,13 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mousePress.row, tui); if (idx >= 0) { store.setCommandIndex(idx); return } }
     store.mousePress(k.mousePress.row, k.mousePress.col); return
   }
+  if (k.mouseMove) {
+    // HOVER: with ?1003 any-motion the terminal reports motion without a button.
+    // While the '/' palette is open, highlight the command under the cursor
+    // (opencode-style); elsewhere ignore (the transcript only acts on drag).
+    if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mouseMove.row, tui); if (idx >= 0) store.setCommandIndex(idx) }
+    return
+  }
   if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return }
   if (k.mouseRelease) {
     const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
