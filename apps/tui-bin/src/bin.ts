@@ -13,7 +13,7 @@
  * @module @yourname/dsh-tui/bin
  */
 
-import { basename, dirname, join, resolve, sep } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { pathToFileURL } from 'node:url'
@@ -138,19 +138,6 @@ function readVersion(): string {
   return (pkg as { version?: string }).version ?? '0.0.0'
 }
 
-/** Absolute path of the executable running this process, or `undefined` when
- *  unavailable. The SEA bundle is a Bun single-file binary, so `process.argv[1]`
- *  is a `$bunfs` virtual path that never matches a real file; `process.execPath`
- *  is the real executable, so the running-binary guard keys on it. */
-function argvScript(): string | undefined {
-  try {
-    const p = process.execPath
-    return typeof p === 'string' && p !== '' ? resolve(p) : undefined
-  } catch {
-    return undefined
-  }
-}
-
 /** Whether it is safe to `rm -rf` the given directory. The harness home is
  *  named `.dsh`; refusing anything else (a bare ancestor, the OS home, `/`,
  *  or an arbitrary `$DSH_HOME`) keeps a destructive clear from ever touching
@@ -169,12 +156,13 @@ function canClearHome(dir: string): boolean {
  * data under the same root (settings.yaml, sessions, profiles, storages,
  * attachments, exports). All of it is optional user state, never required for
  * startup: each is regenerated on the next run (settings load as defaults,
- * a fresh anonymous id is minted, storage/attachments dirs are recreated). The
- * only file kept is the currently-executing binary, which cannot be unlinked
- * on every platform; it is pointed at for removal after this process exits. The
- * dev-install symlink at `~/.local/bin` and the PATH export line the repo-root
- * `install` script appended to the shell profiles are removed too. The repo
- * checkout is never touched.
+ * a fresh anonymous id is minted, storage/attachments dirs are recreated), so
+ * a cold home never fails. `~/.dsh/bin` is a local-dev install artifact and is
+ * not present in production, so no special handling is needed for it — the
+ * single recursive remove takes it along. The dev-install symlink at
+ * `~/.local/bin` and the PATH export line the repo-root `install` script
+ * appended to the shell profiles are removed too. The repo checkout is never
+ * touched.
  * @returns the process exit code: 0 on success or when nothing was installed,
  * 1 when a removal failed or the home was refused as unsafe.
  */
@@ -183,13 +171,10 @@ function uninstallSelf(): number {
   let failed = false
   let clearedHome = false
   let refusedHome = false
-  const running = argvScript()
 
-  // Clear the entire harness home. On Unix a full recursive remove succeeds
-  // even when it deletes the currently-executing binary (the unlinked inode
-  // stays alive for the running process), so try that first. Only a locked
-  // entry — on some platforms the running binary — blocks it; then remove every
-  // other entry and advise on the binary.
+  // Clear the entire harness home in one recursive remove. `~/.dsh/bin` (the
+  // production binary copy a dev install creates) lives under the same root and
+  // is just removed with it; production has no such dir.
   const home = dshHomePath()
   if (!canClearHome(home)) {
     // Never rm -rf a path we cannot prove is the dsh data home.
@@ -197,40 +182,22 @@ function uninstallSelf(): number {
     failed = true
     process.stderr.write(`${NAME}: refusing to clear harness home "${home}" — not a recognized dsh data directory. Remove it manually.\n`)
   } else {
-    let entries: string[] | undefined
+    let present = false
     try {
-      entries = readdirSync(home)
+      readdirSync(home)
+      present = true
     } catch {
-      entries = undefined // home absent -> nothing installed
+      present = false // home absent -> nothing installed
     }
-    if (entries !== undefined) {
-      clearedHome = true
-      let fullRemove: string | undefined
+    if (present) {
       try {
         rmSync(home, { recursive: true, force: true })
-        fullRemove = home
-      } catch {
-        // Fall through to the per-entry skip below.
-      }
-      if (fullRemove !== undefined) {
-        process.stdout.write(`${NAME}: removed ${fullRemove}\n`)
+        clearedHome = true
         removed += 1
-      } else {
-        for (const entry of entries) {
-          const p = join(home, entry)
-          if (running !== undefined && (p === running || running.startsWith(p + sep))) {
-            process.stdout.write(`${NAME}: keeping running binary at ${p}; remove it after this process exits.\n`)
-            continue
-          }
-          try {
-            rmSync(p, { recursive: true, force: true })
-            process.stdout.write(`${NAME}: removed ${p}\n`)
-            removed += 1
-          } catch (error) {
-            failed = true
-            process.stderr.write(`${NAME}: failed to remove ${p}: ${error instanceof Error ? error.message : String(error)}\n`)
-          }
-        }
+        process.stdout.write(`${NAME}: removed ${home}\n`)
+      } catch (error) {
+        failed = true
+        process.stderr.write(`${NAME}: failed to remove ${home}: ${error instanceof Error ? error.message : String(error)}\n`)
       }
     }
   }
