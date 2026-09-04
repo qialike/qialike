@@ -1273,13 +1273,19 @@ export class Store {
    *  Set synchronously before notify() so the NEXT frame reads it (no post-commit
    *  race — a post-commit hook would only ever see the previous frame). */
   private syncFrameSelection(): void {
-    const g = globalThis as unknown as { __dshFrameController?: { selection: unknown; bg: string } }
+    const g = globalThis as unknown as { __dshFrameController?: { selection: unknown; bg: string; anchor?: unknown; focus?: unknown } }
     if (!g.__dshFrameController) g.__dshFrameController = { selection: null, bg: '1' }
     const s = this._selection
     const active = s !== null && (Math.abs(s.aRow - s.cRow) + Math.abs(s.aCol - s.cCol)) > 2
-    if (!active || s === null) { g.__dshFrameController.selection = null; return }
+    if (!active || s === null) { g.__dshFrameController.selection = null; g.__dshFrameController.anchor = null; g.__dshFrameController.focus = null; return }
     const rect = this._frameGuard ? this._frameGuard(s) : null
     g.__dshFrameController.selection = rect
+    // Anchor + focus (the drag endpoints, 1-based SGR) let the frame controller
+    // reproduce a LINE/FLOW copy (opencode-style): walking from the anchor cell to
+    // the focus cell following the text flow, so e.g. dragging from the start of a
+    // line into the middle of the next copies the whole first line + that prefix.
+    g.__dshFrameController.anchor = { row: s.aRow, col: s.aCol }
+    g.__dshFrameController.focus = { row: s.cRow, col: s.cCol }
   }
   /** Begin a mouse selection at a terminal cell; clears any previous selection. */
   mousePress(row: number, col: number): void {

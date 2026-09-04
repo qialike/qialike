@@ -647,21 +647,33 @@ export function patchInkFrameController(nm) {
         // shadowed by it. Inverse is orthogonal to fg/bg and never strips styles.
         const __code = '\\x1b[7m';
         const __end = '\\x1b[27m';
-        let __copied = '';
-        for (let y = __dshSel.y1; y <= __dshSel.y2; y++) {
-            const row = output[y];
-            if (!row) continue;
-            let __line = '';
-            for (let x = __dshSel.x1; x <= __dshSel.x2; x++) {
-                const cell = row[x];
-                if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null) continue;
-                if (cell.styles.some((s) => s.code === __code)) continue;
-                cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }];
-                __line += cell.value;
+        const __invAppend = (cell, line) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; line.v += cell.value; };
+        // LINE/FLOW selection (opencode-style): walk from the anchor cell to the
+        // focus cell following the text flow. Highlighting + copying both use the
+        // SAME flow, so a drag from the start of a line into the middle of the next
+        // highlights (and copies) the whole first line + that prefix — NOT a
+        // column-aligned box. Falls back to a rectangle when endpoints are absent.
+        const __a = __fc.anchor, __f = __fc.focus;
+        let __txt = '';
+        const __rect = () => { const inv = (cell) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; }; let t = ''; for (let y = __dshSel.y1; y <= __dshSel.y2; y++) { const row = output[y]; if (!row) continue; let l = ''; for (let x = __dshSel.x1; x <= __dshSel.x2; x++) { const cell = row[x]; inv(cell); if (cell && cell.value !== '') l += cell.value; } t += l.replace(/\\s+$/, '') + '\\n'; } return t.replace(/\\n+$/, ''); };
+        if (__a && __f && typeof __a.row === 'number' && typeof __f.row === 'number') {
+            const ar = __a.row - 1, ac = __a.col - 1, fr = __f.row - 1, fc2 = __f.col - 1;
+            let sR = ar, sC = ac, eR = fr, eC = fc2;
+            if (ar > fr || (ar === fr && ac > fc2)) { sR = fr; sC = fc2; eR = ar; eC = ac; }
+            const C = 4; // grid content column (paddingX 1 + MESSAGE_LEFT_COLS 3)
+            const rEnd = (y) => { const row = output[y]; if (!row) return C; let e = C; for (let x = C; x < row.length - 1; x++) { const c = row[x]; if (c && c.value !== '' && c.value != null && !/^\\s*$/.test(c.value)) e = x; } return e; };
+            for (let y = sR; y <= eR; y++) {
+                const row = output[y]; if (!row) { __txt += '\\n'; continue; }
+                const from = (y === sR) ? Math.min(sC, row.length - 1) : C;
+                const to = (y === eR) ? Math.min(eC, row.length - 1) : rEnd(y);
+                const line = { v: '' };
+                for (let x = from; x <= to; x++) { __invAppend(row[x], line); }
+                __txt += line.v.replace(/\\s+$/, '') + '\\n';
             }
-            __copied += __line.replace(/\\s+$/, '') + '\\n';
+            __fc.copiedText = __txt.replace(/\\n+$/, '');
+        } else {
+            __fc.copiedText = __rect();
         }
-        __fc.copiedText = __copied.replace(/\\n+$/, '');
     }
     `
   for (const dir of dirs) {
