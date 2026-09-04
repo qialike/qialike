@@ -806,6 +806,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const shift = first < rows.length ? effectiveScroll - layout.starts[first] : 0
   const sel = store.selection
   const selRange = sel !== null ? composerSelectionRange(sel) : null
+  // Show the flat selection view only for a REAL drag (selection spanning more
+  // than a click): a bare left-click is often just a mis-click or cursor move,
+  // and swapping to the flat text view would collapse the opencode layout
+  // (rail/indent/gaps). A click keeps the normal transcript; a drag extends
+  // and the flat view highlights + copies on release.
+  const selectionPresent = sel !== null && (Math.abs(sel.aRow - sel.cRow) + Math.abs(sel.aCol - sel.cCol)) > 2
 
   // The reasoning row animates its leading glyph while the model is actively
   // producing it: the agent is running (not paused) and the tail item is that
@@ -898,7 +904,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           {items.length === 0
             ? <Text dimColor>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
-            : sel !== null
+            : selectionPresent
               ? (
                 <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
                   {renderFlatTranscript()}
