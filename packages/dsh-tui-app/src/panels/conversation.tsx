@@ -129,6 +129,39 @@ function filteredCommands(tui: TuiService): readonly CommandItem[] {
   })
 }
 
+/** Index of the command whose palette row occupies screen row `row`, or -1. The
+ *  palette is a bottom-anchored bordered box just above the composer; this
+ *  mirrors the layout math so a mouse click/wheel can drive it. */
+function commandPaletteIndexFromRow(row: number, tui: TuiService): number {
+  const n = filteredCommands(tui).length
+  if (n === 0) return -1
+  const width = process.stdout.columns ?? 80
+  const height = process.stdout.rows ?? 24
+  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
+  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
+  // Palette box: bottom-anchored, bordered (2 rows) + n content rows, sitting
+  // just above the composer. Observed layout: the box bottom is ~composerTop-3
+  // (message-column paddingY + gap), so the first content row is composerTop-n-3.
+  const contentFirst = composerTop - n - 3
+  const idx = row - contentFirst
+  return (idx >= 0 && idx < n) ? idx : -1
+}
+
+/** Run the command at palette index `index`, taking the input's remainder as its
+ *  args (same as pressing Enter with that row highlighted). */
+function runCommandAt(index: number, tui: TuiService): void {
+  const chosen = filteredCommands(tui)[index]
+  if (chosen === undefined) return
+  const input = store.input
+  // Skip the leading '/' (input.length > name.length) so the remainder is the
+  // args AFTER the command name (without this the last letter was included).
+  const remainder = input.slice(chosen.name.length + 1).trim()
+  store.setInput('')
+  resetHistoryBrowse()
+  store.scrollBottom()
+  chosen.run(remainder)
+}
+
 // ── row measurement ─────────────────────────────────────────────────────────
 
 const measuredHeights = new Map<string, number>()
@@ -667,12 +700,33 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   if (k.pageDown) { store.scrollPage(1); return }
   if (k.home) { store.scrollTop(); return }
   if (k.end) { store.scrollBottom(); return }
-  if (k.wheelUp) { store.scrollLines(-WHEEL_STEP); return }
-  if (k.wheelDown) { store.scrollLines(WHEEL_STEP); return }
-  if (k.mousePress) { store.mousePress(k.mousePress.row, k.mousePress.col); return }
+  // While the slash command palette is open, the mouse drives it: the wheel
+  // moves the highlighted command (like ↑/↓) and a left-click on a row runs it
+  // (like Enter). Otherwise the wheel scrolls the transcript and clicks are the
+  // in-place selection/copy.
+  const paletteOpen = input.startsWith('/') && filteredCommands(tui).length > 0
+  if (k.wheelUp) {
+    if (paletteOpen) { const len = Math.max(1, filteredCommands(tui).length); store.setCommandIndex((store.commandIndex - 1 + len) % len); return }
+    store.scrollLines(-WHEEL_STEP); return
+  }
+  if (k.wheelDown) {
+    if (paletteOpen) { const len = Math.max(1, filteredCommands(tui).length); store.setCommandIndex((store.commandIndex + 1) % len); return }
+    store.scrollLines(WHEEL_STEP); return
+  }
+  if (k.mousePress) {
+    if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mousePress.row, tui); if (idx >= 0) { store.setCommandIndex(idx); return } }
+    store.mousePress(k.mousePress.row, k.mousePress.col); return
+  }
   if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return }
   if (k.mouseRelease) {
     const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
+    if (paletteOpen) {
+      // Left-click on a palette row = Enter (run that command). A click on a row
+      // that is NOT the first-visible one first moves the highlight; releasing on
+      // the (now) highlighted row runs it.
+      const idx = commandPaletteIndexFromRow(k.mouseRelease.row, tui)
+      if (idx >= 0 && kind === 'click') { runCommandAt(idx, tui); return }
+    }
     if (kind === 'click') {
       positionCursorByMouse(k.mouseRelease.row, k.mouseRelease.col)
     } else if (kind === 'drag') {
@@ -931,10 +985,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               underlying transcript text never shows through between rows. */}
           {isSlash && filtered.length > 0 && (
             <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end">
-              <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={0}>
+              <Box borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={2}>
                 {filtered.map((c, i) => {
                   const line = `/${c.name} — ${c.hint}`
-                  const pad = Math.max(1, Math.max(0, usable) - visualWidth(line) - 1)
+                  // 2-col pad each side is the Box paddingX; the rows fill the
+                  // remaining width (usable minus the two 2-char margins).
+                  const pad = Math.max(1, Math.max(0, usable - 4) - visualWidth(line) - 1)
                   return (
                     <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex} backgroundColor={theme.bg} wrap="truncate">
                       {line}{' '.repeat(pad)}
