@@ -813,12 +813,6 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const shift = first < rows.length ? effectiveScroll - layout.starts[first] : 0
   const sel = store.selection
   const selRange = sel !== null ? composerSelectionRange(sel) : null
-  // Show the flat selection view only for a REAL drag (selection spanning more
-  // than a click): a bare left-click is often just a mis-click or cursor move,
-  // and swapping to the flat text view would collapse the opencode layout
-  // (rail/indent/gaps). A click keeps the normal transcript; a drag extends
-  // and the flat view highlights + copies on release.
-  const selectionPresent = sel !== null && (Math.abs(sel.aRow - sel.cRow) + Math.abs(sel.aCol - sel.cCol)) > 2
 
   // The reasoning row animates its leading glyph while the model is actively
   // producing it: the agent is running (not paused) and the tail item is that
@@ -840,57 +834,6 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           />
         </Box>
       )
-
-  const renderFlatTranscript = (): React.ReactNode => {
-    if (sel === null) return null
-    const tRows = buildTranscriptRows(items, usable, expandReasoning)
-    const selRowMin = Math.min(sel.aRow, sel.cRow)
-    const selRowMax = Math.max(sel.aRow, sel.cRow)
-    const topCell = sel.aRow <= sel.cRow ? { row: sel.aRow, col: sel.aCol } : { row: sel.cRow, col: sel.cCol }
-    const bottomCell = sel.aRow <= sel.cRow ? { row: sel.cRow, col: sel.cCol } : { row: sel.aRow, col: sel.aCol }
-    const nodes: React.ReactNode[] = []
-    for (let r = effectiveScroll; r < Math.min(effectiveScroll + viewportLines, tRows.length); r++) {
-      const terminalRow = topRow + (r - effectiveScroll)
-      const row = tRows[r]!
-      const line = row.text
-      const blank = line === ''
-      const isUser = !blank && row.itemIndex >= 0 && items[row.itemIndex]?.kind === 'user'
-      // Leading decoration mirrors the NORMAL transcript geometry so the flat
-      // view can't "collapse" to the left edge mid-drag: user rows keep the ┃
-      // rail (theme.bg) and every row is pushed to the shared content column
-      // (col 5), exactly where itemContent/MarkdownText put their text. The
-      // rail/indent is decoration, not part of the selectable text, so it
-      // renders only before the selectable span and never enters the copy.
-      const leading = isUser
-        ? <Text key="rail" backgroundColor={theme.bg}>{'┃'.padEnd(MESSAGE_LEFT_COLS)}</Text>
-        : <Text key="pad">{' '.repeat(MESSAGE_LEFT_COLS)}</Text>
-      // Empty rows (item separators / markdown blank lines) must be a real
-      // row: a bare '' Text collapses to 0 height in Ink, so every blank line
-      // would vanish when the selection view takes over. Paint a braille blank
-      // with theme.bg — the same technique the transcript spacer rows use —
-      // which keeps the blank line visible and the row grid stable (so the
-      // selection coordinates still line up).
-      const rowText = line === '' ? '\u2800' : line
-      if (terminalRow < selRowMin || terminalRow > selRowMax) {
-        nodes.push(<Text key={r} dimColor backgroundColor={blank ? theme.bg : undefined} wrap="wrap">{leading}{rowText}</Text>)
-        continue
-      }
-      let cStart = 0
-      let cEnd = line.length
-      if (terminalRow === selRowMin) cStart = Math.min(colToChar(line, topCell.col - FLAT_COL_OFFSET), line.length)
-      if (terminalRow === selRowMax) cEnd = Math.min(colToChar(line, bottomCell.col - FLAT_COL_OFFSET), line.length)
-      if (terminalRow === selRowMin && terminalRow === selRowMax && cStart > cEnd) [cStart, cEnd] = [cEnd, cStart]
-      nodes.push(
-        <Text key={r} dimColor backgroundColor={blank ? theme.bg : undefined} wrap="wrap">
-          {leading}
-          {rowText.slice(0, cStart)}
-          <Text inverse>{rowText.slice(cStart, cEnd)}</Text>
-          {rowText.slice(cEnd)}
-        </Text>,
-      )
-    }
-    return nodes
-  }
 
   const renderComposerText = (): React.ReactNode => {
     const len = input.length
@@ -924,19 +867,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           {items.length === 0
             ? <Text dimColor>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
-            : selectionPresent
-              ? (
-                <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column" width="100%">
-                  {renderFlatTranscript()}
+            : (
+              <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
+                <Box marginTop={-shift} flexDirection="column">
+                  {rows.slice(first, last + 1).map((r) => renderRow(r))}
                 </Box>
-              )
-              : (
-                <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
-                  <Box marginTop={-shift} flexDirection="column">
-                    {rows.slice(first, last + 1).map((r) => renderRow(r))}
-                  </Box>
-                </Box>
-              )}
+              </Box>
+            )}
           {/* The approval and question docks live INSIDE the message column so
               their widths always track the (resizable) message box, never the
               sidebar. */}
@@ -1039,6 +976,24 @@ export function installFrameSuffix(): void {
 export function apply(ctx: Context): void {
   store = ctx.get('tuiStore') as Store
   const tui = ctx.get('tui') as TuiService
+  // The patched Ink frame controller highlights the selection in place (over the
+  // real markdown/rail/colors). Clamp the highlight to the transcript viewport:
+  // a selection over the composer/status already has its OWN React inverse, and a
+  // frame-buffer inverse there would double it (cancelling the composer highlight).
+  // 1-based SGR selection rows -> 0-based grid; stop at the last transcript row
+  // (the composer box begins at `composerTop`).
+  store.setFrameSelectionGuard((sel) => {
+    const width = store.width
+    const rows = store.rows
+    const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
+    const composerTop = rows - composerH - STATUS_BAR_HEIGHT + 1
+    const y1 = Math.max(0, Math.min(sel.aRow, sel.cRow) - 1)
+    const y2 = Math.min(composerTop - 2, Math.max(sel.aRow, sel.cRow) - 1)
+    if (y2 < y1) return null // selection sits entirely in the composer/status
+    const x1 = Math.max(0, Math.min(sel.aCol, sel.cCol) - 1)
+    const x2 = Math.min(width - 1, Math.max(sel.aCol, sel.cCol) - 1)
+    return { x1, y1, x2, y2 }
+  })
   tui.panels.register({
     id: 'conversation',
     mode: 'fullscreen',

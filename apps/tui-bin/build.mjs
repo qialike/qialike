@@ -360,6 +360,13 @@ function createResolveFarm() {
   // visible black flash/flicker. Patch it to overwrite frames in place.
   patchInkFullScreen(nm)
 
+  // Ink composites the frame into a cell grid in Output.get() but discards it
+  // after serialization. Patch it to expose the grid and bake a mouse-selection
+  // highlight (inverse SGR) onto the selected cells BEFORE serialization, so the
+  // transcript keeps its real markdown/rail/colors and only the selected cells
+  // are inverted (opencode-style in-place highlight).
+  patchInkFrameController(nm)
+
   const link = (name, dir) => {
     const target = join(nm, ...name.split('/')) // @scope/name -> node_modules/@scope/name
     mkdirSync(dirname(target), { recursive: true })
@@ -605,6 +612,77 @@ const writeFullScreenFrame = (stdout, output) => {
     if (changed) {
       writeFileSync(inkJs, text)
       console.log(`dsh-tui: patched Ink full-screen render path (${dir})`)
+    }
+  }
+}
+
+/** Ink composites every frame into a cell grid in Output.get() (each cell
+ *  { value, fullWidth, styles }) but discards the grid after serialization and
+ *  never exposes it. Patch it so dsh-tui can (a) read the composited grid
+ *  (`cells: output`) and (b) bake a mouse-selection highlight onto the exact
+ *  selected cells BEFORE serialization — inverse SGR (7/27), which stacks over
+ *  any existing fg/bg without stripping it, so code/panel/diff backgrounds and
+ *  the text colors survive and only the selected region is inverted. This is the
+ *  opencode-style in-place highlight that a React-level flat-text view cannot do.
+ *  The app drives it via `globalThis.__dshFrameController = { selection, bg }`. */
+export function patchInkFrameController(nm) {
+  const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
+  if (dirs.length === 0) {
+    throw new Error('dsh-tui: no ink package found to patch (frame controller)')
+  }
+  const marker = '// dsh-tui patch: bake a selection highlight'
+  const anchor = '        const generatedOutput = output'
+  const injection = `// dsh-tui patch: bake a selection highlight onto the composited cell grid
+    // BEFORE serialization (keeps every cell's own styles; only the selected
+    // cells gain a highlight). Read from globalThis.__dshFrameController. Each
+    // selected cell gets a NEW styles array (never mutate in place: a shared
+    // StyledChar could render elsewhere on screen, and in-place mutation would
+    // leak the highlight onto that identical text).
+    const __dshSel = (typeof globalThis !== 'undefined' && globalThis.__dshFrameController && globalThis.__dshFrameController.selection) ? globalThis.__dshFrameController.selection : null;
+    const __dshBg = (typeof globalThis !== 'undefined' && globalThis.__dshFrameController && globalThis.__dshFrameController.bg) ? globalThis.__dshFrameController.bg : null;
+    if (__dshSel && __dshBg) {
+        // Inverse (SGR 7/27) rather than a background override: a cell may already
+        // carry a background (code/panel/diff), and a later-applied bg would be
+        // shadowed by it. Inverse is orthogonal to fg/bg and never strips styles.
+        const __code = '\\x1b[7m';
+        const __end = '\\x1b[27m';
+        for (let y = __dshSel.y1; y <= __dshSel.y2; y++) {
+            const row = output[y];
+            if (!row) continue;
+            for (let x = __dshSel.x1; x <= __dshSel.x2; x++) {
+                const cell = row[x];
+                if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null) continue;
+                if (cell.styles.some((s) => s.code === __code)) continue;
+                cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }];
+            }
+        }
+    }
+    `
+  for (const dir of dirs) {
+    const outputJs = join(nm, '.pnpm', dir, 'node_modules', 'ink', 'build', 'output.js')
+    if (!existsSync(outputJs)) continue
+    let text = readFileSync(outputJs, 'utf8')
+    if (!text.includes(anchor)) {
+      throw new Error(`dsh-tui: cannot patch Ink output.js (anchor missing) in ${outputJs}`)
+    }
+    let changed = false
+    const s = text.indexOf(marker)
+    const a = text.indexOf(anchor)
+    if (s !== -1 && a !== -1 && a > s) {
+      // Already patched: replace the previous injection (marker..anchor) in place.
+      const next = text.slice(0, s) + injection + text.slice(a)
+      if (next !== text) { text = next; changed = true }
+    } else {
+      const next = text.replace(anchor, injection + anchor)
+      if (next !== text) { text = next; changed = true }
+    }
+    if (!text.includes('cells: output')) {
+      text = text.replace('height: output.length\n        };', 'height: output.length,\n            cells: output\n        };')
+      changed = true
+    }
+    if (changed) {
+      writeFileSync(outputJs, text)
+      console.log(`dsh-tui: patched Ink frame controller (${dir})`)
     }
   }
 }

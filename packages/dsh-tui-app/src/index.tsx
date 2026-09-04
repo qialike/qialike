@@ -247,6 +247,15 @@ export class Store {
   private _layoutTopRow = 1
   private _selection: { aRow: number; aCol: number; cRow: number; cCol: number } | null = null
   private _selectionActive = false
+  /** Optional predicate registered by the conversation panel: maps a mouse
+   *  selection to the 0-based GRID rectangle the Ink frame controller should
+   *  highlight, or null to suppress it. The panel clamps to the transcript
+   *  viewport so a composer/status selection (which has its own React inverse)
+   *  is never double-highlighted by the frame buffer. */
+  private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { x1: number; y1: number; x2: number; y2: number } | null) | null = null
+  setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { x1: number; y1: number; x2: number; y2: number } | null): void {
+    this._frameGuard = fn
+  }
 
   private _notifyScheduled = false
   private notify(): void {
@@ -1238,16 +1247,34 @@ export class Store {
   touch(): void {
     this.notify()
   }
+  /** Mirror the current mouse selection to the patched Ink frame controller so
+   *  Output.get() bakes an inverse highlight onto the exact selected cells before
+   *  serialization (in-place, over the real markdown/rail/colors — the code and
+   *  panel backgrounds survive). 1-based SGR coords → 0-based grid; only a real
+   *  drag (Manhattan > 2) highlights, so a bare click never flashes an inverse.
+   *  Set synchronously before notify() so the NEXT frame reads it (no post-commit
+   *  race — a post-commit hook would only ever see the previous frame). */
+  private syncFrameSelection(): void {
+    const g = globalThis as unknown as { __dshFrameController?: { selection: unknown; bg: string } }
+    if (!g.__dshFrameController) g.__dshFrameController = { selection: null, bg: '1' }
+    const s = this._selection
+    const active = s !== null && (Math.abs(s.aRow - s.cRow) + Math.abs(s.aCol - s.cCol)) > 2
+    if (!active || s === null) { g.__dshFrameController.selection = null; return }
+    const rect = this._frameGuard ? this._frameGuard(s) : null
+    g.__dshFrameController.selection = rect
+  }
   /** Begin a mouse selection at a terminal cell; clears any previous selection. */
   mousePress(row: number, col: number): void {
     this._selection = { aRow: row, aCol: col, cRow: row, cCol: col }
     this._selectionActive = true
+    this.syncFrameSelection()
     this.notify()
   }
   /** Move the current end of a mouse selection. */
   mouseDrag(row: number, col: number): void {
     if (!this._selectionActive || this._selection === null) return
     this._selection = { ...this._selection, cRow: row, cCol: col }
+    this.syncFrameSelection()
     this.notify()
   }
   /** Finish a mouse gesture: `drag` when moved (keeps the highlight), `click` otherwise (clears it). */
@@ -1256,18 +1283,30 @@ export class Store {
     const s = this._selection
     this._selection = { ...s, cRow: row, cCol: col }
     this._selectionActive = false
-    if (Math.abs(s.aRow - row) + Math.abs(s.aCol - col) > 2) return 'drag'
-    this._selection = null
-    return 'click'
+    let kind: 'click' | 'drag'
+    if (Math.abs(s.aRow - row) + Math.abs(s.aCol - col) > 2) {
+      kind = 'drag'
+    } else {
+      this._selection = null
+      kind = 'click'
+    }
+    this.syncFrameSelection()
+    this.notify()
+    return kind
   }
   clearSelection(): void {
     if (this._selection === null && !this._selectionActive) return
     this._selection = null
     this._selectionActive = false
+    this.syncFrameSelection()
     this.notify()
   }
   private _maxScroll(): number { return Math.max(0, this._layoutContent - this._layoutViewport) }
   scrollPage(dir: -1 | 1): void {
+    // A mouse-selection highlight is baked into the SCREEN cells; once the
+    // content scrolls those coordinates no longer point at the selected text, so
+    // clear it (opencode's visible-region selection also clears on scroll).
+    this.clearSelection()
     const page = Math.max(1, this._layoutViewport)
     // While following the tail, _scroll is never kept in sync (the effective
     // scroll IS maxScroll), so a first PgUp would page from stale 0 and clamp
@@ -1280,13 +1319,14 @@ export class Store {
   }
   /** Scroll the transcript by a small line delta (mouse wheel). */
   scrollLines(delta: number): void {
+    this.clearSelection()
     if (this._followTail) this._scroll = this._maxScroll()
     this._followTail = false
     this._scroll = Math.max(0, Math.min(this._scroll + delta, this._maxScroll()))
     this.notify()
   }
-  scrollTop(): void { this._followTail = false; this._scroll = 0; this.notify() }
-  scrollBottom(): void { this._followTail = true; this._scroll = this._maxScroll(); this.notify() }
+  scrollTop(): void { this.clearSelection(); this._followTail = false; this._scroll = 0; this.notify() }
+  scrollBottom(): void { this.clearSelection(); this._followTail = true; this._scroll = this._maxScroll(); this.notify() }
 }
 
 /** Durable image attachment reference (derived from the harness message block,
