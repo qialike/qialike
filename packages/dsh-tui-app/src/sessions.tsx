@@ -16,7 +16,9 @@
  */
 
 import { Box, Text } from 'ink'
-import React from 'react'
+import React, { useRef } from 'react'
+import type { DOMElement } from 'ink'
+import { useListGeometry, dialogListIndexFromRow } from './list-geometry.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TuiService, Store } from './index.tsx'
 import { truncateWide } from './markdown.tsx'
@@ -34,6 +36,11 @@ let store!: Store
 
 /** The `tui` service (panel registration). */
 export const inject = ['tui']
+
+/** The VISIBLE display rows (day/pinned headers + session rows) last rendered, so a
+ *  mouse hover can map a screen row → the flat/sessions index (headers are not
+ *  selectable; rows carry the flat index in `.i`). */
+let sessionsMouseDisp: { kind: 'header' | 'row'; i?: number; label?: string }[] = []
 
 /** Day header for a session creation time: Today / Yesterday / date string. */
 function dayLabel(createdAt: number | undefined): string {
@@ -55,6 +62,25 @@ function SessionsDialog(): React.JSX.Element {
     return () => clearInterval(timer)
   }, [])
   const block = <Text inverse={cursorOn}> </Text>
+  // List computation lifted out of the render IIFE so useListGeometry (a React
+  // hook) can be called and the mouse-hover geometry registered; the IIFE reuses
+  // these values.
+  const rows = store.sessionsFiltered
+  const listRows = Math.max(1, store.rows - 15)
+  const total = rows.length
+  type Disp = { kind: 'header'; label: string } | { kind: 'row'; i: number }
+  const disp: Disp[] = []
+  const pinnedRows: number[] = []
+  rows.forEach((s, i) => { if (isPinned(s.id)) pinnedRows.push(i) })
+  if (pinnedRows.length > 0) { disp.push({ kind: 'header', label: '📌 Pinned' }); for (const i of pinnedRows) disp.push({ kind: 'row', i }) }
+  let prevDay = ''
+  rows.forEach((s, i) => { if (isPinned(s.id)) return; const day = dayLabel(s.createdAt); if (day !== prevDay) { disp.push({ kind: 'header', label: day }); prevDay = day } disp.push({ kind: 'row', i }) })
+  const highlightDisp = disp.findIndex((d) => d.kind === 'row' && d.i === store.sessionsDialogIndex)
+  const startDisp = Math.max(0, Math.min(Math.max(0, highlightDisp - Math.floor(listRows / 2)), Math.max(0, disp.length - listRows)))
+  const visibleCount = Math.min(listRows, Math.max(0, disp.length - startDisp))
+  const listRef = useRef<DOMElement>(null)
+  useListGeometry(listRef, visibleCount, 1, [store.sessionsDialogIndex, store.sessionsFilter, rows.length])
+  sessionsMouseDisp = disp.slice(startDisp, startDisp + listRows)
   return (
     <Box flexDirection="column" height={store.rows} alignItems="center" justifyContent="center">
       <Box position="absolute" width="100%" height={store.rows} flexDirection="column">
@@ -73,35 +99,8 @@ function SessionsDialog(): React.JSX.Element {
             {block}
           </Text>
         </Box>
-        <Box flexDirection="column" gap={0}>
+        <Box flexDirection="column" gap={0} ref={listRef}>
           {(() => {
-            const rows = store.sessionsFiltered
-            const listRows = Math.max(1, store.rows - 15)
-            const total = rows.length
-            // Display rows: a "📌 Pinned" group first (pinned sessions sort to
-            // the top of the filtered list), then the remaining sessions
-            // grouped by creation day. Group headers are display-only; the
-            // highlight index still addresses the flat filtered list.
-            type Disp = { kind: 'header'; label: string } | { kind: 'row'; i: number }
-            const disp: Disp[] = []
-            const pinnedRows: number[] = []
-            rows.forEach((s, i) => { if (isPinned(s.id)) pinnedRows.push(i) })
-            if (pinnedRows.length > 0) {
-              disp.push({ kind: 'header', label: '📌 Pinned' })
-              for (const i of pinnedRows) disp.push({ kind: 'row', i })
-            }
-            let prevDay = ''
-            rows.forEach((s, i) => {
-              if (isPinned(s.id)) return
-              const day = dayLabel(s.createdAt)
-              if (day !== prevDay) { disp.push({ kind: 'header', label: day }); prevDay = day }
-              disp.push({ kind: 'row', i })
-            })
-            const highlightDisp = disp.findIndex((d) => d.kind === 'row' && d.i === store.sessionsDialogIndex)
-            const startDisp = Math.max(0, Math.min(
-              Math.max(0, highlightDisp - Math.floor(listRows / 2)),
-              Math.max(0, disp.length - listRows),
-            ))
             const out: React.JSX.Element[] = []
             for (let k = startDisp; k < startDisp + listRows && k < disp.length; k++) {
               const d = disp[k]
@@ -167,6 +166,14 @@ function sessionsKey(k: RawKey, reload: () => void): void {
   // Mouse: consume press (no transcript selection); a left-click runs the CURRENT
   // highlight (== Enter) by re-dispatching as a return key.
   if (k.mousePress) return
+  if (k.mouseMove) {
+    // HOVER: highlight the session row under the cursor (map the screen row to the
+    // visible display index, then to the flat sessions index; group headers pass).
+    const vi = dialogListIndexFromRow(k.mouseMove.row)
+    const d = vi >= 0 ? sessionsMouseDisp[vi] : undefined
+    if (d !== undefined && d.kind === 'row') store.moveSessionsDialogIndex(d.i!)
+    return
+  }
   if (k.mouseRelease) {
     if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') sessionsKey({ return: true } as RawKey, reload)
     return
