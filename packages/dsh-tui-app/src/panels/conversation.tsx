@@ -383,7 +383,12 @@ function composerHeight(width: number, input: string, min: number): number {
 
 function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
   const w = MESSAGE_TEXT_WIDTH(usable)
-  if (item.kind === 'reasoning') return expandReasoning ? countWrappedLines(item.text, w) : 1
+  if (item.kind === 'reasoning') {
+    // Collapsed renders a "Think" label row + the FIRST paragraph wrapped; a
+    // folded estimate of 1 clips the wrapped lines (the transcript lays out
+    // below the fold with the estimate, then clips once scrolled into view).
+    return expandReasoning ? countWrappedLines(item.text, w) : 1 + countWrappedLines(item.text.split('\n')[0], w)
+  }
   if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, w)
   if (item.kind === 'user') return countWrappedLines(item.text, w)
   return countWrappedLines(item.text, w)
