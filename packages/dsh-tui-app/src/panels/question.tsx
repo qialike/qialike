@@ -7,6 +7,7 @@
  */
 
 import { Box, Text } from 'ink'
+import type { DOMElement } from 'ink'
 import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PendingQuestion, TuiService, Store } from '../index.tsx'
@@ -14,6 +15,7 @@ import { visualWidth, truncateWide } from '../markdown.tsx'
 import { dockInnerWidth } from '../config.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
+import { useListGeometry, dialogListIndexFromRow } from '../list-geometry.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-question'
@@ -82,6 +84,10 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   const questionAll = questionText === '' ? [] : wrapVisualLines(questionText, dockInner)
   const questionLines = questionAll.slice(0, questionCapLines)
   const questionTruncated = questionAll.length > questionCapLines
+  const listRef = React.useRef<DOMElement>(null)
+  // The selectable options (+ the "Other…" row) form a vertical list; register
+  // its geometry so mouse hover/click can map a screen row to an option index.
+  useListGeometry(listRef, options.length + 1, 1, [options.length, index, customMode])
   return (
     <Box flexShrink={0} marginLeft={3} marginRight={3} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={2} paddingY={1}>
       <Text color={theme.accent} bold wrap="truncate">{title}</Text>
@@ -108,7 +114,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
           <Text color={theme.primary}>Your answer: {custom || ''}</Text>
         </Box>
       ) : (
-        <Box flexDirection="column" marginTop={1}>
+        <Box flexDirection="column" marginTop={1} ref={listRef}>
           {options.map((opt, i) => (
             <Text key={i} wrap="truncate" color={i === index ? theme.accent : undefined} inverse={i === index}>
               {i + 1}. {opt.label}{opt.description !== undefined ? ` — ${opt.description}` : ''}
@@ -134,10 +140,25 @@ function questionKey(k: RawKey): boolean {
   const question = store.question
   if (question === null) { store.setPanel('conversation'); return true }
   // Mouse in the question dock: consume the press (no selection) and a left-click
-  // runs the current highlight (== Enter) by re-dispatching as a return key.
+  // anchors on the clicked option, then runs the current highlight (== Enter) by
+  // re-dispatching as a return key. Hover (no-button motion) highlights the option
+  // under the cursor via the registered list geometry.
   if (k.mousePress) return true
+  if (k.mouseMove) {
+    if (!question.customMode) {
+      const idx = dialogListIndexFromRow(k.mouseMove.row)
+      if (idx >= 0) store.setQuestionIndex(idx)
+    }
+    return true
+  }
   if (k.mouseRelease) {
-    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return questionKey({ return: true } as RawKey)
+    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') {
+      if (!question.customMode) {
+        const idx = dialogListIndexFromRow(k.mouseRelease.row)
+        if (idx >= 0) store.setQuestionIndex(idx)
+      }
+      return questionKey({ return: true } as RawKey)
+    }
     return true
   }
   if (question.customMode) {

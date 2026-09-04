@@ -683,6 +683,11 @@ export class Store {
     this._approvalChoice = (this._approvalChoice + delta + 3) % 3
     this.notify()
   }
+  /** Jump the approval highlight to `i` (0=Deny, 1=Allow always, 2=Allow once). */
+  setApprovalChoice(i: number): void {
+    this._approvalChoice = Math.max(0, Math.min(2, i))
+    this.notify()
+  }
   /** Tool names the user chose "Allow always" for this session (in-memory, opencode-style). */
   private _allowAlways = new Set<string>()
   /** Tools allowed without asking for the rest of this session. */
@@ -704,6 +709,13 @@ export class Store {
     if (this._question === null) return
     const len = Math.max(1, (this._question.item.options?.length ?? 0) + 1) // +1 = the custom/"Other" row
     this._question.index = (this._question.index + delta + len) % len
+    this.notify()
+  }
+  /** Jump the question highlight to `i` (clamped to the options plus the Other row). */
+  setQuestionIndex(i: number): void {
+    if (this._question === null) return
+    const len = Math.max(1, (this._question.item.options?.length ?? 0) + 1)
+    this._question.index = Math.max(0, Math.min(len - 1, i))
     this.notify()
   }
   setQuestionCustom(value: string, mode: boolean): void {

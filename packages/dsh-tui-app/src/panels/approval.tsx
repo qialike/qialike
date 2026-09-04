@@ -7,11 +7,14 @@
  */
 
 import { Box, Text } from 'ink'
+import type { DOMElement } from 'ink'
 import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PendingApproval, TuiService, Store } from '../index.tsx'
+import { visualWidth } from '../markdown.tsx'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
+import { useRowGeometry, dialogRowIndexFromCol } from '../list-geometry.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-approval'
@@ -38,13 +41,18 @@ function conciseReason(reason: string | undefined, toolName: string): string {
  *  width (the column re-lays out on every terminal resize). */
 function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element {
   const { req } = props.approval
+  const rowRef = React.useRef<DOMElement>(null)
+  // The three actions form one horizontal row; register its geometry so mouse
+  // hover/click can map a screen column to an action index.
+  const widths = APPROVAL_CHOICES.map((label) => visualWidth(label))
+  useRowGeometry(rowRef, widths, [store.approvalChoice, req.toolName])
   return (
     <Box flexShrink={0} borderStyle="round" borderColor={theme.warning} flexDirection="column" paddingX={1} paddingY={1}>
       <Text color={theme.warning} bold wrap="wrap">⚠ Permission required · {req.toolName}</Text>
       <Box marginTop={1}>
         <Text wrap="truncate">{conciseReason(req.reason, req.toolName)}</Text>
       </Box>
-      <Box flexDirection="row" gap={2} marginTop={1}>
+      <Box flexDirection="row" gap={2} marginTop={1} ref={rowRef}>
         {APPROVAL_CHOICES.map((label, i) => (
           <Text key={label} color={i === store.approvalChoice ? theme.warning : undefined} inverse={i === store.approvalChoice}>
             {label}
@@ -61,6 +69,23 @@ function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element
 /** Handle one key while the approval panel is active; returns true (consumed). */
 function approvalKey(k: RawKey): boolean {
   const approval = store.approval
+  // Mouse in the dock: hover highlights the action under the cursor (via the
+  // registered row geometry); a left-click anchors on that action, then runs the
+  // highlighted choice (== Enter). Press/drag are consumed (no transcript drag).
+  if (k.mousePress) return true
+  if (k.mouseMove) {
+    const idx = dialogRowIndexFromCol(k.mouseMove.col)
+    if (idx >= 0) store.setApprovalChoice(idx)
+    return true
+  }
+  if (k.mouseRelease) {
+    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') {
+      const idx = dialogRowIndexFromCol(k.mouseRelease.col)
+      if (idx >= 0) store.setApprovalChoice(idx)
+      return approvalKey({ return: true } as RawKey)
+    }
+    return true
+  }
   if (k.leftArrow) { store.cycleApprovalChoice(-1); return true }
   if (k.rightArrow) { store.cycleApprovalChoice(1); return true }
   const settle = (choice: number): void => {
