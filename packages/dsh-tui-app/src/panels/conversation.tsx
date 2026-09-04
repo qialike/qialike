@@ -154,9 +154,19 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
   }
   if (item.kind === 'reasoning') {
+    // Collapsed: a "↓ Think" label then the thinking text as its own wrapped
+    // paragraph at the shared content column. Keeping the label inline would
+    // hang-indent the wrapped lines (they'd start after "↓ Think · " instead of
+    // the column), breaking the left alignment. Both the label and every line
+    // of the text start at column 5 and wrap inside the 4-col right margin.
     return expandReasoning
       ? <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text dimColor wrap="wrap">{item.text}</Text></Box>
-      : (<Box width="100%" paddingLeft={MESSAGE_LEFT_COLS}>{<><Text color={theme.accent}>↓ Think</Text><Text dimColor> · {item.text.split('\n')[0]}</Text></>}</Box>)
+      : (
+        <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
+          <Text color={theme.accent}>↓ Think</Text>
+          <Text dimColor wrap="wrap">{item.text.split('\n')[0]}</Text>
+        </Box>
+      )
   }
   if (item.kind === 'tool') {
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text></Box>
