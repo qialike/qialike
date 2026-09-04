@@ -1037,14 +1037,21 @@ export function apply(ctx: Context): void {
   store.setFrameSelectionGuard((sel) => {
     const width = store.width
     const rows = store.rows
+    const showSidebar = width >= SIDEBAR_MIN_WIDTH
+    const usable = convUsableWidth(width, showSidebar)
     const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
     const composerTop = rows - composerH - STATUS_BAR_HEIGHT + 1
     const y1 = Math.max(0, Math.min(sel.aRow, sel.cRow) - 1)
     const y2 = Math.min(composerTop - 2, Math.max(sel.aRow, sel.cRow) - 1)
     if (y2 < y1) return null // selection sits entirely in the composer/status
-    const x1 = Math.max(0, Math.min(sel.aCol, sel.cCol) - 1)
-    const x2 = Math.min(width - 1, Math.max(sel.aCol, sel.cCol) - 1)
-    return { x1, y1, x2, y2 }
+    // LINE/FLOW selection is bounded by the message column's CONTENT column: the
+    // left edge (paddingX + MESSAGE_LEFT_COLS) to the content right edge — exactly
+    // the wrap column, BEFORE the Steps sidebar. `right` is handed to the frame
+    // controller so the flow copy stops at the content edge and never sweeps in
+    // a Steps row that happens to be on the same screen line.
+    const left = 1 + MESSAGE_LEFT_COLS
+    const right = Math.min(width - 2, left + MESSAGE_TEXT_WIDTH(usable) - 1)
+    return { rect: { x1: left, y1, x2: right, y2 }, right }
   })
   tui.panels.register({
     id: 'conversation',

@@ -266,12 +266,13 @@ export class Store {
     this.notify()
   }
   /** Optional predicate registered by the conversation panel: maps a mouse
-   *  selection to the 0-based GRID rectangle the Ink frame controller should
-   *  highlight, or null to suppress it. The panel clamps to the transcript
-   *  viewport so a composer/status selection (which has its own React inverse)
-   *  is never double-highlighted by the frame buffer. */
-  private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { x1: number; y1: number; x2: number; y2: number } | null) | null = null
-  setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { x1: number; y1: number; x2: number; y2: number } | null): void {
+   *  selection to the 0-based GRID rectangle it should highlight (or null to
+   *  suppress) plus the message column's CONTENT right edge (grid col), so the
+   *  flow copy stops before the Steps sidebar. The panel clamps to the transcript
+   *  viewport so a composer/status selection (which has its own React inverse) is
+   *  never double-highlighted by the frame buffer. */
+  private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; right: number } | null) | null = null
+  setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; right: number } | null): void {
     this._frameGuard = fn
   }
 
@@ -1273,13 +1274,16 @@ export class Store {
    *  Set synchronously before notify() so the NEXT frame reads it (no post-commit
    *  race — a post-commit hook would only ever see the previous frame). */
   private syncFrameSelection(): void {
-    const g = globalThis as unknown as { __dshFrameController?: { selection: unknown; bg: string; anchor?: unknown; focus?: unknown } }
+    const g = globalThis as unknown as { __dshFrameController?: { selection: unknown; bg: string; anchor?: unknown; focus?: unknown; contentRight?: number } }
     if (!g.__dshFrameController) g.__dshFrameController = { selection: null, bg: '1' }
     const s = this._selection
     const active = s !== null && (Math.abs(s.aRow - s.cRow) + Math.abs(s.aCol - s.cCol)) > 2
     if (!active || s === null) { g.__dshFrameController.selection = null; g.__dshFrameController.anchor = null; g.__dshFrameController.focus = null; return }
-    const rect = this._frameGuard ? this._frameGuard(s) : null
-    g.__dshFrameController.selection = rect
+    const gr = this._frameGuard ? this._frameGuard(s) : null
+    g.__dshFrameController.selection = gr?.rect ?? null
+    // The message column's content right edge (grid col) bounds the flow copy so
+    // it stops before the Steps sidebar (which would otherwise be swept in).
+    g.__dshFrameController.contentRight = gr?.right ?? (this.width - 1)
     // Anchor + focus (the drag endpoints, 1-based SGR) let the frame controller
     // reproduce a LINE/FLOW copy (opencode-style): walking from the anchor cell to
     // the focus cell following the text flow, so e.g. dragging from the start of a

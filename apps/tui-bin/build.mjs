@@ -668,7 +668,7 @@ export function patchInkFrameController(nm) {
             let sR = ar, sC = ac, eR = fr, eC = fc2;
             if (ar > fr || (ar === fr && ac > fc2)) { sR = fr; sC = fc2; eR = ar; eC = ac; }
             const C = 4; // grid content column (paddingX 1 + MESSAGE_LEFT_COLS 3)
-            const rEnd = (y) => { const row = output[y]; if (!row) return C; let e = C; for (let x = C; x < row.length - 1; x++) { const c = row[x]; if (c && c.value !== '' && c.value != null && !/^\\s*$/.test(c.value) && !__deco.test(c.value)) e = x; } return e; };
+            const rEnd = (y) => { const row = output[y]; if (!row) return C; const bound = (typeof __fc.contentRight === 'number' && __fc.contentRight > C) ? __fc.contentRight : (row.length - 1); let e = C; for (let x = C; x <= Math.min(bound, row.length - 1); x++) { const c = row[x]; if (c && c.value !== '' && c.value != null && !/^\\s*$/.test(c.value) && !__deco.test(c.value)) e = x; } return e; };
             for (let y = sR; y <= eR; y++) {
                 const row = output[y]; if (!row) { __txt += '\\n'; continue; }
                 // Clamp the per-row cell range to the CONTENT column [C .. content end]
