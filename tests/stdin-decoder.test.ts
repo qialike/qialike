@@ -44,6 +44,11 @@ describe('StdinDecoder', () => {
     expect(d.push(esc('1b 74'))).toEqual([{ char: 't', meta: true }]) // Alt+T
   })
 
+  test('ctrl+y decodes (copy the active selection key)', () => {
+    const d = new StdinDecoder()
+    expect(d.push(Buffer.from([0x19]))).toEqual([{ char: 'y', ctrl: true }]) // Ctrl+Y
+  })
+
   test('ctrl+d and alt+d decode (hide-provider keys)', () => {
     const d = new StdinDecoder()
     expect(d.push(Buffer.from([0x04]))).toEqual([{ char: 'd', ctrl: true }]) // Ctrl+D

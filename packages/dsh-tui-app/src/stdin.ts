@@ -129,6 +129,7 @@ export class StdinDecoder {
       if (b === 0x06) { this.buf.shift(); out.push({ char: 'f', ctrl: true }); continue }
       if (b === 0x03) { this.buf.shift(); out.push({ char: 'c', ctrl: true }); continue }
       if (b === 0x14) { this.buf.shift(); out.push({ char: 't', ctrl: true }); continue } // Ctrl+T
+      if (b === 0x19) { this.buf.shift(); out.push({ char: 'y', ctrl: true }); continue } // Ctrl+Y: copy the active selection
       if (b >= 0x01 && b <= 0x1a) { this.buf.shift(); continue } // unhandled control char: ignore
       const len = utf8Len(b)
       if (this.buf.length < len) break

@@ -538,6 +538,24 @@ function writeClipboard(text: string): void {
   child.stdin.end(text)
 }
 
+/** Copy the currently active mouse selection (the one the frame controller is
+ *  highlighting) to the system clipboard. Shared by the mouse-release handler and
+ *  the Ctrl+Y keyboard fallback; prefers the frame-buffer `copiedText` (matches
+ *  the highlight exactly, no drift across item margins) and falls back to the
+ *  flat-model `selectionText`. No-op unless the selection spans a real drag. */
+function copyCurrentSelection(): void {
+  const sel = store.selection
+  if (sel === null || (Math.abs(sel.aRow - sel.cRow) + Math.abs(sel.aCol - sel.cCol)) <= 2) return
+  const fc = (globalThis as unknown as { __dshFrameController?: { copiedText?: string } }).__dshFrameController
+  const framed = fc && fc.copiedText ? fc.copiedText : ''
+  const text = framed || selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
+  const trimmed = text.trim()
+  if (trimmed !== '') {
+    writeClipboard(trimmed)
+    store.append('status', `copied: ${trimmed.slice(0, 40)}${trimmed.length > 40 ? '…' : ''}`, true)
+  }
+}
+
 // ── the conversation key handler ────────────────────────────────────────────
 
 function conversationKey(k: RawKey, tui: TuiService): void {
@@ -624,26 +642,13 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     if (kind === 'click') {
       positionCursorByMouse(k.mouseRelease.row, k.mouseRelease.col)
     } else if (kind === 'drag') {
-      const sel = store.selection
-      if (sel !== null) {
-        // Prefer the text extracted from the screen cells the frame controller
-        // just highlighted — it matches the visible selection exactly. Fall back
-        // to the flat-model selectionText (which drifts across item margins and
-        // can return '' for tall multi-item selections).
-        const fc = (globalThis as unknown as { __dshFrameController?: { copiedText?: string } }).__dshFrameController
-        const framed = fc && fc.copiedText ? fc.copiedText : ''
-        const text = framed || selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
-        const trimmed = text.trim()
-        if (trimmed !== '') {
-          writeClipboard(trimmed)
-          store.append('status', `copied: ${trimmed.slice(0, 40)}${trimmed.length > 40 ? '…' : ''}`, true)
-        }
-      }
+      copyCurrentSelection()
     }
     return
   }
   if (k.ctrl && char === 'u') { resetHistoryBrowse(); store.deleteToLineStart(); return }
   if (k.ctrl && char === 'p') { resetHistoryBrowse(); store.setCommandFilter(''); store.setInput('/'); return }
+  if (k.ctrl && char === 'y') { copyCurrentSelection(); return } // Ctrl+Y: copy the active mouse selection (macOS Terminal.app may drop the release event)
   if (k.tab) {
     if (input.startsWith('/')) {
       const filtered = filteredCommands(tui)
