@@ -151,15 +151,15 @@ type Row =
 function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number): React.ReactNode {
   if (item.kind === 'assistant') {
     // opencode-style assistant: indent the markdown to the shared content column.
-    return <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
+    return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
   }
   if (item.kind === 'reasoning') {
     return expandReasoning
-      ? <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text dimColor wrap="wrap">{item.text}</Text></Box>
-      : (<Box paddingLeft={MESSAGE_LEFT_COLS}>{<><Text color={theme.accent}>↓ Think</Text><Text dimColor> · {item.text.split('\n')[0]}</Text></>}</Box>)
+      ? <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text dimColor wrap="wrap">{item.text}</Text></Box>
+      : (<Box width="100%" paddingLeft={MESSAGE_LEFT_COLS}>{<><Text color={theme.accent}>↓ Think</Text><Text dimColor> · {item.text.split('\n')[0]}</Text></>}</Box>)
   }
   if (item.kind === 'tool') {
-    return <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text></Box>
+    return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text></Box>
   }
   if (item.kind === 'user') {
     // opencode-style user block: a primary left border (┃) with the text on a
@@ -187,7 +187,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     )
   }
   return (
-    <Box paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
+    <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
       <Text dimColor={item.dim} wrap="wrap">
         {item.text}
       </Text>

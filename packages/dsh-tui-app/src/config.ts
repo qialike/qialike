@@ -27,10 +27,10 @@ export const SIDEBAR_MIN_WIDTH = 110
  *  narrower column and silently double the dock height. */
 export function dockInnerWidth(width: number): number {
   const sidebar = width >= SIDEBAR_MIN_WIDTH ? Math.round(width * 0.3) + 2 : 0
-  // Message column padding (1) + dock border (1) + dock content padding (2) per
-  // side → content is inset 4 char-widths from each edge, matching the message
-  // content column (see MESSAGE_LEFT_COLS / MESSAGE_RIGHT_COLS).
-  return Math.max(1, width - sidebar - 2 - 2 - 4)
+  // Question dock content width: message column padding (1) + dock margins (3)
+  // + dock border (1) + dock content padding (2) per side → content inset
+  // 4 char-widths from each edge, matching the message content column.
+  return Math.max(1, width - sidebar - 2 - 6 - 2 - 4)
 }
 
 /** Default for auto-resuming the newest same-directory session at launch. */

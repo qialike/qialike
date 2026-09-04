@@ -116,7 +116,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
       // <Text> (Ink throws "<Box> can't be nested inside <Text>"); render each
       // child as a sibling in a column instead.
       return (
-        <Box key={key} flexDirection="column">
+        <Box key={key} width="100%" flexDirection="column">
           {kids.map((child, i) => child.type === 'paragraph'
             ? <Text key={`q-${key}-${i}`} color={theme.yellow} wrap="wrap">│ {renderInlineChildren(child)}</Text>
             : renderBlock(child, `${key}-q-${i}`))}
@@ -127,7 +127,10 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
     case 'code': {
       const lines = (node.value ?? '').split('\n')
       return (
-        <Box key={key} borderStyle="round" borderColor={theme.borderSubtle} paddingX={1} flexDirection="column">
+        // width="100%": a bordered Box shrink-fits to its content unless told
+        // to fill; the code frame must span the message content width (aligning
+        // with the wrapped text lines and leaving the 4-col right margin).
+        <Box key={key} width="100%" borderStyle="round" borderColor={theme.borderSubtle} paddingX={1} flexDirection="column">
           {node.lang ? <Text dimColor>{node.lang}</Text> : null}
           {/* Each code line as its own Text so wrapped lines are counted in the
               box height (a single joined Text overflows the border when wrapping). */}
@@ -142,9 +145,9 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
       // Same Box-in-Text rule: each item's paragraph content stays in a Text,
       // and non-paragraph block children (e.g. code) render as siblings.
       return (
-        <Box key={key} flexDirection="column">
+        <Box key={key} width="100%" flexDirection="column">
           {items.map((item, i) => (
-            <Box key={i} flexDirection="column">
+            <Box key={i} width="100%" flexDirection="column">
               <Text wrap="wrap">
                 <Text color={theme.secondary}>{ordered ? `${start + i}. ` : '• '}</Text>
                 {(item.children ?? []).map((child, j) => child.type === 'paragraph'
@@ -182,7 +185,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
     default: {
       const kids = node.children ?? []
       return (
-        <Box key={key} flexDirection="column">
+        <Box key={key} width="100%" flexDirection="column">
           {kids.length > 0
             ? kids.map((c, i) => renderBlock(c, `${key}-${i}`))
             : (node.value ? <Text wrap="wrap">{node.value}</Text> : null)}
@@ -378,7 +381,7 @@ export function MarkdownText(props: { text: string }): React.JSX.Element {
   // survives every paint path. estimateMarkdownHeight adds the same +1 per
   // block boundary, so the estimate matches the real layout.
   return (
-    <Box flexDirection="column">
+    <Box width="100%" flexDirection="column">
       {(tree.children ?? []).map((node, i) => (
         <Box key={i} marginTop={i > 0 ? 1 : 0} flexShrink={0}>{renderBlock(node, i)}</Box>
       ))}
