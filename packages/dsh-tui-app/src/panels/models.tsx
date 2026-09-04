@@ -264,6 +264,14 @@ function ModelsDialog(): React.JSX.Element {
 /** Handle one key while the connect panel is active; returns true (consumed). */
 function connectKey(k: RawKey): boolean {
   const char = k.char ?? ''
+  // Mouse in the dialog: consume the press (no transcript selection here) and a
+  // left-click runs the CURRENT highlight (== Enter), re-dispatched as a return
+  // key so the existing per-mode selection logic is reused.
+  if (k.mousePress) return true
+  if (k.mouseRelease) {
+    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return connectKey({ return: true })
+    return true
+  }
   if (store.keyDialog) {
     if (k.return) {
       const done = store.keyDialogDone()

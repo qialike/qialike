@@ -81,6 +81,13 @@ export function openThemePicker(store: Store, api: ThemePickerApi): void {
 export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): boolean {
   if (!state.open) return false
   const close = (): void => { state.open = false; store.setPanel('conversation') }
+  // Mouse: consume press (no selection); a left-click runs the current highlight
+  // (== Enter) by re-dispatching as a return key.
+  if (k.mousePress) return true
+  if (k.mouseRelease) {
+    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return themePickerKey({ return: true } as RawKey, store, api)
+    return true
+  }
   const cancel = (): void => {
     if (state.snapshot !== null) api.restore(state.snapshot, state.previous)
     state.snapshot = null

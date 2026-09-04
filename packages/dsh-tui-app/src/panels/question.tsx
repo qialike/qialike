@@ -133,6 +133,13 @@ function questionKey(k: RawKey): boolean {
   const char = k.char ?? ''
   const question = store.question
   if (question === null) { store.setPanel('conversation'); return true }
+  // Mouse in the question dock: consume the press (no selection) and a left-click
+  // runs the current highlight (== Enter) by re-dispatching as a return key.
+  if (k.mousePress) return true
+  if (k.mouseRelease) {
+    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return questionKey({ return: true } as RawKey)
+    return true
+  }
   if (question.customMode) {
     if (k.return) {
       const custom = question.custom.trim()

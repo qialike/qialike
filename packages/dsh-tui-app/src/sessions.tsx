@@ -164,6 +164,13 @@ function sessionsKey(k: RawKey, reload: () => void): void {
   const char = k.char ?? ''
   const page = Math.max(1, store.rows - 14)
   const clearNotice = (): void => { if (store.sessionsNotice !== '') store.setSessionsNotice('') }
+  // Mouse: consume press (no transcript selection); a left-click runs the CURRENT
+  // highlight (== Enter) by re-dispatching as a return key.
+  if (k.mousePress) return
+  if (k.mouseRelease) {
+    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') sessionsKey({ return: true } as RawKey, reload)
+    return
+  }
   // Rename mode: the filter box becomes a title input (Enter confirms, Esc
   // cancels); navigation and other actions are suspended.
   if (store.sessionsRenaming !== null) {
