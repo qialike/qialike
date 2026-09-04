@@ -250,7 +250,11 @@ function uninstallSelf(): number {
   }
   if (refusedHome) {
     process.stdout.write(`${NAME}: harness home "${home}" left in place (unsafe path refused). Remove it manually.\n`)
-  } else if (removed === 0 && !failed) {
+  } else if (failed) {
+    // Some item failed to remove (e.g. the sandbox blocked a write, or a path
+    // was locked). Never claim success: report the partial result honestly.
+    process.stdout.write(`${NAME}: uninstall FAILED — ${removed === 0 ? 'nothing was removed' : 'some items removed'}; see the errors above. Nothing else was changed.\n`)
+  } else if (removed === 0) {
     process.stdout.write(`${NAME}: nothing to remove (harness home and PATH entry not found)\n`)
   } else {
     process.stdout.write(`${NAME}: uninstalled${clearedHome ? ' (harness home cleared)' : ''}. Reinstall with \`bash scripts/install\` (repo root).\n`)
