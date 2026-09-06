@@ -30,6 +30,15 @@
     # surfaces. Unset keeps the schema default (native).
     mode: !!js process.env.DSH_TOOLS_MODE
 
+# The web surface groups sessions under a Workspace (workspaceId); the TUI
+# profile does not mount the Workspace registry by default, so dsh-tui sessions
+# (created with `meta.cwd` only) have no workspaceId and the web lists them as
+# "Ungrouped". Mount the same workspace registry here so dsh-tui can attach its
+# sessions to the workspace that owns its cwd (see tui-runtime establish()).
+- insert:
+    - id: workspace
+      name: '@deepseek-ai/dsh-workspace'
+
 # ── OS-level sandbox: bwrap (Linux) / Seatbelt (macOS) / ACL (Windows) ──────
 #
 # The SEA single file cannot bundle the Linux-only landlock native addon, so

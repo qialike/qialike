@@ -15,6 +15,15 @@
  * while new content is clipped). Very long text falls back to a plain wrap so a
  * huge code dump never stalls the loop.
  *
+ * Coloring policy: headings keep the accent color; a bold label immediately
+ * followed by a colon (`**键**: 值`) keeps the secondary color as a field key,
+ * and filename/path tokens in body prose keep the secondary color too. All
+ * other marks keep their structural styling (bold/italic/strikethrough/
+ * underline/inline-code chip) but render in the base text color, and plain
+ * prose/paths before a colon are never colored. Think (reasoning) and tool
+ * rows render through their own plain paths elsewhere and never receive the
+ * file-name coloring.
+ *
  * @module @yourname/dsh-tui-app/markdown
  */
 
@@ -62,17 +71,62 @@ function headingColor(_depth: number): string {
   return theme.accent
 }
 
+/** Known file extensions for prose file-name highlighting. */
+const FILE_EXT_RE = /\.(?:ts|tsx|js|jsx|mjs|cjs|json|jsonl|yaml|yml|md|markdown|py|sh|bash|css|scss|sass|html|htm|go|rs|c|cpp|cc|h|hpp|txt|zstd|toml|lock|env|xml|svg|png|jpe?g|gif|webp|exe|bin|sql|log|diff|patch|csv|db|sqlite)$/i
+
+/**
+ * Color filename/path tokens in one body-prose run with the secondary accent.
+ * Scoped to the assistant Markdown body only — Think (reasoning) and tool rows
+ * render through their own plain paths in conversation.tsx, not this renderer,
+ * so they are never touched here.
+ *
+ * A token qualifies when it looks like a path (contains a `/` or `\`, no URL
+ * `://`, and a leading `~`/`.`/`/` or a file extension or 3+ segments) or ends
+ * in a known file extension. Bare numbers, version strings, and Latin
+ * abbreviation punctuation (`e.g.`) stay uncolored.
+ */
+function renderBodyText(text: string): React.ReactNode {
+  const out: React.ReactNode[] = []
+  const RE = /[A-Za-z0-9_~./\\-]+/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = RE.exec(text)) !== null) {
+    let token = m[0]
+    // A trailing period after a file name is sentence punctuation, not the
+    // file name; pull at most a few off so a name + `.` still matches.
+    while (token.endsWith('.') && !FILE_EXT_RE.test(token) && token.length > 1) {
+      token = token.slice(0, -1)
+    }
+    const isPath = (token.includes('/') || token.includes('\\'))
+      && !token.includes('://')
+      && (token.startsWith('/') || token.startsWith('~/') || token.startsWith('./') || token.startsWith('../')
+        || FILE_EXT_RE.test(token) || token.split(/[/\\]/).length > 2)
+    const isFile = FILE_EXT_RE.test(token)
+    if (isPath || isFile) {
+      const start = m.index
+      const end = start + m[0].length
+      if (start > last) out.push(text.slice(last, start))
+      out.push(<Text key={`f${start}`} color={theme.secondary}>{token}</Text>)
+      const tail = text.slice(start + token.length, end)
+      if (tail !== '') out.push(tail)
+      last = end
+    }
+  }
+  if (last < text.length) out.push(text.slice(last))
+  return out.length === 0 ? text : out
+}
+
 /** Render inline phrasing nodes as React nodes (no newlines). */
-function renderInline(node: MdNode): React.ReactNode {
+function renderInline(node: MdNode, isKey = false): React.ReactNode {
   switch (node.type) {
-    case 'text': return node.value ?? ''
-    case 'strong': return <Text bold color={theme.warning}>{renderInlineChildren(node)}</Text>
-    case 'emphasis': return <Text color={theme.yellow}>{renderInlineChildren(node)}</Text>
-    case 'delete': return <Text dimColor>{renderInlineChildren(node)}</Text>
-    case 'inlineCode': return <Text color={theme.success}>{node.value ?? ''}</Text>
+    case 'text': return renderBodyText(node.value ?? '')
+    case 'strong': return <Text bold color={isKey ? theme.secondary : undefined}>{renderInlineChildren(node)}</Text>
+    case 'emphasis': return <Text italic>{renderInlineChildren(node)}</Text>
+    case 'delete': return <Text strikethrough>{renderInlineChildren(node)}</Text>
+    case 'inlineCode': return <Text backgroundColor={theme.element}>{node.value ?? ''}</Text>
     case 'break': return '\n'
     case 'link': return (
-      <Text color={theme.primary} underline>
+      <Text underline>
         {renderInlineChildren(node)}{node.url ? <Text dimColor> ({node.url})</Text> : null}
       </Text>
     )
@@ -88,7 +142,16 @@ function renderInline(node: MdNode): React.ReactNode {
 function renderInlineChildren(node: MdNode): React.ReactNode {
   const kids = node.children ?? []
   if (kids.length === 0) return null
-  return kids.map((child, i) => <React.Fragment key={i}>{renderInline(child)}</React.Fragment>)
+  // A bold label immediately followed by a colon (`**状态**: value`) is a
+  // field key: color that bold label with the secondary accent. Any other
+  // text-before-colon (prose, paths, code references) stays in the base text
+  // color, since it cannot be told apart from a genuine key syntactically.
+  return kids.map((child, i) => {
+    const next = kids[i + 1]
+    const isKey = child.type === 'strong' && next?.type === 'text'
+      && /^[:：]/.test((next.value ?? '').trimStart())
+    return <React.Fragment key={i}>{renderInline(child, isKey)}</React.Fragment>
+  })
 }
 
 /** Render a paragraph's inline content as a single wrapped line. */
@@ -118,7 +181,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
       return (
         <Box key={key} width="100%" flexDirection="column">
           {kids.map((child, i) => child.type === 'paragraph'
-            ? <Text key={`q-${key}-${i}`} color={theme.yellow} wrap="wrap">│ {renderInlineChildren(child)}</Text>
+            ? <Text key={`q-${key}-${i}`} wrap="wrap">│ {renderInlineChildren(child)}</Text>
             : renderBlock(child, `${key}-q-${i}`))}
         </Box>
       )
@@ -149,7 +212,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
           {items.map((item, i) => (
             <Box key={i} width="100%" flexDirection="column">
               <Text wrap="wrap">
-                <Text color={theme.secondary}>{ordered ? `${start + i}. ` : '• '}</Text>
+                <Text>{ordered ? `${start + i}. ` : '• '}</Text>
                 {(item.children ?? []).map((child, j) => child.type === 'paragraph'
                   ? <React.Fragment key={`l-${i}-${j}`}>{renderInlineChildren(child)}</React.Fragment>
                   : null)}
@@ -166,7 +229,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
       // Best-effort aligned grid; a terminal cannot do rich tables.
       const rows = (node.children ?? []).map((row: MdNode) =>
         (row.children ?? []).map((cell: MdNode) =>
-          (cell.children ?? []).map(renderInline).join('')) )
+          (cell.children ?? []).map((cellChild: MdNode) => renderInline(cellChild)).join('')) )
       if (rows.length === 0) return null
       const header = rows[0] ?? []
       const width = header.length

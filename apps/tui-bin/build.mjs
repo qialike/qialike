@@ -412,6 +412,27 @@ function createResolveFarm() {
   // are inverted (opencode-style in-place highlight).
   patchInkFrameController(nm)
 
+  // Ink's Output.write decides a glyph's column count from ansi-tokenize's
+  // `fullWidth` flag OR a surrogate-pair length heuristic. BMP emoji that the
+  // terminal draws two columns wide (✅ ❌ ⚡ …) are single codepoints with
+  // fullWidth=false, so Ink places them at ONE grid column: every later cell of
+  // that row (text AND the sidebar border columns) is emitted one column right,
+  // overflowing the terminal width and kinking the vertical border. Judge width
+  // from string-width — the same source Ink's layout/serialization uses — so the
+  // cell grid agrees with the terminal.
+  patchInkWideChar(nm)
+
+  // The width of a glyph on the terminal depends on the terminal's text font
+  // and its emoji fallback — EAW-W emoji (✅ ❌ ⚡) are wide everywhere, but an
+  // EAW=N symbol such as ⚠ can be drawn WIDE by an emoji-font terminal while ✓
+  // ✗ ☑ ⚙ next to it stay NARROW, and that mix is per-font, not per-table. The
+  // durable fix is to MEASURE each glyph on the real terminal (CPR, ESC[6n)
+  // instead of guessing: the shared string-width module keeps upstream EAW
+  // semantics and reads runtime-measured overrides from
+  // globalThis.__dshCharWidths, so measure, wrap, grid placement and row-height
+  // estimates all agree with the actual rendering.
+  patchStringWidthEmojiBlocks(nm)
+
   const link = (name, dir) => {
     const target = join(nm, ...name.split('/')) // @scope/name -> node_modules/@scope/name
     mkdirSync(dirname(target), { recursive: true })
@@ -692,20 +713,31 @@ const writeFullScreenFrame = (stdout, output) => {
     // (see __dshTuiRepaintLastFrame below).
     if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
     const lines = output.split('\\n');
+    // CPR glyph-width calibration window: while the app measures a glyph's real
+    // terminal width (ESC[6n round trips on the bottom row), frames must NOT
+    // overwrite the probe row mid-measurement. Buffer the latest frame and write
+    // it once calibration unlocks (__dshCalibrationFlush).
+    if (typeof globalThis !== 'undefined' && globalThis.__dshCalibrationLock) {
+        writeFullScreenFrame._pending = lines;
+        return;
+    }
     const prev = writeFullScreenFrame._prev;
     const bgHex = __dshLineHex('__dshTuiBgColor');
     const fgHex = __dshLineHex('__dshTuiTextColor');
     const paint = (line) => (bgHex || fgHex) ? __dshForceBg(line, bgHex, fgHex) : line;
+    const changedLines = [];
     let frame = '';
     if (prev === undefined || prev.length !== lines.length) {
         // first frame or a resize: rewrite every line
         for (let i = 0; i < lines.length; i++) {
+            changedLines.push(lines[i]);
             frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(lines[i]);
         }
         if (lines.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J'; // clear residue below (shrink)
     } else {
         for (let i = 0; i < lines.length; i++) {
             if (prev[i] === lines[i]) continue;
+            changedLines.push(lines[i]);
             frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(lines[i]);
         }
     }
@@ -713,6 +745,29 @@ const writeFullScreenFrame = (stdout, output) => {
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
     if (suffix) frame += suffix;
     if (frame !== '') stdout.write(frame);
+    if (typeof globalThis !== 'undefined' && typeof globalThis.__dshCharScan === 'function' && changedLines.length > 0) {
+        globalThis.__dshCharScan(changedLines);
+    }
+};
+// Flush a frame buffered while the CPR calibration window was locked.
+globalThis.__dshCalibrationFlush = () => {
+    const pending = writeFullScreenFrame._pending;
+    if (!pending || pending.length === 0) return;
+    writeFullScreenFrame._pending = undefined;
+    const bgHex = __dshLineHex('__dshTuiBgColor');
+    const fgHex = __dshLineHex('__dshTuiTextColor');
+    const paint = (line) => (bgHex || fgHex) ? __dshForceBg(line, bgHex, fgHex) : line;
+    let frame = '';
+    for (let i = 0; i < pending.length; i++) frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(pending[i]);
+    if (pending.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J';
+    const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
+    if (suffix) frame += suffix;
+    if (frame !== '') process.stdout.write(frame);
+    writeFullScreenFrame._prev = pending;
+    if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
+    if (typeof globalThis !== 'undefined' && typeof globalThis.__dshCharScan === 'function') {
+        globalThis.__dshCharScan(pending);
+    }
 };
 // Watchdog self-heal: the app calls this when its liveness check decides the
 // render loop has stopped flushing frames while the agent is running. Ink's own
@@ -867,6 +922,210 @@ export function patchInkFrameController(nm) {
       writeFileSync(outputJs, text)
       console.log(`dsh-tui: patched Ink frame controller (${dir})`)
     }
+  }
+}
+
+/**
+ * Ink's Output.write advances one grid column for characters it does not
+ * consider wide. Its original test — ansi-tokenize's `fullWidth` flag OR
+ * `character.value.length > 1` — misses single-codepoint glyphs the terminal
+ * draws two columns wide (✅ ❌ ⚡ … are one code point each, and after the
+ * string-width emoji-block patch so is bare ⚠). Those glyphs then occupy one
+ * grid cell while every later glyph of the row lands one real column right of
+ * where Ink thinks it is: a row containing one serializes to `width + 1`
+ * columns, the sidebar border columns shift right by one on that row
+ * (broken/kinked vertical border), and the last column falls off the terminal
+ * width.
+ *
+ * Judge width from string-width — the same source Ink's layout measure and
+ * cell serialization use — so grid placement agrees with the terminal. One
+ * refinement: when a widened base glyph is immediately followed by a variation
+ * selector (⚠️ ☀️ ♥️ …), Ink receives the U+FE0F as its own zero-width token
+ * and would place it in a THIRD cell, shifting the row back by one. Keep such
+ * bases narrow so the VS16 cell itself supplies the glyph's second column (two
+ * grid cells for a two-column glyph). Fails loudly if Ink's internals move so
+ * the fix is never silently skipped.
+ * @param nm - the resolve-farm `node_modules` root.
+ */
+export function patchInkWideChar(nm) {
+  const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
+  if (dirs.length === 0) {
+    throw new Error('dsh-tui: no ink package found in the resolve farm to patch (wide char)')
+  }
+  const regionRe = /const characters = styledCharsFromTokens\(tokenize\(line\)\);[\s\S]*?offsetX \+= isWideCharacter \? 2 : 1;\n\s+}/
+  const region = [
+    'const characters = styledCharsFromTokens(tokenize(line));',
+    '                    let offsetX = x;',
+    '                    // dsh-tui patch: per-glyph width placement (see charwidth.ts).',
+    '                    // A glyph the terminal PAINTS two columns wide but whose CURSOR advance',
+    '                    // is only ONE column (⚠ / ⚠️ on VTE: wcwidth counts 1, the color-emoji',
+    '                    // glyph paints 2) needs its reserved second cell to be a REAL space so',
+    '                    // the cursor actually advances two columns — otherwise every later cell',
+    '                    // of the row (the sidebar border included) prints one column LEFT.',
+    '                    // ⚠️ arrives as base + U+FE0F: keep the base narrow so the VS16 cell (a',
+    '                    // space here) carries the glyph\'s second column; never a third cell.',
+    "                    const __pw = (typeof globalThis !== 'undefined' && globalThis.__dshPaintWide instanceof Set) ? globalThis.__dshPaintWide : new Set([0x26a0]);",
+    "                    const __cw = (typeof globalThis !== 'undefined' && globalThis.__dshCharWidths instanceof Map) ? globalThis.__dshCharWidths : null;",
+    '                    const __padFlags = [];',
+    '                    for (let __i = 0; __i < characters.length; __i++) {',
+    '                        const character = characters[__i];',
+    '                        const __next = characters[__i + 1];',
+    "                        const __cp = typeof character.value === 'string' ? character.value.codePointAt(0) : -1;",
+    "                        const __isVS = character.type === 'char' && character.value === '\uFE0F';",
+    '                        const __pad = __pw.has(__cp) && (__cw === null || __cw.get(__cp) === 1);',
+    '                        __padFlags[__i] = __pad;',
+    '                        if (__isVS && __padFlags[__i - 1]) {',
+    "                            currentLine[offsetX] = { type: 'char', value: ' ', fullWidth: false, styles: character.styles };",
+    '                            offsetX += 1;',
+    '                            continue;',
+    '                        }',
+    '                        currentLine[offsetX] = character;',
+    "                        const isWideCharacter = (stringWidth(character.value) > 1 || __pad) && !(__next && __next.type === 'char' && __next.value === '\uFE0F');",
+    '                        if (isWideCharacter) {',
+    "                            currentLine[offsetX + 1] = {",
+    "                                type: 'char',",
+    "                                value: __pad ? ' ' : '',",
+    '                                fullWidth: false,',
+    '                                styles: character.styles',
+    '                            };',
+    '                        }',
+    '                        offsetX += isWideCharacter ? 2 : 1;',
+    '                    }',
+  ].join('\n')
+  for (const dir of dirs) {
+    const outputJs = join(nm, '.pnpm', dir, 'node_modules', 'ink', 'build', 'output.js')
+    if (!existsSync(outputJs)) continue
+    let text = readFileSync(outputJs, 'utf8')
+    if (text.includes('const __padFlags = [];')) continue // already patched
+    if (!regionRe.test(text)) {
+      throw new Error(`dsh-tui: cannot patch Ink wide-char placement in ${outputJs} (Ink internals changed?)`)
+    }
+    writeFileSync(outputJs, text.replace(regionRe, region))
+    console.log(`dsh-tui: patched Ink wide-char placement (${dir})`)
+  }
+}
+
+/**
+ * The single shared text-width oracle: Ink's layout measure (widest-line →
+ * string-width), its grid placement in output.js (`stringWidth > 1`), clip/slice
+ * logic and the app's own row-height estimates all import the same `string-width`
+ * module. Replacing that module with the implementation below makes every layer
+ * agree on every glyph's width.
+ *
+ * Semantics: upstream EAW by default (text dingbats such as ✓ ✗ ☑ ⚙ stay one
+ * column — no per-glyph guess list, so nothing regresses on EAW terminals), plus
+ * a runtime per-code-point override table (`globalThis.__dshCharWidths`) filled
+ * by the CPR calibration probe (packages/dsh-tui-app/src/charwidth.ts). The
+ * probe measures each glyph's REAL rendered width on the actual terminal+font
+ * via `ESC[6n`, so a terminal that draws ⚠ two columns wide (color-emoji
+ * fallback) is honoured while a terminal that draws it narrow is measured narrow
+ * too — the divider cannot drift on any terminal. Residual U+FE0E/U+FE0F
+ * variation selectors carry no column. The whole file is rewritten at build
+ * time (idempotent; the patch owns this dependency copy).
+ * @param nm - the resolve-farm `node_modules` root.
+ */
+export function patchStringWidthEmojiBlocks(nm) {
+  const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('string-width@'))
+  if (dirs.length === 0) {
+    throw new Error('dsh-tui: no string-width package found in the resolve farm to patch (runtime calibration)')
+  }
+  const source = `// dsh-tui: runtime-calibrated string-width (replaced at build time).
+// Upstream EAW semantics by default; per-code-point overrides measured on the
+// REAL terminal via CPR (ESC[6n) live in globalThis.__dshCharWidths (a Map set
+// up by packages/dsh-tui-app/src/charwidth.ts). No static guess list: a glyph
+// the terminal draws narrow stays narrow, a glyph it draws wide is widened.
+import stripAnsi from 'strip-ansi';
+import eastAsianWidth from 'eastasianwidth';
+import emojiRegex from 'emoji-regex';
+
+const widths = () => (typeof globalThis !== 'undefined' && globalThis.__dshCharWidths instanceof Map) ? globalThis.__dshCharWidths : null;
+
+// dsh-tui paint-wide glyphs: color-emoji terminals draw these as a two-cell
+// pictograph even though the cursor only advances ONE column (CPR measures the
+// cursor advance, not the painted extent, so a measured width of 1 for ⚠ on
+// VTE/Noto Color Emoji still leaves the glyph overrunning its cell and the next
+// characters crammed against it). Reserve two columns in the layout for these,
+// regardless of the (advance-based) CPR measurement. Members are confirmed by
+// real-terminal observation; text symbols (✓ ✗ ☑ ♠ ⚙ …) stay ONE column.
+const PAINT_WIDE = new Set([0x26a0]);
+
+export default function stringWidth(string, options = {}) {
+	if (typeof string !== 'string' || string.length === 0) {
+		return 0;
+	}
+
+	options = {
+		ambiguousIsNarrow: true,
+		...options
+	};
+
+	string = stripAnsi(string);
+
+	if (string.length === 0) {
+		return 0;
+	}
+
+	// Emoji sequences (incl. variation-selector pairs and astral emoji) count as
+	// two columns.
+	string = string.replace(emojiRegex(), '  ');
+	// A residual variation selector (default-emoji base + U+FE0F that emoji-regex
+	// did not absorb, or a stray FE0E/FE0F) carries no column.
+	string = string.replace(/[\\uFE0E\\uFE0F]/g, '');
+
+	const map = widths();
+	const ambiguousCharacterWidth = options.ambiguousIsNarrow ? 1 : 2;
+	let width = 0;
+
+	for (const character of string) {
+		const codePoint = character.codePointAt(0);
+
+		// Ignore control characters
+		if (codePoint <= 0x1F || (codePoint >= 0x7F && codePoint <= 0x9F)) {
+			continue;
+		}
+
+		// Ignore combining characters
+		if (codePoint >= 0x300 && codePoint <= 0x36F) {
+			continue;
+		}
+
+		// Paint-wide glyphs (color-emoji fallback) reserve two columns even though
+		// the cursor advances one — CPR alone cannot see the painted extent.
+		if (PAINT_WIDE.has(codePoint)) {
+			width += 2;
+			continue;
+		}
+
+		// CPR-measured real width wins over the EAW default.
+		const calibrated = map === null ? undefined : map.get(codePoint);
+		if (calibrated !== undefined) {
+			width += calibrated;
+			continue;
+		}
+
+		const code = eastAsianWidth.eastAsianWidth(character);
+		switch (code) {
+			case 'F':
+			case 'W':
+				width += 2;
+				break;
+			case 'A':
+				width += ambiguousCharacterWidth;
+				break;
+			default:
+				width += 1;
+		}
+	}
+
+	return width;
+}
+`
+  for (const dir of dirs) {
+    const indexJs = join(nm, '.pnpm', dir, 'node_modules', 'string-width', 'index.js')
+    if (!existsSync(indexJs)) continue
+    if (readFileSync(indexJs, 'utf8') === source) continue
+    writeFileSync(indexJs, source)
+    console.log(`dsh-tui: rewrote string-width with runtime-calibrated widths (${dir})`)
   }
 }
 

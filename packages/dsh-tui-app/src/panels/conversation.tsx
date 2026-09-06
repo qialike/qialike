@@ -44,10 +44,21 @@ export const inject = ['tui']
 
 const COMPOSER_MIN_HEIGHT = 5
 
-/** Readable-but-dimmed tone for auxiliary UI text (status bar, Steps meta,
- *  composer footer, hints, reasoning preview): between the old fully-dim look
- *  and full `theme.text` — the "slightly brighter than before" compromise. */
-const MUTED_READABLE = '#b8b8c0'
+/** Theme-aware muted text: bright on DARK backgrounds (the terminal's own
+ *  colors, status bar, hints, empty-state, composer footer) and a dark gray on
+ *  the LIGHT skin. The old single #b8b8c0 was unreadable against a white page;
+ *  mutedReadable() alone (#808080) is a touch too dim on dark. */
+function isLightTheme(): boolean {
+  const bg = theme.bg.replace(/^#/, '')
+  if (bg.length !== 6) return false
+  const r = parseInt(bg.slice(0, 2), 16)
+  const g = parseInt(bg.slice(2, 4), 16)
+  const b = parseInt(bg.slice(4, 6), 16)
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.5
+}
+function mutedReadable(): string {
+  return isLightTheme() ? theme.textMuted : '#b8b8c0'
+}
 
 // opencode-style message area (mirrors ~/opencode routes/session/index.tsx):
 // a USER message is a left colored rail (┃ + space) with the text in a column
@@ -376,10 +387,10 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     const settledFirst = capVisual(item.text.split('\n')[0] ?? '', w)
     return (
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
-        <Text inverse={hovered || undefined} color={theme.accent}>{expandReasoning ? '-' : '+'} Think</Text>
+        <Text inverse={hovered || undefined} color={mutedReadable()}>{expandReasoning ? '-' : '+'} Think</Text>
         {expandReasoning
-          ? <Text color={MUTED_READABLE} wrap="wrap">{item.text}</Text>
-          : <Text color={MUTED_READABLE} wrap="wrap">{active ? thinkLiveLine(item.text, usable) : settledFirst || '\u00a0'}</Text>}
+          ? <Text color={mutedReadable()} wrap="wrap">{item.text}</Text>
+          : <Text color={mutedReadable()} wrap="wrap">{active ? thinkLiveLine(item.text, usable) : settledFirst || '\u00a0'}</Text>}
       </Box>
     )
   }
@@ -390,16 +401,14 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     // `toolExpanded`/`hovered` arrive as PROPS so the memoized row re-renders
     // on a click (a store read inside this component would be invisible to the
     // memo — that was why Think toggled but tool rows did not).
-    const running = item.text.startsWith('│ ')
     const isError = item.text.startsWith('✗ ')
     const body = item.tool?.body
     const expanded = body !== undefined && toolExpanded
-    const headerColor = isError ? theme.error : running ? theme.secondary : theme.success
     return (
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
-        <Text inverse={hovered || undefined} color={headerColor} wrap="wrap">{toolRowHeader(item, usable)}</Text>
+        <Text inverse={hovered || undefined} color={mutedReadable()} wrap="wrap">{toolRowHeader(item, usable)}</Text>
         {body !== undefined && expanded && (
-          <Text color={isError ? theme.error : MUTED_READABLE} wrap="wrap">{body}</Text>
+          <Text color={isError ? theme.error : mutedReadable()} wrap="wrap">{body}</Text>
         )}
       </Box>
     )
@@ -431,7 +440,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
   }
   return (
     <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
-      <Text color={MUTED_READABLE} wrap="wrap">
+      <Text color={mutedReadable()} wrap="wrap">
         {item.text}
       </Text>
     </Box>
@@ -556,7 +565,7 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
   }, [props.animate])
   if (props.paused) return <Text color={theme.warning}>⏸ Paused</Text>
   // Idle: a STATIC marker (⠿, not an animated spinner frame) + "Idle".
-  if (!props.animate) return <Text color={MUTED_READABLE}>⠿ Idle</Text>
+  if (!props.animate) return <Text color={theme.text}>⠿ Idle</Text>
   const armed = Date.now() - store.lastEscTime < 800
   // Liveness text: the second counters re-read Date.now() on every render, so
   // the line keeps changing even across a long silent stretch (model thinking,
@@ -573,7 +582,7 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
   return (
     <Text color={theme.info}>
       {glyph}
-      <Text color={MUTED_READABLE}> {runPhaseLabel(store)} · {sinceTurn}s{quiet} · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
+      <Text color={theme.text}> {runPhaseLabel(store)} · {sinceTurn}s{quiet} · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
     </Text>
   )
 }
@@ -1476,7 +1485,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column">
           <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           {items.length === 0
-            ? <Text color={MUTED_READABLE}>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
+            ? <Text color={mutedReadable()}>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
             : (
               <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
                 <Box marginTop={-shift} flexDirection="column">
@@ -1537,7 +1546,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             <Text color={permissionColor}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} (Tab)</Text>
             <Box flexGrow={1} />
             {modelLabel !== '' && (
-              <Text color={MUTED_READABLE}>Model: {modelBaseLabel}
+              <Text color={theme.text}>Model: {modelBaseLabel}
                 {effortName !== '' && <Text color={theme.warning} bold> · {effortName}</Text>}
               </Text>
             )}
@@ -1548,15 +1557,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
           {steps.length === 0
-            ? <Text color={MUTED_READABLE}>no plan yet</Text>
+            ? <Text color={mutedReadable()}>no plan yet</Text>
             : <StepRows steps={steps} />}
-          <Text color={MUTED_READABLE}>session {store.session === undefined ? '' : String(store.session.id)}</Text>
+          <Text color={theme.text}>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
           {/* Embedded harness version sits ABOVE the dsh-tui version, flush
               against the workspace path at the sidebar bottom. */}
-          <Text color={MUTED_READABLE}>deepseek-harness {HARNESS_VERSION}</Text>
-          <Text color={MUTED_READABLE}>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
-          <Text color={MUTED_READABLE} wrap="truncate">{store.workspace}</Text>
+          <Text color={theme.text}>deepseek-harness {HARNESS_VERSION}</Text>
+          <Text color={theme.text}>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
+          <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
       </Box>
@@ -1577,7 +1586,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box flexGrow={1} />
         {statsLine !== '' && (
           <Box flexShrink={0}>
-            <Text color={MUTED_READABLE} wrap="truncate">{statsLine}</Text>
+            <Text color={theme.text} wrap="truncate">{statsLine}</Text>
           </Box>
         )}
       </Box>

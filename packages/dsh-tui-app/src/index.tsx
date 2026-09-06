@@ -50,6 +50,7 @@ import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type Se
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
+import { initCharWidthCalibration } from './charwidth.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -73,7 +74,36 @@ export const IS_BETA_BUILD = /[-.]?(beta|rc|alpha|preview)[-.]?/i.test(APP_VERSI
 export const BETA_FOOTER_SUFFIX = process.env.DSH_TUI_BETA?.trim() === '1' ? ' beta' : ''
 
 /** Core services required before the terminal session can start. */
-export const inject = ['agentDefaultModel', 'agents', 'sessions', 'tuiModels']
+export const inject = ['agentDefaultModel', 'agents', 'sessions', 'tuiModels', 'workspaceRegistry']
+
+/** Best-effort: attach a session to the workspace that owns `workspace` (the
+ *  web groups sessions by workspaceId; a session created with only `meta.cwd`
+ *  is otherwise listed as "Ungrouped"). The tui profile mounts the workspace
+ *  registry (see cordis.patch.yml); a path or registry mismatch never takes
+ *  the TUI down. Retries because a just-created session's header may not be
+ *  persisted/indexed the instant the agent handle resolves. */
+async function attachSessionToWorkspace(ctx: unknown, workspace: string, sessionId: string): Promise<void> {
+  try {
+    const wr = (ctx as { workspaceRegistry?: { resolveByPath(p: string): Promise<{ attachSession(id: string): Promise<void> } | undefined> } }).workspaceRegistry
+    const ws = await wr?.resolveByPath(workspace)
+    if (ws !== undefined) {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        try {
+          await ws.attachSession(sessionId)
+          logErrorFileOnly('attach', `attached session ${sessionId} (cwd ${workspace})`)
+          return
+        } catch (error) {
+          if (attempt === 11) logErrorFileOnly('attach', `workspace attach failed: ${String(error)}`)
+          else await new Promise<void>((resolve) => { setTimeout(resolve, 250) })
+        }
+      }
+    } else {
+      logErrorFileOnly('attach', `no workspace for cwd ${workspace}`)
+    }
+  } catch (error) {
+    logErrorFileOnly('attach', `workspace resolve failed: ${String(error)}`)
+  }
+}
 
 /** Plugin config: the invocation flags resolved from the injected provider service. */
 export interface Config {
@@ -628,6 +658,10 @@ export class Store {
   }
   /** Bumped when measured row heights change (see `measureEpoch`). */
   bumpMeasure(): void { this._measureEpoch += 1 }
+  /** Bumped when CPR calibration changes glyph widths: wrapped heights may
+   *  change, so the transcript layout must recompute. Same epoch as measured
+   *  heights — both are "layout-affecting measurements changed". */
+  bumpWidths(): void { this._measureEpoch += 1; this.notify() }
   /** Bumped when an expansion toggle changes row heights (see
    *  `expansionEpoch`). */
   private bumpExpansion(): void { this._expansionEpoch += 1 }
@@ -2127,6 +2161,17 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       const result = await establish()
       handle = result.handle
       resumed = result.resumed
+      // dsh-tui and the web share the session store under
+      // ~/.dsh/sessions/<cwd-encoded>/, but the web groups sessions by
+      // workspaceId. A dsh-tui session is created with `meta.cwd` only, so the
+      // harness never attaches it and the web lists it under "Ungrouped".
+      // Attach this session to the workspace that owns `config.workspace` (when
+      // one exists — e.g. the web-created "deepseek" workspace) so it groups
+      // under the SAME workspace instead of Ungrouped. Best-effort: a path or
+      // registry mismatch must never break the TUI boot.
+      if (handle !== undefined) {
+        void attachSessionToWorkspace(ctx, config.workspace, handle.agent.session.id)
+      }
       break
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -2625,6 +2670,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         sessionId = agent.session.id
         sessionRef.current = sessionId
         store.setSession(agent.session)
+        void attachSessionToWorkspace(ctx, config.workspace, agent.session.id)
         touchSession(sessionId)
         resetSessionStats()
         store.clear() // transcript + steps from the old session
@@ -2659,6 +2705,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         sessionId = agent.session.id
         sessionRef.current = sessionId
         store.setSession(agent.session)
+        void attachSessionToWorkspace(ctx, config.workspace, agent.session.id)
         touchSession(sessionId)
         resetSessionStats()
         const history = foldHistoryEvents(agent.session.snapshotEvents())
@@ -2718,6 +2765,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
     process.stdin.setRawMode(true)
   }
+
+  // Calibrate ambiguous glyph widths against the real terminal (CPR/ESC[6n) so
+  // rows align for THIS terminal's fonts: measure while idle, re-layout once a
+  // width lands. Deferred whenever the agent is busy so probing never contends
+  // with streaming frames or typed input.
+  initCharWidthCalibration({
+    isBusy: () => store.running || store.paused,
+    onWidthsChanged: () => store.bumpWidths(),
+  })
 
   // Park the REAL terminal cursor at the composer caret after every full-screen
   // frame, and keep it visible. Ink hides the terminal cursor and (previously)
