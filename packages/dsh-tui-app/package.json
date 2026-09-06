@@ -66,6 +66,10 @@
       "types": "./lib/types/plan.d.ts",
       "default": "./lib/plan.js"
     },
+    "./sidebar-toggle": {
+      "types": "./lib/types/sidebar-toggle.d.ts",
+      "default": "./lib/sidebar-toggle.js"
+    },
     "./selftest": {
       "types": "./lib/types/selftest.d.ts",
       "default": "./lib/selftest.js"

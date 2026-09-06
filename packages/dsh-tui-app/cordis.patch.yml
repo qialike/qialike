@@ -47,7 +47,13 @@
 # executor), so it is enabled alongside the OS sandbox; the sandbox-POLICY
 # service still owns the session `sandbox:mode` that the TUI's Tab switch
 # writes, feeding the sandbox_permissions + approval escalation path.
+# On Windows the SEA single file cannot embed the native ACL restricted-token
+# runner (build.mjs stubs pwsh-sandbox), so the only mountable executor is the
+# unconfined pwsh-local; permission-presets refuses to mount over an
+# unconfined executor (its check fails loud), so the row is disabled on
+# Windows only. POSIX keeps it enabled over the confined bash-sandbox rung.
 - id: permission
+  disabled: !!js process.platform === 'win32'
 
 - id: bash-sandbox
   config:
@@ -55,6 +61,18 @@
 
 - id: pwsh-sandbox
   disabled: true
+
+# Windows `ctx.shell` executor. The base pwsh-sandbox row this surface disables
+# above is the native ACL restricted-token runner, which a single-file SEA
+# cannot bundle (build.mjs stubs the module); without any executor the
+# pwsh tool row and permission-presets row stay pending on `shell` and boot
+# fails the activation audit. Windows still needs one shell executor, so mount
+# the non-native pwsh-local provider on Windows only, mirroring the base
+# bundle's per-platform bash/pwsh pairing (POSIX keeps bash-sandbox).
+- insert:
+    - id: pwsh-local
+      name: '@deepseek-ai/dsh-pwsh-local'
+      disabled: !!js process.platform !== 'win32'
 
 # fs-sandbox is the PURE-JS file-policy fence (no native addon): write/edit/
 # delete tools consult the session sandbox-policy mode and deny mutations in
@@ -114,6 +132,12 @@
     # ~/.dsh/themes/*.json palettes; /theme switches live and persists.
     - id: tui-theme
       name: '@yourname/dsh-tui-app/theme-plugin'
+
+    # Steps sidebar visibility: `/sidebar` command (+ click on the Steps title
+    # band) toggles the right panel between auto/on/off; the choice persists in
+    # dsh-tui.json.
+    - id: tui-sidebar-toggle
+      name: '@yourname/dsh-tui-app/sidebar-toggle'
 
 
     - id: tui-models

@@ -45,7 +45,7 @@ import { TUI_MODELS_SERVICE, type AddProviderInput, type ModelsProviderOption, t
 import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
 import { emptySessionStats, foldSessionStats, type SessionStats } from './session-stats.ts'
 
-import { readHiddenProviders, resolveResumeLast, setHiddenProviders } from './config.ts'
+import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
 import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
@@ -307,6 +307,24 @@ export class Store {
   /** Bumped on every theme (re)apply so memoized rows re-render with new colors. */
   get themeEpoch(): number { return this._themeEpoch }
   bumpTheme(): void { this._themeEpoch += 1; this.notify() }
+
+  // ── right sidebar (Steps) visibility ──────────────────────────────────────
+  private _sidebarMode: SidebarMode = readSidebarMode()
+  /** Right-sidebar visibility mode: `auto` follows the width threshold, `on`/
+   *  `off` pin it (persisted across runs). */
+  get sidebarMode(): SidebarMode { return this._sidebarMode }
+  setSidebarMode(mode: SidebarMode): void {
+    this._sidebarMode = mode
+    persistSidebarMode(mode)
+    this.notify()
+  }
+  /** Cycle `auto → on → off → auto` (the `/sidebar` command and a Steps-title
+   *  click both use this); returns the new mode. */
+  cycleSidebarMode(): SidebarMode {
+    const next: SidebarMode = this._sidebarMode === 'auto' ? 'on' : this._sidebarMode === 'on' ? 'off' : 'auto'
+    this.setSidebarMode(next)
+    return next
+  }
 
   // ── action slots (injected by start(); panels call them through the store) ──
   /** Sent-message history (shared with the conversation panel's browse). */
@@ -1474,6 +1492,26 @@ async function apiKeyConfigured(ctx: Context): Promise<boolean> {
   }
 }
 
+/** Whether the CURRENT provider's own API key is configured. The composer
+ *  label/"not set" state must follow the provider actually selected, not a
+ *  DeepSeek-only probe: adding a non-DeepSeek provider first (e.g. OpenCode
+ *  Zen) would otherwise keep showing "not set" although its key is stored,
+ *  while a first-added DeepSeek provider "succeeds" purely because the probe
+ *  hardcodes the DeepSeek key. Falls back to the DeepSeek check when the
+ *  models service (per-provider key status) is unavailable. */
+async function providerConfigured(ctx: Context, provider: string): Promise<boolean> {
+  if (provider === 'deepseek-official') return apiKeyConfigured(ctx)
+  const modelsService = ctx.get('tuiModels') as
+    | { keyConfigured?(provider: string): Promise<boolean> }
+    | undefined
+  try {
+    if (modelsService?.keyConfigured !== undefined) return await modelsService.keyConfigured(provider)
+  } catch {
+    // fall through to the best-effort DeepSeek probe below
+  }
+  return apiKeyConfigured(ctx)
+}
+
 /** Group the models service's providers into first-level entries (one per provider). */
 function buildProviderEntries(providers: readonly ModelsProviderOption[]): ProviderModelsEntry[] {
   return providers.map((p) => ({
@@ -1702,6 +1740,17 @@ export function apply(ctx: Context, config: Config): void {
 /** The async session lifetime, started from `apply` and owned by this plugin. */
 async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   await ctx.get('loader')?.await()
+  // The loader activates entries in service-availability waves, and
+  // `loader.await()` can settle at a momentarily quiescent point before the
+  // agent-loop row has activated. The agent factory is registered by that
+  // row's AgentLoop service on construction; creating or resuming the launch
+  // session before then throws "no agent factory registered (load an
+  // agent-loop plugin)". Wait (bounded) for the agentLoop service so the
+  // first create/resume below runs after the factory registration.
+  const factoryDeadline = Date.now() + 5_000
+  while (ctx.get('agentLoop') === undefined && Date.now() < factoryDeadline) {
+    await new Promise<void>((resolve) => { setTimeout(resolve, 10) })
+  }
   const agents = ctx.get('agents')
   const defaultModel = ctx.get('agentDefaultModel')
   const sessions = ctx.get('sessions')
@@ -1724,22 +1773,47 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // real content in this same directory — empty sessions (created and exited
   // without a message) are skipped, so relaunching picks up the last actual
   // work rather than a blank transcript.
+  //
+  // The registry's factory registration can land a short moment AFTER the
+  // loader reports quiescence (late service-availability waves during boot);
+  // create/resume throws "no agent factory registered" before any side effect
+  // when it has not landed yet. Launching the session must tolerate that
+  // transient gap, so the establish attempt retries with a bounded window.
   let handle: AgentHandle | undefined
   let resumed = false
-  if (config.resume !== undefined) {
-    handle = await agents.resume({ resumeSessionId: SessionId(config.resume), agentOptions, setup })
-    resumed = true
-  } else if (resolveResumeLast()) {
-    handle = await autoResumeNewest(ctx, agents, config.workspace, agentOptions, setup)
-    resumed = handle !== undefined
+  const establish = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
+    let nextHandle: AgentHandle | undefined
+    let nextResumed = false
+    if (config.resume !== undefined) {
+      nextHandle = await agents.resume({ resumeSessionId: SessionId(config.resume), agentOptions, setup })
+      nextResumed = true
+    } else if (resolveResumeLast()) {
+      nextHandle = await autoResumeNewest(ctx, agents, config.workspace, agentOptions, setup)
+      nextResumed = nextHandle !== undefined
+    }
+    if (nextHandle === undefined) {
+      nextHandle = await agents.create({
+        sessionId: SessionId(`session-${randomUUID()}`),
+        meta: { cwd: config.workspace },
+        agentOptions,
+        setup,
+      })
+    }
+    return { handle: nextHandle, resumed: nextResumed }
   }
-  if (handle === undefined) {
-    handle = await agents.create({
-      sessionId: SessionId(`session-${randomUUID()}`),
-      meta: { cwd: config.workspace },
-      agentOptions,
-      setup,
-    })
+  const NO_FACTORY = /no agent factory registered/
+  const factoryRetryDeadline = Date.now() + 10_000
+  for (;;) {
+    try {
+      const result = await establish()
+      handle = result.handle
+      resumed = result.resumed
+      break
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!NO_FACTORY.test(message) || Date.now() >= factoryRetryDeadline) throw error
+      await new Promise<void>((resolve) => { setTimeout(resolve, 25) })
+    }
   }
   // `handle` / `agent` / `sessionId` are reassigned by `newSessionAction` when
   // `/new` switches to a fresh session; every closure below reads them through
@@ -1779,7 +1853,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // distinguishable), plus the saved reasoning effort when one is selected.
   const savedEffort = selection.reasoningEffort === undefined ? undefined : String(selection.reasoningEffort)
   const effortSuffix = savedEffort === undefined ? '' : ` · ${reasoningEffortName(savedEffort)}`
-  const hasKey = await apiKeyConfigured(ctx)
+  const hasKey = await providerConfigured(ctx, agentOptions.provider ?? 'deepseek-official')
   const modelLabel = hasKey
     ? `${providerDisplayName(agentOptions.provider ?? 'deepseek-official', templates())} · ${modelDisplayName(agentOptions.model)}${effortSuffix}`
     : 'not set'
@@ -1997,7 +2071,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const modelName = providerEntry?.models.find((m) => m.id === model)?.name ?? modelDisplayName(model)
     const effortDisplay = effort === undefined ? '' : reasoningEffortName(effort)
     const effortSuffix = effortDisplay === '' ? '' : ` · ${effortDisplay}`
-    void apiKeyConfigured(ctx).then(ok => store.setModelLabel(ok ? `${providerName} · ${modelName}${effortSuffix}` : 'not set', ok ? effortDisplay : ''))
+    void providerConfigured(ctx, provider).then(ok => store.setModelLabel(ok ? `${providerName} · ${modelName}${effortSuffix}` : 'not set', ok ? effortDisplay : ''))
     store.append('status', `models: ${providerName} · ${modelName}${effortSuffix}`, true)
   }
   // Ctrl+T / Alt+T: cycle the current model's reasoning effort through its
@@ -2081,9 +2155,27 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       store.startProviderList(names)
     })
   }
+  // When the FIRST configured provider is added and it is not the built-in
+  // DeepSeek route, promote it to the current model immediately. Before any
+  // provider exists the selection defaults to (keyless) DeepSeek, so without
+  // this the newly added gateway never becomes the usable model until it is
+  // manually re-picked — the asymmetry where "first provider = DeepSeek works,
+  // first provider = anything else shows not set / seems to fail to add".
+  const activateFirstProviderIfNeeded = (provider: string, entries: readonly ProviderModelsEntry[], wasEmpty: boolean): void => {
+    if (!wasEmpty || provider === 'deepseek-official') return
+    if (store.currentModel.provider === provider && store.currentModel.model !== '') return
+    const entry = entries.find((e) => e.provider === provider)
+    const model = entry?.models[0]?.model
+    if (entry === undefined || model === undefined) return
+    store.modelsSaveAction(provider, model)
+    store.append('status', `models: activated ${entry.name} · ${modelDisplayName(model)} as the current model`, true)
+  }
   store.keyDialogSubmit = (provider: string, name: string, key: string) => {
     if (modelsService === undefined) return
-    void modelsService.setKey(provider, key).then((result) => {
+    void (async (): Promise<void> => {
+      let wasEmpty = true
+      try { wasEmpty = (await modelsService.listConfigured()).length === 0 } catch { /* treat as empty */ }
+      const result = await modelsService.setKey(provider, key)
       if (!result.ok) {
         store.append('status', `models: ${result.error}`, true)
         return
@@ -2099,6 +2191,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         void modelsService.listConfigured().then((providers) => {
           const entries = buildProviderEntries(providers)
           if (entries.some((e) => e.provider === provider) || attempts <= 0) {
+            activateFirstProviderIfNeeded(provider, entries, wasEmpty)
             store.openModels(entries, Math.max(0, entries.findIndex((e) => e.provider === provider)))
             // Refresh the total-provider count shown after ＋ Add provider.
             void modelsService.listAll().then((names) => store.setProviderTotal(names.length)).catch(() => {})
@@ -2108,14 +2201,17 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         })
       }
       refresh(25)
-    })
+    })()
   }
   store.providerFormSubmit = (input: AddProviderInput) => {
     if (modelsService === undefined) {
       store.showProviderFormError('models service unavailable')
       return
     }
-    void modelsService.addProvider(input).then((result) => {
+    void (async (): Promise<void> => {
+      let wasEmpty = true
+      try { wasEmpty = (await modelsService.listConfigured()).length === 0 } catch { /* treat as empty */ }
+      const result = await modelsService.addProvider(input)
       if (!result.ok) {
         store.showProviderFormError(result.error)
         return
@@ -2125,6 +2221,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       const refresh = (attempts: number): void => {
         const entries = buildProviderEntries(modelsService.listProviders())
         if (entries.some((e) => e.provider === input.route.trim()) || attempts <= 0) {
+          activateFirstProviderIfNeeded(input.route.trim(), entries, wasEmpty)
           store.openModels(entries, Math.max(0, entries.findIndex((e) => e.provider === input.route.trim())))
           // Refresh the total-provider count shown after ＋ Add provider.
           void modelsService.listAll().then((names) => store.setProviderTotal(names.length)).catch(() => {})
@@ -2134,7 +2231,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         setTimeout(() => refresh(attempts - 1), 120)
       }
       refresh(10)
-    })
+    })()
   }
   store.pauseAgent = () => {
     agent.cancel({ kind: 'user' }, { keepInbox: true })
@@ -2295,7 +2392,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     process.stdout.off('resize', onResize)
     process.stdin.off('data', onStdin)
     void app.unmount()
-    try { process.stdout.write('\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
+    try { process.stdout.write('\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
   })
   await agent.whenIdle()
 }

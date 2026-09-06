@@ -23,6 +23,7 @@ import {
   type TuiService,
 } from '../index.tsx'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
+import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, dockInnerWidth } from '../config.ts'
 import { formatSessionStats } from '../session-stats.ts'
 import { theme } from '../theme.ts'
@@ -40,6 +41,11 @@ let store!: Store
 export const inject = ['tui']
 
 const COMPOSER_MIN_HEIGHT = 5
+
+/** Readable-but-dimmed tone for auxiliary UI text (status bar, Steps meta,
+ *  composer footer, hints, reasoning preview): between the old fully-dim look
+ *  and full `theme.text` — the "slightly brighter than before" compromise. */
+const MUTED_READABLE = '#b8b8c0'
 
 // opencode-style message area (mirrors ~/opencode routes/session/index.tsx):
 // a USER message is a left colored rail (┃ + space) with the text in a column
@@ -201,11 +207,11 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
     // the column), breaking the left alignment. The leading glyph is an
     // animated spinner while the model is actively thinking (ThinkingIcon).
     return expandReasoning
-      ? <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text dimColor wrap="wrap">{item.text}</Text></Box>
+      ? <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text color={MUTED_READABLE} wrap="wrap">{item.text}</Text></Box>
       : (
         <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
           <Text color={theme.accent}><ThinkingIcon active={active} /> Think</Text>
-          <Text dimColor wrap="wrap">{item.text.split('\n')[0]}</Text>
+          <Text color={MUTED_READABLE} wrap="wrap">{item.text.split('\n')[0]}</Text>
         </Box>
       )
   }
@@ -239,7 +245,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
   }
   return (
     <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
-      <Text dimColor={item.dim} wrap="wrap">
+      <Text color={MUTED_READABLE} wrap="wrap">
         {item.text}
       </Text>
     </Box>
@@ -293,12 +299,12 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
   }, [props.animate])
   if (props.paused) return <Text color={theme.warning}>⏸ Paused</Text>
   // Idle: a STATIC marker (⠿, not an animated spinner frame) + "Idle".
-  if (!props.animate) return <Text dimColor>⠿ Idle</Text>
+  if (!props.animate) return <Text color={MUTED_READABLE}>⠿ Idle</Text>
   const armed = Date.now() - store.lastEscTime < 800
   return (
     <Text color={theme.info}>
       {SPINNER_FRAMES[frame]}
-      <Text dimColor> Working · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
+      <Text color={MUTED_READABLE}> Working · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
     </Text>
   )
 }
@@ -374,10 +380,97 @@ function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
 
 // ── layout helpers ──────────────────────────────────────────────────────────
 
+/** Whether the Steps sidebar is drawn at `width`: the manual store override
+ *  (`on`/`off`) wins; `auto` follows the width threshold. Every geometry helper
+ *  consults this so the transcript/composer widths always match the sidebar
+ *  that is actually drawn (including after a user hide/show). */
+function sidebarVisibleFor(width: number): boolean {
+  const mode = store.sidebarMode ?? 'auto'
+  if (mode === 'off') return false
+  if (mode === 'on') return true
+  return width >= SIDEBAR_MIN_WIDTH
+}
+
+/** The numeric right Steps sidebar width, when the sidebar is visible. Mirrors
+ *  the renderer's `sidebarWidth` so composer geometry can never drift from the
+ *  drawn sidebar. */
+function sidebarWidthFor(width: number): number {
+  return sidebarVisibleFor(width) ? Math.max(20, Math.round(width * 0.3)) : 0
+}
+
+/** The composer's outer width: the full terminal width, or — when the Steps
+ *  sidebar is visible — exactly the message column width, so the composer's
+ *  right border sits flush against the sidebar's left edge and input text
+ *  never extends beneath/right of the sidebar. */
+function composerOuterWidth(width: number): number {
+  return Math.max(1, width - sidebarWidthFor(width))
+}
+
+/** The composer text wrap width: outer width minus round border (2) and
+ *  paddingX (2). */
+function composerUsable(width: number): number {
+  return Math.max(10, composerOuterWidth(width) - 4)
+}
+
+/** Wrap composer text exactly like Ink's `<Text wrap="wrap">`: the same
+ *  wrap-ansi call Ink's wrap-text.js makes (`trim: false, hard: true`), so
+ *  composer height/caret math can never drift from the rendered rows. Words
+ *  longer than the column break anywhere; shorter words stay whole. */
+function composerWrap(text: string, usable: number): string[] {
+  if (text === '') return ['']
+  return wrapAnsi(text, usable, { trim: false, hard: true }).split('\n')
+}
+
+/** Wrap one logical input line into visual rows, keeping each row's starting
+ *  character index in `input` so a click/caret cell can map back to an index.
+ *  `offset` is the logical line's first index in the full composer input. */
+function composerRowsWithStart(line: string, usable: number, offset: number): Array<{ start: number; text: string }> {
+  const out: Array<{ start: number; text: string }> = []
+  if (line === '') return [{ start: offset, text: '' }]
+  for (const text of composerWrap(line, usable)) out.push({ start: offset, text })
+  return out
+}
+
+/** Per-VISUAL-row character offsets of the whole input: wrap every logical line
+ *  with Ink's rule and walk each wrapped row's character length, so a row's
+ *  `start` is the input index where that visual row begins (rows are bijective
+ *  with the text because wrap keeps every character with `trim: false`). */
+function composerVisualRows(input: string, usable: number): Array<{ start: number; text: string }> {
+  const rows: Array<{ start: number; text: string }> = []
+  let offset = 0
+  for (const seg of input.split('\n')) {
+    let at = 0
+    for (const text of composerWrap(seg, usable)) {
+      rows.push({ start: offset + at, text })
+      at += text.length
+    }
+    offset += seg.length + 1
+  }
+  return rows
+}
+
+/** Which visual rows are visible in the composer's text area, given the caret's
+ *  global row: a window of `textArea` rows that keeps the caret row visible
+ *  (tail when typing at the end). Returns the first visible row and the exact
+ *  `[start, end)` character range of those rows, so the caller can render ONLY
+ *  that window — the box never overflows, and the caret row stays inside it. */
+function composerWindow(input: string, usable: number, caretRow: number, textArea: number): { rows: Array<{ start: number; text: string }>; first: number; start: number; end: number } {
+  const rows = composerVisualRows(input, usable)
+  const total = rows.length
+  const area = Math.max(1, textArea)
+  const first = total <= area ? 0 : Math.max(0, Math.min(caretRow - (area - 1), total - area))
+  const lastRow = rows[Math.min(total - 1, first + area - 1)]!
+  return { rows, first, start: rows[first]!.start, end: lastRow.start + lastRow.text.length }
+}
+
 function composerHeight(width: number, input: string, min: number): number {
-  const usable = Math.max(10, width - 4)
-  const wrapped = input.split('\n').reduce((sum, seg) => sum + Math.max(1, Math.ceil(visualWidth(seg) / usable)), 0)
-  const cap = Math.max(min, Math.floor(store.rows * 0.4))
+  const usable = composerUsable(width)
+  const wrapped = input.split('\n').reduce((sum, seg) => sum + composerWrap(seg, usable).length, 0)
+  // The composer keeps growing (pushing the message area upward) until it would
+  // leave the message viewport below its ~3-row minimum; only past that point
+  // does taller input scroll inside the composer (see the render + caret math),
+  // instead of overflowing its box over the footer/status rows.
+  const cap = Math.max(min, store.rows - 8)
   return Math.min(min + wrapped - 1, cap)
 }
 
@@ -459,34 +552,26 @@ function colToChar(line: string, col: number): number {
   return line.length
 }
 
+/** The caret's GLOBAL visual row (0-based over ALL wrapped input rows). */
+function composerCaretGlobalRow(input: string, cursor: number, usable: number): number {
+  const caret = Math.max(0, Math.min(cursor, input.length))
+  return Math.max(0, composerWrap(input.slice(0, caret), usable).length - 1)
+}
+
 function composerInputIndex(row: number, col: number): number | null {
   const width = process.stdout.columns ?? 80
   const height = process.stdout.rows ?? 24
   const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
   const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
-  const inRow = row - composerTop
-  const usable = Math.max(10, width - 4)
-  const visualStarts: number[] = []
-  for (let i = 0; i <= store.input.length; i++) {
-    if (i === 0 || store.input[i - 1] === '\n') visualStarts.push(i)
-  }
-  const lineAt = (start: number): string => {
-    const nl = store.input.indexOf('\n', start)
-    return store.input.slice(start, nl === -1 ? store.input.length : nl)
-  }
-  const inputRows = visualStarts.reduce((sum, start) => sum + Math.max(1, Math.ceil(visualWidth(lineAt(start)) / usable)), 0)
-  const clickRow = inRow - 1
-  if (clickRow < 0 || clickRow >= inputRows) return null
-  let acc = 0
-  for (const start of visualStarts) {
-    const line = lineAt(start)
-    const visLines = Math.max(1, Math.ceil(visualWidth(line) / usable))
-    if (clickRow < acc + visLines) {
-      return start + colToChar(line, Math.max(0, col - 3))
-    }
-    acc += visLines
-  }
-  return null
+  const usable = composerUsable(width)
+  const lead = store.composerImage !== null ? 1 : 0
+  const textArea = Math.max(1, composerH - 4)
+  const caretRow = composerCaretGlobalRow(store.input, store.cursor, usable)
+  const win = composerWindow(store.input, usable, caretRow, textArea)
+  const clickRow = win.first + (row - (composerTop + 1 + lead))
+  if (clickRow < 0 || clickRow >= win.rows.length) return null
+  const target = win.rows[clickRow]!
+  return target.start + colToChar(target.text, Math.max(0, col - 3))
 }
 
 function positionCursorByMouse(row: number, col: number): void {
@@ -499,25 +584,19 @@ function composerCaretCell(): { row: number; col: number } | null {
   const height = process.stdout.rows ?? 24
   const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
   const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
-  const usable = Math.max(10, width - 4)
+  const usable = composerUsable(width)
+  const lead = store.composerImage !== null ? 1 : 0
   const caret = Math.max(0, Math.min(store.cursor, store.input.length))
-  let visRow = 0
-  let visCol = 0
-  let pos = 0
-  while (pos < caret) {
-    const nl = store.input.indexOf('\n', pos)
-    const end = nl === -1 ? store.input.length : nl
-    if (caret <= end) {
-      const upToCaret = visualWidth(store.input.slice(pos, caret))
-      visRow += Math.floor(upToCaret / usable)
-      visCol = upToCaret % usable
-      pos = caret
-    } else {
-      visRow += Math.max(1, Math.ceil(visualWidth(store.input.slice(pos, end)) / usable))
-      pos = end + 1
-    }
-  }
-  return { row: composerTop + 1 + visRow, col: 3 + visCol }
+  // The caret cell is the end of the wrapped PREFIX (input[0..caret)): the
+  // suffix that follows the caret starts at that same cell, so wrapping the
+  // prefix with Ink's own rule yields the exact rendered caret position.
+  const lines = composerWrap(store.input.slice(0, caret), usable)
+  const lastLine = lines[lines.length - 1] ?? ''
+  const caretRow = Math.max(0, lines.length - 1)
+  const textArea = Math.max(1, composerH - 4)
+  const win = composerWindow(store.input, usable, caretRow, textArea)
+  const visRow = Math.max(0, caretRow - win.first)
+  return { row: composerTop + 1 + lead + visRow, col: 3 + visualWidth(lastLine) }
 }
 
 function composerSelectionRange(sel: { aRow: number; aCol: number; cRow: number; cCol: number }): { start: number; end: number } | null {
@@ -536,7 +615,7 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   const input = store.input
   const composerH = composerHeight(width, input, COMPOSER_MIN_HEIGHT)
   const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
-  const usable = convUsableWidth(width, store.width >= SIDEBAR_MIN_WIDTH)
+  const usable = convUsableWidth(width, sidebarVisibleFor(width))
   const rows = buildTranscriptRows(store.getItems(), usable, store.expandReasoning)
   const joined = rows.map((r) => r.text).join('\n')
   const inputStart = joined.length + 1
@@ -705,6 +784,14 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   if (k.pageDown) { store.scrollPage(1); return }
   if (k.home) { store.scrollTop(); return }
   if (k.end) { store.scrollBottom(); return }
+  // A left-click on the Steps sidebar's TITLE band toggles the sidebar
+  // (auto → on → off → auto). Only reachable while the sidebar is drawn.
+  if (k.mousePress && sidebarVisibleFor(store.width) && k.mousePress.row <= 4
+      && k.mousePress.col > store.width - sidebarWidthFor(store.width)) {
+    const mode = store.cycleSidebarMode()
+    store.flashStatus(mode === 'auto' ? 'Steps: auto (follows width)' : mode === 'on' ? 'Steps: shown' : 'Steps: hidden')
+    return
+  }
   // While the slash command palette is open, the mouse drives it: the wheel
   // moves the highlighted command (like ↑/↓) and a left-click on a row runs it
   // (like Enter). Otherwise the wheel scrolls the transcript and clicks are the
@@ -826,7 +913,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const modelBaseLabel = effortName === '' || !modelLabel.endsWith(` · ${effortName}`)
     ? modelLabel
     : modelLabel.slice(0, Math.max(0, modelLabel.length - effortName.length - 3))
-  const showSidebar = width >= SIDEBAR_MIN_WIDTH
+  const showSidebar = sidebarVisibleFor(width)
 
   const filtered = useMemo(
     () => filteredCommands(props.tui),
@@ -841,6 +928,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const status = isRawModeSupported ? '' : '(raw input unsupported) '
 
   const composerH = composerHeight(width, input, COMPOSER_MIN_HEIGHT)
+  // Scroll window: when the input's wrapped rows exceed the visible text area,
+  // render only the caret-following window (keeps the caret row visible;
+  // nothing overflows over the composer footer).
+  const cUsable = composerUsable(width)
+  const caretGlobalRow = Math.max(0, composerWrap(input.slice(0, store.cursor), cUsable).length - 1)
+  const cWin = composerWindow(input, cUsable, caretGlobalRow, Math.max(1, composerH - 4))
   // Approval dock height: fixed — border 2 + padding 2 + header 1 + gap 1 +
   // one truncated reason line 1 + gap 1 + choice row 1 + gap 1 + hint 1.
   const approvalH = store.approval === null ? 0 : 11
@@ -946,18 +1039,24 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         </Box>
       )
 
-  const renderComposerText = (): React.ReactNode => {
-    const len = input.length
+  // Composer input render: display exactly `input.slice(start, end)` — the
+  // visible scroll window (tail-follow when the input is taller than the text
+  // area). Rendering only the window keeps the box height exact (nothing
+  // overflows over the footer row) while the single Ink <Text wrap> paints
+  // reliably (row/overflow-clip variants did not). The window keeps the caret
+  // row visible, so typing at the end shows the newest lines.
+  const renderComposerText = (start: number, end: number): React.ReactNode => {
+    const text = input.slice(start, end)
     const seg = (a: number, b: number, inv: boolean, k: string): React.ReactNode =>
-      a < b ? <Text key={k} inverse={inv}>{input.slice(a, b)}</Text> : null
-    if (selRange === null) return <>{input}</>
-    const s = selRange.start
-    const e = selRange.end
+      a < b ? <Text key={k} inverse={inv}>{text.slice(a, b)}</Text> : null
+    if (selRange === null || selRange.end <= start || selRange.start >= end) return <>{text}</>
+    const s = Math.max(0, selRange.start - start)
+    const e = Math.min(text.length, Math.max(0, selRange.end - start))
     return (
       <>
         {seg(0, s, false, 's0')}
         {seg(s, e, true, 's1')}
-        {seg(e, len, false, 's2')}
+        {seg(e, text.length, false, 's2')}
       </>
     )
   }
@@ -974,10 +1073,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       <Box position="absolute" width="100%" height={store.rows} flexDirection="column">
         <Text backgroundColor={theme.bg} wrap="wrap">{' '.repeat(Math.max(0, store.width * store.rows))}</Text>
       </Box>
+      {/* Middle row: a left column (message area on top, composer pinned to its
+          bottom) plus — when the Steps sidebar is visible — the sidebar as a
+          full-height right sibling, so its bottom border lands on the SAME row
+          as the composer's bottom border. */}
       <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="row" width="100%">
-        <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
+        <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column">
+          <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           {items.length === 0
-            ? <Text dimColor>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
+            ? <Text color={MUTED_READABLE}>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
             : (
               <Box flexGrow={1} flexShrink={1} minHeight={0} overflowY="hidden" flexDirection="column">
                 <Box marginTop={-shift} flexDirection="column">
@@ -1021,40 +1125,43 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             </Box>
           )}
         </Box>
+        {/* The composer is pinned to the bottom of the message column and spans
+            its full width: with the Steps sidebar visible its right border sits
+            flush against the sidebar's left edge and input wraps before it. */}
+        <Box flexShrink={0} borderStyle="round" borderColor={theme.border} paddingX={1} flexDirection="column" justifyContent="space-between"
+          height={composerHeight(width, input, COMPOSER_MIN_HEIGHT) + (store.composerImage !== null ? 1 : 0)}>
+          <Box flexDirection="column">
+            {store.composerImage !== null && (
+              <Text color={theme.primary}>
+                [Image: {store.composerImage.name}] <Text dimColor>· Esc to remove</Text>
+              </Text>
+            )}
+            <Text color={theme.text} wrap="wrap">{status}{renderComposerText(cWin.start, cWin.end)}</Text>
+          </Box>
+          <Box flexDirection="row" gap={2} paddingY={1} marginTop={1}>
+            <Text color={permissionColor}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} (Tab)</Text>
+            <Box flexGrow={1} />
+            {modelLabel !== '' && (
+              <Text color={MUTED_READABLE}>Model: {modelBaseLabel}
+                {effortName !== '' && <Text color={theme.warning} bold> · {effortName}</Text>}
+              </Text>
+            )}
+          </Box>
+        </Box>
+        </Box>
         {showSidebar && (
         <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
           {steps.length === 0
-            ? <Text dimColor>no plan yet</Text>
+            ? <Text color={MUTED_READABLE}>no plan yet</Text>
             : <StepRows steps={steps} />}
-          <Text dimColor>session {store.session === undefined ? '' : String(store.session.id)}</Text>
+          <Text color={MUTED_READABLE}>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
           {/* Version sits flush against the workspace path at the sidebar bottom. */}
-          <Text dimColor>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
-          <Text dimColor wrap="truncate">{store.workspace}</Text>
+          <Text color={MUTED_READABLE}>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
+          <Text color={MUTED_READABLE} wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
-      </Box>
-
-      <Box flexShrink={0} borderStyle="round" borderColor={theme.border} paddingX={1} flexDirection="column" justifyContent="space-between"
-        height={composerHeight(width, input, COMPOSER_MIN_HEIGHT) + (store.composerImage !== null ? 1 : 0)}>
-        <Box flexDirection="column">
-          {store.composerImage !== null && (
-            <Text color={theme.primary}>
-              [Image: {store.composerImage.name}] <Text dimColor>· Esc to remove</Text>
-            </Text>
-          )}
-          <Text color={theme.text} wrap="wrap">{status}{renderComposerText()}</Text>
-        </Box>
-        <Box flexDirection="row" gap={2} paddingY={1} marginTop={1}>
-          <Text color={permissionColor}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} (Tab)</Text>
-          <Box flexGrow={1} />
-          {modelLabel !== '' && (
-            <Text dimColor>Model: {modelBaseLabel}
-              {effortName !== '' && <Text color={theme.warning} bold> · {effortName}</Text>}
-            </Text>
-          )}
-        </Box>
       </Box>
 
       <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} height={STATUS_BAR_HEIGHT}>
@@ -1073,7 +1180,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box flexGrow={1} />
         {statsLine !== '' && (
           <Box flexShrink={0}>
-            <Text dimColor wrap="truncate">{statsLine}</Text>
+            <Text color={MUTED_READABLE} wrap="truncate">{statsLine}</Text>
           </Box>
         )}
       </Box>
@@ -1084,8 +1191,18 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
 /** Install the per-frame suffix hook the patched Ink frame writer appends to
  *  every full-screen frame: it re-shows the REAL terminal cursor and parks it
  *  at the composer caret (the macOS IME candidate window anchors to it). The
- *  connect dialog hides the cursor instead (its input is masked dots). */
+ *  connect dialog hides the cursor instead (its input is masked dots).
+ *
+ *  Cursor SHAPE is set here too: terminals differ in their default cursor
+ *  (Ubuntu/GNOME shows a block, Windows Terminal shows a bar), and the surface
+ *  exposes the hardware cursor at the composer caret, so the shape would
+ *  otherwise follow the emulator. Emit DECSCUSR steady-block (`CSI 2 SP q`) so
+ *  every terminal shows the same block caret; the exit handler restores the
+ *  terminal default (`CSI 0 SP q`). */
 export function installFrameSuffix(): void {
+  try {
+    if (process.stdout.isTTY) process.stdout.write('\x1b[2 q')
+  } catch { /* best-effort */ }
   const frameSuffix = (): string => {
     // Park the REAL cursor at the composer caret only while the conversation is
     // the active panel (the macOS IME candidate window anchors to it). Any
@@ -1095,7 +1212,7 @@ export function installFrameSuffix(): void {
     // list row and look like a stray cursor jumping around. Hide it instead.
     if (store.panel !== 'conversation') return '\x1b[?25l'
     const cell = composerCaretCell()
-    return `\x1b[?25h${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
+    return `\x1b[?25h\x1b[2 q${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
   }
   ;(globalThis as unknown as { __dshTuiFrameSuffix?: () => string }).__dshTuiFrameSuffix = frameSuffix
 }
@@ -1113,7 +1230,7 @@ export function apply(ctx: Context): void {
   store.setFrameSelectionGuard((sel) => {
     const width = store.width
     const rows = store.rows
-    const showSidebar = width >= SIDEBAR_MIN_WIDTH
+    const showSidebar = sidebarVisibleFor(width)
     const usable = convUsableWidth(width, showSidebar)
     const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
     const composerTop = rows - composerH - STATUS_BAR_HEIGHT + 1

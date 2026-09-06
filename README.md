@@ -221,8 +221,18 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
    harness persists every session durably, so the previous conversation stays reachable from
    `/sessions` / `--resume`. The current model selection and workspace carry over.
  - **`/export` session export**: bare `/export` opens an **export dialog** (format JSON/Markdown, editable file name, sanitize toggle; `↑/↓` move fields, `←/→` toggle, type the name, `Enter` export); with flags it exports directly: **JSON** (machine-readable, opencode `export` shape) or **Markdown** (human-readable replay): `/export` exports the current session, `/export <sessionId>` a given one, `--markdown` switches format, `--sanitize` redacts content (`[redacted:…]`), `--output <name>` sets a custom file name (extension added; may include subdirectories, e.g. `notes/summary`). Writes `export-<ts>-<id>.(json|md)` into the **workspace root** and shows the path in the status line.
-- **OpenCode-style layout**: a conversation column plus an Activity panel (tool calls/results) and an
-  input dock at the bottom.
+- **`/sidebar` right-panel toggle**: the right-hand **Steps** panel (session id, `Steps X/Y`
+  progress and the step checklist, `no plan yet` when the model did not use `todo_write`) shows
+  automatically when the terminal is wide enough (≥110 columns). `/sidebar` toggles it — bare
+  `/sidebar` cycles `auto → on → off`, `/sidebar on|off|auto` sets a mode directly — and so does a
+  **left-click on the Steps title bar**. `auto` follows the width, `on` forces it visible (even in
+  narrow windows), `off` hides it (the message column and input box widen as in a narrow window).
+  The choice persists in `~/.dsh/dsh-tui.json` (`sidebar_mode`, default `auto`); every geometry —
+  message-column/composer width, wrapping, caret cell, mouse clicks, selection guards — follows the
+  same visibility rule, so layout and caret never misalign when the panel is shown or hidden.
+- **OpenCode-style layout**: a conversation column (transcript + bottom input dock) with the Steps
+  panel to its right when visible (auto at ≥110 columns, or forced with `/sidebar`); the old
+  Activity panel and `/activity` command were removed long ago.
 
 ## Plugin architecture ("everything is a plugin")
 
@@ -280,6 +290,10 @@ examples/cordis.yml     a deploy overlay pinning model + workspace
 tests/smoke.mjs          keyless REAL-composition boot smoke
 ```
 
-`cordis.patch.yml` rides over `dsh-base` and disables the OS sandbox rows (the single file carries
-no native addon), keeping the `workspace-write + ask` approval boundary and the local
-`bash`/`fs` providers.
+`cordis.patch.yml` rides over `dsh-base`; the OS-level sandbox rows are enabled — bash runs via
+`ctx.sandbox.confine()` (bwrap on Linux, Seatbelt on macOS), with `danger-full-access` executing
+unconfined. Native rows a single-file SEA cannot carry are stubbed: the Windows ACL runner
+(`pwsh-sandbox`) is replaced on Windows only by a non-native `pwsh-local` executor that provides
+`ctx.shell`, and the `permission` presets row is disabled on Windows only (POSIX keeps it over the
+confined bash rung). The pure-JS `fs-sandbox` fence plus the `workspace-write + ask` approval
+boundary remain the file-effect gates.

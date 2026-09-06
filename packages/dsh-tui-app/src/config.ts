@@ -39,12 +39,19 @@ export const DEFAULT_RESUME_LAST = true
 /** Environment variable that overrides the auto-resume default and is persisted. */
 export const RESUME_LAST_ENV = 'DSH_TUI_RESUME_LAST'
 
+/** Right-sidebar visibility mode: `auto` follows the terminal width threshold,
+ *  `on`/`off` pin it regardless of width. Persisted so a manual choice
+ *  survives restarts; the `/sidebar` command and a Steps-title click cycle it. */
+export type SidebarMode = 'auto' | 'on' | 'off'
+
 /** The parsed config document. */
 export interface TuiConfig {
   /** Whether launch auto-resumes the newest session in the same directory. */
   resume_last?: boolean
   /** Provider routes hidden from the /models first-level list (persisted). */
   hidden_providers?: string[]
+  /** Right-sidebar visibility mode (persisted). */
+  sidebar_mode?: SidebarMode
 }
 
 /** Absolute path of the dsh-tui config file. */
@@ -112,4 +119,15 @@ export function readHiddenProviders(): string[] {
 /** Persist the hidden-provider route list (best-effort, merged into the config). */
 export function setHiddenProviders(routes: readonly string[]): void {
   persistConfig({ ...readConfig(), hidden_providers: [...routes] })
+}
+
+/** The persisted right-sidebar mode; `auto` when unset or invalid (never throws). */
+export function readSidebarMode(): SidebarMode {
+  const mode = readConfig().sidebar_mode
+  return mode === 'on' || mode === 'off' ? mode : 'auto'
+}
+
+/** Persist the right-sidebar visibility mode (best-effort). */
+export function setSidebarMode(mode: SidebarMode): void {
+  persistConfig({ ...readConfig(), sidebar_mode: mode })
 }

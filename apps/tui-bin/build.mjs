@@ -570,16 +570,71 @@ export function patchInkFullScreen(nm) {
 // __dshTuiTextColor, mirrored by src/theme.ts). Inverse spans (selection) keep
 // the terminal's default inversion for contrast.
 const __dshSgrRe = /\\x1b\\[([0-9;]*)m/g;
+// The SGR flavor for the forced glyph paint must match the color level Ink's
+// own chalk colorization uses on THIS terminal, or the painted glyph cells
+// disagree with the surrounding page (Apple Terminal.app ignores 38;2/48;2 and
+// repaints those glyphs with its palette/default — the mismatched
+// under-character blocks). Reuse chalk's auto-detected level with the same
+// conversion chain (24-bit -> 256 cube/grey -> 16-color): level 3 emits
+// truecolor, level 2 256-color, level 1 16-color, level 0 nothing.
+import chalk from 'chalk';
 const __dshRgb = (hex) => {
     if (typeof hex !== 'string') return null;
     const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
     if (!m) return null;
     const n = parseInt(m[1], 16);
-    return ((n >> 16) & 255) + ';' + ((n >> 8) & 255) + ';' + (n & 255);
+    return [((n >> 16) & 255), ((n >> 8) & 255), (n & 255)];
 };
-const __dshForceBg = (line, bgRgb, fgRgb) => {
-    const bgCode = '\\x1b[48;2;' + bgRgb + 'm';
-    const fgCode = '\\x1b[38;2;' + fgRgb + 'm';
+// rgbToAnsi256: nearest color in the 6x6x6 cube + grey ramp (color-convert).
+const __dshRgbToAnsi256 = (r, g, b) => {
+    if (r === g && g === b) {
+        if (r < 8) return 16;
+        if (r > 248) return 231;
+        return Math.round(((r - 8) / 247) * 24) + 232;
+    }
+    return 16
+        + (36 * Math.round(r / 255 * 5))
+        + (6 * Math.round(g / 255 * 5))
+        + Math.round(b / 255 * 5);
+};
+// ansi256ToAnsi: fold a 256-color code to the nearest 16-color one.
+const __dshAnsi256ToAnsi = (code) => {
+    if (code < 8) return 30 + code;
+    if (code < 16) return 90 + (code - 8);
+    let red, green, blue;
+    if (code >= 232) { red = (((code - 232) * 10) + 8) / 255; green = red; blue = red; }
+    else { code -= 16; const remainder = code % 36; red = Math.floor(code / 36) / 5; green = Math.floor(remainder / 6) / 5; blue = (remainder % 6) / 5; }
+    const value = Math.max(red, green, blue) * 2;
+    if (value === 0) return 30;
+    let result = 30 + ((Math.round(blue) << 2) | (Math.round(green) << 1) | Math.round(red));
+    if (value === 2) result += 60;
+    return result;
+};
+const __dshLevel = () => (typeof chalk !== 'undefined' && typeof chalk.level === 'number') ? chalk.level : 0;
+const __dshBgSeq = (hex) => {
+    const rgb = __dshRgb(hex);
+    if (!rgb) return '';
+    const level = __dshLevel();
+    if (level >= 3) return '\\x1b[48;2;' + rgb.join(';') + 'm';
+    const code = __dshRgbToAnsi256(rgb[0], rgb[1], rgb[2]);
+    if (level === 2) return '\\x1b[48;5;' + code + 'm';
+    if (level === 1) return '\\x1b[' + (__dshAnsi256ToAnsi(code) + 10) + 'm';
+    return '';
+};
+const __dshFgSeq = (hex) => {
+    const rgb = __dshRgb(hex);
+    if (!rgb) return '';
+    const level = __dshLevel();
+    if (level >= 3) return '\\x1b[38;2;' + rgb.join(';') + 'm';
+    const code = __dshRgbToAnsi256(rgb[0], rgb[1], rgb[2]);
+    if (level === 2) return '\\x1b[38;5;' + code + 'm';
+    if (level === 1) return '\\x1b[' + __dshAnsi256ToAnsi(code) + 'm';
+    return '';
+};
+const __dshLineHex = (key) => (typeof globalThis[key] === 'string' && globalThis[key]) || null;
+const __dshForceBg = (line, bgHex, fgHex) => {
+    const bgCode = bgHex ? __dshBgSeq(bgHex) : '';
+    const fgCode = fgHex ? __dshFgSeq(fgHex) : '';
     let out = '';
     let last = 0;
     let bgOn = false;
@@ -589,8 +644,8 @@ const __dshForceBg = (line, bgRgb, fgRgb) => {
     for (let m; (m = __dshSgrRe.exec(line)) !== null;) {
         const seg = line.slice(last, m.index);
         if (seg.length > 0) {
-            if (fgRgb && !fgOn && !inverse) { out += fgCode; fgOn = true; }
-            if (bgRgb && !bgOn && !inverse) { out += bgCode; bgOn = true; }
+            if (fgHex && !fgOn && !inverse) { out += fgCode; fgOn = true; }
+            if (bgHex && !bgOn && !inverse) { out += bgCode; bgOn = true; }
         }
         out += seg;
         const p = m[1] === '' ? ['0'] : m[1].split(';');
@@ -611,29 +666,25 @@ const __dshForceBg = (line, bgRgb, fgRgb) => {
     }
     const tail = line.slice(last);
     if (tail.length > 0) {
-        if (fgRgb && !fgOn && !inverse) out += fgCode;
-        if (bgRgb && !bgOn && !inverse) out += bgCode;
+        if (fgHex && !fgOn && !inverse) out += fgCode;
+        if (bgHex && !bgOn && !inverse) out += bgCode;
     }
     out += tail;
     return out;
 };
-const __dshLineRgb = (key) => {
-    const hex = (typeof globalThis[key] === 'string' && globalThis[key]) || null;
-    return hex ? __dshRgb(hex) : null;
-};
 const writeFullScreenFrame = (stdout, output) => {
     const lines = output.split('\\n');
     const prev = writeFullScreenFrame._prev;
-    const bgRgb = __dshLineRgb('__dshTuiBgColor');
-    const fgRgb = __dshLineRgb('__dshTuiTextColor');
-    const paint = (line) => (bgRgb || fgRgb) ? __dshForceBg(line, bgRgb, fgRgb) : line;
+    const bgHex = __dshLineHex('__dshTuiBgColor');
+    const fgHex = __dshLineHex('__dshTuiTextColor');
+    const paint = (line) => (bgHex || fgHex) ? __dshForceBg(line, bgHex, fgHex) : line;
     let frame = '';
     if (prev === undefined || prev.length !== lines.length) {
         // first frame or a resize: rewrite every line
         for (let i = 0; i < lines.length; i++) {
             frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(lines[i]);
         }
-        if (lines.length > 0) frame += (bgRgb ? '\\x1b[48;2;' + bgRgb + 'm' : '') + '\\x1b[0J'; // clear residue below (shrink)
+        if (lines.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J'; // clear residue below (shrink)
     } else {
         for (let i = 0; i < lines.length; i++) {
             if (prev[i] === lines[i]) continue;
@@ -786,7 +837,7 @@ export function patchInkFrameController(nm) {
 async function buildBundleLib() {
   const pkgDir = join(ROOT, 'packages/dsh-tui-app')
   const result = await build({
-    entryPoints: [join(pkgDir, 'src/index.tsx'), join(pkgDir, 'src/startup.ts'), join(pkgDir, 'src/models.ts'), join(pkgDir, 'src/llm.ts'), join(pkgDir, 'src/opencode.ts'), join(pkgDir, 'src/china-gateways.ts'), join(pkgDir, 'src/foreign-gateways.ts'), join(pkgDir, 'src/azure.ts'), join(pkgDir, 'src/theme-plugin.ts'), join(pkgDir, 'src/panels/conversation.tsx'), join(pkgDir, 'src/panels/approval.tsx'), join(pkgDir, 'src/panels/question.tsx'), join(pkgDir, 'src/panels/models.tsx'), join(pkgDir, 'src/sessions.tsx'), join(pkgDir, 'src/export.tsx'), join(pkgDir, 'src/new.ts'), join(pkgDir, 'src/goal.ts'), join(pkgDir, 'src/plan.ts'), join(pkgDir, 'src/selftest.ts'), join(pkgDir, 'src/image-attach.ts'), join(pkgDir, 'src/invariant.ts')],
+    entryPoints: [join(pkgDir, 'src/index.tsx'), join(pkgDir, 'src/startup.ts'), join(pkgDir, 'src/models.ts'), join(pkgDir, 'src/llm.ts'), join(pkgDir, 'src/opencode.ts'), join(pkgDir, 'src/china-gateways.ts'), join(pkgDir, 'src/foreign-gateways.ts'), join(pkgDir, 'src/azure.ts'), join(pkgDir, 'src/theme-plugin.ts'), join(pkgDir, 'src/sidebar-toggle.ts'), join(pkgDir, 'src/panels/conversation.tsx'), join(pkgDir, 'src/panels/approval.tsx'), join(pkgDir, 'src/panels/question.tsx'), join(pkgDir, 'src/panels/models.tsx'), join(pkgDir, 'src/sessions.tsx'), join(pkgDir, 'src/export.tsx'), join(pkgDir, 'src/new.ts'), join(pkgDir, 'src/goal.ts'), join(pkgDir, 'src/plan.ts'), join(pkgDir, 'src/selftest.ts'), join(pkgDir, 'src/image-attach.ts'), join(pkgDir, 'src/invariant.ts')],
     bundle: true,
     platform: 'node',
     format: 'esm',

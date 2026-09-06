@@ -120,7 +120,8 @@ dist/dsh-tui --help
 - **`/sessions` 会话管理器（唯一的会话选择入口）**：opencode 风格全屏对话框——列出持久化会话（**仅当前工作目录**，与自动恢复同目录语义一致）（**标题**/id，不显示日期时间——日期由分组组头承载），**打字即过滤**（标题/id/cwd），`Enter` 恢复所选、`Ctrl+R` 改名所选（本地持久，重启仍有效）、`Ctrl+F` 置顶/取消置顶（置顶会话在顶部 `📌 Pinned` 组，持久）、`Ctrl+D` 删除所选历史会话（两次确认；当前会话受保护）、`Esc` 两级退出；列表超页支持 `PgUp`/`PgDn`/`Home`/`End`，**按创建时间倒序（最新在前）并按创建日期分组**（`Today` / `Yesterday` / 日期组头）。每行以会话**标题**打头——即**第一个任务的摘要**（如 `你是谁 · @9/1/2026, 5:47:18 PM · /home/pipo/temp`）：harness 的 `session-title` 服务从会话第一条消息折叠生成（确定性 fallback，可被 LLM 标题提供者润色），随会话持久化——包括 `/new` 切换掉的旧会话。该对话框只承载历史会话记录——开启全新会话由 `/new` 负责。内容级搜索暂不可用（harness 单文件进程无 remote 层的会话内容搜索 API）。
 - **`/new` 新会话**：就地开启一个全新会话（对应 opencode 的 "New session" 入口）。取消当前回合、创建新 agent、拆除旧 agent——harness 对所有会话自动持久化，因此之前的对话仍可从 `/sessions` / `--resume` 找回；当前模型选择与工作目录保留。
 - **`/export` 会话导出**：输入 `/export` 弹出**导出对话框**（格式 JSON/Markdown、文件名可编辑、脱敏开关；`↑/↓` 移动字段、`←/→` 切换、输入文件名、`Enter` 导出）；带参数直达：导出会话为 **JSON**（机器可读，opencode `export` 同型）或 **Markdown**（人类可读回放）。`/export` 导出当前会话、`/export <sessionId>` 指定会话、`--markdown` 切换格式、`--sanitize` 脱敏（文本/工具输出替换为 `[redacted:…]`）、`--output <名称>` 自定义文件名（自动加扩展名,可含子目录,如 `notes/summary`）。写入**工作区根目录** `export-<时间>-<id>.(json|md)`，状态行显示路径。
-- **opencode 式布局**：对话列 + Activity 面板（工具调用/结果）+ 底部输入框。
+- **`/sidebar` 右侧栏开关**：右侧 **Steps** 面板（`session <id>` + `Steps X/Y` 进度 + 步骤清单；模型未用 `todo_write` 时显示 `no plan yet`）默认在终端足够宽（≥110 列）时自动显示。输入 `/sidebar` 可切换——无参时循环 `auto → on → off`，`/sidebar on|off|auto` 直接设档；**鼠标左键点击 Steps 标题栏**同样可切换。`auto` 随宽度、`on` 恒显（窄窗也显示）、`off` 恒隐（消息列与输入框随之变宽，等同窄窗布局）。选择持久化到 `~/.dsh/dsh-tui.json` 的 `sidebar_mode`（默认 `auto`）；消息列/输入框宽度、换行、光标格、鼠标点击、选区保护等全部几何与显隐判定一致，切换后布局与光标不会错位。
+- **opencode 式布局**：对话列（转写区 + 底部输入框）+ 右侧 Steps 面板（≥110 列自动显示，或经 `/sidebar` 强制显隐）；旧的 Activity 面板与 `/activity` 命令早已移除。
 
 ## 插件化架构（"一切皆插件"）
 
@@ -171,5 +172,8 @@ examples/cordis.yml     一处部署 overlay：固化模型与工作区
 tests/smoke.mjs         无 key 的 REAL-composition 启动冒烟
 ```
 
-`cordis.patch.yml` 在 `dsh-base` 之上，并禁用 OS 沙箱行（单文件不带原生 addon），保留
-`workspace-write + ask` 的审批边界与本地 `bash`/`fs` provider。
+`cordis.patch.yml` 在 `dsh-base` 之上；**OS 级沙箱行已启用**——bash 经 `ctx.sandbox.confine()` 运行
+（Linux 用 bwrap、macOS 用 Seatbelt），`danger-full-access` 不加隔离直跑。单文件 SEA 无法内嵌的原生行
+被 stub：Windows 原生 ACL runner（`pwsh-sandbox`）在 Windows 上由非原生 `pwsh-local` 执行器补位提供
+`ctx.shell`，`permission`（presets）行**仅 Windows 禁用**（POSIX 保留，挂在受限 bash rung 上）；
+纯 JS `fs-sandbox` 栅栏 + `workspace-write + ask` 审批边界仍是文件效应的闸门。
