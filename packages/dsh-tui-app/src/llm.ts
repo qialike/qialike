@@ -206,6 +206,12 @@ export interface TuiProviderTemplate extends TuiProviderProfile {
  */
 
 /** The TUI's own provider: `deepseek-official` runs out of the box. */
+// `maxTokens` is the PER-REQUEST output ceiling the provider honours (8192 =
+// the DeepSeek API output cap; reasoning tokens count against it). The cap is
+// the model's own, not a UI choice — a max-tokens turn/end with no body text
+// is surfaced by the TUI (see the turn/end max-tokens hint) instead of being
+// silently clipped. Raising this above the provider cap would be rejected or
+// clamped server-side.
 const DEEPSEEK_OFFICIAL: TuiProviderProfile = {
   displayName: 'DeepSeek',
   baseURL: 'https://api.deepseek.com',

@@ -15,7 +15,8 @@
 
 import { basename, dirname, join } from 'node:path'
 import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { homedir, tmpdir } from 'node:os'
+import { constants, homedir, tmpdir } from 'node:os'
+import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
 import { Context, FiberState } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
@@ -25,11 +26,81 @@ import Group from '@deepseek-ai/cordis-plugin-group'
 import { assertEntriesActivated, installFailLoud, loadLayeredEnv, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
 import { DSH_HOME_DIR_NAME, dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
-import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH } from '../generated/config-embed.js'
+import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generated/config-embed.js'
 import { PLUGIN_BUILTINS } from '../generated/plugins.js'
 import pkg from '../../../package.json' with { type: 'json' }
 
 const NAME = 'dsh-tui'
+
+// ── `web` subcommand preflight ───────────────────────────────────────────────
+// The harness CLI the `dsh-tui web` forwarder spawns shares `~/.dsh` session
+// logs with this TUI, so a missing CLI or a version older than the embedded
+// harness produces confusing failures later (e.g. history that will not load).
+// Warn up front, print the exact install command, and let the user proceed.
+
+/** Which `dsh` the web forwarder will launch (`$DSH_TUI_DSH` overrides PATH). */
+function webDshCommand(): string {
+  return process.env.DSH_TUI_DSH ?? 'dsh'
+}
+
+/** Windows needs the shell to resolve npm `.cmd`/`.bat` shims — both when the
+ *  command comes from PATH and when an explicit `$DSH_TUI_DSH` points at a
+ *  `.cmd`/`.bat` file. POSIX never uses the shell (arguments stay safe). */
+function winShellFor(explicit: string | undefined): boolean {
+  if (process.platform !== 'win32') return false
+  return explicit === undefined || /\.(cmd|bat)$/i.test(explicit)
+}
+
+const VERSION_TOKEN_RE = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/
+function parseVersion(text: string): string | null {
+  const match = VERSION_TOKEN_RE.exec(text)
+  return match === null ? null : match[1]
+}
+
+/**
+ * Probe the installed `dsh`.
+ * @returns 'ok' when the CLI exists AND its version matches the embedded one
+ * (the caller proceeds to launch web); 'missing' when the CLI is absent
+ * (caller exits 127); 'mismatch' when its version differs from the embedded
+ * harness (caller exits 1 — web is NOT launched on a version mismatch).
+ */
+function preflightWebDsh(): 'ok' | 'missing' | 'mismatch' {
+  const command = webDshCommand()
+  const probe = spawnSync(command, ['--version'], {
+    encoding: 'utf8',
+    // Windows resolves npm `.cmd`/`.bat` shims through the shell (PATH or an
+    // explicit $DSH_TUI_DSH pointing at one); POSIX stays shell-free.
+    shell: winShellFor(process.env.DSH_TUI_DSH),
+    timeout: 5000,
+  })
+  if (probe.error !== undefined || probe.status === null || probe.status !== 0) {
+    process.stderr.write(
+      `${NAME}: web mode needs the DeepSeek Harness CLI (\`dsh\`), which is not installed.\n`
+      + `  Install it with:\n`
+      + `    npm install -g @deepseek-ai/dsh@${HARNESS_VERSION}\n`,
+    )
+    return 'missing'
+  }
+  const installed = parseVersion(probe.stdout ?? '')
+  if (installed === null) {
+    process.stderr.write(
+      `${NAME}: warning — could not read the installed \`dsh\` version from \`${command} --version\` `
+      + `(${probe.stdout.trim().slice(0, 80) || '<no output>'}).\n`
+      + `  Install the matching version with:\n`
+      + `    npm install -g @deepseek-ai/dsh@${HARNESS_VERSION}\n`,
+    )
+    return 'mismatch'
+  }
+  if (installed !== HARNESS_VERSION) {
+    process.stderr.write(
+      `${NAME}: warning — installed \`dsh\` ${installed} does not match the harness this ${NAME} embeds (${HARNESS_VERSION}).\n`
+      + `  Install the matching version with:\n`
+      + `    npm install -g @deepseek-ai/dsh@${HARNESS_VERSION}\n`,
+    )
+    return 'mismatch'
+  }
+  return 'ok'
+}
 
 /**
  * Include subclass that resolves bare plugin names from the statically bundled
@@ -169,7 +240,6 @@ function canClearHome(dir: string): boolean {
 function uninstallSelf(): number {
   let removed = 0
   let failed = false
-  let clearedHome = false
   let refusedHome = false
 
   // Clear the entire harness home in one recursive remove. `~/.dsh/bin` (the
@@ -192,7 +262,6 @@ function uninstallSelf(): number {
     if (present) {
       try {
         rmSync(home, { recursive: true, force: true })
-        clearedHome = true
         removed += 1
         process.stdout.write(`${NAME}: removed ${home}\n`)
       } catch (error) {
@@ -257,9 +326,61 @@ function uninstallSelf(): number {
   } else if (removed === 0) {
     process.stdout.write(`${NAME}: nothing to remove (harness home and PATH entry not found)\n`)
   } else {
-    process.stdout.write(`${NAME}: uninstalled${clearedHome ? ' (harness home cleared)' : ''}. Reinstall with \`bash scripts/install\` (repo root).\n`)
+    process.stdout.write(`${NAME}: uninstalled\n`)
   }
   return failed ? 1 : 0
+}
+
+/**
+ * Launch the DeepSeek Harness browser UI by forwarding the whole invocation to
+ * the installed `dsh` CLI (`dsh web`, the official alias of `dsh --profile
+ * web`). The Web surface is a harness-owned profile — dsh-base + dsh-web-app —
+ * whose frontend dist ships inside the published `@deepseek-ai/dsh` package;
+ * a single-file SEA cannot re-host its disk-backed mechanisms (agent-preset
+ * files, per-client plugin bundles, the static dist), so this terminal
+ * launcher delegates instead of re-implementing the surface. The `dsh` binary
+ * must therefore be on PATH (or pointed to by `$DSH_TUI_DSH`).
+ * @param args - the full invocation arguments (`args[0] === 'web'`), forwarded
+ * verbatim: `dsh-tui web --port 8080 --no-open` runs `dsh web --port 8080 --no-open`.
+ * @returns the child process exit code.
+ */
+function runWeb(args: string[]): Promise<number> {
+  return new Promise<number>((resolve) => {
+    const explicit = process.env.DSH_TUI_DSH
+    const child = spawn(explicit ?? 'dsh', args, {
+      stdio: 'inherit',
+      // Windows resolves npm `.cmd`/`.bat` shims through the shell — from PATH
+      // or an explicit $DSH_TUI_DSH pointing at one (kept in sync with the
+      // preflight probe above). POSIX never uses the shell.
+      shell: winShellFor(explicit),
+    })
+    // Ctrl+C / SIGTERM reach the whole foreground process group, so both
+    // processes receive the signal; forwarding leaves the server's own
+    // shutdown path in charge, and we then exit with its status.
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      process.on(signal, () => { child.kill(signal) })
+    }
+    child.on('error', (error: Error & { code?: string }) => {
+      if (error.code === 'ENOENT') {
+        process.stderr.write(
+          `${NAME}: web mode needs the DeepSeek Harness CLI (\`dsh\`) on PATH. `
+          + `Install it with \`npm install -g @deepseek-ai/dsh\` (or the harness repo's install script), `
+          + `then retry \`${NAME} web\`.\n`,
+        )
+        resolve(127)
+      } else {
+        process.stderr.write(`${NAME}: failed to launch dsh: ${error.message}\n`)
+        resolve(1)
+      }
+    })
+    child.on('exit', (code, signal) => {
+      // A signal-terminated child exits with the shell convention 128 + N.
+      const sigNum = signal === null
+        ? undefined
+        : Object.entries(constants.signals).find(([name]) => name === signal)?.[1]
+      resolve(code ?? (sigNum === undefined ? 1 : 128 + Number(sigNum)))
+    })
+  })
 }
 
 async function main(): Promise<void> {
@@ -271,6 +392,17 @@ async function main(): Promise<void> {
   if (args.includes('--version') || args.includes('-V') || args.includes('-v')) {
     process.stdout.write(`${NAME} ${readVersion()}\n`)
     process.exit(0)
+  }
+  // The `web` subcommand hands over to the harness CLI before any terminal
+  // surface mounts: the web server must never run inside the TUI's alternate
+  // screen buffer. Remaining arguments go to `dsh` verbatim. A preflight
+  // guides the user when the harness CLI is missing or its version does not
+  // match the embedded one.
+  if (args[0] === 'web') {
+    const pre = preflightWebDsh()
+    if (pre === 'missing') process.exit(127)
+    if (pre === 'mismatch') process.exit(1) // version differs: warn, do NOT start web
+    process.exit(await runWeb(args))
   }
   // Run inside the alternate screen buffer so the terminal keeps no scrollback
   // and never shows its right-edge scrollbar. The leave (`\x1b[?1049l`) must be

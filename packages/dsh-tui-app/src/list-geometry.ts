@@ -18,7 +18,7 @@ export function dialogListIndexFromRow(row: number): number {
   const idx = Math.floor((row - 1 - g.topRow) / g.rowHeight)
   return idx >= 0 && idx < g.count ? idx : -1
 }
-function measureDomTop(el: DOMElement | null): number {
+export function measureDomTop(el: DOMElement | null): number {
   let top = 0
   let cur: DOMElement | null | undefined = el
   while (cur) {
@@ -57,7 +57,7 @@ export function dialogRowIndexFromCol(col: number): number {
   }
   return -1
 }
-function measureDomLeft(el: DOMElement | null): number {
+export function measureDomLeft(el: DOMElement | null): number {
   let left = 0
   let cur: DOMElement | null | undefined = el
   while (cur) {

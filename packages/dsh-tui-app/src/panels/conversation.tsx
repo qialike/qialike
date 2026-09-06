@@ -26,6 +26,8 @@ import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, count
 import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, dockInnerWidth } from '../config.ts'
 import { formatSessionStats } from '../session-stats.ts'
+import { logError } from '../log.ts'
+import { HARNESS_VERSION } from '../harness-version.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 
@@ -92,6 +94,162 @@ const WHEEL_STEP = 3
 const STATUS_BAR_HEIGHT = 3
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠸', '⠴', '⠦', '⠧', '⠇', '⠏']
+
+/** Live "thinking" preview — ONE fixed row while the model is ACTIVELY
+ *  reasoning (harness-web parity: a fixed-height slot whose text rolls the
+ *  newest reasoning instead of growing the layout). Content = the latest line
+ *  (text after the final newline), windowed from its END so it always fits one
+ *  visual line; the row keeps exactly 2 terminal rows (Think label + preview)
+ *  for the whole stream, so the message area never jumps mid-think. When
+ *  thinking ends the row reverts to the plain first-paragraph preview.
+ *  Deterministic from (text, usable) alone, so the row render, the height
+ *  estimate and the selection-copy text all derive the SAME string and can
+ *  never drift. */
+function thinkLiveLine(text: string, usable: number): string {
+  const seg = text.slice(Math.max(0, text.lastIndexOf('\n') + 1)).trimEnd()
+  if (seg === '') return '\u00a0' // keep the reserved preview row occupied
+  const budget = Math.max(8, MESSAGE_TEXT_WIDTH(usable) - 1) // cells; reserve the leading …
+  if (visualWidth(seg) <= budget) return seg
+  let cells = 0
+  let from = seg.length
+  while (from > 0) {
+    const cw = visualWidth(seg[from - 1]!)
+    if (cells + cw > budget - 1) break
+    cells += cw
+    from -= 1
+  }
+  return `…${seg.slice(from)}`
+}
+
+/** Trim text to fit one terminal line at `widthCells` (keeps the head, adds
+ *  `…`), used by the one-line tool summaries. */
+function capVisual(text: string, widthCells: number): string {
+  if (visualWidth(text) <= widthCells) return text
+  let cells = 0
+  let out = ''
+  for (const ch of text) {
+    const cw = visualWidth(ch)
+    if (cells + cw > widthCells - 1) break
+    out += ch
+    cells += cw
+  }
+  return `${out}…`
+}
+
+/** Canonical tool-row TITLES, verbatim from the harness web client's locale
+ *  (`tool.title.*` EN in ui-conversation locales + the ui-tool variant/title
+ *  mapping) so dsh-tui's headers read the same as deepseek-harness. Unknown
+ *  tool names keep their own name (web shows generic "Tool call" with the name
+ *  in the summary; keeping the name inline stays unambiguous in one line). */
+const TOOL_ROW_TITLES: Readonly<Record<string, string>> = {
+  bash: 'Bash',
+  pwsh: 'Pwsh',
+  read: 'Read',
+  web_fetch: 'Fetch',
+  web_search: 'Search',
+  grep: 'Search',
+  glob: 'Search',
+  write: 'Write',
+  edit: 'Edit',
+  run_code: 'Code',
+  todo_write: 'Update to-do list',
+}
+
+/** Per-tool leading GLYPH (terminal stand-in for harness-web vector icons;
+ *  opencode-TUI family). The glyph is fixed per tool — running/ok/error are
+ *  conveyed by header color, not by swapping the glyph. */
+const TOOL_ROW_ICONS: Readonly<Record<string, string>> = {
+  bash: '$',
+  pwsh: '$',
+  read: '←',
+  web_fetch: '%',
+  web_search: '◈',
+  grep: '✱',
+  glob: '✱',
+  write: '⚙',
+  edit: '←',
+  run_code: '▷',
+  todo_write: '☑',
+}
+
+/** One-line per-tool detail from raw args (web-style summary): bash/pwsh show
+ *  the command, read/web_fetch/write/edit a path, grep/glob/web_search the
+ *  pattern, todo_write done/total (+active). `null` → caller falls back. */
+function toolDetail(name: string, args: Record<string, unknown>): string | null {
+  const take = (keys: readonly string[]): string | null => {
+    for (const key of keys) {
+      const value = args[key]
+      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+    }
+    return null
+  }
+  if (name === 'bash' || name === 'pwsh') {
+    const command = take(['command', 'cmd'])
+    return command === null ? null : command.replace(/\s*\n\s*/g, ' ')
+  }
+  if (name === 'read' || name === 'web_fetch') return take(['file', 'path', 'url', 'id'])
+  if (name === 'write' || name === 'edit' || name === 'file_mutation') return take(['file', 'path', 'filePath'])
+  if (name === 'grep' || name === 'glob' || name === 'web_search') return take(['pattern', 'query', 'q'])
+  if (name === 'run_code') return take(['command', 'cmd'])
+  if (name === 'todo_write') {
+    const todos = args['todos']
+    if (Array.isArray(todos)) {
+      let done = 0
+      let active = 0
+      for (const it of todos) {
+        const status = it !== null && typeof it === 'object' ? (it as { status?: unknown }).status : undefined
+        if (status === 'completed') done += 1
+        else if (status === 'in_progress') active += 1
+      }
+      const base = `${done}/${todos.length}`
+      return active > 0 ? `${base} · ${active} active` : base
+    }
+    return null
+  }
+  return null
+}
+
+/** One-line tool summary row text: a per-tool GLYPH icon (terminal stand-in
+ *  for the harness web vector icons — opencode-TUI family: `$` bash, `←`
+ *  read/edit, `⚙` write, `✱` search, `%` web fetch, `◈` web search, `☑`
+ *  todo, `◇` unknown) + canonical TITLE (harness-web `tool.title.*`, e.g.
+ *  "Bash") with the argument detail appended when the args parse and name a
+ *  known shape, plus a trailing `…` marker while the result body is
+ *  collapsed and a `✗` suffix on error rows (color-blind visible, web state
+ *  dot equivalent). Unknown tools use the web generic title "Tool call" with
+ *  the real name riding the summary. Running/ok/error are conveyed by COLOR
+ *  on the header. Deterministic from (item, usable) and the expansion state —
+ *  render, height estimate and selection copy share it, so they never drift. */
+function toolRowHeader(item: TranscriptItem, usable: number): string {
+  const name = item.text.slice(2)
+  const key = name.toLowerCase()
+  const icon = TOOL_ROW_ICONS[key] ?? '◇'
+  const known = TOOL_ROW_TITLES[key]
+  const width = Math.max(8, MESSAGE_TEXT_WIDTH(usable))
+  const body = item.tool?.body
+  const marker = body !== undefined && !store.isToolExpanded(item.key) ? '…' : ''
+  const error = item.text.startsWith('✗ ')
+  let detail: string | null = null
+  if (item.tool?.argsRaw !== undefined) {
+    try {
+      const args: unknown = JSON.parse(item.tool.argsRaw)
+      detail = args !== null && typeof args === 'object'
+        ? toolDetail(key, args as Record<string, unknown>)
+        : null
+    } catch {
+      // Malformed/truncated args: fall back to the plain label.
+    }
+  }
+  // Known tool: `icon Title[ · detail]`. Unknown: web semantics — title is
+  // "Tool call" and the real name (+detail) rides the summary.
+  const head = known === undefined
+    ? `${icon} Tool call · ${name}`
+    : `${icon} ${known}`
+  let label = detail === null ? head : `${head} · ${detail}`
+  const errSuffix = error ? ' ✗' : ''
+  const budget = width - visualWidth(marker) - (error ? visualWidth(errSuffix) : 0)
+  return `${capVisual(label, budget)}${marker}${errSuffix}`
+}
 
 // ── input history (composer) ────────────────────────────────────────────────
 // The history list lives on the store so the runtime's submit path (which
@@ -182,6 +340,10 @@ function setMeasuredHeight(key: string, rows: number): void {
   if (last !== undefined && now - last < 250) return
   lastMeasuredNotify.set(key, now)
   measuredHeights.set(key, rows)
+  // Row heights changed: the layout memo must recompute. The dedicated epoch
+  // (not the generic render `version`) is what invalidates it, so typing and
+  // phase/hover churn never re-lay the whole transcript.
+  store.bumpMeasure()
   store.touch()
 }
 
@@ -195,28 +357,52 @@ type Row =
   | { type: 'item'; item: TranscriptItem; top: number; bottom: number }
   | { type: 'steps'; top: number; bottom: number }
 
-function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: number, active: boolean): React.ReactNode {
+function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpanded: boolean, hovered: boolean, usable: number, active: boolean): React.ReactNode {
   if (item.kind === 'assistant') {
     // opencode-style assistant: indent the markdown to the shared content column.
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
   }
   if (item.kind === 'reasoning') {
-    // Collapsed: a "↓ Think" label then the thinking text as its own wrapped
-    // paragraph at the shared content column. Keeping the label inline would
-    // hang-indent the wrapped lines (they'd start after "↓ Think · " instead of
-    // the column), breaking the left alignment. The leading glyph is an
-    // animated spinner while the model is actively thinking (ThinkingIcon).
-    return expandReasoning
-      ? <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text color={MUTED_READABLE} wrap="wrap">{item.text}</Text></Box>
-      : (
-        <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
-          <Text color={theme.accent}><ThinkingIcon active={active} /> Think</Text>
-          <Text color={MUTED_READABLE} wrap="wrap">{item.text.split('\n')[0]}</Text>
-        </Box>
-      )
+    // Web-parity Think disclosure: the "↓ Think" label row is ALWAYS shown
+    // (spinner while streaming); the summary under it is ONE line — while
+    // streaming the rolling latest reasoning (thinkLiveLine), once finished
+    // the FIRST line of the reasoning (firstLine) truncated to the column
+    // width with `…` (ReasoningRow.tsx: running ? latestLine : firstLine,
+    // nowrap + ellipsis). Row height is therefore a constant 2 (label +
+    // summary) whether streaming or settled; clicking the header (or /think)
+    // expands the full body. Hover highlights the header so it reads as
+    // clickable.
+    const w = Math.max(8, MESSAGE_TEXT_WIDTH(usable))
+    const settledFirst = capVisual(item.text.split('\n')[0] ?? '', w)
+    return (
+      <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
+        <Text inverse={hovered || undefined} color={theme.accent}>{expandReasoning ? '-' : '+'} Think</Text>
+        {expandReasoning
+          ? <Text color={MUTED_READABLE} wrap="wrap">{item.text}</Text>
+          : <Text color={MUTED_READABLE} wrap="wrap">{active ? thinkLiveLine(item.text, usable) : settledFirst || '\u00a0'}</Text>}
+      </Box>
+    )
   }
   if (item.kind === 'tool') {
-    return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><Text color={item.text.startsWith('✓') ? theme.success : theme.secondary} wrap="wrap">{item.text}</Text></Box>
+    // Tool rows (web-parity collapsed card): running = `│ <summary>`, settled =
+    // `✓ / ✗ <summary>` with the result/error body HIDDEN until expanded
+    // (mouse click on the row).
+    // `toolExpanded`/`hovered` arrive as PROPS so the memoized row re-renders
+    // on a click (a store read inside this component would be invisible to the
+    // memo — that was why Think toggled but tool rows did not).
+    const running = item.text.startsWith('│ ')
+    const isError = item.text.startsWith('✗ ')
+    const body = item.tool?.body
+    const expanded = body !== undefined && toolExpanded
+    const headerColor = isError ? theme.error : running ? theme.secondary : theme.success
+    return (
+      <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
+        <Text inverse={hovered || undefined} color={headerColor} wrap="wrap">{toolRowHeader(item, usable)}</Text>
+        {body !== undefined && expanded && (
+          <Text color={isError ? theme.error : MUTED_READABLE} wrap="wrap">{body}</Text>
+        )}
+      </Box>
+    )
   }
   if (item.kind === 'user') {
     // opencode-style user block: a primary left border (┃) with the text on a
@@ -255,7 +441,15 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, usable: num
 /** Memoized transcript row: unchanged item objects (stable references, only
  *  the streaming tail is replaced) skip re-render/parse on typing, scroll and
  *  other notify cycles. */
-const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { item: TranscriptItem; expandReasoning: boolean; themeEpoch: number; usable: number; active: boolean }): React.JSX.Element {
+const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
+  item: TranscriptItem
+  expandReasoning: boolean
+  toolExpanded: boolean
+  hovered: boolean
+  themeEpoch: number
+  usable: number
+  active: boolean
+}): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
     const key = String(props.item.key)
@@ -278,9 +472,43 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: { i
     }
     const timers = [setTimeout(sample, 60), setTimeout(sample, 400), setTimeout(sample, 900)]
     return () => { for (const t of timers) clearTimeout(t) }
-  }, [props.item.text])
-  return <Box ref={ref} flexDirection="column">{itemContent(props.item, props.expandReasoning, props.usable, props.active)}</Box>
+    // Re-measure when an expansion toggle changes this row's rendered height
+    // (the item text itself is unchanged, so [props.item.text] alone would
+    // skip it and leave the measured cache stale).
+  }, [props.item.text, props.expandReasoning, props.toolExpanded])
+  return (
+    <Box ref={ref} flexDirection="column">
+      {itemContent(props.item, props.expandReasoning, props.toolExpanded, props.hovered, props.usable, props.active)}
+    </Box>
+  )
 })
+
+/** Per-row error isolation: one transcript row whose content throws during
+ *  render (e.g. an exotic tool result the markdown/plain renderer chokes on) is
+ *  dropped to a one-line warning instead of taking the whole conversation
+ *  surface down through the app-level boundary — the classic way a screen
+ *  "freezes" while the agent keeps running underneath. Logged for diagnosis. */
+class RowErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: Error | null }> {
+  state: { error: Error | null } = { error: null }
+  static getDerivedStateFromError(error: Error): { error: Error } {
+    return { error }
+  }
+  componentDidCatch(error: Error): void {
+    try {
+      logError('row', error)
+    } catch {
+      // best-effort: never throw from the error boundary
+    }
+  }
+  render(): React.ReactNode {
+    if (this.state.error !== null) {
+      return (
+        <Text color={theme.error} wrap="truncate">⚠ row dropped: {this.state.error.message}</Text>
+      )
+    }
+    return this.props.children
+  }
+}
 
 function StepsRow(props: { steps: readonly StepItem[] }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
@@ -290,39 +518,70 @@ function StepsRow(props: { steps: readonly StepItem[] }): React.JSX.Element {
   return <Box ref={ref} flexDirection="column"><StepsBlock steps={props.steps} /></Box>
 }
 
+/** Phase word for the status-bar liveness text (kept short: it shares the
+ *  single-line status bar with the session-stats group on the right). */
+const RUN_PHASE_WORD: Record<Store['runPhase'], string> = {
+  working: 'working',
+  thinking: 'thinking',
+  answering: 'answering',
+  tool: 'tool',
+}
+
+/** The liveness text beside the spinner: the run phase, plus the currently
+ *  open tool (parallel calls collapse to `name ×n`). */
+function runPhaseLabel(store: Store): string {
+  if (store.runPhase === 'tool') {
+    const tool = store.currentTool
+    if (tool === null) return RUN_PHASE_WORD.tool
+    const name = tool.length > 16 ? `${tool.slice(0, 15)}…` : tool
+    return store.toolOpenCount > 1 ? `${name} ×${store.toolOpenCount}` : name
+  }
+  return RUN_PHASE_WORD[store.runPhase]
+}
+
 function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.Element | null {
-  const [frame, setFrame] = React.useState(0)
+  // PULSE only: the timer exists to keep this leaf re-rendering while running.
+  // The glyph itself is derived from the WALL CLOCK at render time (below), so
+  // ANY render — this pulse OR a store-event parent render — paints the frame
+  // the clock currently says. Under a tool-event storm the 100 ms timer can be
+  // starved for a while while parent renders (driven by store events) continue
+  // and the seconds text keeps moving; with a state-counter glyph that left the
+  // icon frozen next to live text, with a clock-derived glyph it cannot: the
+  // icon and the text are both functions of Date.now().
+  const [, setPulse] = React.useState(0)
   React.useEffect(() => {
     if (!props.animate) return
-    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 100)
+    const timer = setInterval(() => setPulse((p) => p + 1), 100)
     return () => clearInterval(timer)
   }, [props.animate])
   if (props.paused) return <Text color={theme.warning}>⏸ Paused</Text>
   // Idle: a STATIC marker (⠿, not an animated spinner frame) + "Idle".
   if (!props.animate) return <Text color={MUTED_READABLE}>⠿ Idle</Text>
   const armed = Date.now() - store.lastEscTime < 800
+  // Liveness text: the second counters re-read Date.now() on every render, so
+  // the line keeps changing even across a long silent stretch (model thinking,
+  // a slow tool) — the status bar can never LOOK frozen while the run is
+  // healthy. The "Ns since last event" suffix appears only once the gap is
+  // noticeable (> 3 s), so a fast tool loop stays compact.
+  const now = Date.now()
+  // Glyph = the spinner phase the wall clock says (8 frames × 100 ms → 800 ms
+  // loop): deterministic per instant, immune to timer starvation/coalescing.
+  const glyph = SPINNER_FRAMES[Math.floor(now / 100) % SPINNER_FRAMES.length]
+  const sinceTurn = Math.max(0, Math.floor((now - store.busySince) / 1000))
+  const sinceLast = Math.max(0, Math.floor((now - store.lastActivityAt) / 1000))
+  const quiet = sinceLast >= 4 ? ` · ${sinceLast}s since last event` : ''
   return (
     <Text color={theme.info}>
-      {SPINNER_FRAMES[frame]}
-      <Text color={MUTED_READABLE}> Working · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
+      {glyph}
+      <Text color={MUTED_READABLE}> {runPhaseLabel(store)} · {sinceTurn}s{quiet} · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
     </Text>
   )
 }
 
-/** The reasoning ("Think") leading glyph: an animated spinner (the same frames
- *  as the status-bar "Working") while the model is actively thinking, a static
- *  ↓ otherwise. The glyph owns its timer so only this leaf re-renders on a tick
- *  (the reasoning text beside it is a sibling and stays put). */
-function ThinkingIcon(props: { active: boolean }): React.JSX.Element {
-  const [frame, setFrame] = React.useState(0)
-  React.useEffect(() => {
-    if (!props.active) { setFrame(0); return }
-    const timer = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 100)
-    return () => clearInterval(timer)
-  }, [props.active])
-  return <Text color={props.active ? theme.info : theme.accent}>{props.active ? SPINNER_FRAMES[frame] : '↓'}</Text>
-}
-
+/** The reasoning ("Think") leading glyph — a tree-style expand indicator:
+ *  `+` while the row is collapsed, `-` while expanded. The animated spinner
+ *  previously used here moved to the status-bar liveness indicator; streaming
+ *  activity is still visible in the rolling one-line preview. */
 function buildRows(items: readonly TranscriptItem[], steps: readonly StepItem[]): Row[] {
   const base: ({ type: 'item'; item: TranscriptItem } | { type: 'steps' })[] = []
   let inserted = false
@@ -474,17 +733,49 @@ function composerHeight(width: number, input: string, min: number): number {
   return Math.min(min + wrapped - 1, cap)
 }
 
-function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
-  const w = MESSAGE_TEXT_WIDTH(usable)
-  if (item.kind === 'reasoning') {
-    // Collapsed renders a "Think" label row + the FIRST paragraph wrapped; a
-    // folded estimate of 1 clips the wrapped lines (the transcript lays out
-    // below the fold with the estimate, then clips once scrolled into view).
-    return expandReasoning ? countWrappedLines(item.text, w) : 1 + countWrappedLines(item.text.split('\n')[0], w)
+/** Per-item row-height estimates, memoized by (item, usable, reasoning flags,
+ *  tool-expansion). History rows keep the same item object across renders, so
+ *  once an estimate is computed a layout pass only walks the cache — the
+ *  Markdown(mdast) parse per assistant row happens ONCE per item, not on every
+ *  event/keystroke (measured: 40 assistant rows ≈ 36 ms per pass without this
+ *  cache, <1 ms with it). The streaming tail replaces its item each delta, so
+ *  only that single row re-parses while it grows. */
+const estCache = new WeakMap<TranscriptItem, Map<string, number>>()
+
+function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean, reasoningTail: boolean): number {
+  const toolExpanded = item.kind === 'tool' && item.tool?.body !== undefined && store.isToolExpanded(item.key)
+  const cacheKey = `${usable}|${expandReasoning ? 1 : 0}|${reasoningTail ? 1 : 0}|${toolExpanded ? 1 : 0}`
+  let byItem = estCache.get(item)
+  if (byItem === undefined) {
+    byItem = new Map()
+    estCache.set(item, byItem)
   }
-  if (item.kind === 'assistant') return estimateMarkdownHeight(item.text, w)
-  if (item.kind === 'user') return countWrappedLines(item.text, w)
-  return countWrappedLines(item.text, w)
+  const hit = byItem.get(cacheKey)
+  if (hit !== undefined) return hit
+
+  const w = MESSAGE_TEXT_WIDTH(usable)
+  let lines: number
+  if (item.kind === 'reasoning') {
+    // Web parity: collapsed is ALWAYS label(1) + one-line summary(1) — fixed
+    // 2 rows whether streaming or settled — so the layout never moves; only
+    // the expanded (clicked /think) body adds wrapped text rows.
+    if (expandReasoning) lines = 1 + countWrappedLines(item.text, w)
+    else lines = 2
+  } else if (item.kind === 'assistant') {
+    lines = estimateMarkdownHeight(item.text, w)
+  } else if (item.kind === 'user') {
+    lines = countWrappedLines(item.text, w)
+  } else if (item.kind === 'tool') {
+    // Header (summary) lines + the result/error body ONLY while expanded —
+    // mirror of the rendered row, so scroll stays aligned on toggle.
+    const body = item.tool?.body
+    lines = countWrappedLines(toolRowHeader(item, usable), w)
+      + (body !== undefined && toolExpanded ? countWrappedLines(body, w) : 0)
+  } else {
+    lines = countWrappedLines(item.text, w)
+  }
+  byItem.set(cacheKey, lines)
+  return lines
 }
 
 function convUsableWidth(width: number, showSidebar: boolean): number {
@@ -525,18 +816,41 @@ function wrapRows(text: string, usable: number): string[] {
   return out
 }
 
-function buildTranscriptRows(items: readonly TranscriptItem[], usable: number, expandReasoning: boolean): TranscriptRow[] {
+function buildTranscriptRows(items: readonly TranscriptItem[], usable: number, reasoningTail: boolean): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   items.forEach((item, i) => {
     if (i > 0) rows.push({ text: '', itemIndex: i - 1 })
-    let plain: string
-    if (item.kind === 'reasoning') {
-      plain = expandReasoning ? item.text : `◇ Think · ${item.text.split('\n')[0]}`
-    } else {
-      plain = item.kind === 'assistant' && item.text.length <= 8000 ? markdownPlain(item.text) : item.text
-    }
-    // Wrap breadth mirrors the rendered layout (one shared content column).
     const w = MESSAGE_TEXT_WIDTH(usable)
+    if (item.kind === 'tool') {
+      // Tool rows mirror the rendered summary header (+ result/error body only
+      // while expanded), so selection/copy offsets stay aligned.
+      for (const line of wrapRows(toolRowHeader(item, usable), w)) rows.push({ text: line, itemIndex: i })
+      const body = item.tool?.body
+      if (body !== undefined && store.isToolExpanded(item.key)) {
+        for (const line of wrapRows(body, w)) rows.push({ text: line, itemIndex: i })
+      }
+      return
+    }
+    if (item.kind === 'reasoning') {
+      // Mirror the rendered rows: the label line + the content under it
+      // (full text when THIS row is expanded, the live/preview line when
+      // collapsed), so selection/copy offsets stay aligned.
+      if (store.reasoningExpanded(item.key)) {
+        for (const line of wrapRows('◇ Think', w)) rows.push({ text: line, itemIndex: i })
+        for (const line of wrapRows(item.text, w)) rows.push({ text: line, itemIndex: i })
+      } else {
+        // Two visible rows: the label + the one-line summary (rolling latest
+        // line while the tail streams, else the truncated first line).
+        for (const line of wrapRows('◇ Think', w)) rows.push({ text: line, itemIndex: i })
+        const summary = reasoningTail && i === items.length - 1
+          ? thinkLiveLine(item.text, usable)
+          : capVisual(item.text.split('\n')[0] ?? '', w)
+        for (const line of wrapRows(summary === '' ? '\u00a0' : summary, w)) rows.push({ text: line, itemIndex: i })
+      }
+      return
+    }
+    const plain = item.kind === 'assistant' && item.text.length <= 8000 ? markdownPlain(item.text) : item.text
+    // Wrap breadth mirrors the rendered layout (one shared content column).
     for (const line of wrapRows(plain, w)) rows.push({ text: line, itemIndex: i })
   })
   return rows
@@ -616,7 +930,9 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   const composerH = composerHeight(width, input, COMPOSER_MIN_HEIGHT)
   const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
   const usable = convUsableWidth(width, sidebarVisibleFor(width))
-  const rows = buildTranscriptRows(store.getItems(), usable, store.expandReasoning)
+  const flatItems = store.getItems()
+  const rows = buildTranscriptRows(flatItems, usable,
+    store.running && !store.paused && flatItems.at(-1)?.kind === 'reasoning')
   const joined = rows.map((r) => r.text).join('\n')
   const inputStart = joined.length + 1
   const rowPrefix: number[] = []
@@ -641,7 +957,7 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   return `${joined}\n${input}`.slice(Math.min(a, c), Math.max(a, c))
 }
 
-function writeClipboard(text: string): void {
+export function writeClipboard(text: string): void {
   // macOS Terminal.app has no OSC 52, so `pbcopy` is the only reliable path; use
   // the ABSOLUTE path and BLOCK until it has consumed stdin (spawnSync), so a
   // Node single-executable binary is guaranteed to deliver the bytes — an async
@@ -761,6 +1077,8 @@ function conversationKey(k: RawKey, tui: TuiService): void {
       return
     }
     if (historyBrowse !== -1) { browseOlder(); return }
+    // Empty input: ONE ↑ recalls the most recent message (shell habit).
+    if (input === '') { browseOlder(); return }
     if (input.includes('\n')) { store.moveCursorUp(); return }
     if (store.cursor > 0) { store.setCursor(0); return }
     browseOlder()
@@ -773,6 +1091,8 @@ function conversationKey(k: RawKey, tui: TuiService): void {
       return
     }
     if (historyBrowse !== -1) { browseNewer(); return }
+    // Empty input (cursor already at 0): ↓ returns to the draft / does nothing.
+    if (input === '') return
     if (input.includes('\n')) { store.moveCursorDown(); return }
     if (store.cursor < input.length) { store.setCursor(input.length); return }
     browseNewer()
@@ -782,8 +1102,11 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   if (k.rightArrow) { store.moveCursorRight(); return }
   if (k.pageUp) { store.scrollPage(-1); return }
   if (k.pageDown) { store.scrollPage(1); return }
-  if (k.home) { store.scrollTop(); return }
-  if (k.end) { store.scrollBottom(); return }
+  // Home/End edit the composer: the caret jumps to the start/end of the current
+  // (logical) line — a single-line input therefore goes to the start/end of the
+  // whole text. Transcript scrolling stays on PgUp/PgDn + the mouse wheel.
+  if (k.home) { store.moveCursorToLineStart(); return }
+  if (k.end) { store.moveCursorToLineEnd(); return }
   // A left-click on the Steps sidebar's TITLE band toggles the sidebar
   // (auto → on → off → auto). Only reachable while the sidebar is drawn.
   if (k.mousePress && sidebarVisibleFor(store.width) && k.mousePress.row <= 4
@@ -812,8 +1135,18 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   if (k.mouseMove) {
     // HOVER: with ?1003 any-motion the terminal reports motion without a button.
     // While the '/' palette is open, highlight the command under the cursor
-    // (opencode-style); elsewhere ignore (the transcript only acts on drag).
-    if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mouseMove.row, tui); if (idx >= 0) store.setCommandIndex(idx) }
+    // (opencode-style). Elsewhere the hover feeds the tool-row affordance: a
+    // settled tool row (expandable) highlights under the cursor like opencode's
+    // clickable headers.
+    if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mouseMove.row, tui); if (idx >= 0) store.setCommandIndex(idx); return }
+    const hit = store.resolveRow(k.mouseMove.row)
+    // Same rule as Think rows: any settled tool row (or any reasoning row) is
+    // hover-highlighted / clickable — no extra "has body" requirement.
+    const hoverable = hit !== null && (
+      (hit.kind === 'tool' && hit.tool !== undefined && hit.tool.state !== 'running')
+      || hit.kind === 'reasoning'
+    )
+    store.setHoverTool(hoverable ? hit.key : null)
     return
   }
   if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return }
@@ -827,6 +1160,19 @@ function conversationKey(k: RawKey, tui: TuiService): void {
       if (idx >= 0 && kind === 'click') { runCommandAt(idx, tui); return }
     }
     if (kind === 'click') {
+      // Click on a SETTLED tool row toggles it exactly like a Think row (no
+      // "must have a body" gate); a click on a Think header toggles that
+      // reasoning row (web/opencode parity). Everything else falls through to
+      // the composer caret placement.
+      const hit = store.resolveRow(k.mouseRelease.row)
+      if (hit !== null && hit.kind === 'tool' && hit.tool !== undefined && hit.tool.state !== 'running') {
+        store.toggleToolExpanded(hit.key)
+        return
+      }
+      if (hit !== null && hit.kind === 'reasoning') {
+        store.toggleReasoningRow(hit.key)
+        return
+      }
       positionCursorByMouse(k.mouseRelease.row, k.mouseRelease.col)
     } else if (kind === 'drag') {
       copyCurrentSelection()
@@ -859,6 +1205,16 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     const now = Date.now()
     if (store.running && now - store.lastEscTime < 800) { store.lastEscTime = 0; store.pauseAgent() }
     else store.lastEscTime = now
+    // Human self-heal: if the patched frame writer has stopped flushing (a
+    // stalled render loop), ANY keypress revives the screen at both levels —
+    // store.touch() feeds the normal React/Ink path and the writer's
+    // __dshTuiRepaintLastFrame bypasses Ink entirely. Cheap no-op otherwise.
+    const frameGlobals = globalThis as unknown as { __dshTuiLastFlushAt?: number; __dshTuiRepaintLastFrame?: () => void }
+    const lastFlush = frameGlobals.__dshTuiLastFlushAt
+    if (store.running && lastFlush !== undefined && Date.now() - lastFlush > 3000 && frameGlobals.__dshTuiRepaintLastFrame !== undefined) {
+      store.touch()
+      frameGlobals.__dshTuiRepaintLastFrame()
+    }
     return
   }
   if (k.ctrl && char === 'c') { resetHistoryBrowse(); store.setInput(''); store.cancelAction(); return }
@@ -886,6 +1242,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const { isRawModeSupported } = useStdin()
   const [, forceRender] = React.useReducer((c: number) => c + 1, 0)
   React.useEffect(() => store.subscribe(() => forceRender()), [])
+  // Unmount (another fullscreen panel, session switch): drop the row resolver
+  // the click handler reads.
+  React.useEffect(() => () => store.setRowResolver(null), [])
   const version = store.getVersion()
   const themeEpoch = store.themeEpoch
   const items = store.getItems()
@@ -899,7 +1258,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const approval = store.approval
   const question = store.question
   const width = store.width
-  const expandReasoning = store.expandReasoning
+  // Per-row effective expansion: a Think row opens on its own when clicked
+  // (per-row override), or follows the /think master switch by default.
+  const reasoningExpandedFor = (item: TranscriptItem): boolean =>
+    item.kind === 'reasoning' && store.reasoningExpanded(item.key)
   const permissionLabel = store.permissionLabel
   const permissionColor = store.permissionColor
   const modelLabel = store.modelLabel
@@ -964,7 +1326,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // measured row heights (sidebar width jump / re-layout feedback).
   const sidebarWidth = showSidebar ? Math.max(20, Math.round(width * 0.3)) : 0
   const viewportLines = convViewportLines(composerH, 0, modalH)
-  const rows = useMemo(() => buildRows(items, steps), [items, steps, version, themeEpoch])
+  const rows = useMemo(() => buildRows(items, steps), [items, steps])
+  // The reasoning row shows a live preview (thinkLiveLine) while the model is
+  // ACTIVELY producing it: the agent is running (not paused) and the tail item
+  // is that reasoning row (it is the streaming target). Computed BEFORE the
+  // layout memo because the row-height estimate must mirror the same preview;
+  // once thinking ends and an assistant body follows, the tail changes, the
+  // flag drops and the row reverts to the plain first-paragraph preview.
+  const tailItem = items.at(-1)
+  const reasoningActive = store.running && !store.paused && tailItem?.kind === 'reasoning'
   const layout = useMemo(() => {
     // A width change invalidates every cached row height (wrap counts differ);
     // drop the cache so the next pass re-estimates before anything is measured.
@@ -991,7 +1361,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           // height, e.g. 1 instead of 3). Use the measured value only when it
           // stays within 1 of the estimate — a wildly-off reading is a scroll
           // artifact, so fall back to the estimate to keep every gap stable.
-          const est = estItemLines(r.item, usable, expandReasoning)
+          const est = estItemLines(r.item, usable, reasoningExpandedFor(r.item), reasoningActive && r.item === tailItem)
           const measured = measuredHeights.get(key)
           if (measured !== undefined && Math.abs(measured - est) <= 1) return measured
           measuredHeights.set(key, est)
@@ -1003,11 +1373,36 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] }
     return { hts, starts, content: s }
-  }, [rows, usable, expandReasoning, steps, version, themeEpoch])
+  }, [rows, usable, steps, reasoningActive, store.measureEpoch, store.expansionEpoch])
   const maxScroll = Math.max(0, layout.content - viewportLines)
   const effectiveScroll = store.followTail ? maxScroll : Math.max(0, Math.min(store.scroll, maxScroll))
   const topRow = 2
   store.setLayout(layout.content, viewportLines, effectiveScroll, topRow)
+  // Tool/Think row expansion clicks/hover: TOLERANT mapping from a 1-based
+  // terminal row to the nearest toggleable row — every TOOL row and every
+  // reasoning (Think) row — matched on its HEADER line (first content line of
+  // the item: cumulative start + its top margin). A ±TOOL_HIT_TOLERANCE band
+  // absorbs small screen-offset errors (borders/padding), and body lines far
+  // below a header are not clickable (no accidental collapse while reading an
+  // expanded body). Nearest header within the band wins.
+  const TOOL_HIT_TOLERANCE = 3
+  const toggleHeaders: { item: TranscriptItem; header: number }[] = []
+  for (let j = 0; j < rows.length; j++) {
+    const r = rows[j]!
+    if (r.type === 'item' && (r.item.kind === 'tool' || r.item.kind === 'reasoning')) {
+      toggleHeaders.push({ item: r.item, header: layout.starts[j]! + r.top })
+    }
+  }
+  store.setRowResolver((row) => {
+    const line = row - topRow + effectiveScroll
+    let best: TranscriptItem | null = null
+    let bestDist = Infinity
+    for (const t of toggleHeaders) {
+      const dist = Math.abs(line - t.header)
+      if (dist <= TOOL_HIT_TOLERANCE && dist < bestDist) { best = t.item; bestDist = dist }
+    }
+    return best
+  })
   let first = 0
   while (first < rows.length && layout.starts[first] + layout.hts[first] <= effectiveScroll) first++
   if (first >= rows.length) first = Math.max(0, rows.length - 1)
@@ -1018,25 +1413,25 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const sel = store.selection
   const selRange = sel !== null ? composerSelectionRange(sel) : null
 
-  // The reasoning row animates its leading glyph while the model is actively
-  // producing it: the agent is running (not paused) and the tail item is that
-  // reasoning row (it is the streaming target). Once thinking ends and an
-  // assistant body follows, the tail changes and the glyph goes static.
-  const tailItem = items.at(-1)
-  const reasoningActive = store.running && !store.paused && tailItem?.kind === 'reasoning'
   const renderRow = (r: Row): React.ReactNode =>
     r.type === 'steps'
       ? <Box key="steps" marginTop={r.top} marginBottom={r.bottom}><StepsRow steps={steps} /></Box>
       : (
-        <Box key={r.item.key} marginTop={r.top} marginBottom={r.bottom} flexShrink={0}>
-          <MemoTranscriptItemView
-            item={r.item}
-            expandReasoning={expandReasoning}
-            themeEpoch={themeEpoch}
-            usable={usable}
-            active={reasoningActive && r.item.key === tailItem?.key}
-          />
-        </Box>
+        <RowErrorBoundary key={r.item.key}>
+          <Box marginTop={r.top} marginBottom={r.bottom} flexShrink={0}>
+            <MemoTranscriptItemView
+              item={r.item}
+              expandReasoning={reasoningExpandedFor(r.item)}
+              toolExpanded={r.item.kind === 'tool' && r.item.tool?.body !== undefined && store.isToolExpanded(r.item.key)}
+              hovered={store.hoveredToolKey === r.item.key
+                && (r.item.kind === 'reasoning'
+                  || (r.item.kind === 'tool' && r.item.tool !== undefined && r.item.tool.state !== 'running'))}
+              themeEpoch={themeEpoch}
+              usable={usable}
+              active={reasoningActive && r.item.key === tailItem?.key}
+            />
+          </Box>
+        </RowErrorBoundary>
       )
 
   // Composer input render: display exactly `input.slice(start, end)` — the
@@ -1157,7 +1552,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             : <StepRows steps={steps} />}
           <Text color={MUTED_READABLE}>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
-          {/* Version sits flush against the workspace path at the sidebar bottom. */}
+          {/* Embedded harness version sits ABOVE the dsh-tui version, flush
+              against the workspace path at the sidebar bottom. */}
+          <Text color={MUTED_READABLE}>deepseek-harness {HARNESS_VERSION}</Text>
           <Text color={MUTED_READABLE}>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
           <Text color={MUTED_READABLE} wrap="truncate">{store.workspace}</Text>
         </Box>

@@ -50,7 +50,7 @@ import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type Se
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
-import { initErrorLog, logError, logConsoleError } from './log.ts'
+import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
 /** Stable Cordis plugin name. */
@@ -94,6 +94,14 @@ export interface TranscriptItem {
   readonly kind: 'user' | 'assistant' | 'reasoning' | 'status' | 'tool'
   readonly text: string
   readonly dim?: boolean
+  /** Tool-row payload: `running` rows carry the (capped) raw arguments for the
+   *  summary; settled rows carry the result/error text (inline-capped for
+   *  display; the full text stays in the session log). */
+  readonly tool?: {
+    readonly state: 'running' | 'ok' | 'error'
+    readonly argsRaw?: string
+    readonly body?: string
+  }
 }
 
 /** A step in the model's plan (mirrors the harness `TodoItem`). */
@@ -183,6 +191,11 @@ export interface PendingQuestion {
   index: number
   custom: string
   customMode: boolean
+  /** Character index of the caret inside the custom ("Other") input. */
+  customCursor: number
+  /** Live mouse selection inside the custom input (char indexes, `to`
+   *  exclusive), or null when no selection is active. */
+  sel: { from: number; to: number } | null
   /** Position within a multi-question ask (1-based) and the total, when > 1. */
   readonly position?: number
   readonly total?: number
@@ -194,6 +207,12 @@ export interface CommandItem {
   readonly hint: string
   readonly run: (arg: string) => void
 }
+
+/** Coarse phase of the current agent run, shown in the status bar's liveness
+ *  indicator: `working` (between events, model computing the next step),
+ *  `thinking` (reasoning deltas streaming), `answering` (text streaming) or
+ *  `tool` (a tool call row is open). */
+export type RunPhase = 'working' | 'thinking' | 'answering' | 'tool'
 
 /** Mutable UI store the Ink app subscribes to. */
 export class Store {
@@ -239,6 +258,39 @@ export class Store {
   private _workspace = ''
   private _running = false
   private _paused = false
+  // ── run-liveness metadata (the status bar must never LOOK frozen while the
+  // agent is running, even across long silent stretches) ─────────────────────
+  /** Wall-clock (ms) of the last live agent/session activity event. */
+  private _lastActivityAt = 0
+  /** Wall-clock (ms) the current run started (agent/status → running). */
+  private _busySince = 0
+  /** The last opened tool call name, while at least one is in flight. */
+  private _currentTool: string | null = null
+  /** Count of concurrently open tool rows (parallel tool calls). */
+  private _toolOpen = 0
+  /** Coarse run phase for the status-bar liveness text. */
+  private _phase: RunPhase = 'working'
+  /** Global tool-body visibility: when true, EVERY settled tool row's result
+   *  body shows unless overridden per row; false hides unless overridden. */
+  private _toolBodiesDefault = false
+  /** Per-row overrides of the global default (key → effective visible). */
+  private _toolBodiesOverride = new Map<number, boolean>()
+  /** Global reasoning (Think) expansion default; per-row overrides below let
+   *  one Think row open/close by mouse without touching the others. */
+  private _reasoningDefault = false
+  private _reasoningOverride = new Map<number, boolean>()
+  /** Bumped when measured row heights change (the transcript layout memo
+   *  depends on this instead of the generic render `version`, so typing and
+   *  phase/hover churn never recompute the whole layout). */
+  private _measureEpoch = 0
+  /** Bumped when an expansion toggle changes row heights (/think, per-row). */
+  private _expansionEpoch = 0
+  /** Tool row currently under the mouse (hover affordance: "clickable"), or
+   *  null. Only set when the row is a settled tool with a body. */
+  private _hoveredToolKey: number | null = null
+  /** Row → transcript item resolver installed by the conversation panel each
+   *  render (mouse clicks on a tool row toggle its expansion). */
+  private _rowResolver: ((row: number) => TranscriptItem | null) | null = null
   private _followTail = true
   private _scroll = 0
   private _layoutContent = 0
@@ -518,21 +570,113 @@ export class Store {
     this.notify()
   }
 
-  /** Append a running tool-call row (opencode-style inline tool). */
-  toolCall(name: string): void {
-    this.items = [...this.items, { key: this.key += 1, kind: 'tool', text: `│ ${name}` }]
+  /** Append a running tool-call row (opencode-style inline tool). The raw
+   *  arguments are kept (capped) for the one-line summary derivation. */
+  toolCall(name: string, argsRaw?: string): void {
+    this.items = [...this.items, {
+      key: this.key += 1,
+      kind: 'tool',
+      text: `│ ${name}`,
+      tool: { state: 'running', ...argsRaw === undefined ? {} : { argsRaw: capToolArgs(argsRaw) } },
+    }]
+    this._toolOpen += 1
+    this._currentTool = name
+    this._phase = 'tool'
+    this.markActivity()
     this.notify()
   }
 
-  /** Mark the most recent running tool row as completed. */
-  toolResult(): void {
+  /** Mark the most recent running tool row as completed, attaching the
+   *  (inline-capped) result/error text for the expandable body. */
+  toolResult(result?: { ok: boolean; text: string }): void {
+    const body = result === undefined || result.text.trim() === '' ? undefined : capToolBody(result.text.trim())
     for (let i = this.items.length - 1; i >= 0; i--) {
       const item = this.items[i]
       if (item.kind === 'tool') {
-        this.items = [...this.items.slice(0, i), { ...item, text: `✓ ${item.text.slice(2)}` }, ...this.items.slice(i + 1)]
+        const prevTool = item.tool
+        const name = item.text.slice(2)
+        const error = result !== undefined && !result.ok
+        const header = error ? `✗ ${name}` : `✓ ${name}`
+        const tool: TranscriptItem['tool'] = {
+          state: error ? 'error' : 'ok',
+          ...prevTool?.argsRaw === undefined ? {} : { argsRaw: prevTool.argsRaw },
+          ...body === undefined ? {} : { body },
+        }
+        this.items = [
+          ...this.items.slice(0, i),
+          { ...item, text: header, tool },
+          ...this.items.slice(i + 1),
+        ]
         break
       }
     }
+    this._toolOpen = Math.max(0, this._toolOpen - 1)
+    if (this._toolOpen === 0) {
+      this._currentTool = null
+      this._phase = 'working'
+    }
+    this.markActivity()
+    this.notify()
+  }
+
+  // ── tool-row expansion (collapsed summary ↔ full result body) ─────────────
+  /** Whether the tool row's body currently shows: the per-row override when
+   *  set, else the global default (`/think`). */
+  isToolExpanded(key: number): boolean {
+    const override = this._toolBodiesOverride.get(key)
+    return override === undefined ? this._toolBodiesDefault : override
+  }
+  /** Bumped when measured row heights change (see `measureEpoch`). */
+  bumpMeasure(): void { this._measureEpoch += 1 }
+  /** Bumped when an expansion toggle changes row heights (see
+   *  `expansionEpoch`). */
+  private bumpExpansion(): void { this._expansionEpoch += 1 }
+  get measureEpoch(): number { return this._measureEpoch }
+  get expansionEpoch(): number { return this._expansionEpoch }
+  /** Toggle ONE tool row (mouse click): records a per-row override of
+   *  the current global default, so individual rows stay clickable in both
+   *  global modes. */
+  toggleToolExpanded(key: number): void {
+    const next = !this.isToolExpanded(key)
+    if (next === this._toolBodiesDefault) this._toolBodiesOverride.delete(key)
+    else this._toolBodiesOverride.set(key, next)
+    this.bumpExpansion()
+    this.notify()
+  }
+  /** `/think`: unified "show all detail" — every reasoning (Think) body AND
+   *  every tool result body expand together; toggling again collapses both.
+   *  Per-tool click overrides are dropped on each flip. The scroll position is
+   *  untouched (B: keep bottom / current position); the status bar flashes a
+   *  confirmation with the number of affected rows so the toggle is always
+   *  visible feedback. */
+  toggleAllDetail(): void {
+    const show = !this._toolBodiesDefault
+    const detailRows = this.items.reduce(
+      (n, it) => n + (it.kind === 'reasoning' ? 1 : 0) + (it.kind === 'tool' && it.tool?.body !== undefined ? 1 : 0),
+      0,
+    )
+    this._toolBodiesDefault = show
+    this._toolBodiesOverride.clear()
+    this._reasoningDefault = show
+    this._reasoningOverride.clear()
+    this.bumpExpansion()
+    this.flashStatus(show ? `details: show all (${detailRows} rows)` : `details: hide all (${detailRows} rows)`)
+    this.notify()
+  }
+  /** Register the panel's screen-row → transcript-item resolver for the mouse
+   *  click handler (re-set every render; null when the panel is unmounted). */
+  setRowResolver(resolver: ((row: number) => TranscriptItem | null) | null): void {
+    this._rowResolver = resolver
+  }
+  resolveRow(row: number): TranscriptItem | null {
+    return this._rowResolver === null ? null : this._rowResolver(row)
+  }
+  /** Hover state for the tool-row affordance (opencode-style: a row that can be
+   *  clicked highlights under the cursor). */
+  get hoveredToolKey(): number | null { return this._hoveredToolKey }
+  setHoverTool(key: number | null): void {
+    if (key === this._hoveredToolKey) return
+    this._hoveredToolKey = key
     this.notify()
   }
 
@@ -543,6 +687,8 @@ export class Store {
     } else {
       this.items = [...this.items, { key: this.key += 1, kind: 'assistant', text }]
     }
+    this._phase = 'answering'
+    this.markActivity()
     this.notify()
   }
 
@@ -577,16 +723,40 @@ export class Store {
     } else {
       this.items = [...this.items, { key: this.key += 1, kind: 'reasoning', text }]
     }
+    this._phase = 'thinking'
+    this.markActivity()
     this.notify()
   }
 
-  private _expandReasoning = false
-  get expandReasoning(): boolean { return this._expandReasoning }
-  toggleReasoning(): void { this._expandReasoning = !this._expandReasoning; this.notify() }
+  /** Global reasoning (Think) expansion default (`/think`); per-row mouse
+   *  clicks use reasoningExpanded(key) with a per-row override. */
+  get expandReasoning(): boolean { return this._reasoningDefault }
+  /** Whether ONE reasoning row's body shows: per-row override ?? global. */
+  reasoningExpanded(key: number): boolean {
+    const override = this._reasoningOverride.get(key)
+    return override === undefined ? this._reasoningDefault : override
+  }
+  /** Toggle ONE Think row (mouse click on its header): records a per-row
+   *  override of the global default, so individual reasoning rows open/close
+   *  without affecting the others or the `/think` master switch. */
+  toggleReasoningRow(key: number): void {
+    const next = !this.reasoningExpanded(key)
+    if (next === this._reasoningDefault) this._reasoningOverride.delete(key)
+    else this._reasoningOverride.set(key, next)
+    this.bumpExpansion()
+    this.notify()
+  }
 
   clear(): void {
     this.items = []
     this._steps = []
+    this._toolBodiesOverride.clear()
+    this._toolBodiesDefault = false
+    this._reasoningOverride.clear()
+    this._reasoningDefault = false
+    this._measureEpoch += 1
+    this._expansionEpoch += 1
+    this._rowResolver = null
     this.notify()
   }
 
@@ -597,6 +767,12 @@ export class Store {
     this.items = [...items]
     this.key = items.length
     this._steps = [...steps]
+    this._toolBodiesOverride.clear()
+    this._toolBodiesDefault = false
+    this._reasoningOverride.clear()
+    this._reasoningDefault = false
+    this._measureEpoch += 1
+    this._expansionEpoch += 1
     this.notify()
   }
 
@@ -639,6 +815,14 @@ export class Store {
     const nextEnd = this._lineEnd(nextStart)
     const col = this._cursor - start
     this.setCursor(nextStart + Math.min(col, nextEnd - nextStart))
+  }
+  /** Move the caret to the start of the current logical line (Home). */
+  moveCursorToLineStart(): void {
+    this.setCursor(this._lineStart(this._cursor))
+  }
+  /** Move the caret to the end of the current logical line (End). */
+  moveCursorToLineEnd(): void {
+    this.setCursor(this._lineEnd(this._cursor))
   }
   insertAtCursor(text: string): void {
     this._input = this._input.slice(0, this._cursor) + text + this._input.slice(this._cursor)
@@ -740,6 +924,110 @@ export class Store {
     if (this._question === null) return
     this._question.custom = value
     this._question.customMode = mode
+    this._question.customCursor = value.length
+    this.notify()
+  }
+  // ── custom ("Other") input editing — mirrors the composer key semantics ──
+  private clampQuestionCursor(): void {
+    if (this._question === null) return
+    const len = this._question.custom.length
+    if (this._question.customCursor > len) this._question.customCursor = len
+    if (this._question.customCursor < 0) this._question.customCursor = 0
+  }
+  questionType(char: string): void {
+    if (this._question === null) return
+    const q = this._question
+    const at = q.customCursor
+    q.custom = q.custom.slice(0, at) + char + q.custom.slice(at)
+    q.customCursor = at + char.length
+    this.notify()
+  }
+  questionBackspace(): void {
+    if (this._question === null) return
+    const q = this._question
+    if (q.customCursor > 0) {
+      const at = q.customCursor - 1
+      q.custom = q.custom.slice(0, at) + q.custom.slice(q.customCursor)
+      q.customCursor = at
+    }
+    this.notify()
+  }
+  questionDelete(): void {
+    if (this._question === null) return
+    const q = this._question
+    if (q.customCursor < q.custom.length) {
+      q.custom = q.custom.slice(0, q.customCursor) + q.custom.slice(q.customCursor + 1)
+    }
+    this.notify()
+  }
+  /** Ctrl+U: delete the current line's start (after the preceding newline)
+   *  through the caret, joining the rest with the previous line — the same
+   *  semantics as the composer. */
+  questionCtrlU(): void {
+    if (this._question === null) return
+    const q = this._question
+    const at = q.customCursor
+    const nl = q.custom.lastIndexOf('\n', at - 1)
+    const start = nl === -1 ? 0 : nl
+    q.custom = q.custom.slice(0, start) + q.custom.slice(at)
+    q.customCursor = start
+    this.notify()
+  }
+  /** Ctrl+C: clear the input (keep the popup open; Esc still cancels). */
+  questionClearInput(): void {
+    if (this._question === null) return
+    this._question.custom = ''
+    this._question.customCursor = 0
+    this.notify()
+  }
+  questionCursorToStart(): void {
+    if (this._question === null) return
+    this._question.customCursor = 0
+    this.notify()
+  }
+  questionCursorToEnd(): void {
+    if (this._question === null) return
+    this._question.customCursor = this._question.custom.length
+    this.notify()
+  }
+  /** Jump the custom-input caret to an arbitrary (clamped) index (visual-line
+   *  up/down movement computed by the question panel). */
+  questionCursorTo(index: number): void {
+    if (this._question === null) return
+    this._question.customCursor = Math.max(0, Math.min(this._question.custom.length, index))
+    this.notify()
+  }
+  // ── mouse: click to place the caret / drag to select inside the custom ──
+  questionMousePress(at: number): void {
+    if (this._question === null) return
+    this._question.customCursor = at
+    this._question.sel = { from: at, to: at }
+    this.notify()
+  }
+  questionMouseDrag(at: number): void {
+    if (this._question === null) return
+    const s = this._question.sel
+    if (s !== null) { this._question.sel = { from: s.from, to: at }; this.notify() }
+  }
+  /** Release: returns the selected range (normalized, `to` exclusive) and
+   *  clears the live selection; null when there was none. */
+  questionMouseEnd(): { from: number; to: number } | null {
+    if (this._question === null) return null
+    const s = this._question.sel
+    this._question.sel = null
+    if (s === null) return null
+    return s.from <= s.to ? { from: s.from, to: s.to } : { from: s.to, to: s.from }
+  }
+  questionCursorLeft(): void {
+    if (this._question === null) return
+    this._question.customCursor -= 1
+    this.clampQuestionCursor()
+    this.notify()
+  }
+  questionCursorRight(): void {
+    if (this._question === null) return
+    this._question.customCursor += 1
+    this.clampQuestionCursor()
     this.notify()
   }
   get width(): number { return this._width }
@@ -1271,11 +1559,42 @@ export class Store {
   setRunning(running: boolean): void {
     if (running === this._running) return
     this._running = running
-    if (running) this._paused = false // resuming a turn clears the Stopped state
+    if (running) {
+      this._paused = false // resuming a turn clears the Stopped state
+      const now = Date.now()
+      this._busySince = now
+      this._lastActivityAt = now
+      this._phase = 'working'
+    } else {
+      // Idle: no in-flight tools and the run clock resets for the next turn.
+      this._busySince = 0
+      this._toolOpen = 0
+      this._currentTool = null
+      this._phase = 'working'
+    }
     this.notify()
   }
   get paused(): boolean { return this._paused }
   setPaused(paused: boolean): void { if (paused === this._paused) return; this._paused = paused; this.notify() }
+  // ── run liveness (status-bar "never looks frozen" state) ───────────────────
+  get lastActivityAt(): number { return this._lastActivityAt }
+  get busySince(): number { return this._busySince }
+  get currentTool(): string | null { return this._currentTool }
+  get toolOpenCount(): number { return this._toolOpen }
+  get runPhase(): RunPhase { return this._phase }
+  /** Liveness beat from the live session-event stream / run start. Cheap and
+   *  never notifies (the caller already notifies), so it is safe at the top of
+   *  the high-frequency event handler. */
+  markActivity(): void {
+    const now = Date.now()
+    this._lastActivityAt = now
+    if (this._busySince === 0) this._busySince = now
+  }
+  /** Set the coarse run phase shown in the status bar (never notifies; the
+   *  caller is already mid-update). */
+  setRunPhase(phase: RunPhase): void {
+    this._phase = phase
+  }
   get followTail(): boolean { return this._followTail }
   get scroll(): number { return this._scroll }
   get layoutContent(): number { return this._layoutContent }
@@ -1815,6 +2134,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       await new Promise<void>((resolve) => { setTimeout(resolve, 25) })
     }
   }
+  // The retry loop above either assigns `handle` (then breaks) or throws once
+  // the factory deadline passes; TypeScript cannot see past the try/catch, so
+  // assert the assignment here instead of reaching for a non-null assertion.
+  if (handle === undefined) {
+    throw new Error('tui-runtime: agent handle was not established')
+  }
   // `handle` / `agent` / `sessionId` are reassigned by `newSessionAction` when
   // `/new` switches to a fresh session; every closure below reads them through
   // the `let` bindings, so the listeners and slots track the live session.
@@ -1909,8 +2234,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     })()
   }, 500).unref()
 
+  // Did the current turn produce any assistant TEXT (any step)? A max-tokens
+  // turn-end with zero body text is a silent stall (the 8k output budget was
+  // spent on reasoning) that the UI must explain instead of leaving Idle bare.
+  let textSinceThisTurn = false
+
   ctx.on('session/event', (session, event: SessionEvent) => {
     if (session.id !== sessionId) return
+    // Liveness beat: any live event means the run is active, so the status bar
+    // can show "Ns since last event" even across silent model stretches.
+    store.markActivity()
     switch (event.type) {
       case 'assistant/chunk': {
         const chunk = event.data.chunk
@@ -1937,16 +2270,42 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           .map((block) => block.text)
           .join('')
         if (joined === '') break
+        textSinceThisTurn = true
         // Authoritative text: replace (or create) the assistant row so a
         // streamed, possibly newline-incomplete copy never lingers (headings
         // flush against the content above), and live matches a resumed replay.
         store.settleAssistantText(joined)
+        store.setRunPhase('working') // the answer settled; the next event decides (tool/thinking)
         break
       }
       case 'step/start': {
         const data = event.data as { turn?: number; step?: number }
         if (typeof data.turn === 'number' && typeof data.step === 'number') {
           stepStartAt.set(`${data.turn}:${data.step}`, Date.now())
+        }
+        // A fresh step begins with the model computing (reasoning deltas flip
+        // the phase to `thinking` as they arrive).
+        store.setRunPhase('working')
+        break
+      }
+      // Between steps the model is computing the next one; keep the phase
+      // honest so a silent gap reads as "working", never as Idle.
+      case 'step/end': {
+        store.setRunPhase('working')
+        break
+      }
+      // Turn bookkeeping for the max-tokens stall hint (C2H): reset the
+      // text-produced flag on a fresh turn; explain a silent ceiling hit.
+      case 'turn/start': {
+        textSinceThisTurn = false
+        break
+      }
+      case 'turn/end': {
+        const reason = (event.data as { reason?: { kind?: string } }).reason
+        if (reason?.kind === 'max-tokens' && !textSinceThisTurn) {
+          store.append('status',
+            '⚠ 上一轮输出达到长度上限(8192 tok，多为推理消耗)且未产出正文 — 发送任意消息即可继续；长任务可用 Ctrl+T 调低推理档。',
+            true)
         }
         break
       }
@@ -1965,7 +2324,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         const queue = toolCallsAt.get(key) ?? []
         queue.push(Date.now())
         toolCallsAt.set(key, queue)
-        store.toolCall(event.data.name)
+        store.toolCall(event.data.name, (event.data as { arguments?: string }).arguments)
         break
       }
       case 'tool/result': {
@@ -1973,7 +2332,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         const key = `${data.turn}:${data.step}`
         const started = toolCallsAt.get(key)?.shift()
         if (started !== undefined) store.accrueTool(Date.now() - started)
-        store.toolResult()
+        const { text, error } = toolResultDisplay((event.data as { message?: { content?: unknown } }).message)
+        store.toolResult({ ok: !error, text })
         break
       }
       // The session title (first-task summary) folds in the harness
@@ -2010,7 +2370,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     },
   })
   tui.commands.register({ name: 'help', hint: 'show this help', run: () => { store.openHelp() } })
-  tui.commands.register({ name: 'think', hint: 'expand/collapse the Think (reasoning) text', run: () => { store.toggleReasoning() } })
+  tui.commands.register({ name: 'think', hint: 'show/hide details under Think and tool rows (reasoning + tool output)', run: () => { store.toggleAllDetail() } })
   tui.commands.register({
     name: 'compact',
     hint: 'compact the session history',
@@ -2319,6 +2679,41 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.setRunning(payload.status === 'running')
   })
 
+  // ── render-loop watchdog ──────────────────────────────────────────────────
+  // A render-loop wedge (a row that stalls Ink's scheduler without throwing —
+  // the process stays up and the agent keeps appending events invisibly) shows
+  // as a FROZEN screen while the run is actually healthy. Every second while
+  // running, check the patched frame writer's last-flush stamp: if no frame was
+  // flushed for a while, revive the screen at two levels — store.touch() feeds
+  // the normal React/Ink path, and __dshTuiRepaintLastFrame bypasses Ink
+  // entirely (the writer rewrites its last known frame straight to stdout).
+  // One rate-bounded log line per stall episode documents the freeze for
+  // diagnosis (file only — never scribble on the TUI's own terminal).
+  const frameGlobals = (): { lastFlush?: number; repaint?: () => void } => {
+    const g = globalThis as unknown as { __dshTuiLastFlushAt?: number; __dshTuiRepaintLastFrame?: () => void }
+    return { lastFlush: g.__dshTuiLastFlushAt, repaint: g.__dshTuiRepaintLastFrame }
+  }
+  let stallLoggedAt = 0
+  const watchdog = setInterval(() => {
+    try {
+      if (!store.running || store.paused) { stallLoggedAt = 0; return }
+      const now = Date.now()
+      const { lastFlush, repaint } = frameGlobals()
+      if (lastFlush === undefined) return // no first frame yet (pre-mount)
+      if (now - lastFlush < 3000) { stallLoggedAt = 0; return } // healthy
+      const stalledFor = Math.max(1, Math.round((now - lastFlush) / 1000))
+      if (stallLoggedAt === 0 || now - stallLoggedAt > 10_000) {
+        stallLoggedAt = now
+        logErrorFileOnly('watchdog', `no Ink frame flushed for ${stalledFor}s while running (agent active) — forcing a repaint`)
+      }
+      store.touch() // level 1: feed the normal React/Ink render path
+      repaint?.() // level 2: bypass Ink, rewrite the last known frame
+    } catch {
+      // The watchdog never takes the app down.
+    }
+  }, 1000)
+  watchdog.unref?.()
+
   // Enable raw mode so the terminal owns no input processing.
   if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
     process.stdin.setRawMode(true)
@@ -2413,31 +2808,41 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
  */
 async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
   const answers: AskUserQuestionAnswerItem[] = []
-  for (let q = 0; q < request.questions.length; q++) {
-    const item = request.questions[q]
-    const answer = await new Promise<AskUserQuestionAnswerItem>((resolve, reject) => {
-      // An abort (tool/step cancelled) must reject the pending ask.
-      if (request.signal?.aborted) {
-        reject(new Error('ask_user_question was cancelled'))
-        return
-      }
-      store.setQuestion({
-        item, resolve, reject, index: 0, custom: '', customMode: false,
-        position: q + 1, total: request.questions.length,
+  const total = request.questions.length
+  try {
+    for (let q = 0; q < request.questions.length; q++) {
+      const item = request.questions[q]
+      const answer = await new Promise<AskUserQuestionAnswerItem>((resolve, reject) => {
+        // An abort (tool/step cancelled) must reject the pending ask.
+        if (request.signal?.aborted) {
+          reject(new Error('ask_user_question was cancelled'))
+          return
+        }
+        store.setQuestion({
+          item, resolve, reject, index: 0, custom: '', customMode: false, customCursor: 0, sel: null,
+          position: q + 1, total,
+        })
+        if (request.signal) {
+          request.signal.addEventListener('abort', () => {
+            if (store.question !== null) {
+              const rejectFn = store.question.reject
+              store.clearQuestion()
+              rejectFn(new Error('ask_user_question was cancelled'))
+            }
+          }, { once: true })
+        }
       })
-      if (request.signal) {
-        request.signal.addEventListener('abort', () => {
-          if (store.question !== null) {
-            const rejectFn = store.question.reject
-            store.clearQuestion()
-            rejectFn(new Error('ask_user_question was cancelled'))
-          }
-        }, { once: true })
-      }
-    })
-    answers.push(answer)
+      answers.push(answer)
+      // Web-parity progress echo for a multi-question ask.
+      if (total > 1) store.append('status', `answered ${answers.length}/${total}`, true)
+    }
+    return { answers }
+  } catch (error) {
+    // Web-parity cancellation notice (Esc / abort): the pending answer was not
+    // submitted.
+    store.append('status', 'Question cancelled — answer not submitted', true)
+    throw error
   }
-  return { answers }
 }
 
 /**
@@ -2504,6 +2909,43 @@ function flattenContentText(content: unknown): string {
     .join('')
 }
 
+/** Cap tool-result text for DISPLAY (expanded rows render it; the session log
+ *  keeps the full result). Bounded so a single huge tool output cannot balloon
+ *  transcript memory over a long session. */
+function capToolBody(text: string): string {
+  const MAX_TOOL_BODY = 4000
+  return text.length <= MAX_TOOL_BODY ? text : `${text.slice(0, MAX_TOOL_BODY)}…`
+}
+
+/** Cap raw tool-call arguments stored for summary derivation (bash command,
+ *  read path, todo list counts). Only enough for a one-line summary is kept. */
+function capToolArgs(argsRaw: string): string {
+  const MAX_TOOL_ARGS = 400
+  return argsRaw.length <= MAX_TOOL_ARGS ? argsRaw : `${argsRaw.slice(0, MAX_TOOL_ARGS)}…`
+}
+
+/** Extract the display text and error flag from a `tool/result` message.
+ *  Outputs arrive as nested `tool-result` blocks (`content[]` each holding
+ *  inner `text` blocks and an `isError` flag); plain top-level text blocks are
+ *  tolerated. Live and resumed (fold) paths share this, so both agree. */
+function toolResultDisplay(message: { content?: unknown } | undefined): { text: string; error: boolean } {
+  const content = message?.content
+  if (!Array.isArray(content)) return { text: '', error: false }
+  let text = ''
+  let error = false
+  for (const block of content) {
+    if (block === null || typeof block !== 'object') continue
+    const b = block as { type?: unknown; content?: unknown; isError?: unknown }
+    if (b.type === 'tool-result') {
+      error = error || b.isError === true
+      text += flattenContentText(b.content)
+    } else if (b.type === 'text') {
+      text += String((b as { text?: unknown }).text ?? '')
+    }
+  }
+  return { text, error }
+}
+
 /**
  * Fold a persisted session's event log into transcript rows, mirroring what
  * the live `session/event` listener renders — except assistant text comes from
@@ -2538,21 +2980,59 @@ function foldHistoryEvents(events: readonly SessionEvent[]): { items: Transcript
         items.push({ key: key += 1, kind: 'assistant', text: joined })
         break
       }
+      case 'assistant/chunk': {
+        // Rebuild the Think (reasoning) rows the live path renders: accumulate
+        // reasoning deltas into one reasoning item per contiguous run (append
+        // to the tail when it is already a reasoning item, mirroring
+        // store.streamReasoning). text-delta chunks stay dropped — the settled
+        // assistant/message above is the authoritative text.
+        const chunk = (event.data as { chunk?: { type?: string; text?: string } }).chunk
+        const delta = chunk?.type === 'reasoning-delta' ? chunk.text : undefined
+        if (typeof delta === 'string' && delta !== '') {
+          const tail = items.at(-1)
+          if (tail !== undefined && tail.kind === 'reasoning') {
+            items[items.length - 1] = { ...tail, text: tail.text + delta }
+          } else {
+            items.push({ key: key += 1, kind: 'reasoning', text: delta })
+          }
+        }
+        break
+      }
       case 'todo/write': {
         const todos = event.data.todos
         if (todos.length > 0) steps = todos
         break
       }
       case 'tool/call': {
-        items.push({ key: key += 1, kind: 'tool', text: `│ ${event.data.name}` })
+        const argsRaw = (event.data as { arguments?: string }).arguments
+        items.push({
+          key: key += 1,
+          kind: 'tool',
+          text: `│ ${event.data.name}`,
+          tool: { state: 'running', ...argsRaw === undefined ? {} : { argsRaw: capToolArgs(argsRaw) } },
+        })
         break
       }
       case 'tool/result': {
-        // Mark the most recent running tool row as completed (toolResult()).
+        // Mark the most recent running tool row as completed and attach the
+        // result/error body — the same shape the live path's
+        // store.toolResult() builds, so resume replays byte-identically.
+        const { text, error } = toolResultDisplay((event.data as { message?: { content?: unknown } }).message)
+        const body = text.trim() === '' ? undefined : capToolBody(text.trim())
         for (let i = items.length - 1; i >= 0; i--) {
           const item = items[i]
           if (item !== undefined && item.kind === 'tool' && item.text.startsWith('│ ')) {
-            items[i] = { ...item, text: `✓ ${item.text.slice(2)}` }
+            const prevTool = item.tool
+            const name = item.text.slice(2)
+            items[i] = {
+              ...item,
+              text: error ? `✗ ${name}` : `✓ ${name}`,
+              tool: {
+                state: error ? 'error' : 'ok',
+                ...prevTool?.argsRaw === undefined ? {} : { argsRaw: prevTool.argsRaw },
+                ...body === undefined ? {} : { body },
+              },
+            }
             break
           }
         }

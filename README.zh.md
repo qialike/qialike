@@ -122,6 +122,7 @@ dist/dsh-tui --help
 - **`/export` 会话导出**：输入 `/export` 弹出**导出对话框**（格式 JSON/Markdown、文件名可编辑、脱敏开关；`↑/↓` 移动字段、`←/→` 切换、输入文件名、`Enter` 导出）；带参数直达：导出会话为 **JSON**（机器可读，opencode `export` 同型）或 **Markdown**（人类可读回放）。`/export` 导出当前会话、`/export <sessionId>` 指定会话、`--markdown` 切换格式、`--sanitize` 脱敏（文本/工具输出替换为 `[redacted:…]`）、`--output <名称>` 自定义文件名（自动加扩展名,可含子目录,如 `notes/summary`）。写入**工作区根目录** `export-<时间>-<id>.(json|md)`，状态行显示路径。
 - **`/sidebar` 右侧栏开关**：右侧 **Steps** 面板（`session <id>` + `Steps X/Y` 进度 + 步骤清单；模型未用 `todo_write` 时显示 `no plan yet`）默认在终端足够宽（≥110 列）时自动显示。输入 `/sidebar` 可切换——无参时循环 `auto → on → off`，`/sidebar on|off|auto` 直接设档；**鼠标左键点击 Steps 标题栏**同样可切换。`auto` 随宽度、`on` 恒显（窄窗也显示）、`off` 恒隐（消息列与输入框随之变宽，等同窄窗布局）。选择持久化到 `~/.dsh/dsh-tui.json` 的 `sidebar_mode`（默认 `auto`）；消息列/输入框宽度、换行、光标格、鼠标点击、选区保护等全部几何与显隐判定一致，切换后布局与光标不会错位。
 - **opencode 式布局**：对话列（转写区 + 底部输入框）+ 右侧 Steps 面板（≥110 列自动显示，或经 `/sidebar` 强制显隐）；旧的 Activity 面板与 `/activity` 命令早已移除。
+- **运行状态"活性指示"（界面不会"看起来像卡死"）**：agent 运行期间，底部状态栏持续显示**相位与经过秒数**——`⠙ thinking · 12s · Esc to pause`（模型思考）、`⠴ answering · Ns`（正文流式）、工具调用时显示**当前工具名**（并行折叠为 `name ×n`），事件静默 ≥4s 会标出 `Ns since last event`——长任务中画面始终在动。若渲染循环真停摆（agent 仍在后台工作），**内置看门狗**自动两级强制重绘（并在 `~/.dsh/dsh-tui.log` 记录 `[watchdog]` 行），按任意键也可立即救回画面；单条异常消息导致的渲染错误只把该行降级为 `⚠ row dropped` 警告（`[row]` 日志），不会冻结整个界面。工具行完成后默认**折叠为摘要卡片**（bash/read/todo 等按参数生成摘要，如 `✓ bash · ls -la …`、`✓ todo_write · 3/5`；成功/失败着色、可展开标记 `…`），**鼠标点击该行**或 **`/think`**（统一展开/收起下方内容：Think 推理全文 + 全部工具行正文）展开/收起完整结果（限长，完整内容保留在会话日志——对齐 web 的摘要+展开语义）；模型输出达到长度上限且未产出正文时，对话区会给出明确提示（可发送任意消息继续，或用 Ctrl+T 调低推理档减少额度消耗）。
 
 ## 插件化架构（"一切皆插件"）
 
@@ -140,9 +141,15 @@ bash scripts/install      # 把 dist/dsh-tui 拷贝到 ~/.dsh/bin，并把 ~/.ds
 # （等价于 pnpm install:local；工作台根执行：bash dsh-tui/scripts/install）
 dsh-tui                  # 此后任意目录可直接执行
 dsh-tui --help
-dsh-tui uninstall        # 从二进制内部卸载生产安装：删除 ~/.dsh/dsh-tui.{log,json}
-                         #   与追加到 ~/.bashrc/~/.zshrc 的 PATH 行；运行中的
-                         #   ~/.dsh/bin/dsh-tui 拷贝给出手动删除提示
+dsh-tui uninstall        # 从二进制内部卸载：清空整个 harness home（$DSH_HOME，默认 ~/.dsh——
+                         #   config、日志、主题、settings.yaml、sessions、profiles、storages、
+                         #   attachments、exports 及本地 ~/.dsh/bin 拷贝），并移除
+                         #   ~/.local/bin/dsh-tui 开发软链与安装脚本追加到 ~/.bashrc/~/.zshrc
+                         #   的 PATH 导出行
+dsh-tui web [flags]      # 打开 DeepSeek Harness 浏览器 UI（转发已安装的 `dsh web` CLI，Web
+                         #   界面保持为 harness 自有实现）：需要 `dsh` 在 PATH 上
+                         #   （`npm install -g @deepseek-ai/dsh`）或设置 $DSH_TUI_DSH；
+                         #   web 参数（--host/--port/--no-open/...）原样透传
 pnpm uninstall:local     # （历史遗留）移除旧版 scripts/install.sh 创建的
                          #   ~/.local/bin/dsh-tui 软链
 ```
@@ -150,6 +157,33 @@ pnpm uninstall:local     # （历史遗留）移除旧版 scripts/install.sh 创
 二进制在构建时已内嵌 DeepSeek Harness，因此 `dsh-tui` 运行时**不需要** harness 检出、`pnpm` 或
 `node_modules`——只需 `DEEPSEEK_API_KEY`（环境变量 / `~/.dsh` settings / `.env`）与一个工作区
 （默认 `cwd`，或 `--workspace`）。会话状态、设置与凭据存放在 `~/.dsh`。
+
+`dsh-tui web` 运行已安装的 `dsh` CLI，其版本应不低于本 dsh-tui 构建内嵌的 harness 版本：
+两端读写同一份 `~/.dsh/sessions` 日志，更旧的 `dsh` 读取器会把新版范围压缩的
+`sourceEventSeqs` 误判为损坏历史（`SessionPersistenceCorruptionError`）。
+
+`dsh-tui web` 启动前会核对 `dsh`：未安装或版本与本 dsh-tui 内嵌不一致时，告警并打印安装命令（版本不一致时不启动 web、直接退出）。
+
+`dsh-tui web` 运行已安装的 `dsh` CLI，其版本应不低于本 dsh-tui 构建内嵌的 harness 版本：
+两端读写同一份 `~/.dsh/sessions` 日志，更旧的 `dsh` 读取器会把新版范围压缩的
+`sourceEventSeqs` 误判为损坏历史（`SessionPersistenceCorruptionError`）。
+
+### 无头 / 远程访问：本机跑服务，别机浏览器访问
+
+`dsh web` 默认只监听 `127.0.0.1`。要在**本机（含无桌面/纯终端 Linux）跑服务、另一台机器的浏览器访问**：
+
+```sh
+dsh-tui web --host 0.0.0.0 --no-open   # 监听所有网卡；无头机无本地浏览器故加 --no-open
+```
+
+然后在别机浏览器打开 `http://<这台机器IP>:3080`（默认端口 3080，可用 `--port <n>` 修改；
+记得在防火墙/安全组放行端口）。**仅建议在可信网络/内网/VPN 下使用**——绑定 `0.0.0.0` 即对网络开放服务。
+更稳妥的方式：服务端保持默认回环绑定，从你的机器做 SSH 隧道：
+
+```sh
+ssh -L 3080:localhost:3080 user@headless-host
+# 再在本机浏览器打开 http://localhost:3080
+```
 
 ## 作为插件 bundle 安装
 

@@ -233,6 +233,22 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
 - **OpenCode-style layout**: a conversation column (transcript + bottom input dock) with the Steps
   panel to its right when visible (auto at ≥110 columns, or forced with `/sidebar`); the old
   Activity panel and `/activity` command were removed long ago.
+- **Live run status — the screen never *looks* frozen while the agent works**: while a run is in
+  progress the bottom status bar keeps changing — phase and elapsed seconds (`⠙ thinking · 12s · Esc to pause`),
+  `answering · Ns` while text streams, the current **tool name** (parallel calls collapse to `name ×n`),
+  and `Ns since last event` once the agent stays silent ≥4s. If the render loop itself ever stalls
+  (the agent keeps working in the background), a built-in watchdog force-repaints at two levels and
+  logs a `[watchdog]` line to `~/.dsh/dsh-tui.log`; pressing any key revives the screen immediately.
+  A single message whose rendering throws degrades only that row to a `⚠ row dropped` warning
+  (`[row]` log) instead of freezing the whole UI. Settled tool rows are now collapsed **summary cards** (per-tool summaries derived from the
+  arguments — `✓ bash · ls -la …`, `✓ todo_write · 3/5` — with ok/error coloring and a `…`
+  expand marker): **click the row** or run **`/think`** to
+  expand/collapse the detail under these rows together — every Think (reasoning) body plus every
+  tool output
+  (bounded; the full text stays in the session log, matching the web ToolRow summary+expand
+  semantics), and when a model output hits its length ceiling with no body text, the transcript
+  explains the stall instead of dropping silently to Idle — send any message to continue, or
+  lower the reasoning effort with Ctrl+T to burn less of the per-request budget.
 
 ## Plugin architecture ("everything is a plugin")
 
@@ -255,10 +271,16 @@ bash scripts/install      # copy dist/dsh-tui into ~/.dsh/bin and put ~/.dsh/bin
 # (equivalent: pnpm install:local; from the workspace root: bash dsh-tui/scripts/install)
 dsh-tui                  # now runnable from any directory
 dsh-tui --help
-dsh-tui uninstall        # uninstall the production install from inside the binary:
-                         #   removes ~/.dsh/dsh-tui.{log,json} and the PATH entry
-                         #   added to ~/.bashrc/~/.zshrc; prompts for manual removal
-                         #   of the running ~/.dsh/bin/dsh-tui copy
+dsh-tui uninstall        # uninstall from inside the binary: clears the whole harness
+                         #   home ($DSH_HOME, default ~/.dsh — config, logs, themes,
+                         #   settings.yaml, sessions, profiles, storages, attachments,
+                         #   exports, and any local ~/.dsh/bin copy) and removes the
+                         #   ~/.local/bin/dsh-tui dev symlink and the PATH export line
+                         #   the install script added to ~/.bashrc/~/.zshrc
+dsh-tui web [flags]      # serve the DeepSeek Harness browser UI (alias of the installed
+                         #   `dsh web` CLI, so the Web surface stays the harness's own):
+                         #   needs `dsh` on PATH (`npm install -g @deepseek-ai/dsh`) or
+                         #   $DSH_TUI_DSH; web flags (--host/--port/--no-open/...) pass through
 pnpm uninstall:local     # (legacy) remove the ~/.local/bin/dsh-tui symlink of older
                          #   dev installs created by the removed scripts/install.sh
 ```
@@ -267,6 +289,37 @@ The binary embeds DeepSeek Harness at build time, so `dsh-tui` needs no harness 
 `pnpm`, and no `node_modules` at runtime — only an API key for the provider in use
 (env / `~/.dsh` settings / `.env`) and a workspace (default `cwd`, or `--workspace`). Session
 state, settings, and credentials live under `~/.dsh`.
+
+`dsh-tui web` runs the installed `dsh` CLI, which should be at least the harness version
+embedded in this dsh-tui build: both sides write and read the same `~/.dsh/sessions` logs,
+and an older `dsh` reader rejects the newer range-compressed `sourceEventSeqs` as corrupt
+history (`SessionPersistenceCorruptionError`).
+
+`dsh-tui web` preflights `dsh` first: when it is missing, or its version differs from the one embedded in this dsh-tui build, a warning prints the matching install command and (on a version mismatch) the command exits instead of starting the web server.
+
+`dsh-tui web` runs the installed `dsh` CLI, which should be at least the harness version
+embedded in this dsh-tui build: both sides write and read the same `~/.dsh/sessions` logs,
+and an older `dsh` reader rejects the newer range-compressed `sourceEventSeqs` as corrupt
+history (`SessionPersistenceCorruptionError`).
+
+### Serving the web UI to another machine (headless / remote)
+
+`dsh web` binds to `127.0.0.1` by default. To run the server on one machine — including a
+headless / terminal-only Linux — and open it in a browser on another machine:
+
+```sh
+dsh-tui web --host 0.0.0.0 --no-open   # serve on all interfaces; no local browser on a headless box
+```
+
+then visit `http://<host-ip>:3080` from the other machine (default port 3080, change with
+`--port <n>`; allow the port in the firewall / security group). Only do this on a trusted
+network / VPN — binding `0.0.0.0` exposes the server. A safer alternative when the server is
+reachable over SSH: keep the default loopback binding and tunnel from your machine:
+
+```sh
+ssh -L 3080:localhost:3080 user@headless-host
+# then open http://localhost:3080 locally
+```
 
 ## Install as a plugin bundle
 
