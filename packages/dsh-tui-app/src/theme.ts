@@ -57,14 +57,14 @@ const DEFAULTS: ThemePalette = {
   textMuted: '#808080',
   /** Primary accent (user role, links, function/primary). */
   primary: '#fab283',
-  /** Secondary accent (agent roles). */
-  secondary: '#5c9cf5',
+  /** Secondary accent (agent roles, bold keys, file/path names). */
+  secondary: '#6ba6f7',
   /** Accent (headings, command highlights). */
-  accent: '#9d7cd8',
+  accent: '#b18ae8',
   /** Success / code. */
   success: '#7fd88f',
   /** Warning / blockquote / type. */
-  warning: '#f5a742',
+  warning: '#f7b45a',
   /** Info / operator. */
   info: '#56b6c2',
   /** Error. */
