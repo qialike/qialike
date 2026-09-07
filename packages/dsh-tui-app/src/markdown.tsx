@@ -33,6 +33,7 @@ import { fromMarkdown } from 'mdast-util-from-markdown'
 import { gfm } from 'micromark-extension-gfm'
 import { gfmFromMarkdown } from 'mdast-util-gfm'
 import stringWidth from 'string-width'
+import wrapAnsi from 'wrap-ansi'
 import { theme } from './theme.ts'
 
 /** Structural subset of mdast the renderer touches (avoids a hard mdast types dependency). */
@@ -232,7 +233,6 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
           (cell.children ?? []).map((cellChild: MdNode) => renderInline(cellChild)).join('')) )
       if (rows.length === 0) return null
       const header = rows[0] ?? []
-      const width = header.length
       const pad = (s: string, w: number) => s.padEnd(w).slice(0, w)
       return (
         <Text key={key} wrap="wrap">
@@ -256,12 +256,6 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
       )
     }
   }
-}
-
-/** Render a root's children as block nodes. */
-function renderRoot(node: MdNode): React.ReactNode {
-  const children = node.children ?? []
-  return children.map((child, i) => renderBlock(child, i))
 }
 
 /** Flatten an inline node's children into plain text (soft breaks stay newlines). */
@@ -332,13 +326,24 @@ export function truncateWide(text: string, maxCols: number): string {
   return `${out}…`
 }
 
-/** Number of terminal rows a wrapped piece of text occupies at `usable` columns. */
+/** Number of terminal rows Ink paints for `text` at `usable` columns.
+ *
+ *  Paragraph/heading/list/blockquote text renders with Ink `wrap="wrap"`,
+ *  which is exactly `wrap-ansi(text, usable, { trim: false, hard: true })` —
+ *  a greedy WORD break (characters pack up to the column limit, a word that
+ *  would overflow moves to the next row, a word wider than the limit is
+ *  hard-broken). A character-count ceil (`Math.ceil(width / usable)`) is NOT
+ *  equivalent: it undercounts prose, because word breaks waste the residual
+ *  columns and the miss grows with the text length. That undercount fed
+ *  `layout.content` (hence `maxScroll`) with too few rows, so the streaming
+ *  tail was clipped below the viewport — the "message box doesn't auto-scroll;
+ *  PgDn reveals it" bug. Using the same `wrap-ansi` the renderer uses makes the
+ *  estimate equal the painted row count.
+ * @param text - the text (paragraphs separated by `\n`).
+ * @param usable - the wrapped column width.
+ * @returns the number of terminal rows Ink will paint. */
 export function countWrappedLines(text: string, usable: number): number {
-  let total = 0
-  for (const seg of text.split('\n')) {
-    total += Math.max(1, Math.ceil(visualWidth(seg) / Math.max(1, usable)))
-  }
-  return total
+  return wrapAnsi(text, Math.max(1, usable), { trim: false, hard: true }).split('\n').length
 }
 
 /**

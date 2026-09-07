@@ -1,8 +1,17 @@
 #!/usr/bin/env node
 /**
- * dsh-tui — single-file SEA launcher for the TUI terminal surface.
+ * dsh-tui — the full single-file SEA boot for the TUI terminal surface.
  *
- * This entry reimplements the app-boot `boot()` sequence with one change: a
+ * Not the binary's entry point: {@link ./main.ts} is. That thin entry resolves
+ * `--version` and a lone `--help` without loading this module's static graph,
+ * then delegates everything else here through a deferred dynamic import, so
+ * this file's ~111-plugin import set (`generated/plugins.ts` and friends) only
+ * instantiates when a real boot is needed. On load it re-checks its own
+ * launcher flags (`uninstall`, `web`, version — the web forwarder must never
+ * run inside the TUI's alternate screen buffer) and then runs the full
+ * composition below.
+ *
+ * This boot reimplements the app-boot `boot()` sequence with one change: a
  * {@link SeaInclude} resolves bare `@deepseek-ai/*` plugin names from the
  * statically imported {@link PLUGIN_BUILTINS} map instead of a runtime
  * `import()`, which a single bundled file cannot perform. Everything else is
@@ -415,7 +424,23 @@ async function main(): Promise<void> {
   // handler exists (boot failure, early fatal errors), which is why it is a
   // no-op once `appMounted` is set.
   const leaveAlt = (): void => { try { process.stdout.write('\x1b[?25h\x1b[?1049l') } catch { /* ignore */ } }
+  // Enter the alternate screen buffer. `--help` must keep its exact current
+  // output — the commander-rendered text is the process's only write after
+  // this entry — so the splash below is skipped for help invocations; it is
+  // also restricted to a real terminal (a piped stdout is a capture, where a
+  // splash would only add noise before Ink's first frame). The splash is
+  // overwritten in place by the app's first Ink frame — the patched frame
+  // writer (apps/tui-bin/build.mjs) erases and repaints every line of the
+  // first frame, and `\x1b[0J` clears anything below it — and a boot failure
+  // before the app mounts exits through the backstop above, which leaves the
+  // alternate buffer and discards the splash with it. Nothing reaches the
+  // normal screen buffer, so no residue.
   process.stdout.write('\x1b[?1049h')
+  const wantsHelp = args.some((arg) => arg === '--help' || arg === '-h')
+  if (!wantsHelp && process.stdout.isTTY === true) {
+    process.stdout.write('\x1b[2J\x1b[H')
+    process.stdout.write(`\x1b[90m${NAME} v${readVersion()} — starting…\x1b[0m`)
+  }
   let appMounted = false
   process.on('exit', () => { if (!appMounted) leaveAlt() })
   const profile = materializeProfile()

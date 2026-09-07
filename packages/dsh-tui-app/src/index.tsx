@@ -26,7 +26,6 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
-import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-tools'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
@@ -35,15 +34,13 @@ import type {
   AskUserQuestionAnswer,
   AskUserQuestionAnswerItem,
   AskUserQuestionItem,
-  AskUserQuestionOption,
   AskUserQuestionRequest,
 } from '@deepseek-ai/dsh-user-questions'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
-import { TUI_STARTUP_SERVICE } from './startup.ts'
-import { TUI_MODELS_SERVICE, type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
+import { type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
 import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
-import { emptySessionStats, foldSessionStats, type SessionStats } from './session-stats.ts'
+import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
 import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
@@ -59,13 +56,6 @@ export const name = 'tui-runtime'
 
 /** Project version (single source of truth: the root package.json). */
 export const APP_VERSION = (pkg as { version?: string }).version ?? '0.0.0'
-
-/** Whether this build is a beta/preview: true when the version carries a
- *  prerelease tag (`0.2.2-beta.1`, `-rc`, `-alpha`, `-preview`) or
- *  `DSH_TUI_BETA=1` is set at launch. Release builds (plain semver) show no
- *  beta marker in the sidebar footer. */
-export const IS_BETA_BUILD = /[-.]?(beta|rc|alpha|preview)[-.]?/i.test(APP_VERSION)
-  || process.env.DSH_TUI_BETA?.trim() === '1'
 
 /** Footer suffix appended ONLY when beta is forced by `DSH_TUI_BETA=1` on a
  *  plain (non-prerelease) version. A version that already spells it out
@@ -121,7 +111,7 @@ export const Config: z<Config> = z.object({
 /** One rendered transcript line. */
 export interface TranscriptItem {
   readonly key: number
-  readonly kind: 'user' | 'assistant' | 'reasoning' | 'status' | 'tool'
+  readonly kind: 'user' | 'assistant' | 'reasoning' | 'status' | 'tool' | 'error'
   readonly text: string
   readonly dim?: boolean
   /** Tool-row payload: `running` rows carry the (capped) raw arguments for the
@@ -131,6 +121,9 @@ export interface TranscriptItem {
     readonly state: 'running' | 'ok' | 'error'
     readonly argsRaw?: string
     readonly body?: string
+    /** Wall-clock start (ms) of a `running` row — drives the row's live
+     *  elapsed-seconds tail while the tool is in flight. */
+    readonly startedAt?: number
   }
 }
 
@@ -213,22 +206,42 @@ export interface PendingApproval {
   readonly resolve: (outcome: ApprovalOutcome) => void
 }
 
-/** An in-band user question (ask_user_question) awaiting the user's decision. */
+/** One in-band user-question ask shown as a single card dock. A request may
+ *  carry several questions; the card shows them ONE at a time, keeps each
+ *  committed answer, and submits the whole batch once every question is
+ *  answered (opencode question-dock semantics — no popup-per-question).
+ *
+ *  `questions`/`answers`/… are the batch state; `item`/`index`/`custom`/…
+ *  are the ACTIVE question's editable snapshot (`questions[active]`), so the
+ *  panel and the row-count estimate read one coherent shape. */
 export interface PendingQuestion {
-  readonly item: AskUserQuestionItem
-  readonly resolve: (answer: AskUserQuestionAnswerItem) => void
+  readonly questions: readonly AskUserQuestionItem[]
+  readonly resolve: (answers: AskUserQuestionAnswerItem[]) => void
   readonly reject: (error: Error) => void
+  /** Index of the question currently shown (0-based). */
+  active: number
+  /** Committed answers per question (index-aligned); null = not answered yet. */
+  answers: ({ kind: 'option'; label: string } | { kind: 'custom'; text: string } | null)[]
+  /** Last highlighted row per question (option index; `options.length` = the
+   *  "Other" row). */
+  highlights: number[]
+  /** Draft "Other" text per question, kept while navigating back/forth. */
+  drafts: string[]
+  /** Whether the "Other" inline editor was open when the question was left. */
+  draftOpen: boolean[]
+  // ── active-question snapshot (== questions[active]) ──
+  item: AskUserQuestionItem
+  /** Highlighted row of the active question (`options.length` = "Other"). */
   index: number
+  /** Draft text of the active question's "Other" editor. */
   custom: string
+  /** Whether the "Other" editor is open (typed answer lands below the list). */
   customMode: boolean
-  /** Character index of the caret inside the custom ("Other") input. */
+  /** Character index of the caret inside the active "Other" input. */
   customCursor: number
-  /** Live mouse selection inside the custom input (char indexes, `to`
+  /** Live mouse selection inside the active custom input (char indexes, `to`
    *  exclusive), or null when no selection is active. */
   sel: { from: number; to: number } | null
-  /** Position within a multi-question ask (1-based) and the total, when > 1. */
-  readonly position?: number
-  readonly total?: number
 }
 
 /** A command in the slash palette. */
@@ -428,6 +441,11 @@ export class Store {
   submitMessage: (text: string) => void = () => {}
   cancelAction: () => void = () => {}
   pauseAgent: () => void = () => {}
+  /** Abort the whole task when the user cancels an ask_user_question from the
+   *  question dock (injected by start(); Esc in the options list calls it, so
+   *  cancelling the ask also stops the agent's running turn — the model is
+   *  awaiting the answer, so the task must not keep going). */
+  cancelQuestionAction: () => void = () => {}
   /** Start a brand-new session in place (injected by start(); the `/new`
    *  command calls it). The current session is cancelled, disposed, and left
    *  durably persisted by the harness, so it stays reachable from
@@ -600,14 +618,24 @@ export class Store {
     this.notify()
   }
 
+  /** Append a RUN-FAILURE row (provider/billing/quota error, transport after
+   *  retries, credential problems…). Harness-web turn-error parity: a visible
+   *  error row, not a silent stop — the user can send another message to
+   *  start a fresh turn (quota/billing failures are NOT auto-retried). */
+  appendRunError(text: string): void {
+    this.items = [...this.items, { key: this.key += 1, kind: 'error', text }]
+    this.notify()
+  }
+
   /** Append a running tool-call row (opencode-style inline tool). The raw
-   *  arguments are kept (capped) for the one-line summary derivation. */
+   *  arguments are kept (capped) for the one-line summary derivation; the
+   *  start timestamp feeds the row's live elapsed-seconds tail. */
   toolCall(name: string, argsRaw?: string): void {
     this.items = [...this.items, {
       key: this.key += 1,
       kind: 'tool',
       text: `│ ${name}`,
-      tool: { state: 'running', ...argsRaw === undefined ? {} : { argsRaw: capToolArgs(argsRaw) } },
+      tool: { state: 'running', startedAt: Date.now(), ...argsRaw === undefined ? {} : { argsRaw: capToolArgs(argsRaw) } },
     }]
     this._toolOpen += 1
     this._currentTool = name
@@ -931,16 +959,200 @@ export class Store {
   isAllowAlways(toolName: string): boolean { return this._allowAlways.has(toolName) }
   rememberAllowAlways(toolName: string): void { this._allowAlways.add(toolName); this.notify() }
   get question(): PendingQuestion | null { return this._question }
-  setQuestion(q: PendingQuestion): void { this._question = q; this._questionScroll = 0; this._panel = 'question'; this.notify() }
-  /** Question-detail scroll offset (long details such as plan reviews are
-   *  shown in a bounded, PgUp/PgDn-scrollable window inside the dock). */
+  setQuestion(q: PendingQuestion): void { this._question = q; this._questionScroll = 0; this._questionTabFrom = 0; this._questionRows = 0; this._panel = 'question'; this.notify() }
+  /** Measured dock ROW count: the question panel reports the real rendered
+   *  height of its dock every frame; the floating window + its opaque backdrop
+   *  size themselves from THIS value (falling back to the layout estimate
+   *  before the first measurement) so the dock's bottom edge is always pinned
+   *  and only its top moves as content grows/shrinks. */
+  private _questionRows = 0
+  get questionRows(): number { return this._questionRows }
+  setQuestionRows(v: number): void {
+    const n = Math.max(0, Math.round(v))
+    if (n === this._questionRows) return
+    this._questionRows = n
+    this.notify()
+  }
+  /** Question-body scroll offset (the dock's scrollable body window — detail +
+   *  fully-wrapped options — scrolls inside a bounded window; rows are never
+   *  ellipsized, they wrap and the window reveals the rest). */
   private _questionScroll = 0
   get questionScroll(): number { return this._questionScroll }
   scrollQuestion(delta: number): void {
     this._questionScroll = Math.max(0, this._questionScroll + delta)
     this.notify()
   }
-  clearQuestion(): void { this._question = null; if (this._panel === 'question') this._panel = 'conversation'; this.notify() }
+  /** Horizontal page offset of the multi-question TAB BAR: the index of the
+   *  FIRST tab currently visible. Kept in the store so ←/→ can page the tabs
+   *  when the bar overflows the dock width; the panel clamps it to the window
+   *  that fits (and auto-scrolls the active tab into view). */
+  private _questionTabFrom = 0
+  get questionTabFrom(): number { return this._questionTabFrom }
+  setQuestionTabFrom(v: number): void {
+    const next = Math.max(0, v)
+    if (next === this._questionTabFrom) return
+    this._questionTabFrom = next
+    this.notify()
+  }
+  /** Jump the question body window to an absolute offset (selection-follow:
+   *  after ↑/↓/digits move the highlight, the window scrolls so the option's
+   *  full wrapped block stays in view). */
+  scrollQuestionTo(v: number): void {
+    this._questionScroll = Math.max(0, v)
+    this.notify()
+  }
+  // ── card navigation & batch submission (multi-question ask, one dock) ──────
+  /** Persist the active question's transient state (highlight, editor text,
+   *  editor-open) into its per-question slot before switching away. */
+  private stashQuestionSlot(): void {
+    const q = this._question
+    if (q === null) return
+    const a = q.active
+    q.highlights[a] = q.index
+    q.drafts[a] = q.custom
+    q.draftOpen[a] = q.customMode
+  }
+  /** Load question `i`'s saved state into the active snapshot (and the active
+   *  question object), closing the editor unless that question's answer was a
+   *  custom text (then it reopens for editing, matching the Other row). */
+  private loadQuestionSlot(i: number): void {
+    const q = this._question
+    if (q === null) return
+    const item = q.questions[i]!
+    const optsLen = item.options?.length ?? 0
+    const ans = q.answers[i]
+    q.item = item
+    if (ans !== null && ans.kind === 'custom') {
+      q.index = optsLen
+      q.custom = ans.text
+      q.customMode = true
+      q.draftOpen[i] = true
+    } else if (ans !== null && ans.kind === 'option') {
+      const at = item.options?.findIndex((o) => o.label === ans.label) ?? -1
+      q.index = at >= 0 ? at : Math.min(q.highlights[i] ?? 0, optsLen)
+      q.custom = ''
+      q.customMode = false
+    } else {
+      q.index = Math.min(q.highlights[i] ?? 0, optsLen)
+      q.custom = q.drafts[i] ?? ''
+      q.customMode = q.custom !== '' && (q.draftOpen[i] ?? false)
+    }
+    q.customCursor = q.custom.length
+    q.sel = null
+  }
+  /** Move to the previous/next question (free navigation — nothing is
+   *  committed by moving; current transient state is stashed). */
+  questionGo(dir: -1 | 1): void {
+    const q = this._question
+    if (q === null) return
+    const next = q.active + dir
+    if (next < 0 || next >= q.questions.length) return
+    this.stashQuestionSlot()
+    q.active = next
+    this.loadQuestionSlot(next)
+    this._questionScroll = 0
+    this.notify()
+  }
+  /** Jump straight to question `i` (clicking the card's tab bar / opencode
+   *  dock semantics). */
+  questionJump(i: number): void {
+    const q = this._question
+    if (q === null) return
+    const target = Math.max(0, Math.min(q.questions.length - 1, i))
+    if (target === q.active) return
+    this.stashQuestionSlot()
+    q.active = target
+    this.loadQuestionSlot(target)
+    this._questionScroll = 0
+    this.notify()
+  }
+  /** The primary "answer" action (Enter / click / digit): commit the active
+   *  question (option or "Other" text) and advance to the next unanswered one,
+   *  or submit the whole batch when every question is answered. Pressing Enter
+   *  on the OTHER row (with no text yet) opens the inline editor instead. */
+  questionEnter(): void {
+    const q = this._question
+    if (q === null) return
+    const opts = q.item.options ?? []
+    const optsLen = opts.length
+    const a = q.active
+    if (q.customMode) {
+      const trimmed = q.custom.trim()
+      if (trimmed === '') { this.flashStatus('type your answer first'); return }
+      q.answers[a] = { kind: 'custom', text: trimmed }
+      q.drafts[a] = q.custom
+      q.draftOpen[a] = false
+      q.customMode = false
+      this.advanceAfterAnswer(q)
+      return
+    }
+    if (q.index === optsLen) {
+      // "Other…" chosen: open the inline editor UNDER the option list.
+      q.customMode = true
+      q.customCursor = q.custom.length
+      this.notify()
+      return
+    }
+    const opt = opts[q.index]
+    if (opt === undefined) return
+    q.answers[a] = { kind: 'option', label: opt.label }
+    q.drafts[a] = ''
+    q.draftOpen[a] = false
+    q.highlights[a] = q.index
+    q.customMode = false
+    this.advanceAfterAnswer(q)
+  }
+  /** After a commit: submit when all answered; otherwise jump to / advance
+   *  toward the first unanswered question so a batch finishes in order. */
+  private advanceAfterAnswer(q: PendingQuestion): void {
+    const first = q.answers.findIndex((a) => a === null)
+    if (first === -1) { this.submitQuestion(); return }
+    if (first !== q.active) {
+      this.stashQuestionSlot()
+      q.active = first
+      this.loadQuestionSlot(first)
+      this._questionScroll = 0
+      this.notify()
+      if (q.questions.length > 1) this.flashStatus(`answer question ${first + 1}/${q.questions.length} first`)
+      return
+    }
+    // Current (now answered) is the first unanswered: step to the next one.
+    let next = q.active + 1
+    while (next < q.questions.length && q.answers[next] !== null) next++
+    if (next >= q.questions.length) { this.submitQuestion(); return }
+    this.stashQuestionSlot()
+    q.active = next
+    this.loadQuestionSlot(next)
+    this._questionScroll = 0
+    this.notify()
+  }
+  /** Submit the whole ask with every question's committed answer (in order),
+   *  then close the dock. */
+  private submitQuestion(): void {
+    const q = this._question
+    if (q === null) return
+    const answers: AskUserQuestionAnswerItem[] = q.questions.map((item, i) => {
+      const ans = q.answers[i]
+      if (ans === null) return { id: item.id, selected: [] } // guarded: all answered
+      if (ans.kind === 'custom') return { id: item.id, selected: [], custom: ans.text }
+      return { id: item.id, selected: [ans.label] }
+    })
+    const resolve = q.resolve
+    this.clearQuestion()
+    resolve(answers)
+  }
+  /** Esc / Ctrl+C outside the editor: cancel the WHOLE ask request and abort
+   *  the running task (the agent is awaiting the answer; it must not keep
+   *  going). */
+  cancelQuestion(): void {
+    const q = this._question
+    if (q === null) return
+    const rejectFn = q.reject
+    this.clearQuestion()
+    rejectFn(new Error('ask_user_question was cancelled'))
+    this.cancelQuestionAction()
+  }
+  clearQuestion(): void { this._question = null; this._questionRows = 0; if (this._panel === 'question') this._panel = 'conversation'; this.notify() }
   bumpQuestionIndex(delta: number): void {
     if (this._question === null) return
     const len = Math.max(1, (this._question.item.options?.length ?? 0) + 1) // +1 = the custom/"Other" row
@@ -959,6 +1171,17 @@ export class Store {
     this._question.custom = value
     this._question.customMode = mode
     this._question.customCursor = value.length
+    this.notify()
+  }
+  /** Close the active question's inline "Other" editor via Esc: DISCARD the
+   *  typed text (back to the options list for this question; Esc there cancels
+   *  the whole ask). Committing (Enter) saves the draft; escaping discards it. */
+  questionCloseEditor(): void {
+    if (this._question === null) return
+    this._question.customMode = false
+    this._question.sel = null
+    this._question.custom = ''
+    this._question.customCursor = 0
     this.notify()
   }
   // ── custom ("Other") input editing — mirrors the composer key semantics ──
@@ -2210,9 +2433,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // only receives new events). `/new`-created sessions have no history.
   resetSessionStats()
   if (resumed) {
-    const history = foldHistoryEvents(agent.session.snapshotEvents())
-    store.loadHistory(history.items, history.steps)
-    store.setStats(foldSessionStats(agent.session.snapshotEvents()))
+    // One pass over the log produces the transcript rows, the step list AND
+    // the bottom-bar stats (see foldSessionReplay) — a second full walk of a
+    // long session log is pure resume latency.
+    const replay = foldSessionReplay(agent.session.snapshotEvents())
+    store.loadHistory(replay.items, replay.steps)
+    store.setStats(replay.stats)
   }
   // The merged template directory (core + plugin-registered), read live so a
   // sibling plugin's additions apply without a restart.
@@ -2347,10 +2573,19 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       }
       case 'turn/end': {
         const reason = (event.data as { reason?: { kind?: string } }).reason
-        if (reason?.kind === 'max-tokens' && !textSinceThisTurn) {
-          store.append('status',
-            '⚠ 上一轮输出达到长度上限(8192 tok，多为推理消耗)且未产出正文 — 发送任意消息即可继续；长任务可用 Ctrl+T 调低推理档。',
-            true)
+        if (reason?.kind === 'max-tokens') {
+          if (!textSinceThisTurn) {
+            // The whole output budget went to reasoning (no body text yet).
+            store.append('status',
+              '⚠ 上一轮输出达到长度上限(8192 tok，多为推理消耗)且未产出正文 — 发送任意消息即可继续；长任务可用 Ctrl+T 调低推理档。',
+              true)
+          } else {
+            // Harness-web parity: output was truncated but kept — tell the
+            // user to send "continue" so the model resumes from it.
+            store.append('status',
+              '⚠ 回答被截断：达到输出 token 上限，已输出的内容已保留 — 发送「继续」即可让模型接着输出。',
+              true)
+          }
         }
         break
       }
@@ -2642,6 +2877,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     agent.cancel({ kind: 'user' }, { keepInbox: true })
     store.setPaused(true)
   }
+  store.cancelQuestionAction = () => {
+    // The model is awaiting the ask_user_question answer; cancelling it must
+    // stop the whole task, not just the dialog. Best-effort: an idle agent
+    // makes cancel a harmless no-op (the agent/status listener clears running).
+    try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
+  }
   store.newSessionAction = () => {
     // The `/new` command: start a brand-new session in place, modeled on
     // opencode's command-palette "New session" entry. The harness persists
@@ -2708,9 +2949,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         void attachSessionToWorkspace(ctx, config.workspace, agent.session.id)
         touchSession(sessionId)
         resetSessionStats()
-        const history = foldHistoryEvents(agent.session.snapshotEvents())
-        store.loadHistory(history.items, history.steps)
-        store.setStats(foldSessionStats(agent.session.snapshotEvents()))
+        const replay = foldSessionReplay(agent.session.snapshotEvents())
+        store.loadHistory(replay.items, replay.steps)
+        store.setStats(replay.stats)
         store.setRunning(false)
         store.setPaused(false)
         store.append('status', `Session ${sessionId} in ${config.workspace} (resumed)`, true)
@@ -2856,45 +3097,54 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
  * @param col - the SGR mouse column (1-based).
  */
 /**
- * The user-questions answerer: present each of the model's questions in-band
- * and return the human's answer. Single-select options plus a typeable
- * "Other" row; if only one question is asked this is a one-step decision.
+ * The user-questions answerer: present the model's questions in-band as ONE
+ * card dock (opencode-style: one question at a time inside the card, answers
+ * accumulated, whole batch submitted once every question is answered) and
+ * return the human's answers. Single-select options plus a typeable "Other"
+ * row whose editor opens inline under the option list — no second dialog.
  * @param request - the ask_user_question request.
- * @returns the structured answer.
+ * @returns the structured answers.
  */
 async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestionAnswer> {
-  const answers: AskUserQuestionAnswerItem[] = []
-  const total = request.questions.length
+  const questions = request.questions
+  if (questions.length === 0) return { answers: [] }
   try {
-    for (let q = 0; q < request.questions.length; q++) {
-      const item = request.questions[q]
-      const answer = await new Promise<AskUserQuestionAnswerItem>((resolve, reject) => {
-        // An abort (tool/step cancelled) must reject the pending ask.
-        if (request.signal?.aborted) {
-          reject(new Error('ask_user_question was cancelled'))
-          return
-        }
-        store.setQuestion({
-          item, resolve, reject, index: 0, custom: '', customMode: false, customCursor: 0, sel: null,
-          position: q + 1, total,
-        })
-        if (request.signal) {
-          request.signal.addEventListener('abort', () => {
-            if (store.question !== null) {
-              const rejectFn = store.question.reject
-              store.clearQuestion()
-              rejectFn(new Error('ask_user_question was cancelled'))
-            }
-          }, { once: true })
-        }
-      })
-      answers.push(answer)
-      // Web-parity progress echo for a multi-question ask.
-      if (total > 1) store.append('status', `answered ${answers.length}/${total}`, true)
-    }
+    const answers = await new Promise<AskUserQuestionAnswerItem[]>((resolve, reject) => {
+      // An abort (tool/step cancelled) must reject the pending ask.
+      if (request.signal?.aborted) {
+        reject(new Error('ask_user_question was cancelled'))
+        return
+      }
+      const q: PendingQuestion = {
+        questions,
+        resolve,
+        reject,
+        active: 0,
+        answers: questions.map(() => null),
+        highlights: questions.map(() => 0),
+        drafts: questions.map(() => ''),
+        draftOpen: questions.map(() => false),
+        item: questions[0]!,
+        index: 0,
+        custom: '',
+        customMode: false,
+        customCursor: 0,
+        sel: null,
+      }
+      store.setQuestion(q)
+      if (request.signal) {
+        request.signal.addEventListener('abort', () => {
+          if (store.question !== null) {
+            const rejectFn = store.question.reject
+            store.clearQuestion()
+            rejectFn(new Error('ask_user_question was cancelled'))
+          }
+        }, { once: true })
+      }
+    })
     return { answers }
   } catch (error) {
-    // Web-parity cancellation notice (Esc / abort): the pending answer was not
+    // Web-parity cancellation notice (Esc / abort): the pending ask was not
     // submitted.
     store.append('status', 'Question cancelled — answer not submitted', true)
     throw error
@@ -3009,13 +3259,18 @@ function toolResultDisplay(message: { content?: unknown } | undefined): { text: 
  * the whole result is produced in one pass so a resumed session replays
  * instantly instead of chunk-by-chunk.
  * @param events - the resumed session's full event log.
+ * @param stats - optional bottom-bar stats accumulator; when given, each event
+ * is folded into it during the same walk so a caller can also obtain the
+ * session stats without a second pass over the log (see
+ * {@link foldSessionReplay}).
  * @returns the transcript rows and the latest step list.
  */
-function foldHistoryEvents(events: readonly SessionEvent[]): { items: TranscriptItem[]; steps: StepItem[] } {
+function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStatsFolding): { items: TranscriptItem[]; steps: StepItem[] } {
   const items: TranscriptItem[] = []
   let key = 0
   let steps: StepItem[] = []
   for (const event of events) {
+    stats?.observe(event)
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source as { kind?: string; plugin?: string }
@@ -3065,7 +3320,7 @@ function foldHistoryEvents(events: readonly SessionEvent[]): { items: Transcript
           key: key += 1,
           kind: 'tool',
           text: `│ ${event.data.name}`,
-          tool: { state: 'running', ...argsRaw === undefined ? {} : { argsRaw: capToolArgs(argsRaw) } },
+          tool: { state: 'running', startedAt: Date.now(), ...argsRaw === undefined ? {} : { argsRaw: capToolArgs(argsRaw) } },
         })
         break
       }
@@ -3100,6 +3355,21 @@ function foldHistoryEvents(events: readonly SessionEvent[]): { items: Transcript
     }
   }
   return { items, steps }
+}
+
+/**
+ * Single-pass resume replay: fold a persisted session's event log into the
+ * transcript rows, the latest step list AND the bottom-bar session stats in
+ * one walk (the stats accumulator shares this loop instead of a second full
+ * pass over the log — the only reason a long history is ever scanned twice on
+ * resume is per-turn tool timing state, which the accumulator keeps itself).
+ * @param events - the resumed session's full event log.
+ * @returns the transcript rows, the latest step list, and cumulative stats.
+ */
+function foldSessionReplay(events: readonly SessionEvent[]): { items: TranscriptItem[]; steps: StepItem[]; stats: SessionStats } {
+  const stats = createSessionStatsFolding()
+  const history = foldHistoryEvents(events, stats)
+  return { items: history.items, steps: history.steps, stats: stats.snapshot() }
 }
 
 /** The harness manual-compaction failure texts, verbatim from dsh-command-compact. */
@@ -3138,28 +3408,5 @@ async function compact(ctx: Context, agent: unknown): Promise<void> {
     store.append('status', error instanceof ManualCompactionError
       ? COMPACTION_FAILURE_TEXT[error.code]
       : `compaction: ${error instanceof Error ? error.message : String(error)}`, true)
-  }
-}
-
-/**
- * Store the DeepSeek API key through the credentials seam — the same write the
- * web Models page performs (`~/.dsh/.credentials.yaml` under the
- * `DEEPSEEK_API_KEY` reference). `dsh-llm-deepseek` resolves the key per
- * request, so the next model turn picks it up without a restart.
- * @param ctx - plugin context carrying the credentials service.
- * @param value - the trimmed API key.
- */
-async function connect(ctx: Context, value: string): Promise<void> {
-  const credentials = ctx.get('credentials') as { set?: (ref: ReturnType<typeof credentialRef>, value: string) => Promise<void> } | undefined
-  if (credentials?.set === undefined) {
-    store.append('status', 'connect: the credentials service is unavailable', true)
-    return
-  }
-  try {
-    await credentials.set(credentialRef('DEEPSEEK_API_KEY'), value.trim())
-    store.append('status', 'connect: API key saved to ~/.dsh/.credentials.yaml — applies to the next request', true)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    store.append('status', `connect: ${message} (tip: if DEEPSEEK_API_KEY is in the environment, use it directly instead)`, true)
   }
 }

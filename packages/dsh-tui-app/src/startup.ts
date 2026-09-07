@@ -30,10 +30,13 @@ export interface TuiStartupValues {
 }
 
 /**
- * This app's command.
+ * This app's command. Exported so the single-file launcher's thin entry
+ * (apps/tui-bin/src/main.ts) can render the same width-aware `--help` text
+ * before the ~111-module plugin graph loads; the help bytes must not drift
+ * between the fast path and the full boot.
  * @returns a fresh program, so one process can parse more than once (tests).
  */
-function tuiCommand(): Command {
+export function tuiCommand(): Command {
   return new Command()
     .name('dsh --profile tui')
     .description('Boot an interactive full-screen terminal surface over an agent session.')

@@ -67,7 +67,6 @@ function SessionsDialog(): React.JSX.Element {
   // these values.
   const rows = store.sessionsFiltered
   const listRows = Math.max(1, store.rows - 15)
-  const total = rows.length
   type Disp = { kind: 'header'; label: string } | { kind: 'row'; i: number }
   const disp: Disp[] = []
   const pinnedRows: number[] = []

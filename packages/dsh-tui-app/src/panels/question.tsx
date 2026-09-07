@@ -1,31 +1,46 @@
 /**
  * The question panel plugin (`tui-panel-question`): the in-band
- * `ask_user_question` dialog (single-select options plus a typeable "Other"
- * row). Registers the `question` overlay panel against the `tui` service.
+ * `ask_user_question` CARD dialog. One ask request may carry several
+ * questions; the card shows them ONE at a time (opencode question-dock
+ * semantics), keeps each committed answer, lets the user move back/forth
+ * (←/→ or Tab), and submits the whole batch once every question is answered.
+ * Each question offers single-select options plus a typeable "Other" row
+ * whose editor opens INLINE under the option list — never a second dialog.
+ *
+ * Rendering model (mirrors the harness `.body { overflow-y:auto }` + `.option
+ * { flex-wrap }`): NO content row is ever truncated. The question sentence is
+ * pinned and fully soft-wrapped (a long question shows in full — never a
+ * '…'), and below it a bounded body window holds the detail text plus every
+ * option's fully-wrapped block. When the body is taller than the window it
+ * scrolls (PgUp/PgDn), with the highlighted option kept in view. All row
+ * counts come from question-layout.ts so the dock height and the conversation
+ * `modalH` estimate can never drift.
  *
  * @module @yourname/dsh-tui-app/panels-question
  */
 
-import { Box, Text } from 'ink'
+import { Box, Text, measureElement } from 'ink'
 import type { DOMElement } from 'ink'
 import React from 'react'
 import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PendingQuestion, TuiService, Store } from '../index.tsx'
-import { visualWidth, truncateWide } from '../markdown.tsx'
+import { visualWidth } from '../markdown.tsx'
 import { dockInnerWidth } from '../config.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
-import { useListGeometry, dialogListIndexFromRow, measureDomTop, measureDomLeft } from '../list-geometry.ts'
+import { measureDomTop, measureDomLeft } from '../list-geometry.ts'
+import {
+  questionBodyWindowRows,
+  visualWrap,
+  questionBody,
+  bodyOptionRanges,
+  QUESTION_INPUT_MAX_ROWS,
+  type QuestionBodyRow,
+} from '../question-layout.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-question'
-
-/** Max wrapped rows the question sentence itself may occupy before being
- *  truncated (kept in sync with the conversation's modalH estimate: a verbose
- *  model dumping long text into `question` must not inflate the dock; long
- *  content belongs in the scrollable `detail` window). */
-const questionCapLines = 6
 
 /** The store service (see panels/conversation.tsx). */
 let store!: Store
@@ -56,6 +71,131 @@ function writeClipboard(text: string): void {
  *  character indexes. Refreshed after every render of the custom input. */
 let questionInputGeo: { top: number; left: number; windowStart: number; count: number; rows: { start: number; text: string }[] } | null = null
 
+/** Latest measured geometry of the scrollable body window + the option each
+ *  currently-visible body row belongs to, so hover/click can map a screen row
+ *  back to the option under it (options are multi-row now; rows of a wrapped
+ *  option all map to that option). */
+let questionBodyGeo: { top: number; owners: number[] } | null = null
+
+/** Latest measured geometry of the multi-question TAB BAR row (its screen row,
+ *  its first visible question index, plus one horizontal column span per
+ *  VISIBLE segment), so a click on a tab jumps straight to that question
+ *  (opencode dock semantics). */
+let questionTabsGeo: { top: number; left: number; from: number; segs: { from: number; to: number }[] } | null = null
+
+/** Question index whose tab segment sits under the 1-based mouse (row, col),
+ *  or -1 when the pointer is outside the tab bar. */
+function questionTabAt(row: number, col: number): number {
+  const g = questionTabsGeo
+  if (g === null) return -1
+  const lineIdx = Math.floor(row - 1 - g.top)
+  if (lineIdx !== 0) return -1
+  const x = col - 1 - g.left
+  if (x < 0) return -1
+  for (let i = 0; i < g.segs.length; i++) {
+    const s = g.segs[i]!
+    if (x >= s.from && x < s.to) return g.from + i
+  }
+  return -1
+}
+
+/** Column budget the tab bar keeps for its `… ` / ` …` overflow markers while
+ *  a page of tabs is shown (both sides, so the window size stays stable). */
+const TAB_PAGE_RESERVE = 4
+
+/** One row of the multi-question tab bar as the dock paints it. When the
+ *  labels do not fit the dock width the bar PAGES: only `visible` tabs are
+ *  drawn starting at `from`, flanked by `…` markers, and ←/→ page the window
+ *  (the active tab is kept in view). Pure (explicit `tabFrom`) — render, mouse
+ *  mapping and tests share it; exported for tests/question-popup.test.ts. */
+export function questionTabWindow(q: PendingQuestion, dockInner: number, tabFrom: number): {
+  labels: string[]
+  total: number
+  from: number
+  visible: number
+  overflow: boolean
+  segs: { from: number; to: number }[]
+} {
+  const total = q.questions.length
+  const labels = q.questions.map((it, i) =>
+    `${q.answers[i] === null ? '' : '✓'}${(it.header ?? String(i + 1)).slice(0, 14)}`)
+  if (total <= 1) return { labels, total, from: 0, visible: total, overflow: false, segs: [] }
+  const display = (i: number): string => (q.active === i ? `[${labels[i]!}]` : labels[i]!)
+  const widthAll = labels.reduce((sum, _, i) => sum + visualWidth(display(i)) + (i > 0 ? 2 : 0), 0)
+  const overflow = widthAll > dockInner
+  const avail = overflow ? Math.max(8, dockInner - TAB_PAGE_RESERVE) : dockInner
+  let visible = 0
+  let w = 0
+  for (let i = 0; i < labels.length; i++) {
+    const add = visualWidth(display(i)) + (visible > 0 ? 2 : 0)
+    if (w + add > avail) break
+    w += add
+    visible += 1
+  }
+  if (visible === 0) visible = 1 // ultra-narrow: still expose one tab
+  const maxFrom = Math.max(0, total - visible)
+  const from = overflow ? Math.max(0, Math.min(tabFrom, maxFrom)) : 0
+  // Column spans of the painted segments (leading `… ` marker consumed when a
+  // middle page is shown; separators two cells) — used for click mapping.
+  const segs: { from: number; to: number }[] = []
+  {
+    const first = overflow ? from : 0
+    const last = overflow ? from + visible : total
+    let col = overflow && from > 0 ? 2 : 0
+    for (let i = first; i < last; i++) {
+      const width = visualWidth(display(i))
+      segs.push({ from: col, to: col + width })
+      col += width + (i < last - 1 ? 2 : 0)
+    }
+  }
+  return { labels, total, from, visible, overflow, segs }
+}
+
+/** Last valid caret cell while the "Other" editor is open. The measured
+ *  {@link questionInputGeo} (and the input ref behind it) can briefly go null
+ *  on a frame — Ink measures the element on a lag — which made {@link
+ *  questionCaretCell} return null and the frame suffix flip the hardware cursor
+ *  ?25h → ?25l: the "flash then disappear" on VTE. Keep the last good cell so
+ *  the cursor stays put during those gaps (it only resets when the editor
+ *  actually closes). */
+let questionCaretCellLast: { row: number; col: number } | null = null
+
+/** Screen cell (1-based SGR row/col) of the inline "Other" editor's caret, or
+ *  null when the editor is closed / its geometry is not measured yet. The
+ *  conversation frame suffix parks the REAL terminal cursor here so IME
+ *  composition/candidate windows anchor next to the typed text instead of the
+ *  bottom-right corner (Chinese input).
+ *
+ *  The caret-following window is recomputed FRESH from the CURRENT caret every
+ *  read, so the caret's visual row is always inside it; the measured
+ *  {@link questionInputGeo} supplies the absolute screen top/left. While the
+ *  editor is open, a transient null measurement returns the LAST valid cell
+ *  (never hides the cursor). */
+function questionCaretCell(): { row: number; col: number } | null {
+  const q = store.question
+  if (q === null || !q.customMode) { questionCaretCellLast = null; return null }
+  const g = questionInputGeo
+  if (g === null) return questionCaretCellLast
+  const inner = dockInnerWidth(store.width)
+  const win = inputWindow(q.custom, inner, q.customCursor)
+  const caretLineIdx = win.lines.findIndex((l) => l.caretAt !== null)
+  if (caretLineIdx < 0) return questionCaretCellLast
+  const line = win.lines[caretLineIdx]!
+  const caretAt = line.caretAt ?? 0
+  const before = line.text.slice(0, Math.max(0, caretAt))
+    .split('').reduce((acc, ch) => acc + visualWidth(ch), 0)
+  const cell = { row: g.top + caretLineIdx + 1, col: g.left + before + 1 }
+  questionCaretCellLast = cell
+  return cell
+}
+
+/** Global hook identity used by the conversation panel's frame suffix. */
+function installQuestionCaretHook(active: boolean): void {
+  const host = globalThis as { __dshTuiQuestionCaretCell?: (() => { row: number; col: number } | null) | null }
+  if (active) host.__dshTuiQuestionCaretCell = questionCaretCell
+  else if (host.__dshTuiQuestionCaretCell === questionCaretCell) host.__dshTuiQuestionCaretCell = null
+}
+
 /** Map a 1-based SGR mouse (row, col) to a character index inside the custom
  *  input, or null when the point is outside the input area. */
 function inputCharAt(row: number, col: number): number | null {
@@ -83,16 +223,10 @@ function inputCharAt(row: number, col: number): number | null {
 /** The `tui` service must be available to register the panel. */
 export const inject = ['tui']
 
-/** Max detail rows shown inside the dock window (kept in sync with the
- *  conversation's modalH estimate: window ≤ rows - 25 so composer + status
- *  + a minimum transcript viewport still fit). */
-function detailWindowRows(rows: number): number {
-  return Math.max(2, Math.min(10, rows - 25))
-}
-
-/** Max VISIBLE rows of the Other (custom) answer input; longer input scrolls
- *  inside the input area with the caret kept in view (composer semantics). */
-const INPUT_MAX_ROWS = 5
+/** Max visible rows of the Other (custom) answer input; longer input scrolls
+ *  inside the input area with the caret kept in view (composer semantics).
+ *  Single source of truth with question-layout's estimate (QUESTION_INPUT_MAX_ROWS). */
+const INPUT_MAX_ROWS = QUESTION_INPUT_MAX_ROWS
 
 /** Visual (wrapped) rows of one logical line with their char offsets inside
  *  the line. */
@@ -198,55 +332,79 @@ export function inputWindow(
   }
 }
 
-/** Split text into visual lines wrapped at `usable` columns, using the same
- *  per-character width rule as the renderer (wide chars count two). */
-function wrapVisualLines(text: string, usable: number): string[] {
-  const out: string[] = []
-  for (const raw of text.split('\n')) {
-    if (raw === '') { out.push(''); continue }
-    let cur = ''
-    let w = 0
-    for (const ch of raw) {
-      const cw = visualWidth(ch)
-      if (w + cw > usable && cur !== '') {
-        out.push(cur)
-        cur = ''
-        w = 0
-      }
-      cur += ch
-      w += cw
-    }
-    out.push(cur)
-  }
-  return out
-}
-
-/** The in-band user-question dock: header + question + numbered selectable
- *  options (digits 1..N select directly, N+1 = "Other"), docked above the
- *  composer and rendered inside the message column like the approval dock.
- *  A long `detail` (e.g. a plan review) is shown in a bounded window that
- *  scrolls with PgUp/PgDn so the full text stays reviewable. */
+/** The in-band user-question dock: header + pinned question (fully wrapped,
+ *  never truncated) + a bounded scrollable body holding detail and every
+ *  option's full multi-line text + the hint. Digits 1..N select directly,
+ *  N+1 opens "Other". The body scrolls like the harness `.body` when content
+ *  overflows: no option row is ever ellipsized — long options wrap and the
+ *  window reveals the rest. */
 function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element {
-  const { item, index, custom, customCursor, customMode, position, total } = props.question
+  const q = props.question
+  const total = q.questions.length
+  const position = q.active + 1
+  const { item, index, custom, customCursor, customMode } = q
   const options = item.options ?? []
-  const title = total !== undefined && total > 1 ? `Ask question ${position ?? 1}/${total}` : 'Ask question'
+  const title = total > 1 ? `Ask question ${position}/${total}` : 'Ask question'
   const dockInner = dockInnerWidth(store.width)
-  const windowRows = detailWindowRows(store.rows)
-  const detailLines = item.detail === undefined || item.detail === ''
-    ? []
-    : wrapVisualLines(item.detail, dockInner)
-  const detailOverflow = detailLines.length > windowRows
-  const maxScroll = Math.max(0, detailLines.length - windowRows)
+  const tw = questionTabWindow(q, dockInner, store.questionTabFrom)
+  const tabsRef = React.useRef<DOMElement>(null)
+  // Measure the tab bar's screen row/left and its visible segments so a click
+  // on a tab maps back to its question (only the CURRENT window is clickable;
+  // ←/→ page the bar when it overflows).
+  React.useEffect(() => {
+    if (total <= 1) { questionTabsGeo = null; return }
+    const el = tabsRef.current
+    if (el === null) { questionTabsGeo = null; return }
+    questionTabsGeo = {
+      top: Math.round(measureDomTop(el)),
+      left: Math.round(measureDomLeft(el)),
+      from: tw.from,
+      segs: tw.segs.map((s) => ({ ...s })),
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- measured when the bar re-renders
+  }, [total, tw.overflow, tw.from, q.active, q.answers, dockInner])
+  // Keep the ACTIVE tab inside the visible window: after answering/advancing
+  // or jumping, page the bar so the current question's tab is always shown.
+  React.useEffect(() => {
+    if (total <= 1 || !tw.overflow) {
+      if (store.questionTabFrom !== 0) store.setQuestionTabFrom(0)
+      return
+    }
+    const maxFrom = Math.max(0, total - tw.visible)
+    let from = Math.min(store.questionTabFrom, maxFrom)
+    if (q.active < from) from = q.active
+    else if (q.active >= from + tw.visible) from = Math.max(0, q.active - tw.visible + 1)
+    if (from !== store.questionTabFrom) store.setQuestionTabFrom(Math.max(0, Math.min(maxFrom, from)))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- per active question
+  }, [total, q.active, tw.overflow, tw.visible, dockInner])
+  const windowRows = questionBodyWindowRows(store.rows)
+  // The question sentence: FULL wrap, no cap, no '…' (requirement: a question
+  // that must span several lines is shown completely).
+  const qText = item.question ?? ''
+  const questionLines = qText === '' ? [] : visualWrap(qText, dockInner)
+  // Body rows: detail (if any) + every option's wrapped block + Other… row.
+  const body = questionBody(item.detail, options, dockInner)
+  const bodyRows = body.length
+  const maxScroll = Math.max(0, bodyRows - windowRows)
   const scroll = Math.min(store.questionScroll, maxScroll)
-  const shown = detailLines.slice(scroll, scroll + windowRows)
-  const questionText = item.question ?? ''
-  const questionAll = questionText === '' ? [] : wrapVisualLines(questionText, dockInner)
-  const questionLines = questionAll.slice(0, questionCapLines)
-  const questionTruncated = questionAll.length > questionCapLines
-  const listRef = React.useRef<DOMElement>(null)
-  // The selectable options (+ the "Other…" row) form a vertical list; register
-  // its geometry so mouse hover/click can map a screen row to an option index.
-  useListGeometry(listRef, options.length + 1, 1, [options.length, index, customMode])
+  const shown = body.slice(scroll, scroll + windowRows)
+  const overflow = bodyRows > windowRows
+  const bodyRef = React.useRef<DOMElement>(null)
+  const dockRef = React.useRef<DOMElement>(null)
+  // Report the dock's REAL rendered height (rows) so the floating window and
+  // its opaque backdrop size exactly to the dock: the bottom edge then stays
+  // pinned and only the top moves as content grows/shrinks (Other editor
+  // opening, question switch, etc.). Falls back to the layout estimate on the
+  // very first frame (before this measurement lands).
+  React.useEffect(() => {
+    const report = (): void => {
+      const el = dockRef.current
+      if (el !== null) store.setQuestionRows(measureElement(el).height)
+    }
+    report()
+    const t = setTimeout(report, 80) // layout may settle a frame after commit
+    return () => clearTimeout(t)
+  }, [q.active, q.customMode, q.custom, q.answers, dockInner, store.rows])
   // Custom-input windowing + mouse geometry (see inputWindow/inputCharAt).
   const customInputRef = React.useRef<DOMElement>(null)
   const inputRowsAll = inputVisualRows(custom, dockInner)
@@ -264,36 +422,119 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- measured per input change
   }, [customMode, custom, customCursor, dockInner, inputWin.startRow, inputWin.lines.length, inputRowsAll])
+  // While the inline "Other" editor is open, expose the editor caret cell to
+  // the conversation frame suffix so the REAL terminal cursor parks there —
+  // IME composition/candidate windows then anchor next to the typed text.
+  React.useEffect(() => {
+    installQuestionCaretHook(customMode)
+    return () => installQuestionCaretHook(false)
+  }, [customMode])
+  // Register the BODY window's screen geometry and, for each of its currently
+  // visible rows, the option it belongs to (-1 = detail/separator row), so the
+  // key handler can map a mouse row to the option under it even when options
+  // span multiple wrapped rows.
+  React.useEffect(() => {
+    const el = bodyRef.current
+    if (customMode || el === null) { questionBodyGeo = null; return }
+    questionBodyGeo = {
+      top: Math.round(measureDomTop(el)),
+      owners: shown.map((r) => r.option),
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- measured per scroll/render
+  }, [customMode, shown, scroll, index])
+  // When the dialog opens, make sure the currently highlighted option is
+  // inside the visible window (an option far down a long body would otherwise
+  // be highlighted but invisible until the user scrolls).
+  const openedQuestion = React.useRef<unknown>(null)
+  React.useEffect(() => {
+    if (openedQuestion.current === props.question) return
+    openedQuestion.current = props.question
+    revealOption(index)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- per question open
+  }, [props.question])
+  // When switching to another question of the card, bring the restored
+  // selection into view (revealOption is a no-op while the Other editor is
+  // open — the dedicated editor effect scrolls the body to its end instead).
+  React.useEffect(() => {
+    revealOption(index)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- per active question
+  }, [q.active])
+  // Opening the "Other" editor scrolls the body to its END so the Other row
+  // sits directly above the inline input (body rows above can still be
+  // browsed with PgUp/PgDn).
+  React.useEffect(() => {
+    if (!customMode) return
+    const q2 = store.question
+    if (q2 === null) return
+    const b = questionBody(q2.item.detail, q2.item.options ?? [], dockInnerWidth(store.width))
+    const max = Math.max(0, b.length - questionBodyWindowRows(store.rows))
+    if (store.questionScroll !== max) store.scrollQuestionTo(max)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- per editor open
+  }, [customMode])
+  const rowColor = (row: QuestionBodyRow): string | undefined => {
+    const sel = row.option === index
+    return sel ? theme.accent : undefined
+  }
+  const rowInverse = (row: QuestionBodyRow): boolean => row.option === index
+  const hint = customMode
+    ? `${overflow ? 'PgUp/PgDn scroll · ' : ''}type your answer · Enter = answer & next · Esc close`
+    : `${overflow ? 'PgUp/PgDn scroll · ' : ''}${
+        total > 1
+          ? tw.overflow
+            ? '←/→ page tabs · ↑/↓ choose · Enter answer & next · digits pick · Esc cancel'
+            : '↑/↓ choose · Enter answer & next · ←/→ or click a tab · digits pick · Esc cancel'
+          : 'number / ↑/↓ choose · Enter confirm · Esc cancel'
+      }`
   return (
-    <Box flexShrink={0} marginLeft={3} marginRight={3} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={2} paddingY={1}>
+    <Box ref={dockRef} flexShrink={0} marginLeft={3} marginRight={3} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={2} paddingY={1}>
       <Text color={theme.accent} bold wrap="truncate">{title}<Text dimColor> · waiting</Text></Text>
+      {total > 1 && (
+        <Box ref={tabsRef} flexDirection="column">
+          <Text wrap="truncate">
+            {tw.from > 0 && <Text dimColor>…{' '}</Text>}
+            {tw.labels.slice(tw.from, tw.from + tw.visible).map((label, offset) => {
+              const i = tw.from + offset
+              const active = i === q.active
+              const answered = q.answers[i] !== null
+              const txt = active ? `[${label}]` : label
+              return (
+                <Text key={i} inverse={active} color={active ? theme.accent : answered ? theme.success : theme.textMuted}>
+                  {(offset > 0 ? '  ' : '') + txt}
+                </Text>
+              )
+            })}
+            {tw.from + tw.visible < total && <Text dimColor>{' …'}</Text>}
+          </Text>
+        </Box>
+      )}
       {questionLines.length > 0 && (
         <Box flexDirection="column" marginTop={1}>
           {questionLines.map((line, i) => (
-            <Text key={i} wrap="truncate">
-              {questionTruncated && i === questionLines.length - 1
-                ? truncateWide(line + '…', dockInner)
-                : line}
-            </Text>
+            <Text key={i} wrap="wrap">{line === '' ? ' ' : line}</Text>
           ))}
         </Box>
       )}
-      {detailLines.length > 0 && (
-        <Box flexDirection="column" marginTop={1}>
-          {shown.map((line, i) => (
-            <Text key={scroll + i} wrap="wrap" dimColor>{line === '' ? ' ' : line}</Text>
-          ))}
-        </Box>
-      )}
-      {customMode ? (
-        <Box flexDirection="column" marginTop={1}>
-          <Text color={theme.accent} wrap="truncate">Your answer:</Text>
-          {/* ≤5 visible rows, caret-following window (see inputWindow). The
-              caret cell is the character under it shown inverse (same width,
-              no reflow); an end-of-input caret appends an inverted NBSP block.
-              A live mouse selection (drag) inverts the selected span instead.
+      <Box flexDirection="column" marginTop={1} ref={bodyRef}>
+        {shown.map((row, i) => (
+          <Text key={scroll + i} wrap="wrap"
+            color={row.kind === 'detail' || row.kind === 'sep' ? undefined : rowColor(row)}
+            dimColor={row.kind === 'detail'}
+            inverse={rowInverse(row)}>
+            {row.text === '' ? ' ' : row.text}
+          </Text>
+        ))}
+      </Box>
+      {customMode && (
+        <>
+          {/* The inline Other editor lives UNDER the option body, in the SAME
+              dock — no second dialog (opencode dock semantics). ≤5 visible
+              rows, caret-following window (see inputWindow). The caret cell is
+              the character under it shown inverse (same width, no reflow); an
+              end-of-input caret appends an inverted NBSP block. A live mouse
+              selection (drag) inverts the selected span instead.
               Linux/Windows/macOS paint inverse as a solid block — the real
               terminal cursor is hidden inside the overlay. */}
+          <Text color={theme.accent} wrap="truncate">✎ your answer</Text>
           <Box ref={customInputRef} flexDirection="column">
             {inputWin.lines.map((line, i) => {
               const sel = props.question.sel
@@ -323,33 +564,77 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
               )
             })}
           </Box>
-        </Box>
-      ) : (
-        <Box flexDirection="column" marginTop={1} ref={listRef}>
-          {options.map((opt, i) => (
-            <Text key={i} wrap="truncate" color={i === index ? theme.accent : undefined} inverse={i === index}>
-              {i + 1}. {opt.label}{opt.description !== undefined ? ` — ${opt.description}` : ''}
-            </Text>
-          ))}
-          <Text wrap="truncate" color={options.length === index ? theme.accent : undefined} inverse={options.length === index}>
-            {options.length + 1}. Other…
-          </Text>
-        </Box>
+        </>
       )}
       <Box marginTop={1}>
-        <Text dimColor>{customMode
-          ? 'type your answer · Enter confirm · Esc cancel'
-          : `${detailOverflow ? 'PgUp/PgDn scroll · ' : ''}number / ↑/↓ choose · Enter confirm · Esc cancel`}</Text>
+        <Text dimColor>{hint}</Text>
       </Box>
     </Box>
   )
 }
 
-/** Handle one key while the question panel is active; returns true (consumed). */
+/** Option index currently hovered by the mouse (from the registered body
+ *  geometry), or -1 when the pointer is over a non-option row (detail,
+ *  separator) or outside the window. */
+function optionFromRow(row: number): number {
+  const g = questionBodyGeo
+  if (g === null) return -1
+  const idx = Math.floor(row - 1 - g.top)
+  if (idx < 0 || idx >= g.owners.length) return -1
+  return g.owners[idx]!
+}
+
+/** Scroll the body window so the given option's whole wrapped block is in
+ *  view (selection-follow for ↑/↓/digits/hover/click; no-op when everything
+ *  fits). */
+function revealOption(index: number): void {
+  const q = store.question
+  if (q === null || q.customMode) return
+  const options = q.item.options ?? []
+  const dockInner = dockInnerWidth(store.width)
+  const body = questionBody(q.item.detail, options, dockInner)
+  const windowRows = questionBodyWindowRows(store.rows)
+  const maxScroll = Math.max(0, body.length - windowRows)
+  const ranges = bodyOptionRanges(body, options.length)
+  const r = ranges[index]
+  if (r === undefined || r.start < 0) return
+  // Desired window top: if the block is shorter than the window, show it
+  // fully (top-aligned when it starts above, bottom-aligned when below);
+  // taller blocks keep their start in view.
+  let top: number
+  if (r.end - r.start <= windowRows) {
+    const current = Math.min(store.questionScroll, maxScroll)
+    if (r.start < current) top = r.start
+    else if (r.end > current + windowRows) top = Math.max(0, r.end - windowRows)
+    else top = current
+  } else {
+    top = r.start
+  }
+  if (top !== Math.min(store.questionScroll, maxScroll)) {
+    store.scrollQuestionTo(Math.min(top, maxScroll))
+  }
+}
+
+/** Handle one key while the question panel is active; returns true (consumed).
+ *  The dock is a card over the whole ask: answering a question commits it and
+ *  moves to the next (or submits when all are answered); ←/→ (or Tab) move
+ *  between questions freely; selecting the "Other…" row opens its inline
+ *  editor UNDER the option list (no second dialog); Esc cancels the whole ask
+ *  (closing the inline editor first when it is open). */
 function questionKey(k: RawKey): boolean {
   const char = k.char ?? ''
   const question = store.question
   if (question === null) { store.setPanel('conversation'); return true }
+  const options = question.item.options ?? []
+  const optsLen = options.length
+  // Clicking a question TAB (multi-question card) jumps straight to it —
+  // handled before every other mouse mapping (tab bar is the top row).
+  const pressTab = k.mousePress === undefined ? -1 : questionTabAt(k.mousePress.row, k.mousePress.col)
+  const releaseTab = k.mouseRelease === undefined ? -1 : questionTabAt(k.mouseRelease.row, k.mouseRelease.col)
+  if (pressTab >= 0 || releaseTab >= 0) {
+    store.questionJump(pressTab >= 0 ? pressTab : releaseTab)
+    return true
+  }
   // Custom ("Other") input mouse: click positions the caret, drag selects
   // (highlighted), release copies the selection. Only mapped when the click
   // lands inside the measured input area; other mouse events are consumed.
@@ -380,55 +665,48 @@ function questionKey(k: RawKey): boolean {
     }
   }
   // Mouse in the question dock: consume the press (no selection) and a left-click
-  // anchors on the clicked option, then runs the current highlight (== Enter) by
-  // re-dispatching as a return key. Hover (no-button motion) highlights the option
-  // under the cursor via the registered list geometry.
+  // anchors on the clicked option, then answers it (like Enter). Hover
+  // (no-button motion) highlights the option under the cursor via the
+  // registered body-window geometry (multi-row options map every row of their
+  // block back to the option).
   if (k.mousePress) return true
   if (k.mouseMove) {
     if (!question.customMode) {
-      const idx = dialogListIndexFromRow(k.mouseMove.row)
-      if (idx >= 0) store.setQuestionIndex(idx)
+      const owner = optionFromRow(k.mouseMove.row)
+      if (owner >= 0) store.setQuestionIndex(owner)
     }
     return true
   }
   if (k.mouseRelease) {
     if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') {
-      // A click only acts when it lands on a real OPTION row (highlights it and
-      // confirms, like Enter). Clicks anywhere else — including a stray click
-      // on the question text / background, left or right button — are consumed
-      // and keep the popup open: only Esc cancels it.
+      // A click only acts when it lands on a real OPTION row (answers it —
+      // like Enter). Clicks anywhere else — including a stray click on the
+      // question text / detail / background — are consumed and keep the dock
+      // open: only Esc cancels the whole ask.
       if (!question.customMode) {
-        const idx = dialogListIndexFromRow(k.mouseRelease.row)
-        if (idx >= 0 && idx <= (question.item.options?.length ?? 0)) {
-          store.setQuestionIndex(idx)
-          return questionKey({ return: true } as RawKey)
+        const owner = optionFromRow(k.mouseRelease.row)
+        if (owner >= 0 && owner <= optsLen) {
+          store.setQuestionIndex(owner)
+          store.questionEnter()
         }
       }
     }
     return true
   }
   if (question.customMode) {
-    // Composer-like editing in the "Other" input: Enter submits, Alt+Enter
-    // inserts a newline, arrows/Home/End move the caret, Backspace/Delete
-    // delete, Ctrl+U clears to the current line start, Ctrl+C clears the input
-    // (kept open), Esc cancels.
-    if (k.return) {
-      const custom = question.custom.trim()
-      store.clearQuestion()
-      question.resolve({ id: question.item.id, selected: [], custom: custom === '' ? undefined : custom })
-    } else if (char === '\n' || k.altEnter) {
-      store.questionType('\n')
-    } else if (k.escape) {
-      const rejectFn = question.reject; store.clearQuestion(); rejectFn(new Error('ask_user_question was cancelled'))
-    } else if (k.ctrl && char === 'c') {
-      store.questionClearInput()
-    } else if (k.ctrl && char === 'u') {
-      store.questionCtrlU()
-    } else if (k.leftArrow) {
-      store.questionCursorLeft()
-    } else if (k.rightArrow) {
-      store.questionCursorRight()
-    } else if (k.upArrow) {
+    // Inline "Other" editor (under the option list): Enter commits the text
+    // and moves on, Alt+Enter inserts a newline, arrows/Home/End move the
+    // caret, Backspace/Delete delete, Ctrl+U clears to the current line start,
+    // Ctrl+C clears the input (kept open), Esc discards the typed text and
+    // closes the editor (stays on this question; Esc there cancels the ask).
+    if (k.return) store.questionEnter()
+    else if (char === '\n' || k.altEnter) store.questionType('\n')
+    else if (k.escape) store.questionCloseEditor()
+    else if (k.ctrl && char === 'c') store.questionClearInput()
+    else if (k.ctrl && char === 'u') store.questionCtrlU()
+    else if (k.leftArrow) store.questionCursorLeft()
+    else if (k.rightArrow) store.questionCursorRight()
+    else if (k.upArrow) {
       // Visual-line caret movement: one line up, preserving the column.
       store.questionCursorTo(caretMoveVertical(question.custom, question.customCursor, dockInnerWidth(store.width), -1))
     } else if (k.downArrow) {
@@ -450,42 +728,35 @@ function questionKey(k: RawKey): boolean {
     }
     return true
   }
-  if (k.upArrow) store.bumpQuestionIndex(-1)
-  else if (k.downArrow) store.bumpQuestionIndex(1)
-  else if (k.wheelUp) store.bumpQuestionIndex(-1)
-  else if (k.wheelDown) store.bumpQuestionIndex(1)
-  else if (k.pageUp) store.scrollQuestion(-5)
-  else if (k.pageDown) store.scrollQuestion(5)
-  else if (k.return) {
-    const options = question.item.options ?? []
-    if (question.index < options.length && options[question.index]) {
-      const label = options[question.index].label
-      store.clearQuestion()
-      question.resolve({ id: question.item.id, selected: [label] })
+  if (k.upArrow) { store.bumpQuestionIndex(-1); revealOption(question.index) }
+  else if (k.downArrow) { store.bumpQuestionIndex(1); revealOption(question.index) }
+  else if (k.wheelUp) { store.bumpQuestionIndex(-1); revealOption(question.index) }
+  else if (k.wheelDown) { store.bumpQuestionIndex(1); revealOption(question.index) }
+  else if (k.pageUp) store.scrollQuestion(-questionBodyWindowRows(store.rows))
+  else if (k.pageDown) store.scrollQuestion(questionBodyWindowRows(store.rows))
+  else if (k.leftArrow || k.rightArrow) {
+    // When the tab bar overflows the dock width ←/→ PAGE the bar (the active
+    // tab stays in view); otherwise they switch between questions.
+    const tw = questionTabWindow(question, dockInnerWidth(store.width), store.questionTabFrom)
+    if (tw.overflow) {
+      const step = Math.max(1, tw.visible - 1)
+      store.setQuestionTabFrom(tw.from + (k.rightArrow ? step : -step))
     } else {
-      store.setQuestionCustom('', true)
+      store.questionGo(k.leftArrow ? -1 : 1)
     }
   }
+  else if (k.tab) store.questionGo(1)
+  else if (k.return) store.questionEnter()
   else if (/^[1-9]$/.test(char)) {
-    // Number keys pick the numbered option directly (1..N); N+1 opens "Other".
+    // Number keys answer the numbered option directly (1..N); N+1 = Other.
     const digit = Number(char)
-    const options = question.item.options ?? []
-    if (digit <= options.length + 1) {
-      if (digit <= options.length && options[digit - 1]) {
-        const label = options[digit - 1].label
-        store.clearQuestion()
-        question.resolve({ id: question.item.id, selected: [label] })
-      } else {
-        store.setQuestionCustom('', true)
-      }
+    if (digit <= optsLen + 1) {
+      store.setQuestionIndex(digit - 1)
+      store.questionEnter()
     }
   }
-  else if (k.escape || (k.ctrl && char === 'c')) {
-    const rejectFn = question.reject; store.clearQuestion(); rejectFn(new Error('ask_user_question was cancelled'))
-  }
-  else if (char) {
-    store.setQuestionCustom(char, true)
-  }
+  else if (k.escape || (k.ctrl && char === 'c')) store.cancelQuestion()
+  else if (char) store.setQuestionCustom(char, true)
   return true
 }
 

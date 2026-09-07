@@ -33,7 +33,7 @@ const HARNESS = process.env.DSH_HARNESS ?? resolve(ROOT, '../deepseek-harness')
 const OUT_DIR = join(ROOT, 'dist')
 const GEN_DIR = join(ROOT, 'apps/tui-bin/generated')
 const STUB_DIR = join(ROOT, 'apps/tui-bin/stub-native')
-const ENTRY = join(ROOT, 'apps/tui-bin/src/bin.ts')
+const ENTRY = join(ROOT, 'apps/tui-bin/src/main.ts')
 /** Runtime-visible harness version: the app sidebar shows it above the dsh-tui
  *  version. Regenerated on every build from the detected harness checkout, so
  *  it can never drift from what was actually embedded. */
@@ -180,6 +180,28 @@ function listPackageDirs(base) {
     .map((entry) => entry.name)
 }
 
+/**
+ * Harness `@deepseek-ai/*` packages vendored into `x/` and linked into the
+ * resolve farm. The TUI's plugin graph (`pluginSpecifiers()`) is a strict
+ * whitelist drawn from the cordis.patch.yml layers, so the vast majority of
+ * these never enter the single-file bundle — but copying them here still pulls
+ * them into the resolution farm and leaves their source in `x/`.
+ *
+ * A handful pull in third-party SDKs under a **non-MIT** license (Apache-2.0
+ * for the Agent Client Protocol / OpenAI Codex SDKs, and a commercial "All
+ * rights reserved" license for the Claude Agent SDK). None are referenced by
+ * the TUI patch layers, so they are excluded here to keep them out of the build
+ * surface entirely. Add a package to this set (one line) instead of widening the
+ * vendor copy.
+ */
+const EXCLUDED_NON_MIT_SDK_PACKAGES = new Set([
+  '@deepseek-ai/dsh-subagent-claude-code', // pulls @anthropic-ai/claude-agent-sdk (commercial license)
+  '@deepseek-ai/dsh-subagent-codex', // pulls @openai/codex (Apache-2.0)
+  '@deepseek-ai/dsh-acp', // pulls @agentclientprotocol/sdk (Apache-2.0)
+  '@deepseek-ai/dsh-subagent-acp', // pulls @agentclientprotocol/sdk (Apache-2.0)
+  '@deepseek-ai/dsh-session-snapshot', // pulls @agentclientprotocol/sdk (Apache-2.0)
+])
+
 /** All harness `@deepseek-ai/*` packages as name → absolute package dir. */
 function scanPackages() {
   const found = new Map()
@@ -187,7 +209,10 @@ function scanPackages() {
     const manifest = join(dir, 'package.json')
     if (!existsSync(manifest)) return
     const pkg = readJson(manifest)
-    if (typeof pkg.name === 'string' && pkg.name.startsWith('@deepseek-ai/')) found.set(pkg.name, dir)
+    if (typeof pkg.name === 'string' && pkg.name.startsWith('@deepseek-ai/')) {
+      if (EXCLUDED_NON_MIT_SDK_PACKAGES.has(pkg.name)) return
+      found.set(pkg.name, dir)
+    }
   }
   for (const name of listPackageDirs(join(HARNESS, 'vendor'))) add(join(HARNESS, 'vendor', name))
   for (const groupDir of listSubdirs(join(HARNESS, 'packages'))) {

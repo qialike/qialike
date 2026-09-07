@@ -140,9 +140,6 @@ export function schemeRegistry(): Record<string, ThemePalette> {
 /** The scheme currently applied (for `/theme` status). */
 let applied = DEFAULT_SCHEME
 
-/** Current colorscheme name. */
-export function currentScheme(): string { return applied }
-
 /** Apply a scheme (+ optional overrides) onto the shared theme object. */
 export function applyScheme(name: string, overrides?: Record<string, string>): void {
   const all = schemeRegistry()

@@ -40,9 +40,38 @@ The rows below list the verified licenses.
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | opencode assets/`rosepine.json` |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
 
-Transitive third-party dependencies of the above (e.g. `yoga-wasm-web`, `react-reconciler`,
-`ansi-escapes`, `cli-cursor`, the DeepSeek Harness plugin dependencies such as `commander`,
-`picomatch`, `chokidar`, OpenTelemetry, and optional native packages) are distributed under their
-own licenses which their package manifests declare. Native and optional modules (`sharp`,
-`node-pty`, `node-addon-landlock-run`) are stubbed out in the single-file build and are not
-activated by this TUI.
+## Permissive third-party licenses
+
+Most of the harness and Cordis dependencies this project bundles are MIT. A small number are under
+other **permissive** licenses (Apache-2.0 / BSD-3-Clause / ISC). These are all redistributable as
+long as their copyright notice and license text are preserved, so they are safe to bundle — but they
+are listed here explicitly so the license of every bundled module is auditable.
+
+All the packages below are bundled into the single-file executable via the DeepSeek Harness plugins
+the TUI composition activates. Each carries its own upstream `LICENSE`/copyright notice; the
+Apache-2.0 / BSD-3-Clause / ISC full texts are reproduced in the upstream packages and in the
+`deepseek-harness` checkout, not inlined here.
+
+| Package (as bundled) | Version | License | Bundled via | Purpose |
+|---|---|---|---|---|
+| [@opentelemetry/api](https://github.com/open-telemetry/opentelemetry-js) | 1.9.1 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP log telemetry API |
+| [@opentelemetry/api-logs](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OpenTelemetry logs bridge |
+| [@opentelemetry/core](https://github.com/open-telemetry/opentelemetry-js) | 2.9.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OpenTelemetry core internals |
+| [@opentelemetry/exporter-logs-otlp-http](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP/HTTP log exporter |
+| [@opentelemetry/otlp-exporter-base](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP transport base |
+| [@opentelemetry/resources](https://github.com/open-telemetry/opentelemetry-js) | 2.10.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OpenTelemetry resource attributes |
+| [@opentelemetry/sdk-logs](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | Logs SDK |
+| [@opentelemetry/otlp-transformer](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP payload transformer |
+| [diff](https://github.com/kpdecker/jsdiff) | 9.0.0 | BSD-3-Clause | `@deepseek-ai/dsh-tool-fs` | `structuredPatch` hunk splitting for the editor |
+| [yaml](https://github.com/eemeli/yaml) | 2.9.0 | ISC | `@deepseek-ai/dsh-credentials-local`, `@deepseek-ai/dsh-settings-file`, `@deepseek-ai/dsh-skill-filesystem` | comment-preserving YAML config round-trip |
+
+**Native and optional modules** (`sharp` 0.35.3 — Apache-2.0, `node-pty`, `node-addon-landlock-run`,
+`react-devtools-core`) are stubbed out in the single-file build and are not activated by this TUI.
+`koffi` (MIT) is replaced with a `bun:ffi` shim. They therefore carry their own upstream licenses
+but are not part of the shipped binary's runtime.
+
+Other transitive third-party dependencies of the above (e.g. `yoga-wasm-web`, `react-reconciler`,
+`ansi-escapes`, `cli-cursor`, and the DeepSeek Harness plugin dependencies such as `commander`,
+`picomatch`, `chokidar`) are distributed under their own licenses, which their package manifests
+declare — the vast majority are MIT or another permissive license. No copyleft (GPL / AGPL / LGPL /
+MPL) or source-available network-restrictive license was found in the bundled tree.

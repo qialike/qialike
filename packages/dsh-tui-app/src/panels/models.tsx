@@ -12,8 +12,8 @@ import { Box, Text } from 'ink'
 import type { DOMElement } from 'ink'
 import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
-import type { TuiService, ModelsOption, ProviderModelsEntry, Store } from '../index.tsx'
-import { TUI_MODELS_SERVICE, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from '../models.ts'
+import type { TuiService, ProviderModelsEntry, Store } from '../index.tsx'
+import { TUI_MODELS_SERVICE, type ModelsProviderOption, type TuiModelsService } from '../models.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 import { useListGeometry, dialogListIndexFromRow } from '../list-geometry.ts'
@@ -28,7 +28,6 @@ let store!: Store
 // count for the current dialog mode, captured during render so the hover
 // handler (`connectKey`) can map a hovered screen row back to a flat index.
 let modelsScrollStart = 0
-let modelsVisibleCount = 1
 
 /** The `tui` service (panel registration) and the models capability service. */
 export const inject = ['tui', 'tuiModels']

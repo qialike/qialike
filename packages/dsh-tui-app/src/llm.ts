@@ -28,6 +28,8 @@ import {
   ToolCallId,
   ReasoningEffortId,
   attributionHeaders,
+  CONTEXT_WINDOW_EXCEEDED_CODE,
+  isContextWindowExceededError,
   type GenerateOptions,
   type StreamChunk,
   type LlmConfigurableProvider,
@@ -821,7 +823,6 @@ function serializeRequestAnthropic(
 export async function serializeRequestResponses(
   ctx: Context,
   options: GenerateOptions,
-  profile: TuiProviderProfile,
   signal: AbortSignal | undefined,
 ): Promise<Record<string, unknown>> {
   const wire = await serializeMessagesOpenAI(ctx, options.messages, options.system, signal)
@@ -1642,12 +1643,18 @@ class TuiLlmAdapter extends LlmAdapter {
       // so a "no response" is never a black box. The log write is file-only:
       // the stderr mirror would print the line onto the terminal at the input
       // row, which the UI status line already covers.
-      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
       try { logErrorFileOnly('llm', error) } catch { /* best-effort */ }
       try {
-        const store = this.ctx.get('tuiStore') as { append?(kind: string, text: string, dim?: boolean): void } | undefined
+        const store = this.ctx.get('tuiStore') as
+          | { append?(kind: string, text: string, dim?: boolean): void; appendRunError?(text: string): void }
+          | undefined
         const message = error instanceof Error ? error.message : String(error)
-        store?.append?.('status', `llm error: ${message}`, false)
+        if (store?.appendRunError !== undefined) {
+          // Web turn-error parity: an error-colored run-failure row.
+          store.appendRunError(message)
+        } else {
+          store?.append?.('status', `llm error: ${message}`, false)
+        }
       } catch { /* best-effort */ }
       throw error
     }
@@ -1688,7 +1695,7 @@ class TuiLlmAdapter extends LlmAdapter {
     profile: TuiProviderProfile,
     apiKey: string,
   ): AsyncIterable<StreamChunk> {
-    const body = await serializeRequestResponses(this.ctx, options, profile, options.signal)
+    const body = await serializeRequestResponses(this.ctx, options, options.signal)
     const headers: Record<string, string> = {
       'authorization': `Bearer ${apiKey}`,
       'content-type': 'application/json',
@@ -1774,16 +1781,30 @@ class TuiLlmAdapter extends LlmAdapter {
         const parsed = JSON.parse(raw) as { error?: { message?: string; code?: string; type?: string } }
         if (parsed.error?.message !== undefined && parsed.error.message !== '') message = parsed.error.message
         const code = parsed.error?.code ?? parsed.error?.type
-        throw new LlmError(message, typeof code === 'string' && code !== '' ? code : httpErrorCode(response.status), {
+        // Context-overflow must be classified as CONTEXT_WINDOW_EXCEEDED so the
+        // harness's compaction-basic recovery (compact + retry) fires instead
+        // of the request erroring as terminal and aborting the turn — web
+        // parity (the standard llm-deepseek adapter does this through
+        // isContextWindowExceededError). Provider wording varies
+        // ("maximum context length", "input is too long for this model", ...),
+        // so classify from the message, not the raw error code/type.
+        const finalCode = isContextWindowExceededError(message)
+          ? CONTEXT_WINDOW_EXCEEDED_CODE
+          : (typeof code === 'string' && code !== '' ? code : httpErrorCode(response.status))
+        throw new LlmError(message, finalCode, {
           cause: new Error(raw.length > 0 ? raw : `HTTP ${response.status}`),
           status: response.status,
         })
       } catch (error) {
         if (error instanceof LlmError) throw error
-        throw new LlmError(message, httpErrorCode(response.status), {
-          cause: new Error(raw.length > 0 ? raw : `HTTP ${response.status}`),
-          status: response.status,
-        })
+        throw new LlmError(
+          message,
+          isContextWindowExceededError(message) ? CONTEXT_WINDOW_EXCEEDED_CODE : httpErrorCode(response.status),
+          {
+            cause: new Error(raw.length > 0 ? raw : `HTTP ${response.status}`),
+            status: response.status,
+          },
+        )
       }
     }
     return response

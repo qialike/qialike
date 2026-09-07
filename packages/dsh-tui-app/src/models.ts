@@ -136,16 +136,6 @@ export interface ProviderTemplate {
   models?: readonly { id: string }[]
 }
 
-/** Map raw catalog templates (core + plugin-registered) to dropdown entries. */
-function mapTemplates(templates: readonly TuiProviderTemplate[]): readonly ProviderTemplate[] {
-  return templates.map((template) => ({
-    id: template.route,
-    name: template.name,
-    baseURL: template.baseURL,
-    ...(template.models !== undefined ? { models: template.models } : {}),
-  }))
-}
-
 /** The deepseek route's credential reference (the TUI's runtime key). */
 const DEEPSEEK_KEY_REF = 'DEEPSEEK_API_KEY'
 
@@ -178,8 +168,6 @@ export function apply(ctx: Context): void {
   /** The merged template directory (core + plugin-registered), read live. */
   const templates = (): readonly TuiProviderTemplate[] =>
     (ctx.get('tuiLlmTemplates') as { list(): readonly TuiProviderTemplate[] } | undefined)?.list() ?? []
-  /** The add-provider dropdown entries derived from the merged directory. */
-  const providerTemplates = (): readonly ProviderTemplate[] => mapTemplates(templates())
   /** The dsh-tui-llm providers dict as configured (`{ <route>: profile }`). */
   const piProviders = (): Record<string, TuiProviderProfile> | undefined =>
     (settings()?.get(TUI_LLM_NS) as { providers?: Record<string, TuiProviderProfile> } | undefined)?.providers

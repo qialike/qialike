@@ -8,7 +8,7 @@
  */
 
 import { Box, Text, useStdin, measureElement, type DOMElement } from 'ink'
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
@@ -25,6 +25,7 @@ import {
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
 import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, dockInnerWidth } from '../config.ts'
+import { questionDockRows } from '../question-layout.ts'
 import { formatSessionStats } from '../session-stats.ts'
 import { logError } from '../log.ts'
 import { HARNESS_VERSION } from '../harness-version.ts'
@@ -106,18 +107,25 @@ const STATUS_BAR_HEIGHT = 3
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠸', '⠴', '⠦', '⠧', '⠇', '⠏']
 
-/** Live "thinking" preview — ONE fixed row while the model is ACTIVELY
- *  reasoning (harness-web parity: a fixed-height slot whose text rolls the
- *  newest reasoning instead of growing the layout). Content = the latest line
- *  (text after the final newline), windowed from its END so it always fits one
- *  visual line; the row keeps exactly 2 terminal rows (Think label + preview)
- *  for the whole stream, so the message area never jumps mid-think. When
- *  thinking ends the row reverts to the plain first-paragraph preview.
- *  Deterministic from (text, usable) alone, so the row render, the height
- *  estimate and the selection-copy text all derive the SAME string and can
- *  never drift. */
+/** Collapsed Think preview for the LIVE streaming tail — ONE fixed row
+ *  (harness-web parity: a fixed-height slot that rolls the newest reasoning
+ *  instead of growing the layout). Content = the latest line (text after the
+ *  final newline), windowed from its END so it always fits one visual line;
+ *  the row keeps exactly 2 terminal rows (Think label + preview) whether
+ *  streaming or settled, so the message area never jumps mid-think. Used only
+ *  while the row is the streaming tail; SETTLED rows show the first line via
+ *  thinkSettledLine (web `running ? latestLine : firstLine`). Deterministic
+ *  from (text, usable) alone, so render/estimate/copy share one string. */
 function thinkLiveLine(text: string, usable: number): string {
-  const seg = text.slice(Math.max(0, text.lastIndexOf('\n') + 1)).trimEnd()
+  // The preview tracks the LAST logical line. Providers may emit a reasoning
+  // line atomically with its newline, so the raw tail after the final '\n' is
+  // momentarily EMPTY between lines — without a fallback the preview would sit
+  // blank (looks "stuck") until the next line's first characters arrive. Trim
+  // trailing whitespace/newlines FIRST so the previous non-empty line stays on
+  // show while the stream waits for the next chunk (continuous rolling).
+  let seg = text.trimEnd()
+  const nl = seg.lastIndexOf('\n')
+  seg = nl === -1 ? seg : seg.slice(nl + 1)
   if (seg === '') return '\u00a0' // keep the reserved preview row occupied
   const budget = Math.max(8, MESSAGE_TEXT_WIDTH(usable) - 1) // cells; reserve the leading …
   if (visualWidth(seg) <= budget) return seg
@@ -132,19 +140,66 @@ function thinkLiveLine(text: string, usable: number): string {
   return `…${seg.slice(from)}`
 }
 
-/** Trim text to fit one terminal line at `widthCells` (keeps the head, adds
- *  `…`), used by the one-line tool summaries. */
-function capVisual(text: string, widthCells: number): string {
-  if (visualWidth(text) <= widthCells) return text
+/** First LOGICAL line of a block of text (everything before the first newline;
+ *  the whole text when it has none) — the harness-web settled Think/tool
+ *  preview source. */
+function firstLineOf(text: string): string {
+  const nl = text.indexOf('\n')
+  return nl === -1 ? text : text.slice(0, nl)
+}
+
+/** Head-window one line so it fits `widthCells` (keeps the HEAD, adds `…` at
+ *  the end) — web CSS ellipsis semantics for the SETTLED collapsed preview. */
+function capHead(text: string, widthCells: number): string {
+  const seg = text.trimEnd()
+  if (seg === '') return '\u00a0'
+  if (visualWidth(seg) <= widthCells) return seg
   let cells = 0
   let out = ''
-  for (const ch of text) {
+  for (const ch of seg) {
     const cw = visualWidth(ch)
     if (cells + cw > widthCells - 1) break
     out += ch
     cells += cw
   }
   return `${out}…`
+}
+
+/** Collapsed Think preview when the reasoning block is SETTLED (harness-web
+ *  `ReasoningRow` settles to the FIRST line): first logical line, head-capped
+ *  to one terminal line with `…`. */
+function thinkSettledLine(text: string, usable: number): string {
+  const seg = firstLineOf(text).trimEnd()
+  if (seg === '') return '\u00a0' // keep the reserved preview row occupied
+  return capHead(seg, Math.max(8, MESSAGE_TEXT_WIDTH(usable) - 1))
+}
+
+/** Collapsed Think preview for one reasoning row: while the row is the LIVE
+ *  streaming tail follow the newest line (thinkLiveLine); once settled show
+ *  the FIRST line (thinkSettledLine) — matching harness-web ReasoningRow
+ *  `running ? latestLine : firstLine`. */
+function thinkPreviewLine(text: string, liveTail: boolean, usable: number): string {
+  return liveTail ? thinkLiveLine(text, usable) : thinkSettledLine(text, usable)
+}
+
+/** Tail-window one line so it fits `widthCells` (keeps the END, adds `…` at
+ *  the front). The collapsed single-line preview uses this so that, when the
+ *  content exceeds the fixed one line, the NEWEST (tail) content stays visible
+ *  and "scrolls" as more streams in, rather than pinning the head (harness
+ *  `data-follow-end` semantics). Deterministic from (text, widthCells) alone. */
+function capTail(text: string, widthCells: number): string {
+  const seg = text.trimEnd()
+  if (seg === '') return '\u00a0'
+  if (visualWidth(seg) <= widthCells) return seg
+  let cells = 0
+  let from = seg.length
+  while (from > 0) {
+    const cw = visualWidth(seg[from - 1]!)
+    if (cells + cw > widthCells - 1) break
+    cells += cw
+    from -= 1
+  }
+  return `…${seg.slice(from)}`
 }
 
 /** Canonical tool-row TITLES, verbatim from the harness web client's locale
@@ -167,8 +222,9 @@ const TOOL_ROW_TITLES: Readonly<Record<string, string>> = {
 }
 
 /** Per-tool leading GLYPH (terminal stand-in for harness-web vector icons;
- *  opencode-TUI family). The glyph is fixed per tool — running/ok/error are
- *  conveyed by header color, not by swapping the glyph. */
+ *  opencode-TUI family). The glyph is fixed per tool — while the tool is in
+ *  flight the render swaps it for a live spinner frame (see ToolLiveHeader);
+ *  after settling it returns and ok/error read via the header color/✗. */
 const TOOL_ROW_ICONS: Readonly<Record<string, string>> = {
   bash: '$',
   pwsh: '$',
@@ -183,9 +239,11 @@ const TOOL_ROW_ICONS: Readonly<Record<string, string>> = {
   todo_write: '☑',
 }
 
-/** One-line per-tool detail from raw args (web-style summary): bash/pwsh show
- *  the command, read/web_fetch/write/edit a path, grep/glob/web_search the
- *  pattern, todo_write done/total (+active). `null` → caller falls back. */
+/** One-line per-tool detail from raw args (web-style summary keys): bash/pwsh
+ *  show the model-given `description` (falling back to the command), read/
+ *  web_fetch/write/edit show the path, grep/glob/web_search the query/pattern,
+ *  run_code the description (falling back to the command), todo_write
+ *  done/total (+active). `null` → caller falls back. */
 function toolDetail(name: string, args: Record<string, unknown>): string | null {
   const take = (keys: readonly string[]): string | null => {
     for (const key of keys) {
@@ -194,14 +252,20 @@ function toolDetail(name: string, args: Record<string, unknown>): string | null 
     }
     return null
   }
+  const collapse = (value: string): string => value.replace(/\s*\n\s*/g, ' ')
   if (name === 'bash' || name === 'pwsh') {
-    const command = take(['command', 'cmd'])
-    return command === null ? null : command.replace(/\s*\n\s*/g, ' ')
+    const picked = take(['description', 'command', 'cmd'])
+    return picked === null ? null : collapse(picked)
   }
-  if (name === 'read' || name === 'web_fetch') return take(['file', 'path', 'url', 'id'])
-  if (name === 'write' || name === 'edit' || name === 'file_mutation') return take(['file', 'path', 'filePath'])
-  if (name === 'grep' || name === 'glob' || name === 'web_search') return take(['pattern', 'query', 'q'])
-  if (name === 'run_code') return take(['command', 'cmd'])
+  // The harness read/write/edit schemas name the path `file_path` (required);
+  // camelCase/legacy keys are tolerated for other callers.
+  if (name === 'read' || name === 'web_fetch') return take(['path', 'file_path', 'url', 'file', 'id'])
+  if (name === 'write' || name === 'edit' || name === 'file_mutation') return take(['path', 'file_path', 'file', 'filePath'])
+  if (name === 'grep' || name === 'glob' || name === 'web_search') return take(['query', 'pattern', 'url', 'q'])
+  if (name === 'run_code') {
+    const picked = take(['description', 'command', 'cmd'])
+    return picked === null ? null : collapse(picked)
+  }
   if (name === 'todo_write') {
     const todos = args['todos']
     if (Array.isArray(todos)) {
@@ -220,6 +284,16 @@ function toolDetail(name: string, args: Record<string, unknown>): string | null 
   return null
 }
 
+/** Live single-line tool state passed ONLY by the animating render (running
+ *  row during an active run): the current spinner frame (replaces the static
+ *  glyph) and the whole elapsed seconds since the call started (tail). The
+ *  estimate/selection-copy paths call without it and get the static header —
+ *  row height is one line either way, so the layout never moves. */
+interface ToolLive {
+  readonly frame: string
+  readonly seconds: number | null
+}
+
 /** One-line tool summary row text: a per-tool GLYPH icon (terminal stand-in
  *  for the harness web vector icons — opencode-TUI family: `$` bash, `←`
  *  read/edit, `⚙` write, `✱` search, `%` web fetch, `◈` web search, `☑`
@@ -228,13 +302,17 @@ function toolDetail(name: string, args: Record<string, unknown>): string | null 
  *  known shape, plus a trailing `…` marker while the result body is
  *  collapsed and a `✗` suffix on error rows (color-blind visible, web state
  *  dot equivalent). Unknown tools use the web generic title "Tool call" with
- *  the real name riding the summary. Running/ok/error are conveyed by COLOR
- *  on the header. Deterministic from (item, usable) and the expansion state —
- *  render, height estimate and selection copy share it, so they never drift. */
-function toolRowHeader(item: TranscriptItem, usable: number): string {
+ *  the real name riding the summary. Deterministic from (item, usable) —
+ *  render, height estimate and selection copy share it, so they never drift;
+ *  `live` is the one render-only exception (see ToolLive). Exported for the
+ *  row-math unit tests (tests/tool-row-live.test.ts). */
+export function toolRowHeader(item: TranscriptItem, usable: number, live: ToolLive | null = null): string {
   const name = item.text.slice(2)
   const key = name.toLowerCase()
-  const icon = TOOL_ROW_ICONS[key] ?? '◇'
+  const running = item.tool?.state === 'running'
+  const icon = running && live !== null
+    ? live.frame
+    : (TOOL_ROW_ICONS[key] ?? '◇')
   const known = TOOL_ROW_TITLES[key]
   const width = Math.max(8, MESSAGE_TEXT_WIDTH(usable))
   const body = item.tool?.body
@@ -252,14 +330,27 @@ function toolRowHeader(item: TranscriptItem, usable: number): string {
     }
   }
   // Known tool: `icon Title[ · detail]`. Unknown: web semantics — title is
-  // "Tool call" and the real name (+detail) rides the summary.
+  // "Tool call" and the real name (+detail) rides the summary. On ERROR rows
+  // the web row's collapsed summary is the FAILURE's first line, which
+  // replaces the args-derived detail.
   const head = known === undefined
     ? `${icon} Tool call · ${name}`
     : `${icon} ${known}`
+  const errorFirst = error && body !== undefined && body.trim() !== '' ? firstLineOf(body) : null
   let label = detail === null ? head : `${head} · ${detail}`
+  if (errorFirst !== null) label = `${head} · ${errorFirst}`
   const errSuffix = error ? ' ✗' : ''
-  const budget = width - visualWidth(marker) - (error ? visualWidth(errSuffix) : 0)
-  return `${capVisual(label, budget)}${marker}${errSuffix}`
+  // The live elapsed tail rides the row END (like the marker/✗, it always
+  // survives), so a narrow row truncates the detail first, never the seconds.
+  const secondsSuffix = running && live !== null && live.seconds !== null ? ` · ${live.seconds}s` : ''
+  const fixed = marker + errSuffix + secondsSuffix
+  const budget = width - visualWidth(fixed)
+  // Collapsed tool preview follows the END of the label so the newest part stays
+  // visible and "scrolls" when the label exceeds the fixed one line (harness
+  // data-follow-end), instead of pinning the head. ERROR rows instead keep the
+  // head (icon/title + the failure's first line) — web ellipsis semantics.
+  const capped = error ? capHead(label, Math.max(1, budget)) : capTail(label, Math.max(1, budget))
+  return `${capped}${fixed}`
 }
 
 // ── input history (composer) ────────────────────────────────────────────────
@@ -368,45 +459,58 @@ type Row =
   | { type: 'item'; item: TranscriptItem; top: number; bottom: number }
   | { type: 'steps'; top: number; bottom: number }
 
-function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpanded: boolean, hovered: boolean, usable: number, active: boolean): React.ReactNode {
+function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpanded: boolean, hovered: boolean, usable: number, toolLive: boolean, reasoningLive: boolean): React.ReactNode {
   if (item.kind === 'assistant') {
     // opencode-style assistant: indent the markdown to the shared content column.
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
   }
   if (item.kind === 'reasoning') {
-    // Web-parity Think disclosure: the "↓ Think" label row is ALWAYS shown
-    // (spinner while streaming); the summary under it is ONE line — while
-    // streaming the rolling latest reasoning (thinkLiveLine), once finished
-    // the FIRST line of the reasoning (firstLine) truncated to the column
-    // width with `…` (ReasoningRow.tsx: running ? latestLine : firstLine,
-    // nowrap + ellipsis). Row height is therefore a constant 2 (label +
+    // Web-parity Think disclosure (harness ReasoningRow): the label row is
+    // ALWAYS shown and the summary under it is ONE line. While this row is the
+    // LIVE streaming tail the preview follows the newest line (thinkLiveLine);
+    // once settled it shows the FIRST line, head-capped — exactly web's
+    // `running ? latestLine : firstLine`. Row height is a constant 2 (label +
     // summary) whether streaming or settled; clicking the header (or /think)
     // expands the full body. Hover highlights the header so it reads as
     // clickable.
-    const w = Math.max(8, MESSAGE_TEXT_WIDTH(usable))
-    const settledFirst = capVisual(item.text.split('\n')[0] ?? '', w)
     return (
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
         <Text inverse={hovered || undefined} color={mutedReadable()}>{expandReasoning ? '-' : '+'} Think</Text>
         {expandReasoning
           ? <Text color={mutedReadable()} wrap="wrap">{item.text}</Text>
-          : <Text color={mutedReadable()} wrap="wrap">{active ? thinkLiveLine(item.text, usable) : settledFirst || '\u00a0'}</Text>}
+          : <Text color={mutedReadable()} wrap="wrap">{thinkPreviewLine(item.text, reasoningLive, usable)}</Text>}
       </Box>
     )
   }
   if (item.kind === 'tool') {
-    // Tool rows (web-parity collapsed card): running = `│ <summary>`, settled =
-    // `✓ / ✗ <summary>` with the result/error body HIDDEN until expanded
-    // (mouse click on the row).
-    // `toolExpanded`/`hovered` arrive as PROPS so the memoized row re-renders
-    // on a click (a store read inside this component would be invisible to the
-    // memo — that was why Think toggled but tool rows did not).
+    // Tool rows (web-parity collapsed card): running = live single line,
+    // settled = `✓ / ✗ <summary>` with the result/error body HIDDEN until
+    // expanded (mouse click on the row). The summary is ONE line; when the
+    // label exceeds it the summary windows the END (capTail) so the newest
+    // part stays visible — harness `data-follow-end`.
+    // A RUNNING row does not sit still: while the agent is running (not
+    // paused) the static glyph swaps for a clock-driven spinner frame and the
+    // line gains a live `· Ns` elapsed tail (ToolLiveHeader, own 100 ms
+    // timer) — the terminal stand-in for the harness web running sweep, so a
+    // long Bash/Read/Write call never reads as a frozen row. Only rows opened
+    // by THIS run animate (startedAt >= run start), never stale replay
+    // leftovers. `toolExpanded`/`hovered`/`toolLive` arrive as PROPS so the
+    // memoized row re-renders on a click or a run start/stop (a store read
+    // inside this component would be invisible to the memo — that was why
+    // Think toggled but tool rows did not).
     const isError = item.text.startsWith('✗ ')
     const body = item.tool?.body
     const expanded = body !== undefined && toolExpanded
+    const startedAt = item.tool?.startedAt
+    const runningLive = toolLive
+      && item.tool?.state === 'running'
+      && startedAt !== undefined
+      && startedAt >= store.busySince
     return (
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
-        <Text inverse={hovered || undefined} color={mutedReadable()} wrap="wrap">{toolRowHeader(item, usable)}</Text>
+        {runningLive
+          ? <ToolLiveHeader item={item} usable={usable} />
+          : <Text inverse={hovered || undefined} color={mutedReadable()} wrap="wrap">{toolRowHeader(item, usable)}</Text>}
         {body !== undefined && expanded && (
           <Text color={isError ? theme.error : mutedReadable()} wrap="wrap">{body}</Text>
         )}
@@ -438,12 +542,45 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
       </Box>
     )
   }
+  if (item.kind === 'error') {
+    // Run-failure row (billing/quota, transport after retries, credentials…):
+    // web turn-error parity — visibly an error, not a silent stop.
+    return (
+      <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
+        <Text color={theme.error} wrap="wrap">⚠ {item.text}</Text>
+      </Box>
+    )
+  }
   return (
     <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
       <Text color={mutedReadable()} wrap="wrap">
         {item.text}
       </Text>
     </Box>
+  )
+}
+
+/** Self-ticking one-line header for a RUNNING tool row: re-renders every
+ *  100 ms and derives the spinner frame + elapsed seconds from the wall clock
+ *  (same liveness model as the status bar), so the row keeps moving even
+ *  though the memoized transcript row above it has stable props. The interval
+ *  dies with the component (run end / tool settle / toolLive drop), and the
+ *  frame is a pure function of Date.now(), so a missed tick can never freeze
+ *  the glyph. */
+function ToolLiveHeader(props: { item: TranscriptItem; usable: number }): React.JSX.Element {
+  const [, setTick] = React.useState(0)
+  useEffect(() => {
+    const timer = setInterval(() => setTick((n) => n + 1), 100)
+    return () => clearInterval(timer)
+  }, [])
+  const now = Date.now()
+  const frame = SPINNER_FRAMES[Math.floor(now / 100) % SPINNER_FRAMES.length]
+  const started = props.item.tool?.startedAt
+  const seconds = started === undefined ? null : Math.max(0, Math.floor((now - started) / 1000))
+  return (
+    <Text color={mutedReadable()} wrap="wrap">
+      {toolRowHeader(props.item, props.usable, { frame, seconds })}
+    </Text>
   )
 }
 
@@ -457,7 +594,13 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
   hovered: boolean
   themeEpoch: number
   usable: number
-  active: boolean
+  /** Whether the agent is live (running && !paused): running TOOL rows animate
+   *  (spinner + elapsed tail) only while this is true — see ToolLiveHeader. */
+  toolLive: boolean
+  /** Whether THIS reasoning row is the live streaming tail: its collapsed
+   *  preview then follows the newest line; settled rows show the first line
+   *  (harness ReasoningRow running ? latestLine : firstLine). */
+  reasoningLive: boolean
 }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
@@ -487,7 +630,7 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
   }, [props.item.text, props.expandReasoning, props.toolExpanded])
   return (
     <Box ref={ref} flexDirection="column">
-      {itemContent(props.item, props.expandReasoning, props.toolExpanded, props.hovered, props.usable, props.active)}
+      {itemContent(props.item, props.expandReasoning, props.toolExpanded, props.hovered, props.usable, props.toolLive, props.reasoningLive)}
     </Box>
   )
 })
@@ -689,16 +832,6 @@ function composerWrap(text: string, usable: number): string[] {
   return wrapAnsi(text, usable, { trim: false, hard: true }).split('\n')
 }
 
-/** Wrap one logical input line into visual rows, keeping each row's starting
- *  character index in `input` so a click/caret cell can map back to an index.
- *  `offset` is the logical line's first index in the full composer input. */
-function composerRowsWithStart(line: string, usable: number, offset: number): Array<{ start: number; text: string }> {
-  const out: Array<{ start: number; text: string }> = []
-  if (line === '') return [{ start: offset, text: '' }]
-  for (const text of composerWrap(line, usable)) out.push({ start: offset, text })
-  return out
-}
-
 /** Per-VISUAL-row character offsets of the whole input: wrap every logical line
  *  with Ink's rule and walk each wrapped row's character length, so a row's
  *  `start` is the input index where that visual row begins (rows are bijective
@@ -751,9 +884,31 @@ function composerHeight(width: number, input: string, min: number): number {
  *  only that single row re-parses while it grows. */
 const estCache = new WeakMap<TranscriptItem, Map<string, number>>()
 
-function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean, reasoningTail: boolean): number {
+/** Decide the row height the layout uses: trust the measured painted height
+ *  unless it is implausibly SMALL. The measured value is the truth for any row
+ *  that has actually been painted (the streaming tail always is), while the
+ *  estimate is only a fill-in for a not-yet-painted row or a bad reading.
+ *
+ *  The estimate undercounts word-wrapped prose — {@link countWrappedLines} is a
+ *  *character* ceil, not a word-wrap, so Ink's `wrap="wrap"` (greedy word
+ *  break) needs MORE rows than ceil(width/usable), and the gap grows with the
+ *  text length. A measured height LARGER than the estimate is therefore real,
+ *  not a scroll artifact, and MUST be kept: discarding it makes `layout.content`
+ *  (hence `maxScroll`) too small, so the streaming tail is cut off and the
+ *  newest lines sit below the viewport (the "doesn't auto-scroll; PgDn reveals
+ *  it" report). Only a reading that is more than one row BELOW the estimate is
+ *  treated as the documented diff-render collapse (e.g. 1 instead of 3).
+ * @param est - the deterministic wrapped-line estimate for the row.
+ * @param measured - the measured painted height (undefined before first paint).
+ * @returns the row height to lay out. */
+export function resolveRowHeight(est: number, measured: number | undefined): number {
+  if (measured !== undefined && measured + 1 >= est) return measured
+  return est
+}
+
+function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
   const toolExpanded = item.kind === 'tool' && item.tool?.body !== undefined && store.isToolExpanded(item.key)
-  const cacheKey = `${usable}|${expandReasoning ? 1 : 0}|${reasoningTail ? 1 : 0}|${toolExpanded ? 1 : 0}`
+  const cacheKey = `${usable}|${expandReasoning ? 1 : 0}|${toolExpanded ? 1 : 0}`
   let byItem = estCache.get(item)
   if (byItem === undefined) {
     byItem = new Map()
@@ -825,7 +980,7 @@ function wrapRows(text: string, usable: number): string[] {
   return out
 }
 
-function buildTranscriptRows(items: readonly TranscriptItem[], usable: number, reasoningTail: boolean): TranscriptRow[] {
+function buildTranscriptRows(items: readonly TranscriptItem[], usable: number): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   items.forEach((item, i) => {
     if (i > 0) rows.push({ text: '', itemIndex: i - 1 })
@@ -848,12 +1003,12 @@ function buildTranscriptRows(items: readonly TranscriptItem[], usable: number, r
         for (const line of wrapRows('◇ Think', w)) rows.push({ text: line, itemIndex: i })
         for (const line of wrapRows(item.text, w)) rows.push({ text: line, itemIndex: i })
       } else {
-        // Two visible rows: the label + the one-line summary (rolling latest
-        // line while the tail streams, else the truncated first line).
+        // Two visible rows: the label + the one-line preview mirroring the
+        // rendered row: newest line while this row is the LIVE streaming tail,
+        // else the FIRST line (harness-web running ? latestLine : firstLine).
         for (const line of wrapRows('◇ Think', w)) rows.push({ text: line, itemIndex: i })
-        const summary = reasoningTail && i === items.length - 1
-          ? thinkLiveLine(item.text, usable)
-          : capVisual(item.text.split('\n')[0] ?? '', w)
+        const liveTail = store.running && !store.paused && items.length > 0 && items[items.length - 1] === item
+        const summary = thinkPreviewLine(item.text, liveTail, usable)
         for (const line of wrapRows(summary === '' ? '\u00a0' : summary, w)) rows.push({ text: line, itemIndex: i })
       }
       return
@@ -940,8 +1095,7 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
   const usable = convUsableWidth(width, sidebarVisibleFor(width))
   const flatItems = store.getItems()
-  const rows = buildTranscriptRows(flatItems, usable,
-    store.running && !store.paused && flatItems.at(-1)?.kind === 'reasoning')
+  const rows = buildTranscriptRows(flatItems, usable)
   const joined = rows.map((r) => r.text).join('\n')
   const inputStart = joined.length + 1
   const rowPrefix: number[] = []
@@ -1264,7 +1418,6 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const commands = props.tui.commands.list()
   const filter = store.commandFilter
   const commandIndex = store.commandIndex
-  const approval = store.approval
   const question = store.question
   const width = store.width
   // Per-row effective expansion: a Think row opens on its own when clicked
@@ -1308,26 +1461,29 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // Approval dock height: fixed — border 2 + padding 2 + header 1 + gap 1 +
   // one truncated reason line 1 + gap 1 + choice row 1 + gap 1 + hint 1.
   const approvalH = store.approval === null ? 0 : 11
-  // Question dock height: border 2 + padding 2 + header 1 + gaps + the
-  // wrapped question (capped) + the windowed detail (long details such as
-  // plan reviews scroll; window ≤ rows-25, kept in sync with question.tsx)
-  // + the single-line option rows (capped) + the hint.
+  // Question dock height — from the SAME pure layout function the question
+  // panel renders from (question-layout.questionDockRows), so the FLOATING
+  // window's opaque backdrop covers exactly as many rows as the dock paints.
+  // The question dock does NOT reserve transcript space: it floats OVER the
+  // message area (see the overlay below), so opening it never compresses or
+  // shifts the transcript.
   const questionH = store.question === null ? 0 : (() => {
     const q = store.question
-    // Same text width the question panel wraps at (message column minus the
-    // dock chrome), so the estimate matches the rendered row count exactly.
-    const inner = dockInnerWidth(width)
-    const qLines = Math.min(countWrappedLines(q.item.question ?? '', inner), 6)
-    if (q.customMode) return 10 + qLines
-    const detailWindow = Math.max(2, Math.min(10, store.rows - 25))
-    const dLines = q.item.detail === undefined || q.item.detail === ''
-      ? 0 : Math.min(countWrappedLines(q.item.detail, inner), detailWindow)
-    const optRows = Math.min((q.item.options?.length ?? 0) + 1, 12)
-    return 9 + qLines + (dLines > 0 ? 1 + dLines : 0) + optRows
+    const options = q.item.options ?? []
+    return questionDockRows(
+      q.item.question,
+      q.item.detail,
+      options,
+      q.customMode,
+      q.custom,
+      dockInnerWidth(width),
+      store.rows,
+      q.questions.length > 1, // multi-question ask: +1 tab-bar row
+    )
   })()
-  const modalH = store.panel === 'approval' ? approvalH
-    : store.panel === 'question' ? questionH
-    : 0
+  // Only the (in-flow) approval dock shrinks the transcript; the question dock
+  // floats above it and takes no layout height.
+  const modalH = store.panel === 'approval' ? approvalH : 0
   const usable = convUsableWidth(width, showSidebar)
   // Deterministic numeric sidebar width (same formula convUsableWidth uses for
   // the message wrap width). A percentage would let Ink round independently of
@@ -1336,14 +1492,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const sidebarWidth = showSidebar ? Math.max(20, Math.round(width * 0.3)) : 0
   const viewportLines = convViewportLines(composerH, 0, modalH)
   const rows = useMemo(() => buildRows(items, steps), [items, steps])
-  // The reasoning row shows a live preview (thinkLiveLine) while the model is
-  // ACTIVELY producing it: the agent is running (not paused) and the tail item
-  // is that reasoning row (it is the streaming target). Computed BEFORE the
-  // layout memo because the row-height estimate must mirror the same preview;
-  // once thinking ends and an assistant body follows, the tail changes, the
-  // flag drops and the row reverts to the plain first-paragraph preview.
-  const tailItem = items.at(-1)
-  const reasoningActive = store.running && !store.paused && tailItem?.kind === 'reasoning'
+  // The collapsed Think tool rows always follow the tail (see thinkLiveLine /
+  // capTail), so the row heights are independent of whether the model is
+  // actively streaming — the layout never jumps mid-think.
   const layout = useMemo(() => {
     // A width change invalidates every cached row height (wrap counts differ);
     // drop the cache so the next pass re-estimates before anything is measured.
@@ -1370,11 +1521,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           // height, e.g. 1 instead of 3). Use the measured value only when it
           // stays within 1 of the estimate — a wildly-off reading is a scroll
           // artifact, so fall back to the estimate to keep every gap stable.
-          const est = estItemLines(r.item, usable, reasoningExpandedFor(r.item), reasoningActive && r.item === tailItem)
+          const est = estItemLines(r.item, usable, reasoningExpandedFor(r.item))
           const measured = measuredHeights.get(key)
-          if (measured !== undefined && Math.abs(measured - est) <= 1) return measured
-          measuredHeights.set(key, est)
-          return est
+          // Cache the estimate for an unpainted row, and for a reading that is
+          // implausibly small (a diff-rendered row can read a collapsed height);
+          // otherwise the measured painted height is the truth (see
+          // resolveRowHeight) and keeps the streaming tail from being clipped.
+          if (measured === undefined || measured + 1 < est) measuredHeights.set(key, est)
+          return resolveRowHeight(est, measured)
         })()
       return content + r.top + r.bottom
     })
@@ -1382,7 +1536,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] }
     return { hts, starts, content: s }
-  }, [rows, usable, steps, reasoningActive, store.measureEpoch, store.expansionEpoch])
+  }, [rows, usable, steps, store.measureEpoch, store.expansionEpoch])
   const maxScroll = Math.max(0, layout.content - viewportLines)
   const effectiveScroll = store.followTail ? maxScroll : Math.max(0, Math.min(store.scroll, maxScroll))
   const topRow = 2
@@ -1437,7 +1591,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
                   || (r.item.kind === 'tool' && r.item.tool !== undefined && r.item.tool.state !== 'running'))}
               themeEpoch={themeEpoch}
               usable={usable}
-              active={reasoningActive && r.item.key === tailItem?.key}
+              toolLive={store.running && !store.paused}
+              reasoningLive={r.item.kind === 'reasoning' && store.running && !store.paused
+                && items.length > 0 && items[items.length - 1] === r.item}
             />
           </Box>
         </RowErrorBoundary>
@@ -1493,11 +1649,32 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
                 </Box>
               </Box>
             )}
-          {/* The approval and question docks live INSIDE the message column so
-              their widths always track the (resizable) message box, never the
-              sidebar. */}
+          {/* The approval dock lives INSIDE the message column (in-flow) so
+              its width tracks the resizable message box. The QUESTION dock is
+              a FLOATING window instead: it overlays the transcript bottom-
+              anchored above the composer, so answering never compresses or
+              shifts the message area (same treatment as the palette below).
+              The dock reports its REAL height each frame (store.questionRows);
+              the backdrop sizes to that, and the dock hugs the wrapper's
+              bottom — so the popup's BOTTOM edge never moves, only its top
+              grows/shrinks as content changes (Other editor, question switch). */}
           {overlay('approval')}
-          {overlay('question')}
+          {question !== null && questionH > 0 && (
+            <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end">
+              <Box width="100%" height={Math.max(questionH, store.questionRows)} flexDirection="column" justifyContent="flex-end">
+                {/* Opaque backdrop under the dock: Ink Boxes have no
+                    background, so every cell the dock spans is painted
+                    theme.bg first — the transcript text behind a floating
+                    window never shows through its padding/blank rows. */}
+                <Box position="absolute" width="100%" height="100%" flexDirection="column">
+                  {Array.from({ length: Math.max(questionH, store.questionRows) }, (_, r) => (
+                    <Text key={r} backgroundColor={theme.bg} wrap="truncate">{' '.repeat(Math.max(1, usable))}</Text>
+                  ))}
+                </Box>
+                {overlay('question')}
+              </Box>
+            </Box>
+          )}
           {/* Command palette as a bottom-anchored ABSOLUTE overlay inside the
               message column: it takes no layout height, so the transcript keeps
               its full viewport (no compression) and the palette floats just
@@ -1543,11 +1720,18 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             <Text color={theme.text} wrap="wrap">{status}{renderComposerText(cWin.start, cWin.end)}</Text>
           </Box>
           <Box flexDirection="row" gap={2} paddingY={1} marginTop={1}>
-            <Text color={permissionColor}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} (Tab)</Text>
+            {/* Permission chip: only the "(Tab)" toggle hint carries the
+                permission color; the 🔒/label keep the regular text color. */}
+            <Text color={theme.text}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} <Text color={permissionColor}>(Tab)</Text></Text>
             <Box flexGrow={1} />
             {modelLabel !== '' && (
+              // Model info: the "Model:" label and the model name (provider ·
+              // model) both use the regular font; the reasoning-effort chip
+              // renders EXACTLY like the message-box Think row (same
+              // mutedReadable color, no bold), so the chip never reads
+              // brighter than a Think row.
               <Text color={theme.text}>Model: {modelBaseLabel}
-                {effortName !== '' && <Text color={theme.warning} bold> · {effortName}</Text>}
+                {effortName !== '' && <Text color={mutedReadable()}> · {effortName}</Text>}
               </Text>
             )}
           </Box>
@@ -1562,9 +1746,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           <Text color={theme.text}>session {store.session === undefined ? '' : String(store.session.id)}</Text>
           <Box flexGrow={1} />
           {/* Embedded harness version sits ABOVE the dsh-tui version, flush
-              against the workspace path at the sidebar bottom. */}
-          <Text color={theme.text}>deepseek-harness {HARNESS_VERSION}</Text>
-          <Text color={theme.text}>dsh-tui {APP_VERSION}{BETA_FOOTER_SUFFIX}</Text>
+              against the workspace path at the sidebar bottom. Labels use the
+              regular font; the version numbers use the message-box Think
+              color (bold). */}
+          <Text color={theme.text}>deepseek-harness: <Text color={mutedReadable()} bold>{HARNESS_VERSION}</Text></Text>
+          <Text color={theme.text}>dsh-tui: <Text color={mutedReadable()} bold>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
           <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
@@ -1610,13 +1796,30 @@ export function installFrameSuffix(): void {
     if (process.stdout.isTTY) process.stdout.write('\x1b[2 q')
   } catch { /* best-effort */ }
   const frameSuffix = (): string => {
-    // Park the REAL cursor at the composer caret only while the conversation is
-    // the active panel (the macOS IME candidate window anchors to it). Any
-    // other panel (/sessions, /models, /theme, /help, /export, connect) has its
-    // own surface and draws its own caret; re-showing the hardware cursor there
-    // would park it at the (hidden) composer caret cell — which can land ON a
-    // list row and look like a stray cursor jumping around. Hide it instead.
-    if (store.panel !== 'conversation') return '\x1b[?25l'
+    // Park the REAL cursor where the text caret is so IME composition/candidate
+    // windows (macOS/Linux/Win) anchor near the text being typed:
+    //  - conversation panel → the composer caret;
+    //  - question dock with its inline "Other" editor open → that editor's
+    //    caret cell (reported by the question panel through a global hook) so
+    //    Chinese/other IME candidate windows anchor next to what you type.
+    // Any other panel (/sessions, /models, /theme, /help, /export, connect)
+    // draws its own caret and hides the hardware cursor instead — re-showing it
+    // there would park it on a list row and look like a stray cursor jumping.
+    if (store.panel !== 'conversation') {
+      if (store.panel === 'question') {
+        // The question panel draws its own caret as an in-band inverse block
+        // ("the real terminal cursor is hidden inside the overlay"). We still
+        // MOVE the hardware cursor to that cell but keep it HIDDEN, so IME
+        // composition/candidate windows (e.g. Chinese) anchor next to the typed
+        // text while the visible cursor stays the stable inverse block. Showing
+        // the hardware cursor here instead (?25h) flickered over the inverse
+        // block and blinked out when the measured cell momentarily went null.
+        const host = globalThis as { __dshTuiQuestionCaretCell?: (() => { row: number; col: number } | null) | null }
+        const qcell = host.__dshTuiQuestionCaretCell?.() ?? null
+        if (qcell !== null) return `\x1b[${qcell.row};${qcell.col}H\x1b[?25l`
+      }
+      return '\x1b[?25l'
+    }
     const cell = composerCaretCell()
     return `\x1b[?25h\x1b[2 q${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
   }

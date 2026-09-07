@@ -1,5 +1,7 @@
 # dsh-tui — an Ink/React terminal surface for DeepSeek Harness
 
+> **Document scope:** This document is a **user manual** and mainly describes **how to use dsh-tui**.
+
 `dsh-tui` is a full-screen terminal TUI for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
 an interactive single-agent session with live token streaming, driven through the harness's own
 Cordis plugin extension points. The DeepSeek Harness core is **not modified**; this repo is a new
@@ -249,6 +251,18 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   semantics), and when a model output hits its length ceiling with no body text, the transcript
   explains the stall instead of dropping silently to Idle — send any message to continue, or
   lower the reasoning effort with Ctrl+T to burn less of the per-request budget.
+- **User-question dialog (`ask_user_question`) — one card, floating, with tabs**: a single ask
+  carrying several questions is answered inside **one card** that pages through them — title
+  `Ask question k/N`, one clickable **tab** per question (short header/number; answered `✓`,
+  active `[n]`); answering auto-advances, `←/→` (or Tab) revisits, the whole batch submits once
+  every question is answered, and Esc cancels the whole ask. When the tabs do not fit the dock
+  they **page** (`…` markers + `←/→`). Choosing **Other…** opens an **inline editor directly
+  under the option list** (no second dialog); the dialog itself is a **floating window** that
+  overlays the message area without compressing the transcript. Questions and options always wrap
+  in full — never truncated — and the body scrolls when it overflows.
+- **Running tool rows stay alive**: while Bash/Read/Write … is executing, its row animates — a
+  spinner glyph and a live `· Ns` elapsed tail (the terminal equivalent of the web running
+  sweep); once settled it returns to the static icon row (click to expand the result).
 
 ## Plugin architecture ("everything is a plugin")
 

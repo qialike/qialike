@@ -55,6 +55,28 @@ export function emptySessionStats(): SessionStats {
  * @returns cumulative stats.
  */
 export function foldSessionStats(events: readonly SessionStatsEventLike[]): SessionStats {
+  const folding = createSessionStatsFolding()
+  for (const event of events) folding.observe(event)
+  return folding.snapshot()
+}
+
+/**
+ * Incremental session-stats folding. The resume path folds the transcript rows
+ * AND the stats from the same event log; folding the stats through this
+ * accumulator lets that single pass also produce the stats, instead of a
+ * second `foldSessionStats` walk over the whole log.
+ * @returns an accumulator: feed each logged event to {@link observe}, then read
+ * the cumulative result with {@link snapshot}.
+ */
+export interface SessionStatsFolding {
+  /** Fold one logged event into the running totals (no-op for unrelated types). */
+  observe(event: SessionStatsEventLike): void
+  /** The cumulative stats after every event observed so far. */
+  snapshot(): SessionStats
+}
+
+/** {@link createSessionStatsFolding} — see {@link SessionStatsFolding}. */
+export function createSessionStatsFolding(): SessionStatsFolding {
   const turns = new Set<number>()
   let steps = 0
   let llmMs = 0
@@ -63,49 +85,53 @@ export function foldSessionStats(events: readonly SessionStatsEventLike[]): Sess
   let outputTokens = 0
   const stepStart = new Map<string, number>()
   const toolCalls = new Map<string, number[]>()
-  for (const event of events) {
-    const at = event.time
-    switch (event.type) {
-      case 'step/start': {
-        const data = event.data as { turn?: number; step?: number }
-        if (typeof at === 'number' && typeof data.turn === 'number' && typeof data.step === 'number') {
-          stepStart.set(`${data.turn}:${data.step}`, at)
+  return {
+    observe(event) {
+      const at = event.time
+      switch (event.type) {
+        case 'step/start': {
+          const data = event.data as { turn?: number; step?: number }
+          if (typeof at === 'number' && typeof data.turn === 'number' && typeof data.step === 'number') {
+            stepStart.set(`${data.turn}:${data.step}`, at)
+          }
+          break
         }
-        break
-      }
-      case 'tool/call': {
-        const data = event.data as { turn?: number; step?: number }
-        if (typeof at === 'number' && typeof data.turn === 'number' && typeof data.step === 'number') {
+        case 'tool/call': {
+          const data = event.data as { turn?: number; step?: number }
+          if (typeof at === 'number' && typeof data.turn === 'number' && typeof data.step === 'number') {
+            const key = `${data.turn}:${data.step}`
+            const queue = toolCalls.get(key) ?? []
+            queue.push(at)
+            toolCalls.set(key, queue)
+          }
+          break
+        }
+        case 'tool/result': {
+          const data = event.data as { turn?: number; step?: number }
           const key = `${data.turn}:${data.step}`
-          const queue = toolCalls.get(key) ?? []
-          queue.push(at)
-          toolCalls.set(key, queue)
+          const started = toolCalls.get(key)?.shift()
+          if (typeof at === 'number' && started !== undefined) toolMs += Math.max(0, at - started)
+          break
         }
-        break
-      }
-      case 'tool/result': {
-        const data = event.data as { turn?: number; step?: number }
-        const key = `${data.turn}:${data.step}`
-        const started = toolCalls.get(key)?.shift()
-        if (typeof at === 'number' && started !== undefined) toolMs += Math.max(0, at - started)
-        break
-      }
-      case 'assistant/message': {
-        const data = event.data as { turn?: number; step?: number; usage?: { inputTokens?: number; outputTokens?: number } }
-        if (typeof data.turn === 'number') turns.add(data.turn)
-        steps += 1
-        const started = stepStart.get(`${data.turn}:${data.step}`)
-        if (typeof at === 'number' && started !== undefined) llmMs += Math.max(0, at - started)
-        if (data.usage !== undefined) {
-          inputTokens += data.usage.inputTokens ?? 0
-          outputTokens += data.usage.outputTokens ?? 0
+        case 'assistant/message': {
+          const data = event.data as { turn?: number; step?: number; usage?: { inputTokens?: number; outputTokens?: number } }
+          if (typeof data.turn === 'number') turns.add(data.turn)
+          steps += 1
+          const started = stepStart.get(`${data.turn}:${data.step}`)
+          if (typeof at === 'number' && started !== undefined) llmMs += Math.max(0, at - started)
+          if (data.usage !== undefined) {
+            inputTokens += data.usage.inputTokens ?? 0
+            outputTokens += data.usage.outputTokens ?? 0
+          }
+          break
         }
-        break
+        default:
       }
-      default:
-    }
+    },
+    snapshot() {
+      return { turns: turns.size, steps, llmMs, toolMs, inputTokens, outputTokens }
+    },
   }
-  return { turns: turns.size, steps, llmMs, toolMs, inputTokens, outputTokens }
 }
 
 /** Compact wall-clock text: `0.6s` under a minute, `2m42s` above. */

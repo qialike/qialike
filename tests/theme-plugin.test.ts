@@ -10,7 +10,7 @@
 import { describe, expect, test, afterEach } from 'bun:test'
 import { theme } from '../packages/dsh-tui-app/src/theme.ts'
 import {
-  BUILTIN_SCHEMES, DEFAULT_SCHEME, applyScheme, currentScheme, resolveScheme, schemeRegistry, apply,
+  BUILTIN_SCHEMES, DEFAULT_SCHEME, applyScheme, resolveScheme, schemeRegistry, apply,
 } from '../packages/dsh-tui-app/src/theme-plugin.ts'
 
 const ORIGINAL = { ...theme }
@@ -28,10 +28,10 @@ describe('colorscheme registry', () => {
   test('applyScheme switches live and falls back on unknown names', () => {
     applyScheme('light')
     expect(theme.bg).toBe(BUILTIN_SCHEMES.light.bg)
-    expect(currentScheme()).toBe('light')
     applyScheme('nope')
-    expect(theme.bg).toBe(BUILTIN_SCHEMES.dark.bg)
-    expect(currentScheme()).toBe(DEFAULT_SCHEME)
+    // The applied scheme is observable through the shared `theme` object: an
+    // unknown name falls back to the default (dark) scheme.
+    expect(theme.bg).toBe(BUILTIN_SCHEMES[DEFAULT_SCHEME].bg)
   })
 
   test('resolveScheme matches exact or a unique prefix', () => {
@@ -68,7 +68,6 @@ describe('plugin apply wiring', () => {
     expect(commands.map((c) => c.name)).toContain('theme')
     expect(panels.some((p) => p.id === 'themes' && p.mode === 'fullscreen')).toBe(true)
     commands.find((c) => c.name === 'theme')!.run('dark')
-    expect(currentScheme()).toBe('dark')
     expect(theme.bg).toBe(BUILTIN_SCHEMES.dark.bg)
     // Bare /theme opens the picker dialog instead of requiring an argument.
     commands.find((c) => c.name === 'theme')!.run('')
