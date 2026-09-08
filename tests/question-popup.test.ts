@@ -1,8 +1,9 @@
 /**
  * Design/verification tests for the MULTI-QUESTION popup (the "card" dock):
- *  - dock ROW math: the floating window's height estimate (questionDockRows)
- *    must count the tab-bar row for multi-question asks and the inline Other
- *    editor block exactly as the dock paints them;
+ *  - dock ROW math: the dock's height estimate (questionDockRows — the rows
+ *    the in-flow dock reserves in the message column) must count the tab-bar
+ *    row for multi-question asks and the inline Other editor block exactly as
+ *    the dock paints them;
  *  - TAB BAR pagination: when the question tabs overflow the dock width the
  *    pure window function must detect overflow, expose a paged slice whose
  *    segments stay contiguous/clickable, clamp the first-visible index, and

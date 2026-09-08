@@ -50,9 +50,42 @@ interface TitleCacheEntry {
   savedAt: number
 }
 
-/** In-memory title cache; disk is loaded lazily on first use. */
-const memoryCache = new Map<string, TitleCacheEntry>()
-let diskLoaded = false
+/**
+ * Mutable module state.
+ *
+ * IMPORTANT: the SEA build compiles each panel entry (index.tsx, the
+ * conversation panel, the sessions panel, …) as its OWN esbuild bundle, so
+ * top-level state in this file would be duplicated per bundle: a title written
+ * through the runtime entry's copy would never reach the sidebar / session-list
+ * copies (each keeps its own empty memory cache after one disk load) until a
+ * restart re-read the disk cache. All mutable state therefore lives on ONE
+ * object anchored to the process global — every bundle copy runs in the same
+ * realm — so every consumer reads and writes the same caches.
+ */
+interface TitleState {
+  /** In-memory title cache; disk is loaded lazily on first use. */
+  map: Map<string, TitleCacheEntry>
+  diskLoaded: boolean
+  /** In-memory pinned id set; disk loaded lazily. */
+  pinSet: Set<string>
+  pinLoaded: boolean
+}
+
+const STATE_KEY = Symbol.for('dsh-tui.session-titles.state')
+const shared: TitleState = (() => {
+  const holder = globalThis as unknown as Record<symbol, TitleState | undefined>
+  let state = holder[STATE_KEY]
+  if (state === undefined) {
+    state = {
+      map: new Map<string, TitleCacheEntry>(),
+      diskLoaded: false,
+      pinSet: new Set<string>(),
+      pinLoaded: false,
+    }
+    holder[STATE_KEY] = state
+  }
+  return state
+})()
 
 /** Absolute path of the dsh-tui title cache file. */
 function cachePath(): string {
@@ -61,8 +94,8 @@ function cachePath(): string {
 
 /** Load the disk cache once; a missing/unparsable file yields an empty map. */
 function ensureDiskLoaded(): void {
-  if (diskLoaded) return
-  diskLoaded = true
+  if (shared.diskLoaded) return
+  shared.diskLoaded = true
   try {
     const parsed = JSON.parse(readFileSync(cachePath(), 'utf8')) as unknown
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return
@@ -70,13 +103,13 @@ function ensureDiskLoaded(): void {
       const candidate = entry as { title?: unknown; auto?: unknown; user?: unknown; savedAt?: unknown }
       // Legacy entries stored the plain title; treat them as the auto title.
       if (typeof candidate.title === 'string' && candidate.title.trim() !== '') {
-        memoryCache.set(id, { auto: candidate.title, savedAt: typeof candidate.savedAt === 'number' ? candidate.savedAt : 0 })
+        shared.map.set(id, { auto: candidate.title, savedAt: typeof candidate.savedAt === 'number' ? candidate.savedAt : 0 })
         continue
       }
       const next: TitleCacheEntry = { savedAt: typeof candidate.savedAt === 'number' ? candidate.savedAt : 0 }
       if (typeof candidate.auto === 'string' && candidate.auto.trim() !== '') next.auto = candidate.auto
       if (typeof candidate.user === 'string' && candidate.user.trim() !== '') next.user = candidate.user
-      memoryCache.set(id, next)
+      shared.map.set(id, next)
     }
   } catch {
     // Missing or malformed cache file -> cold start.
@@ -88,7 +121,7 @@ function persistDiskCache(): void {
   const path = cachePath()
   try {
     const document: Record<string, TitleCacheEntry> = {}
-    for (const [id, entry] of memoryCache) document[id] = entry
+    for (const [id, entry] of shared.map) document[id] = entry
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, JSON.stringify(document, null, 2) + '\n')
   } catch {
@@ -98,7 +131,7 @@ function persistDiskCache(): void {
 
 /** The effective title for display: user rename wins over the auto title. */
 function titleOf(id: SessionId): string | undefined {
-  const entry = memoryCache.get(String(id))
+  const entry = shared.map.get(String(id))
   return entry?.user ?? entry?.auto
 }
 
@@ -113,10 +146,27 @@ export function rememberTitle(id: SessionId, title: string): void {
   const key = String(id)
   const trimmed = title.trim()
   if (trimmed === '') return
-  const entry = memoryCache.get(key)
+  const entry = shared.map.get(key)
   if (entry !== undefined && entry.user !== undefined) return
-  memoryCache.set(key, { ...entry, auto: trimmed, savedAt: Date.now() })
+  shared.map.set(key, { ...entry, auto: trimmed, savedAt: Date.now() })
   persistDiskCache()
+}
+
+/**
+ * Remember a session's folded title when its live `session/title` event may
+ * have been missed. Titles generate asynchronously (fallback after the first
+ * eligible message, then an optional LLM provider pass); a title event that
+ * lands while the user has switched to another session is dropped by the
+ * current-session event filter, and nothing else re-reads the log for the
+ * switched-away session — so the cache can stay empty for a session that
+ * already has a title. Switching back folds the in-memory event log (zero
+ * I/O) and fills the gap. A user rename is never overwritten.
+ * @param id - the session id.
+ * @param events - the session's event log (typically the in-memory snapshot).
+ */
+export function rememberFoldedTitle(id: SessionId, events: readonly unknown[]): void {
+  const folded = foldSessionTitle(events as readonly SessionEvent[])?.title
+  if (folded !== undefined) rememberTitle(id, folded)
 }
 
 /**
@@ -131,16 +181,16 @@ export function renameTitle(id: SessionId, title: string): void {
   ensureDiskLoaded()
   const key = String(id)
   const trimmed = title.trim()
-  const entry = memoryCache.get(key)
+  const entry = shared.map.get(key)
   if (trimmed === '') {
     if (entry?.user !== undefined) {
-      if (entry.auto !== undefined) memoryCache.set(key, { auto: entry.auto, savedAt: Date.now() })
-      else memoryCache.delete(key)
+      if (entry.auto !== undefined) shared.map.set(key, { auto: entry.auto, savedAt: Date.now() })
+      else shared.map.delete(key)
       persistDiskCache()
     }
     return
   }
-  memoryCache.set(key, { ...entry, user: trimmed, savedAt: Date.now() })
+  shared.map.set(key, { ...entry, user: trimmed, savedAt: Date.now() })
   persistDiskCache()
 }
 
@@ -150,7 +200,20 @@ export function renameTitle(id: SessionId, title: string): void {
  */
 export function forgetTitle(id: SessionId): void {
   ensureDiskLoaded()
-  if (memoryCache.delete(String(id))) persistDiskCache()
+  if (shared.map.delete(String(id))) persistDiskCache()
+}
+
+/**
+ * The effective display title of one session (user rename wins over the auto
+ * title) — the single-row read used by the right-sidebar session line; the
+ * /sessions list still reads through listWithTitles. Cache-only (never
+ * inspects the session log); undefined when untitled or the cache is absent.
+ * @param id - the session id.
+ * @returns the display title, or undefined when none is cached.
+ */
+export function sessionDisplayTitle(id: SessionId): string | undefined {
+  ensureDiskLoaded()
+  return titleOf(id)
 }
 
 /** Label for one session: `标题 · @时间`, or just `@时间` when untitled. */
@@ -258,10 +321,6 @@ export async function prewarmTitles(
 
 // ── pinned sessions (Ctrl+F in the /sessions dialog) ────────────────────────
 
-/** In-memory pinned id set; disk loaded lazily. */
-const pinned = new Set<string>()
-let pinnedLoaded = false
-
 /** Absolute path of the pinned-sessions file. */
 function pinnedPath(): string {
   return dshHomePath('dsh-tui-pinned.json')
@@ -269,12 +328,12 @@ function pinnedPath(): string {
 
 /** Load the pinned set once; a missing/unparsable file yields an empty set. */
 function ensurePinnedLoaded(): void {
-  if (pinnedLoaded) return
-  pinnedLoaded = true
+  if (shared.pinLoaded) return
+  shared.pinLoaded = true
   try {
     const parsed = JSON.parse(readFileSync(pinnedPath(), 'utf8')) as unknown
     if (Array.isArray(parsed)) {
-      for (const id of parsed) if (typeof id === 'string') pinned.add(id)
+      for (const id of parsed) if (typeof id === 'string') shared.pinSet.add(id)
     }
   } catch {
     // Missing or malformed file -> empty set.
@@ -286,7 +345,7 @@ function persistPinned(): void {
   const path = pinnedPath()
   try {
     mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify([...pinned], null, 2) + '\n')
+    writeFileSync(path, JSON.stringify([...shared.pinSet], null, 2) + '\n')
   } catch {
     // best-effort
   }
@@ -295,7 +354,7 @@ function persistPinned(): void {
 /** Whether a session is pinned (pinned sessions sort to the top). */
 export function isPinned(id: SessionId): boolean {
   ensurePinnedLoaded()
-  return pinned.has(String(id))
+  return shared.pinSet.has(String(id))
 }
 
 /**
@@ -307,8 +366,8 @@ export function isPinned(id: SessionId): boolean {
 export function togglePin(id: SessionId): boolean {
   ensurePinnedLoaded()
   const key = String(id)
-  if (pinned.has(key)) pinned.delete(key)
-  else pinned.add(key)
+  if (shared.pinSet.has(key)) shared.pinSet.delete(key)
+  else shared.pinSet.add(key)
   persistPinned()
-  return pinned.has(key)
+  return shared.pinSet.has(key)
 }

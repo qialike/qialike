@@ -114,18 +114,26 @@ function SessionsDialog(): React.JSX.Element {
               }
               const s = rows[d.i]
               if (s === undefined) continue
-              // One line per row: the display title (no date/time — the group
-              // headers carry the day) plus the trailing id, truncated so a
-              // long title cannot wrap and inflate the dialog past the
-              // terminal height.
+              // One line per row: the display title plus the session creation
+              // TIME (HH:MM, the day lives in the group header above); a long
+              // title is truncated so it cannot wrap and inflate the dialog
+              // past the terminal height.
               const display = s.title !== undefined && s.title.trim() !== '' ? s.title.trim() : '(untitled)'
               const title = truncateWide(display, 50)
-              const id = String(s.id).slice(-8)
+              // 24-hour local clock (deterministic — not toLocaleTimeString,
+              // whose AM/PM or locale wording would widen the row).
+              const createdAt = s.createdAt
+              const time = createdAt === undefined ? '' : (() => {
+                const d = new Date(createdAt)
+                const hh = String(d.getHours()).padStart(2, '0')
+                const mm = String(d.getMinutes()).padStart(2, '0')
+                return `${hh}:${mm}`
+              })()
               const active = d.i === store.sessionsDialogIndex
               out.push(
                 <Text key={String(s.id)} color={active ? theme.accent : undefined} inverse={active}>
                   {active ? '› ' : '  '}{isPinned(s.id) ? '📌 ' : ''}{title}
-                  <Text dimColor>  · {id}</Text>
+                  {time !== '' && <Text dimColor>  · {time}</Text>}
                 </Text>,
               )
             }
@@ -150,7 +158,7 @@ function SessionsDialog(): React.JSX.Element {
           </Text>
         )}
         <Box marginTop={1}>
-          <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter resume · Ctrl+R rename · Ctrl+F pin · Ctrl+D delete · Esc clear/back</Text>
+          <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter resume · Ctrl+R rename · Ctrl+F pin · Ctrl+D delete · Esc/right-click clear/back</Text>
         </Box>
       </Box>
     </Box>
@@ -188,7 +196,7 @@ function sessionsKey(k: RawKey, reload: () => void): void {
       }
       store.cancelSessionsRename()
       reload()
-    } else if (k.escape || (k.ctrl && char === 'c')) {
+    } else if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
       store.cancelSessionsRename()
     } else if (k.backspace || k.delete) {
       store.sessionsRenameBackspace()
@@ -255,7 +263,7 @@ function sessionsKey(k: RawKey, reload: () => void): void {
     }
     return
   }
-  if (k.escape || (k.ctrl && char === 'c')) {
+  if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
     if (store.sessionsDeleting !== null) { store.cancelSessionsDelete(); return }
     if (store.sessionsFilter !== '') store.clearSessionsFilter()
     else store.cancelSessions()

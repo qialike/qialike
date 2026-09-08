@@ -15,9 +15,34 @@ import { dirname } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
-/** In-memory activity map; disk loaded lazily. */
-const memory = new Map<string, number>()
-let diskLoaded = false
+/**
+ * Mutable module state.
+ *
+ * IMPORTANT: the SEA build compiles each panel entry (index.tsx, the sessions
+ * panel, …) as its OWN esbuild bundle, so top-level state here would be
+ * duplicated per bundle: a `touchSession` write through the runtime entry's
+ * copy would never be seen by the /sessions list's copy (which keeps its own
+ * empty map after one disk load) until a restart re-read the disk file. All
+ * mutable state therefore lives on ONE object anchored to the process global —
+ * every bundle copy runs in the same realm — so every consumer reads and
+ * writes the same activity map.
+ */
+interface ActivityState {
+  /** In-memory activity map; disk loaded lazily. */
+  map: Map<string, number>
+  diskLoaded: boolean
+}
+
+const STATE_KEY = Symbol.for('dsh-tui.session-activity.state')
+const shared: ActivityState = (() => {
+  const holder = globalThis as unknown as Record<symbol, ActivityState | undefined>
+  let state = holder[STATE_KEY]
+  if (state === undefined) {
+    state = { map: new Map<string, number>(), diskLoaded: false }
+    holder[STATE_KEY] = state
+  }
+  return state
+})()
 
 /** Absolute path of the activity file. */
 function activityPath(): string {
@@ -26,13 +51,13 @@ function activityPath(): string {
 
 /** Load the activity file once; a missing/unparsable file yields an empty map. */
 function ensureLoaded(): void {
-  if (diskLoaded) return
-  diskLoaded = true
+  if (shared.diskLoaded) return
+  shared.diskLoaded = true
   try {
     const parsed = JSON.parse(readFileSync(activityPath(), 'utf8')) as unknown
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return
     for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
-      if (typeof value === 'number' && Number.isFinite(value)) memory.set(id, value)
+      if (typeof value === 'number' && Number.isFinite(value)) shared.map.set(id, value)
     }
   } catch {
     // Missing or malformed file -> cold start.
@@ -44,7 +69,7 @@ function persist(): void {
   const path = activityPath()
   try {
     mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify(Object.fromEntries(memory), null, 2) + '\n')
+    writeFileSync(path, JSON.stringify(Object.fromEntries(shared.map), null, 2) + '\n')
   } catch {
     // best-effort
   }
@@ -57,7 +82,7 @@ function persist(): void {
  */
 export function touchSession(id: SessionId): void {
   ensureLoaded()
-  memory.set(String(id), Date.now())
+  shared.map.set(String(id), Date.now())
   persist()
 }
 
@@ -68,7 +93,7 @@ export function touchSession(id: SessionId): void {
  */
 export function lastActivity(id: SessionId): number | undefined {
   ensureLoaded()
-  return memory.get(String(id))
+  return shared.map.get(String(id))
 }
 
 /**
@@ -77,5 +102,5 @@ export function lastActivity(id: SessionId): number | undefined {
  */
 export function forgetActivity(id: SessionId): void {
   ensureLoaded()
-  if (memory.delete(String(id))) persist()
+  if (shared.map.delete(String(id))) persist()
 }

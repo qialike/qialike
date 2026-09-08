@@ -134,4 +134,31 @@ describe('theme picker dialog', () => {
     themePickerKey(key({ backspace: true }), store, api) // 'u' → user-x again
     expect(api.applied.at(-1)).toBe('user-x')
   })
+
+  test('right-click cancels immediately (== Esc with no filter): no apply, restores snapshot, closes', () => {
+    const store = fakeStore()
+    const api = fakeApi()
+    openThemePicker(store, api)
+    const handled = themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
+    expect(handled).toBe(true)
+    expect(api.applied).toHaveLength(0) // nothing selected on right-click
+    expect(api.restored.length).toBe(1) // opening theme restored
+    expect(api.restored[0]!.name).toBe('dark')
+    expect(store.calls).toContain('panel:conversation')
+  })
+
+  test('right-click with a filter in progress clears the filter first (== Esc step one)', () => {
+    const store = fakeStore()
+    const api = fakeApi()
+    openThemePicker(store, api)
+    themePickerKey(key({ char: 'l' }), store, api) // filter 'l' → preview light
+    themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
+    expect(store.calls.filter((c) => c === 'panel:conversation')).toHaveLength(0) // still open
+    expect(api.applied.at(-1)).toBe('dark') // preview back to first scheme
+    expect(api.restored.length).toBe(0) // not cancelled yet
+    // A second right-click now cancels (== Esc step two).
+    themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
+    expect(api.restored.length).toBe(1)
+    expect(store.calls).toContain('panel:conversation')
+  })
 })

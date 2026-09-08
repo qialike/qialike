@@ -19,7 +19,8 @@ bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
 ## Requirements
 
 - Node.js `^22.19 || >=24` (for `pnpm` build tooling)
-- A DeepSeek Harness checkout (`DSH_HARNESS`, default `../deepseek-harness`)
+- bun (for `bun build --compile` in `pnpm build` and `bun test` in `pnpm test:unit`; version not pinned — install the latest, v1.3.14 is a verified reference)
+- A DeepSeek Harness checkout (`DSH_HARNESS`, default `../deepseek-harness`; needed only for `pnpm build` — running the compiled `dist/dsh-tui` needs no checkout)
 - `DEEPSEEK_API_KEY` (via the environment, `~/.dsh` settings, or `.env`) when running a real session
 
 ## Build

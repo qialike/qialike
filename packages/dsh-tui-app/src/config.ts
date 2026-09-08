@@ -17,6 +17,11 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 /** Terminal width (columns) below which the right sidebar hides (auto). */
 export const SIDEBAR_MIN_WIDTH = 110
 
+/** Rows scrolled per mouse-wheel tick in the transcript. Shared by the
+ *  conversation panel and the plan-review dock (which rolls the message list
+ *  behind it), so both scroll at the same rate. */
+export const WHEEL_STEP = 3
+
 /** Text columns actually available inside an embedded dock (approval /
  *  question) at terminal width `width`. The docks are flex children of the
  *  message column, so their real width excludes the sidebar (when shown),
@@ -25,8 +30,15 @@ export const SIDEBAR_MIN_WIDTH = 110
  *  row count equal to the modalH estimate (conversation.tsx uses the same
  *  value); using the bare terminal width would re-wrap every line inside the
  *  narrower column and silently double the dock height. */
-export function dockInnerWidth(width: number): number {
-  const sidebar = width >= SIDEBAR_MIN_WIDTH ? Math.round(width * 0.3) + 2 : 0
+export function dockInnerWidth(width: number, mode: SidebarMode = 'auto'): number {
+  // Reserve the sidebar only when it is actually VISIBLE for this mode
+  // (mirrors conversation.tsx sidebarVisibleFor: 'on' = always, 'auto' =
+  // width ≥ SIDEBAR_MIN_WIDTH, 'off' = never). Hiding the sidebar widens the
+  // message column — and the floating question dock that spans it. Subtracting
+  // a phantom sidebar here wrapped every dock line ~30% short of the real
+  // column, so popup text filled only the LEFT part of the dialog.
+  const visible = mode === 'on' || (mode === 'auto' && width >= SIDEBAR_MIN_WIDTH)
+  const sidebar = visible ? Math.round(width * 0.3) + 2 : 0
   // Question dock content width: message column padding (1) + dock margins (3)
   // + dock border (1) + dock content padding (2) per side → content inset
   // 4 char-widths from each edge, matching the message content column.

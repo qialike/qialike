@@ -81,13 +81,16 @@ export function optionText(index: number, label: string, description?: string): 
 
 /** Build the dock's scrollable body: the detail block (dim), then every option
  *  fully soft-wrapped (each option a contiguous block of rows so the selection
- *  highlight spans the whole option), then the "Other…" row. One blank row
- *  separates the detail block from the options block (mirrors the margin the
- *  old layout used); blanks are ordinary content rows and scroll along. */
+ *  highlight spans the whole option), then — unless `includeOther` is false
+ *  (plan-review: a bare confirm/decline dock, no free-text row) — the "Other…"
+ *  row. One blank row separates the detail block from the options block
+ *  (mirrors the margin the old layout used); blanks are ordinary content rows
+ *  and scroll along. */
 export function questionBody(
   detail: string | undefined,
   options: readonly { readonly label: string; readonly description?: string }[],
   dockInner: number,
+  includeOther = true,
 ): QuestionBodyRow[] {
   const rows: QuestionBodyRow[] = []
   const dText = detail ?? ''
@@ -99,8 +102,10 @@ export function questionBody(
       optRows.push({ kind: 'option', text: line, option: i })
     }
   }
-  for (const line of visualWrap(optionText(options.length, 'Other…'), dockInner)) {
-    optRows.push({ kind: 'other', text: line, option: options.length })
+  if (includeOther) {
+    for (const line of visualWrap(optionText(options.length, 'Other…'), dockInner)) {
+      optRows.push({ kind: 'other', text: line, option: options.length })
+    }
   }
   if (dRows.length > 0) {
     for (const text of dRows) rows.push({ kind: 'detail', text, option: -1 })
@@ -147,8 +152,10 @@ export function customInputRows(text: string, usable: number): number {
 }
 
 /** EXACT dock row count for the question panel — the number conversation.tsx
- *  uses for the floating window's opaque backdrop AND the number the panel
- *  paints. The dock is a per-question card of a possibly multi-question ask:
+ *  reserves as questionH (the dock lives IN-FLOW in the message column, so a
+ *  mismatch would compress the transcript by the wrong amount) AND the number
+ *  the panel paints. The dock is a per-question card of a possibly
+ *  multi-question ask:
  *  with more than one question a TAB BAR row (one segment per question, click
  *  to jump — opencode dock style) sits right under the title; then the pinned
  *  question + the bounded option body; when the "Other" row is being answered
@@ -174,12 +181,13 @@ export function questionDockRows(
   dockInner: number,
   terminalRows: number,
   showTabs = false,
+  includeOther = true,
 ): number {
   const windowRows = questionBodyWindowRows(terminalRows)
   const qRows = question === undefined || question === '' ? 0 : visualRowCount(question, dockInner)
   const chrome = 4 + 1 + 1 + 1 // border 2 + padding 2, title 1, hint margin 1, hint 1
   const qBlock = qRows > 0 ? 1 + qRows : 0
-  const body = questionBody(detail, options, dockInner)
+  const body = questionBody(detail, options, dockInner, includeOther)
   const shown = Math.min(body.length, windowRows)
   let rows = chrome + (showTabs ? 1 : 0) + qBlock + 1 + shown
   if (customMode) {

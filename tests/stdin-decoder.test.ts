@@ -82,8 +82,34 @@ describe('StdinDecoder', () => {
     expect(d.push(esc('1b 5b 3c 33 3b 35 3b 31 30 4d'))).toEqual([{ mouseRelease: { row: 10, col: 5 } }]) // X10-style button 3
     expect(d.push(esc('1b 5b 3c 33 32 3b 35 3b 31 30 4d'))).toEqual([{ mouseDrag: { row: 10, col: 5 } }]) // button 32 = left+motion
     expect(d.push(esc('1b 5b 3c 33 35 3b 35 3b 31 30 4d'))).toEqual([{ mouseMove: { row: 10, col: 5 } }]) // button 35 = motion no button (?1003 hover)
-    expect(d.push(esc('1b 5b 3c 36 34 3b 35 3b 31 30 4d'))).toEqual([{ wheelUp: true }])
-    expect(d.push(esc('1b 5b 3c 36 35 3b 35 3b 31 30 4d'))).toEqual([{ wheelDown: true }])
+    expect(d.push(esc('1b 5b 3c 36 34 3b 35 3b 31 30 4d'))).toEqual([{ wheelUp: { row: 10, col: 5 } }])
+    expect(d.push(esc('1b 5b 3c 36 35 3b 35 3b 31 30 4d'))).toEqual([{ wheelDown: { row: 10, col: 5 } }])
+  })
+
+  test('sgr mouse: right button decodes as mouseRightPress; left press unchanged', () => {
+    const d = new StdinDecoder()
+    // SGR button 2 = right press.
+    expect(d.push(esc('1b 5b 3c 32 3b 35 3b 31 30 4d'))).toEqual([{ mouseRightPress: { row: 10, col: 5 } }])
+    // Right + motion (2 + 32 = 34) is consumed (popups close on the press).
+    expect(d.push(esc('1b 5b 3c 33 34 3b 35 3b 31 30 4d'))).toEqual([])
+    // Left press still decodes as mousePress; release is shared.
+    expect(d.push(esc('1b 5b 3c 30 3b 35 3b 31 30 4d'))).toEqual([{ mousePress: { row: 10, col: 5 } }])
+    expect(d.push(esc('1b 5b 3c 32 3b 35 3b 31 30 6d'))).toEqual([{ mouseRelease: { row: 10, col: 5 } }])
+  })
+
+  test('sgr mouse: the release after a right press is tagged mouseRightRelease', () => {
+    const d = new StdinDecoder()
+    // Right press then its release (SGR release carries no button — the decoder
+    // tags it so popups swallow it instead of treating it as a left-click).
+    expect(d.push(esc('1b 5b 3c 32 3b 35 3b 31 30 4d'))).toEqual([{ mouseRightPress: { row: 10, col: 5 } }])
+    expect(d.push(esc('1b 5b 3c 32 3b 35 3b 31 30 6d'))).toEqual([{ mouseRightRelease: { row: 10, col: 5 } }])
+    // A following left press resets the pending flag: its release is normal.
+    expect(d.push(esc('1b 5b 3c 30 3b 35 3b 31 30 4d'))).toEqual([{ mousePress: { row: 10, col: 5 } }])
+    expect(d.push(esc('1b 5b 3c 30 3b 35 3b 31 30 6d'))).toEqual([{ mouseRelease: { row: 10, col: 5 } }])
+    // Any non-right press between them also clears the pending tag.
+    expect(d.push(esc('1b 5b 3c 32 3b 35 3b 31 30 4d'))).toEqual([{ mouseRightPress: { row: 10, col: 5 } }])
+    expect(d.push(esc('1b 5b 3c 30 3b 35 3b 31 30 4d'))).toEqual([{ mousePress: { row: 10, col: 5 } }])
+    expect(d.push(esc('1b 5b 3c 30 3b 35 3b 31 30 6d'))).toEqual([{ mouseRelease: { row: 10, col: 5 } }])
   })
 
   test('multi-byte button field (10 columns)', () => {

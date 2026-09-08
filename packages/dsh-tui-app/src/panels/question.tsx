@@ -26,7 +26,7 @@ import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PendingQuestion, TuiService, Store } from '../index.tsx'
 import { visualWidth } from '../markdown.tsx'
-import { dockInnerWidth } from '../config.ts'
+import { WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 import { measureDomTop, measureDomLeft } from '../list-geometry.ts'
@@ -38,6 +38,8 @@ import {
   QUESTION_INPUT_MAX_ROWS,
   type QuestionBodyRow,
 } from '../question-layout.ts'
+import { pointerRegion, composerStripRows, messageRightFor, type PointerRegion } from '../pointer-region.ts'
+import { isPlanReview, questionPresentation } from '../plan-review.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-question'
@@ -82,6 +84,28 @@ let questionBodyGeo: { top: number; owners: number[] } | null = null
  *  VISIBLE segment), so a click on a tab jumps straight to that question
  *  (opencode dock semantics). */
 let questionTabsGeo: { top: number; left: number; from: number; segs: { from: number; to: number }[] } | null = null
+
+/** Latest measured SCREEN ROW SPAN of the whole question dock (its root Box;
+ *  the dock lives IN-FLOW in the message column, right under the transcript,
+ *  so its top moves with the transcript while its bottom sits above the
+ *  composer). The message column rows inside this span count as "on the dock".
+ *  Refreshed whenever the dock's height report lands. */
+let questionDockSpan: { top: number; height: number } | null = null
+
+/** Rightmost column (1-based, inclusive) of the MESSAGE column — the whole
+ *  terminal width minus the Steps sidebar when it is drawn. Mirrors the
+ *  conversation's sidebarVisibleFor/sidebarWidthFor so pointer routing never
+ *  disagrees with what is actually rendered. */
+function messageColumnRight(): number {
+  return messageRightFor(store.width, store.sidebarMode ?? 'auto')
+}
+
+/** Pointer-region routing while the question dock is open. Re-exported (under
+ *  the panel's historical names) from the shared pointer-region module the
+ *  approval dock uses too — one router for both in-flow docks. */
+export type QuestionPointerRegion = PointerRegion
+export const questionPointerRegion = pointerRegion
+export { composerStripRows }
 
 /** Question index whose tab segment sits under the 1-based mouse (row, col),
  *  or -1 when the pointer is outside the tab bar. */
@@ -151,7 +175,23 @@ export function questionTabWindow(q: PendingQuestion, dockInner: number, tabFrom
   return { labels, total, from, visible, overflow, segs }
 }
 
-/** Last valid caret cell while the "Other" editor is open. The measured
+/** A transcript-scroll command the plan-review dock issues (keyboard only). */
+export type ReviewScrollCommand = { type: 'page'; dir: -1 | 1 }
+
+/** While the plan-review dock is up, PgUp/PgDn must roll the MESSAGE LIST
+ *  behind the dock: the plan block lives in the transcript and the dock itself
+ *  is a bare confirm/decline whose 2-option body never scrolls (PgUp/PgDn were
+ *  dead keys while deciding). The WHEEL is deliberately NOT mapped here any
+ *  more: a wheel tick is routed by the POINTER's screen region (see
+ *  questionKey) — inert over the dock, scrolling the transcript only when the
+ *  pointer sits on the message column outside it. Every other key (incl. ↑/↓ —
+ *  option nav stays on the arrows) maps to null. Exported for
+ *  tests/review-scroll.test.ts. */
+export function reviewScrollCommand(k: RawKey): ReviewScrollCommand | null {
+  if (k.pageUp) return { type: 'page', dir: -1 }
+  if (k.pageDown) return { type: 'page', dir: 1 }
+  return null
+}/** Last valid caret cell while the "Other" editor is open. The measured
  *  {@link questionInputGeo} (and the input ref behind it) can briefly go null
  *  on a frame — Ink measures the element on a lag — which made {@link
  *  questionCaretCell} return null and the frame suffix flip the hardware cursor
@@ -176,7 +216,7 @@ function questionCaretCell(): { row: number; col: number } | null {
   if (q === null || !q.customMode) { questionCaretCellLast = null; return null }
   const g = questionInputGeo
   if (g === null) return questionCaretCellLast
-  const inner = dockInnerWidth(store.width)
+  const inner = dockInnerWidth(store.width, store.sidebarMode ?? 'auto')
   const win = inputWindow(q.custom, inner, q.customCursor)
   const caretLineIdx = win.lines.findIndex((l) => l.caretAt !== null)
   if (caretLineIdx < 0) return questionCaretCellLast
@@ -218,6 +258,26 @@ function inputCharAt(row: number, col: number): number | null {
     if (acc === x) { idx = i + 1 }
   }
   return line.start + idx
+}
+
+/** Pure predicate for the dock wheel branch: does a wheel tick at the 1-based
+ *  SGR mouse (row, col) scroll the inline "Other" editor? Requires BOTH that
+ *  the point hovers the editor's box AND that the input overflows the ≤5-row
+ *  window (more visual rows than the window shows — otherwise the wheel stays
+ *  inert like everywhere else on the dock). Column containment mirrors the
+ *  input box: its content spans the whole dock-inner width starting at
+ *  `g.left` over `g.count` rows starting at `g.top + 1`. */
+export function inputWheelScrollsAt(
+  row: number,
+  col: number,
+  g: { top: number; left: number; count: number },
+  totalRows: number,
+  usable: number,
+): boolean {
+  if (totalRows <= g.count) return false // nothing to scroll
+  const lineIdx = row - 1 - g.top
+  if (lineIdx < 0 || lineIdx >= g.count) return false
+  return col >= g.left + 1 && col <= g.left + usable
 }
 
 /** The `tui` service must be available to register the panel. */
@@ -344,8 +404,12 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   const position = q.active + 1
   const { item, index, custom, customCursor, customMode } = q
   const options = item.options ?? []
-  const title = total > 1 ? `Ask question ${position}/${total}` : 'Ask question'
-  const dockInner = dockInnerWidth(store.width)
+  // Plan-review: the dock title + pinned question read Chinese and the body is
+  // only the two options (see questionPresentation) — the plan itself lives as
+  // the labelled message block in the transcript above.
+  const review = isPlanReview(item)
+  const title = review ? '请确认计划' : total > 1 ? `Ask question ${position}/${total}` : 'Ask question'
+  const dockInner = dockInnerWidth(store.width, store.sidebarMode ?? 'auto')
   const tw = questionTabWindow(q, dockInner, store.questionTabFrom)
   const tabsRef = React.useRef<DOMElement>(null)
   // Measure the tab bar's screen row/left and its visible segments so a click
@@ -379,27 +443,39 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   }, [total, q.active, tw.overflow, tw.visible, dockInner])
   const windowRows = questionBodyWindowRows(store.rows)
   // The question sentence: FULL wrap, no cap, no '…' (requirement: a question
-  // that must span several lines is shown completely).
-  const qText = item.question ?? ''
+  // that must span several lines is shown completely). Plan-review paints its
+  // own Chinese wording via questionPresentation.
+  const pres = questionPresentation(item)
+  const qText = pres.question
   const questionLines = qText === '' ? [] : visualWrap(qText, dockInner)
-  // Body rows: detail (if any) + every option's wrapped block + Other… row.
-  const body = questionBody(item.detail, options, dockInner)
+  // Body rows: detail (if any) + every option's wrapped block + Other… row
+  // (plan-review drops detail and the Other row — see questionPresentation).
+  const body = questionBody(pres.detail, pres.options, dockInner, pres.showOther)
   const bodyRows = body.length
   const maxScroll = Math.max(0, bodyRows - windowRows)
   const scroll = Math.min(store.questionScroll, maxScroll)
   const shown = body.slice(scroll, scroll + windowRows)
   const overflow = bodyRows > windowRows
+  // Plan-review: the wheel / PgUp/PgDn roll the MESSAGE LIST behind the dock
+  // (the plan block), so show that affordance only when the transcript
+  // actually has something to scroll (layout recorded this frame by the
+  // conversation panel, which renders the dock overlay after setLayout).
+  const msgScrollable = review && store.layoutContent > store.layoutViewport
   const bodyRef = React.useRef<DOMElement>(null)
   const dockRef = React.useRef<DOMElement>(null)
-  // Report the dock's REAL rendered height (rows) so the floating window and
-  // its opaque backdrop size exactly to the dock: the bottom edge then stays
-  // pinned and only the top moves as content grows/shrinks (Other editor
-  // opening, question switch, etc.). Falls back to the layout estimate on the
-  // very first frame (before this measurement lands).
+  // Report the dock's REAL rendered height (rows): conversation.tsx reserves
+  // exactly this many transcript rows (questionH) since the dock lives IN-FLOW
+  // in the message column — typing in the "Other" editor grows the dock (and
+  // pushes the message history up) until its ≤5-row input window caps it.
+  // Falls back to the layout estimate on the very first frame (before this
+  // measurement lands).
   React.useEffect(() => {
     const report = (): void => {
       const el = dockRef.current
-      if (el !== null) store.setQuestionRows(measureElement(el).height)
+      if (el === null) { questionDockSpan = null; return }
+      const h = Math.round(measureElement(el).height)
+      store.setQuestionRows(h)
+      questionDockSpan = { top: Math.round(measureDomTop(el)), height: h }
     }
     report()
     const t = setTimeout(report, 80) // layout may settle a frame after commit
@@ -466,7 +542,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
     if (!customMode) return
     const q2 = store.question
     if (q2 === null) return
-    const b = questionBody(q2.item.detail, q2.item.options ?? [], dockInnerWidth(store.width))
+    const b = questionBody(q2.item.detail, q2.item.options ?? [], dockInnerWidth(store.width, store.sidebarMode ?? 'auto'))
     const max = Math.max(0, b.length - questionBodyWindowRows(store.rows))
     if (store.questionScroll !== max) store.scrollQuestionTo(max)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- per editor open
@@ -476,15 +552,19 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
     return sel ? theme.accent : undefined
   }
   const rowInverse = (row: QuestionBodyRow): boolean => row.option === index
-  const hint = customMode
-    ? `${overflow ? 'PgUp/PgDn scroll · ' : ''}type your answer · Enter = answer & next · Esc close`
-    : `${overflow ? 'PgUp/PgDn scroll · ' : ''}${
-        total > 1
-          ? tw.overflow
-            ? '←/→ page tabs · ↑/↓ choose · Enter answer & next · digits pick · Esc cancel'
-            : '↑/↓ choose · Enter answer & next · ←/→ or click a tab · digits pick · Esc cancel'
-          : 'number / ↑/↓ choose · Enter confirm · Esc cancel'
-      }`
+  // Plan-review dock = bare confirm/decline; keep its keys hint in Chinese to
+  // match the 确认执行/继续规划 options.
+  const hint = review
+    ? `${msgScrollable ? '滚轮/PgUp/PgDn 滚动消息 · ' : ''}↑/↓ 选择 · 回车确认执行 · 按 Esc 取消（意见可直接在输入框发送）`
+    : customMode
+      ? `${overflow ? 'PgUp/PgDn scroll · ' : ''}type your answer · Enter = answer & next · Esc close`
+      : `${overflow ? 'PgUp/PgDn scroll · ' : ''}${
+          total > 1
+            ? tw.overflow
+              ? '←/→ page tabs · ↑/↓ choose · Enter answer & next · digits pick · Esc cancel'
+              : '↑/↓ choose · Enter answer & next · ←/→ or click a tab · digits pick · Esc cancel'
+            : 'number / ↑/↓ choose · Enter confirm · Esc cancel'
+        }`
   return (
     <Box ref={dockRef} flexShrink={0} marginLeft={3} marginRight={3} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={2} paddingY={1}>
       <Text color={theme.accent} bold wrap="truncate">{title}<Text dimColor> · waiting</Text></Text>
@@ -591,8 +671,9 @@ function revealOption(index: number): void {
   const q = store.question
   if (q === null || q.customMode) return
   const options = q.item.options ?? []
-  const dockInner = dockInnerWidth(store.width)
-  const body = questionBody(q.item.detail, options, dockInner)
+  const pres = questionPresentation(q.item)
+  const dockInner = dockInnerWidth(store.width, store.sidebarMode ?? 'auto')
+  const body = questionBody(pres.detail, pres.options, dockInner, pres.showOther)
   const windowRows = questionBodyWindowRows(store.rows)
   const maxScroll = Math.max(0, body.length - windowRows)
   const ranges = bodyOptionRanges(body, options.length)
@@ -620,13 +701,83 @@ function revealOption(index: number): void {
  *  moves to the next (or submits when all are answered); ←/→ (or Tab) move
  *  between questions freely; selecting the "Other…" row opens its inline
  *  editor UNDER the option list (no second dialog); Esc cancels the whole ask
- *  (closing the inline editor first when it is open). */
-function questionKey(k: RawKey): boolean {
+ *  (closing the inline editor first when it is open).
+ *
+ *  Mouse & wheel events are FIRST routed by the pointer's screen region (see
+ *  the pointer block below): on the dock they drive the dock only (wheel is
+ *  inert — the ONE exception: the inline "Other" editor, where the wheel
+ *  scrolls the ≤5-row input window when its content overflows); on the message
+ *  column outside the dock they act on the message box (wheel scrolls the
+ *  transcript, press/drag/release select & copy — the same behaviour as on the
+ *  normal surface); outside the message column (Steps sidebar) nothing
+ *  responds. */function questionKey(k: RawKey, tui: TuiService): boolean {
   const char = k.char ?? ''
   const question = store.question
   if (question === null) { store.setPanel('conversation'); return true }
   const options = question.item.options ?? []
   const optsLen = options.length
+  // Plan-review: the dock is a bare confirm/decline — no "Other" row, no
+  // free-text editor (an opinion goes into the composer as a normal message).
+  const review = isPlanReview(question.item)
+  // ── Pointer routing by screen region (mouse + wheel). The dock is an
+  //    IN-FLOW block in the message column (right under the transcript); what
+  //    a mouse event means depends on where the pointer is:
+  //    · ON the dock rows — only BUTTONS drive the dock (tab / option / the
+  //      inline editor, handled below); the WHEEL is inert there (it must
+  //      neither bump the choice nor roll the message behind the dock) — save
+  //      for the ONE exception below: hovering the "Other" editor whose
+  //      content overflows its ≤5-row window scrolls that input (see the dock
+  //      wheel branch).
+  //    · On the MESSAGE COLUMN outside the dock AND above the composer — the
+  //      event acts on the MESSAGE BOX exactly as on the normal surface: the
+  //      wheel scrolls the transcript, press/drag/release select & copy.
+  //      Those keys are forwarded to the conversation panel's own handler
+  //      (single source of truth — no duplicated selection/copy logic here).
+  //    · On the COMPOSER's rows (the box at the very bottom, below the dock) —
+  //      same surface behaviour as the message column: the wheel scrolls the
+  //      transcript and press/drag/release EDIT THE DRAFT (caret / selection /
+  //      copy) exactly as on the normal surface. Those keys are forwarded to
+  //      the conversation handler too.
+  //    · Outside the message column (the Steps sidebar…) — no response.
+  const ptr = k.mousePress ?? k.mouseDrag ?? k.mouseMove ?? k.mouseRelease
+  const wheelUp = k.wheelUp
+  const wheelDown = k.wheelDown
+  const ptrRow = ptr?.row ?? wheelUp?.row ?? wheelDown?.row
+  const ptrCol = ptr?.col ?? wheelUp?.col ?? wheelDown?.col
+  if (ptrRow !== undefined && ptrCol !== undefined) {
+    const msgRight = messageColumnRight()
+    const region = questionPointerRegion(ptrRow, ptrCol, questionDockSpan, msgRight,
+      composerStripRows(store.width, store.rows, store.input, store.composerImage !== null, msgRight))
+    if (region === 'none') return true // outside the message column: ignore the mouse event
+    if (region === 'dock') {
+      // Wheel over the dock: inert EXCEPT on the "Other" input box when its
+      // content overflows the ≤5-row window — there the wheel scrolls the box
+      // (visual-line caret moves, exactly like ↑/↓) so a long answer can be
+      // paged inside the input. Button events fall through to the dock logic
+      // below (tabs, options, the inline editor).
+      if (wheelUp !== undefined || wheelDown !== undefined) {
+        if (question.customMode && questionInputGeo !== null) {
+          const usable = dockInnerWidth(store.width, store.sidebarMode ?? 'auto')
+          if (inputWheelScrollsAt(ptrRow, ptrCol, questionInputGeo, questionInputGeo.rows.length, usable)) {
+            const dir: -1 | 1 = wheelUp !== undefined ? -1 : 1
+            store.questionCursorTo(caretMoveVertical(question.custom, question.customCursor, usable, dir))
+          }
+        }
+        return true
+      }
+    } else {
+      // Message column outside the dock (message rows AND the composer strip
+      // below the dock): act on the surface exactly as when no dock is open —
+      // wheel scrolls the transcript, everything else is forwarded to the
+      // conversation panel's own handler (single source of truth: composer
+      // caret/selection/copy, transcript select/copy, tool-row clicks…).
+      if (wheelUp !== undefined) { store.scrollLines(-WHEEL_STEP); return true }
+      if (wheelDown !== undefined) { store.scrollLines(WHEEL_STEP); return true }
+      const conv = tui.panels.byId('conversation')
+      if (conv !== undefined && conv.handleKey !== undefined) conv.handleKey(k, store)
+      return true
+    }
+  }
   // Clicking a question TAB (multi-question card) jumps straight to it —
   // handled before every other mouse mapping (tab bar is the top row).
   const pressTab = k.mousePress === undefined ? -1 : questionTabAt(k.mousePress.row, k.mousePress.col)
@@ -708,9 +859,9 @@ function questionKey(k: RawKey): boolean {
     else if (k.rightArrow) store.questionCursorRight()
     else if (k.upArrow) {
       // Visual-line caret movement: one line up, preserving the column.
-      store.questionCursorTo(caretMoveVertical(question.custom, question.customCursor, dockInnerWidth(store.width), -1))
+      store.questionCursorTo(caretMoveVertical(question.custom, question.customCursor, dockInnerWidth(store.width, store.sidebarMode ?? 'auto'), -1))
     } else if (k.downArrow) {
-      store.questionCursorTo(caretMoveVertical(question.custom, question.customCursor, dockInnerWidth(store.width), 1))
+      store.questionCursorTo(caretMoveVertical(question.custom, question.customCursor, dockInnerWidth(store.width, store.sidebarMode ?? 'auto'), 1))
     } else if (k.home) {
       // Home: start of the current LOGICAL line.
       const nl = question.custom.lastIndexOf('\n', question.customCursor - 1)
@@ -728,16 +879,26 @@ function questionKey(k: RawKey): boolean {
     }
     return true
   }
+  // Plan-review: the KEYBOARD scrolls the TRANSCRIPT (the plan block above the
+  // dock) instead of the option body — reviewScrollCommand maps PgUp/PgDn (the
+  // wheel is already routed by the pointer region above, so a tick over the
+  // dock stays inert and one over the message column scrolls the transcript);
+  // ↑/↓ below still move the confirm/decline choice.
+  if (review) {
+    const cmd = reviewScrollCommand(k)
+    if (cmd !== null) {
+      store.scrollPage(cmd.dir)
+      return true
+    }
+  }
   if (k.upArrow) { store.bumpQuestionIndex(-1); revealOption(question.index) }
   else if (k.downArrow) { store.bumpQuestionIndex(1); revealOption(question.index) }
-  else if (k.wheelUp) { store.bumpQuestionIndex(-1); revealOption(question.index) }
-  else if (k.wheelDown) { store.bumpQuestionIndex(1); revealOption(question.index) }
   else if (k.pageUp) store.scrollQuestion(-questionBodyWindowRows(store.rows))
   else if (k.pageDown) store.scrollQuestion(questionBodyWindowRows(store.rows))
   else if (k.leftArrow || k.rightArrow) {
     // When the tab bar overflows the dock width ←/→ PAGE the bar (the active
     // tab stays in view); otherwise they switch between questions.
-    const tw = questionTabWindow(question, dockInnerWidth(store.width), store.questionTabFrom)
+    const tw = questionTabWindow(question, dockInnerWidth(store.width, store.sidebarMode ?? 'auto'), store.questionTabFrom)
     if (tw.overflow) {
       const step = Math.max(1, tw.visible - 1)
       store.setQuestionTabFrom(tw.from + (k.rightArrow ? step : -step))
@@ -748,15 +909,16 @@ function questionKey(k: RawKey): boolean {
   else if (k.tab) store.questionGo(1)
   else if (k.return) store.questionEnter()
   else if (/^[1-9]$/.test(char)) {
-    // Number keys answer the numbered option directly (1..N); N+1 = Other.
+    // Number keys answer the numbered option directly (1..N); N+1 = Other
+    // (plan-review has no Other row, so N+1 is ignored there).
     const digit = Number(char)
-    if (digit <= optsLen + 1) {
+    if (digit <= optsLen + 1 && (!review || digit <= optsLen)) {
       store.setQuestionIndex(digit - 1)
       store.questionEnter()
     }
   }
   else if (k.escape || (k.ctrl && char === 'c')) store.cancelQuestion()
-  else if (char) store.setQuestionCustom(char, true)
+  else if (char && !review) store.setQuestionCustom(char, true)
   return true
 }
 
@@ -768,6 +930,6 @@ export function apply(ctx: Context): void {
     id: 'question',
     mode: 'overlay',
     render: () => (store.question === null ? null : <QuestionPanel question={store.question} />),
-    handleKey: (k) => questionKey(k),
+    handleKey: (k) => questionKey(k, tui),
   })
 }

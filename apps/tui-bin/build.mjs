@@ -901,7 +901,7 @@ export function patchInkFrameController(nm) {
             const ar = __a.row - 1, ac = __a.col - 1, fr = __f.row - 1, fc2 = __f.col - 1;
             let sR = ar, sC = ac, eR = fr, eC = fc2;
             if (ar > fr || (ar === fr && ac > fc2)) { sR = fr; sC = fc2; eR = ar; eC = ac; }
-            const C = 4; // grid content column (paddingX 1 + MESSAGE_LEFT_COLS 3)
+            const C = (typeof __fc.contentLeft === 'number' && __fc.contentLeft >= 0) ? __fc.contentLeft : 4; // grid content column: message column (paddingX 1 + MESSAGE_LEFT_COLS 3) or the Steps sidebar's own band
             const rEnd = (y) => { const row = output[y]; if (!row) return C; const bound = (typeof __fc.contentRight === 'number' && __fc.contentRight > C) ? __fc.contentRight : (row.length - 1); let e = C; for (let x = C; x <= Math.min(bound, row.length - 1); x++) { const c = row[x]; if (c && c.value !== '' && c.value != null && !/^\\s*$/.test(c.value) && !__deco.test(c.value)) e = x; } return e; };
             for (let y = sR; y <= eR; y++) {
                 const row = output[y]; if (!row) { __txt += '\\n'; continue; }
@@ -983,13 +983,13 @@ export function patchInkWideChar(nm) {
     '                    let offsetX = x;',
     '                    // dsh-tui patch: per-glyph width placement (see charwidth.ts).',
     '                    // A glyph the terminal PAINTS two columns wide but whose CURSOR advance',
-    '                    // is only ONE column (⚠ / ⚠️ on VTE: wcwidth counts 1, the color-emoji',
+    '                    // is only ONE column (⚠ / ⚠️ / 🏷️ … on VTE: wcwidth counts 1, the color-emoji',
     '                    // glyph paints 2) needs its reserved second cell to be a REAL space so',
     '                    // the cursor actually advances two columns — otherwise every later cell',
     '                    // of the row (the sidebar border included) prints one column LEFT.',
-    '                    // ⚠️ arrives as base + U+FE0F: keep the base narrow so the VS16 cell (a',
+    '                    // ⚠️ / 🏷️ arrive as base + U+FE0F: keep the base narrow so the VS16 cell (a',
     '                    // space here) carries the glyph\'s second column; never a third cell.',
-    "                    const __pw = (typeof globalThis !== 'undefined' && globalThis.__dshPaintWide instanceof Set) ? globalThis.__dshPaintWide : new Set([0x26a0]);",
+    "                    const __pw = (typeof globalThis !== 'undefined' && globalThis.__dshPaintWide instanceof Set) ? globalThis.__dshPaintWide : new Set([0x26a0, 0x1f3f7, 0x1f6e0]);",
     "                    const __cw = (typeof globalThis !== 'undefined' && globalThis.__dshCharWidths instanceof Map) ? globalThis.__dshCharWidths : null;",
     '                    const __padFlags = [];',
     '                    for (let __i = 0; __i < characters.length; __i++) {',
@@ -1021,7 +1021,10 @@ export function patchInkWideChar(nm) {
     const outputJs = join(nm, '.pnpm', dir, 'node_modules', 'ink', 'build', 'output.js')
     if (!existsSync(outputJs)) continue
     let text = readFileSync(outputJs, 'utf8')
-    if (text.includes('const __padFlags = [];')) continue // already patched
+    // Idempotent: skip only when the current fallback set is already in place
+    // (a stale patch — e.g. a narrower PAINT_WIDE list — MUST be re-applied so
+    // newly paint-wide glyphs get their reserved second cell too).
+    if (text.includes('const __padFlags = [];') && text.includes('0x1f6e0')) continue
     if (!regionRe.test(text)) {
       throw new Error(`dsh-tui: cannot patch Ink wide-char placement in ${outputJs} (Ink internals changed?)`)
     }
@@ -1072,7 +1075,18 @@ const widths = () => (typeof globalThis !== 'undefined' && globalThis.__dshCharW
 // characters crammed against it). Reserve two columns in the layout for these,
 // regardless of the (advance-based) CPR measurement. Members are confirmed by
 // real-terminal observation; text symbols (✓ ✗ ☑ ♠ ⚙ …) stay ONE column.
-const PAINT_WIDE = new Set([0x26a0]);
+// 0x1f3f7 (🏷 U+1F3F7): an EAW-N ASTRAL emoji — charwidth.ts never probes
+// astral code points ("always two columns"), yet VTE advances it ONE column
+// while Noto Color Emoji paints the label two cells wide (same class as ⚠).
+// 0x1f6e0 (🛠 U+1F6E0): the same EAW-N astral "colored glyph" class (hammer &
+// wrench paints two cells on color-emoji terminals while the cursor advances
+// one; string-width reports 1 for the bare base and only 2 once a U+FE0F
+// variation selector forces emoji presentation). Without the reservation the
+// painted second column pushes the row's right border one cell left.
+// The astral members of this set are additionally probed by charwidth.ts's
+// scan (PAINT_WIDE_ASTRAL) so the advance-based pad decision stays terminal
+// specific; on CPR-less runs the default here pads them like ⚠.
+const PAINT_WIDE = new Set([0x26a0, 0x1f3f7, 0x1f6e0]);
 
 export default function stringWidth(string, options = {}) {
 	if (typeof string !== 'string' || string.length === 0) {

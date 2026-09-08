@@ -35,17 +35,26 @@ export function useListGeometry(ref: RefObject<DOMElement>, count: number, rowHe
 }
 
 /** Geometry of one horizontal options row (the approval dock's Deny / Allow
- *  always / Allow once). Records the row's absolute left edge and each option's
- *  rendered width so mouse HOVER can map a column to an option index. */
-export interface DialogRowGeometry { readonly left: number; readonly widths: readonly number[] }
+ *  always / Allow once). Records the row's absolute top row + left edge and
+ *  each option's rendered width so mouse HOVER can map a (row, col) to an
+ *  option index — the row must be the options row itself, never a title /
+ *  reason / hint row that happens to share a column. */
+export interface DialogRowGeometry {
+  readonly topRow: number
+  readonly left: number
+  readonly widths: readonly number[]
+}
 type RowHost = { __dshDialogRowGeometry?: DialogRowGeometry | null }
 
 export function setDialogRowGeometry(g: DialogRowGeometry | null): void {
   ;(globalThis as unknown as RowHost).__dshDialogRowGeometry = g
 }
-export function dialogRowIndexFromCol(col: number): number {
+export function dialogRowIndexFromCol(row: number, col: number): number {
   const g = (globalThis as unknown as RowHost).__dshDialogRowGeometry
   if (!g || g.widths.length === 0) return -1
+  // topRow is the 0-based Yoga grid row of the options row; a 1-based SGR row
+  // is on that row only when row − 1 === topRow (mirrors dialogListIndexFromRow).
+  if (row - 1 !== g.topRow) return -1
   // col is a 1-based SGR mouse column; the row's left is a 0-based Yoga x.
   const x = col - 1 - g.left
   if (x < 0) return -1
@@ -69,6 +78,10 @@ export function measureDomLeft(el: DOMElement | null): number {
 export function useRowGeometry(ref: RefObject<DOMElement>, widths: readonly number[], deps: readonly unknown[] = []): void {
   useEffect(() => {
     if (!ref.current) return
-    setDialogRowGeometry({ left: Math.round(measureDomLeft(ref.current)), widths })
+    setDialogRowGeometry({
+      topRow: Math.round(measureDomTop(ref.current)),
+      left: Math.round(measureDomLeft(ref.current)),
+      widths,
+    })
   }, [widths, ...deps])
 }

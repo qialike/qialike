@@ -32,11 +32,23 @@ import { homedir } from 'node:os'
 
 /** Code-point ranges worth measuring: everything the font may render either
  *  narrow or wide depending on coverage/emoji fallback. EAW-W/F glyphs and
- *  astral emoji (always two columns in practice) are intentionally excluded. */
+ *  astral emoji (always two columns in practice — except the EAW-N members of
+ *  PAINT_WIDE_ASTRAL below, which VTE advances only one column) are
+ *  intentionally excluded. */
 const PROBE_RANGES: ReadonlyArray<readonly [number, number]> = [
   [0x2000, 0x20cf], // general punctuation/currency zone (‼ ⁉ …)
   [0x2100, 0x2bff], // letterlike → arrows → math → shapes → misc symbols/dingbats → supplemental arrows
 ]
+
+/** Astral members of the build-time PAINT_WIDE set (apps/tui-bin/build.mjs):
+ *  color-emoji glyphs whose CURSOR advance on VTE is only ONE column although
+ *  the terminal PAINTS them two cells wide (🏷 U+1F3F7 and 🛠 U+1F6E0 are both
+ *  EAW=N). Astral emoji are normally skipped from probing ("always two
+ *  columns"), but these MUST be measured: the Ink pad decision keys off the
+ *  measured advance (1 → reserve a real-space second cell; 2 → leave
+ *  untouched), so the divider stays aligned even on terminals that advance
+ *  them the full two columns. Keep in sync with build.mjs `PAINT_WIDE`. */
+const PAINT_WIDE_ASTRAL = new Set<number>([0x1f3f7, 0x1f6e0])
 
 export function isProbeCandidate(cp: number): boolean {
   if (cp < 0x2000 || cp > 0x2bff) return false
@@ -192,8 +204,16 @@ function scan(lines: readonly string[]): void {
   for (const line of lines) {
     for (const ch of line) {
       const cp = ch.codePointAt(0)
-      if (cp === undefined || cp > 0xffff) continue // astral emoji: always two columns
-      if (failed.has(cp) || map.has(cp) || !isProbeCandidate(cp)) continue
+      if (cp === undefined) continue
+      if (failed.has(cp) || map.has(cp)) continue
+      if (cp > 0xffff) {
+        // Astral emoji normally render two columns, but the EAW-N members of
+        // PAINT_WIDE_ASTRAL advance only ONE column on color-emoji terminals
+        // while painting two — measure them so the pad decision stays exact.
+        if (PAINT_WIDE_ASTRAL.has(cp)) pending.add(cp)
+        continue
+      }
+      if (!isProbeCandidate(cp)) continue
       pending.add(cp)
     }
   }

@@ -24,9 +24,12 @@ import {
 } from '../index.tsx'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
 import wrapAnsi from 'wrap-ansi'
-import { SIDEBAR_MIN_WIDTH, dockInnerWidth } from '../config.ts'
+import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import { questionDockRows } from '../question-layout.ts'
+import { questionPresentation } from '../plan-review.ts'
+import { surfaceRegion, sidebarContentBand, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
 import { formatSessionStats } from '../session-stats.ts'
+import { sessionDisplayTitle } from '../session-titles.ts'
 import { logError } from '../log.ts'
 import { HARNESS_VERSION } from '../harness-version.ts'
 import { theme } from '../theme.ts'
@@ -98,9 +101,6 @@ const MESSAGE_PAD_ROWS = 1
 // visually separated); these plus MESSAGE_PAD_ROWS give the user block its
 // 2 blank rows above and below (matches the legacy blank-row layout).
 const USER_PAD_ROWS = 1
-
-/** Rows scrolled per mouse-wheel tick. */
-const WHEEL_STEP = 3
 
 /** The status bar height in terminal rows (bordered single-line bar). */
 const STATUS_BAR_HEIGHT = 3
@@ -463,6 +463,19 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
   if (item.kind === 'assistant') {
     // opencode-style assistant: indent the markdown to the shared content column.
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
+  }
+  if (item.kind === 'plan') {
+    // A plan submitted for review (harness `exit_plan_mode`): a labelled block
+    // whose markdown body is ALWAYS fully unfolded (harness-web decision-card
+    // parity). Not collapsible — the plan is the review subject and must read
+    // in the message area while the dock below only asks 确认执行/继续规划.
+    // The label is a tag chip so the block reads as a document, not a message.
+    return (
+      <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
+        <Text color={theme.bg} backgroundColor={theme.accent}>{' Plan '}</Text>
+        <MarkdownText text={item.text} />
+      </Box>
+    )
   }
   if (item.kind === 'reasoning') {
     // Web-parity Think disclosure (harness ReasoningRow): the label row is
@@ -867,10 +880,15 @@ function composerWindow(input: string, usable: number, caretRow: number, textAre
 function composerHeight(width: number, input: string, min: number): number {
   const usable = composerUsable(width)
   const wrapped = input.split('\n').reduce((sum, seg) => sum + composerWrap(seg, usable).length, 0)
-  // The composer keeps growing (pushing the message area upward) until it would
-  // leave the message viewport below its ~3-row minimum; only past that point
-  // does taller input scroll inside the composer (see the render + caret math),
-  // instead of overflowing its box over the footer/status rows.
+  // The composer grows with the draft (pushing the message area upward) up to
+  // a height cap tied to the TERMINAL HEIGHT: cap = rows − 8 (never more than
+  // min when the terminal is tiny). Its text window is composerH − 4, so the
+  // draft's max VISIBLE rows scale with the screen (rows − 12 on normal
+  // terminals): a short draft is fully shown, and once the draft wraps past
+  // that the composer stops growing and scrolls INSIDE a caret-following
+  // window (see the render + caret math) instead of overflowing its box over
+  // the footer/status rows. The rows−8 floor guard also keeps a ≥3-row
+  // message viewport on small terminals.
   const cap = Math.max(min, store.rows - 8)
   return Math.min(min + wrapped - 1, cap)
 }
@@ -927,6 +945,9 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
     else lines = 2
   } else if (item.kind === 'assistant') {
     lines = estimateMarkdownHeight(item.text, w)
+  } else if (item.kind === 'plan') {
+    // Label tag row + the FULLY unfolded markdown body (never collapsed).
+    lines = 1 + estimateMarkdownHeight(item.text, w)
   } else if (item.kind === 'user') {
     lines = countWrappedLines(item.text, w)
   } else if (item.kind === 'tool') {
@@ -1013,6 +1034,14 @@ function buildTranscriptRows(items: readonly TranscriptItem[], usable: number): 
       }
       return
     }
+    if (item.kind === 'plan') {
+      // Mirror the rendered rows: the label chip line + the fully unfolded
+      // markdown body under it (copy/selection offsets stay aligned).
+      for (const line of wrapRows(' Plan ', w)) rows.push({ text: line, itemIndex: i })
+      const plain = item.text.length <= 8000 ? markdownPlain(item.text) : item.text
+      for (const line of wrapRows(plain, w)) rows.push({ text: line, itemIndex: i })
+      return
+    }
     const plain = item.kind === 'assistant' && item.text.length <= 8000 ? markdownPlain(item.text) : item.text
     // Wrap breadth mirrors the rendered layout (one shared content column).
     for (const line of wrapRows(plain, w)) rows.push({ text: line, itemIndex: i })
@@ -1035,6 +1064,63 @@ function composerCaretGlobalRow(input: string, cursor: number, usable: number): 
   const caret = Math.max(0, Math.min(cursor, input.length))
   return Math.max(0, composerWrap(input.slice(0, caret), usable).length - 1)
 }
+
+/** Pure main-surface geometry: where the message column, the composer box and
+ *  the status bar sit on screen, so pointer routing (wheel/click per hovered
+ *  region) can classify a cell WITHOUT touching the DOM. All numbers mirror
+ *  the layout the render below actually draws (same composerHeight/usable/
+ *  STATUS_BAR_HEIGHT), so routing can never disagree with what is painted.
+ *  The composer box (borders incl.) occupies rows [composerTop, composerTop +
+ *  boxH − 1] where boxH = composerHeight + (image chip ? 1 : 0); the status
+ *  bar is the bottom STATUS_BAR_HEIGHT rows. */
+function mainSurfaceGeometry(): SurfaceGeometry {
+  const width = store.width
+  const rows = store.rows
+  const showSidebar = sidebarVisibleFor(width)
+  const messageRight = showSidebar ? width - sidebarWidthFor(width) : width
+  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
+  const boxH = composerH + (store.composerImage !== null ? 1 : 0)
+  return {
+    messageRight,
+    composerTop: rows - STATUS_BAR_HEIGHT - boxH + 1,
+    composerBottom: rows - STATUS_BAR_HEIGHT,
+    statusTop: rows - STATUS_BAR_HEIGHT + 1,
+  }
+}
+
+/** The composer draft's visible text area (rows) — the caret-following window
+ *  height the render uses. Mirrors `Math.max(1, composerH − 4)` at render. */
+function composerTextArea(): number {
+  return Math.max(1, composerHeight(store.width, store.input, COMPOSER_MIN_HEIGHT) - 4)
+}
+
+/** New caret index after moving the composer caret by `dirRows` VISUAL lines
+ *  (whole wrapped rows), keeping the same cell column when possible. Used by
+ *  the wheel over the composer: when the draft is taller than its box the
+ *  wheel scrolls the DRAFT (visual-line caret moves = what ↑/↓ do), not the
+ *  transcript. Pure for tests; mirrors conversation's composer row model
+ *  (composerVisualRows, so word-wrap row boundaries are exact). */
+export function composerCaretMoveVisual(input: string, caret: number, usable: number, dirRows: -1 | 1): number {
+  const rows = composerVisualRows(input, usable)
+  if (rows.length <= 1) return caret
+  const from = composerCaretGlobalRow(input, caret, usable)
+  const target = Math.max(0, Math.min(rows.length - 1, from + dirRows))
+  if (target === from) return caret
+  const src = rows[from]!
+  // Column (cells) of the caret inside its source visual row.
+  const srcCol = src.text.slice(0, caret - src.start).split('').reduce((acc, ch) => acc + visualWidth(ch), 0)
+  const dst = rows[target]!
+  let acc = 0
+  let idx = dst.text.length
+  for (let i = 0; i < dst.text.length; i++) {
+    const cw = visualWidth(dst.text[i]!)
+    if (acc >= srcCol) { idx = i; break }
+    acc += cw
+    if (acc === srcCol) { idx = i + 1; break }
+  }
+  return dst.start + Math.min(idx, dst.text.length)
+}
+
 
 function composerInputIndex(row: number, col: number): number | null {
   const width = process.stdout.columns ?? 80
@@ -1188,6 +1274,17 @@ function copyCurrentSelection(): void {
 
 // ── the conversation key handler ────────────────────────────────────────────
 
+/** Region where the CURRENT mouse-gesture anchor (store.selection, where the
+ *  press started) sits on the main surface, or null when no selection is live.
+ *  Used to route drags/releases by their START region — a drag that began on
+ *  the message column keeps selecting as the pointer crosses other regions,
+ *  while a drag anchored on the sidebar selects sidebar text only. */
+function anchorSurfaceRegion(): SurfaceRegion | null {
+  const s = store.selection
+  if (s === null) return null
+  return surfaceRegion(s.aRow, s.aCol, mainSurfaceGeometry())
+}
+
 function conversationKey(k: RawKey, tui: TuiService): void {
   const input = store.input
   const char = k.char ?? ''
@@ -1283,6 +1380,88 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   // (like Enter). Otherwise the wheel scrolls the transcript and clicks are the
   // in-place selection/copy.
   const paletteOpen = input.startsWith('/') && filteredCommands(tui).length > 0
+  // ── MAIN SURFACE region routing: the mouse only acts on the region it is
+  //    hovering (message column / composer / sidebar / status bar). The '/'
+  //    palette is a bottom-anchored overlay that owns the mouse while open, so
+  //    region routing applies only when it is closed. Region-agnostic key
+  //    handling (typing, arrows, …) below is untouched.
+  //
+  //    Drags/releases are classified by the ANCHOR cell (where the press
+  //    started — store.selection), not the current pointer cell, so a drag
+  //    that started on the message column keeps selecting as the pointer
+  //    passes over other regions, while a drag that STARTED on the sidebar /
+  //    status bar (which never anchors there: press is consumed) can never
+  //    leak a transcript selection.
+  if (!paletteOpen) {
+    const g = mainSurfaceGeometry()
+    const ptrRow = k.mousePress?.row ?? k.mouseMove?.row ?? k.mouseDrag?.row ?? k.mouseRelease?.row ?? k.wheelUp?.row ?? k.wheelDown?.row
+    const ptrCol = k.mousePress?.col ?? k.mouseMove?.col ?? k.mouseDrag?.col ?? k.mouseRelease?.col ?? k.wheelUp?.col ?? k.wheelDown?.col
+    if (ptrRow !== undefined && ptrCol !== undefined) {
+      const region = surfaceRegion(ptrRow, ptrCol, g)
+      if (region === 'status') {
+        // Bottom status bar / blank rows: inert (no transcript interaction, no
+        // selection anchor). A drag/release that ANCHORED on the message column
+        // keeps working — the pointer may pass over this region while selecting
+        // transcript text — so only those fall through below.
+        if (k.wheelUp !== undefined || k.wheelDown !== undefined) return
+        if (k.mouseMove !== undefined) { store.setHoverTool(null); return }
+        if (k.mousePress !== undefined) return
+        const a = anchorSurfaceRegion()
+        if (a !== 'message' && a !== 'composer' && a !== 'sidebar') return
+      }
+      if (region === 'sidebar') {
+        // Steps column: a click on its TITLE band toggles the sidebar (handled
+        // above); a PRESS elsewhere anchors a SIDEBAR text selection (drag
+        // highlights + copies sidebar rows only — the frame controller's flow
+        // copy is bounded by the sidebar column band, see the selection guard).
+        // Hover never highlights a transcript row (pointer is outside the
+        // message column). The wheel is inert here (the sidebar's own scroll
+        // comes in a later increment).
+        if (k.wheelUp !== undefined || k.wheelDown !== undefined) return
+        if (k.mouseMove !== undefined) { store.setHoverTool(null); return }
+        if (k.mousePress !== undefined) {
+          store.mousePress(k.mousePress.row, k.mousePress.col)
+          return
+        }
+        // Drag/release over the sidebar: let a gesture that ANCHORED on the
+        // sidebar/message/composer continue to the generic handlers below (a
+        // sidebar-anchored drag extends the SIDEBAR selection; a message-anchored
+        // drag may pass over the sidebar while selecting transcript text — the
+        // frame controller bounds each copy to its anchor's column band). Only an
+        // anchorless / status-anchored gesture is consumed here.
+        const a = anchorSurfaceRegion()
+        if (a !== 'message' && a !== 'composer' && a !== 'sidebar') return
+      }
+      if (region === 'composer') {
+        // Wheel over the composer: scrolls the DRAFT itself when it overflows
+        // its box (visual-line caret moves — the caret-following window
+        // follows), and is inert when the draft fits (nothing to scroll).
+        if (k.wheelUp !== undefined || k.wheelDown !== undefined) {
+          const usable = composerUsable(store.width)
+          const allRows = composerVisualRows(store.input, usable).length
+          if (allRows > composerTextArea()) {
+            const dir: -1 | 1 = k.wheelUp !== undefined ? -1 : 1
+            let caret = store.cursor
+            for (let i = 0; i < WHEEL_STEP; i++) {
+              const next = composerCaretMoveVisual(store.input, caret, usable, dir)
+              if (next === caret) break
+              caret = next
+            }
+            store.setCursor(caret)
+          }
+          return
+        }
+        // Press/drag/release/hover over the composer fall through to the
+        // handlers below (they already edit the draft only: resolveRow maps
+        // composer rows to null, mouse clicks place the caret, drags select the
+        // draft). A hover over the composer must not highlight a transcript
+        // tool row (resolveRow only maps transcript rows, so this is a no-op
+        // guard for clarity).
+        if (k.mouseMove !== undefined) { store.setHoverTool(null); return }
+      }
+      // region === 'message': fall through to the transcript handlers below.
+    }
+  }
   if (k.wheelUp) {
     if (paletteOpen) { const len = Math.max(1, filteredCommands(tui).length); store.setCommandIndex((store.commandIndex - 1 + len) % len); return }
     store.scrollLines(-WHEEL_STEP); return
@@ -1325,16 +1504,22 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     if (kind === 'click') {
       // Click on a SETTLED tool row toggles it exactly like a Think row (no
       // "must have a body" gate); a click on a Think header toggles that
-      // reasoning row (web/opencode parity). Everything else falls through to
-      // the composer caret placement.
-      const hit = store.resolveRow(k.mouseRelease.row)
-      if (hit !== null && hit.kind === 'tool' && hit.tool !== undefined && hit.tool.state !== 'running') {
-        store.toggleToolExpanded(hit.key)
-        return
-      }
-      if (hit !== null && hit.kind === 'reasoning') {
-        store.toggleReasoningRow(hit.key)
-        return
+      // reasoning row (web/opencode parity). Only a click that ANCHORED on the
+      // MESSAGE column may toggle transcript rows — a click that started on the
+      // sidebar / composer / status only clears its selection and, on the
+      // composer, places the caret. Everything else falls through to the
+      // composer caret placement.
+      const a = anchorSurfaceRegion()
+      if (a === 'message') {
+        const hit = store.resolveRow(k.mouseRelease.row)
+        if (hit !== null && hit.kind === 'tool' && hit.tool !== undefined && hit.tool.state !== 'running') {
+          store.toggleToolExpanded(hit.key)
+          return
+        }
+        if (hit !== null && hit.kind === 'reasoning') {
+          store.toggleReasoningRow(hit.key)
+          return
+        }
       }
       positionCursorByMouse(k.mouseRelease.row, k.mouseRelease.col)
     } else if (kind === 'drag') {
@@ -1462,28 +1647,41 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // one truncated reason line 1 + gap 1 + choice row 1 + gap 1 + hint 1.
   const approvalH = store.approval === null ? 0 : 11
   // Question dock height — from the SAME pure layout function the question
-  // panel renders from (question-layout.questionDockRows), so the FLOATING
-  // window's opaque backdrop covers exactly as many rows as the dock paints.
-  // The question dock does NOT reserve transcript space: it floats OVER the
-  // message area (see the overlay below), so opening it never compresses or
-  // shifts the transcript.
+  // panel renders from (question-layout.questionDockRows). The dock lives
+  // IN-FLOW in the message column (see the render below), so the transcript
+  // space reserved here must equal the rows the dock actually paints: typing
+  // in the inline "Other" editor grows the dock (pushing the message history
+  // up, one row per new visual input row) until its ≤5-row input window caps
+  // the height; the measured store.questionRows corrects the first-frame
+  // estimate so the reservation never drifts from the painted dock.
   const questionH = store.question === null ? 0 : (() => {
     const q = store.question
-    const options = q.item.options ?? []
+    // Plan-review presents its own Chinese question and drops the plan body
+    // (the plan is the transcript block above) and the "Other…" row — the
+    // SAME presentation function the question panel paints from, so the
+    // reserved transcript space never drifts from the painted dock.
+    const pres = questionPresentation(q.item)
     return questionDockRows(
-      q.item.question,
-      q.item.detail,
-      options,
+      pres.question,
+      pres.detail,
+      pres.options,
       q.customMode,
       q.custom,
-      dockInnerWidth(width),
+      dockInnerWidth(width, store.sidebarMode ?? 'auto'),
       store.rows,
       q.questions.length > 1, // multi-question ask: +1 tab-bar row
+      pres.showOther,
     )
   })()
-  // Only the (in-flow) approval dock shrinks the transcript; the question dock
-  // floats above it and takes no layout height.
-  const modalH = store.panel === 'approval' ? approvalH : 0
+  // The approval dock and the QUESTION dock both live IN-FLOW inside the
+  // message column (right under the transcript, above the composer): whichever
+  // is open shrinks the transcript by its own height — answering pushes the
+  // message history upward instead of floating over it.
+  const modalH = store.panel === 'approval'
+    ? approvalH
+    : store.panel === 'question'
+      ? Math.max(questionH, store.questionRows)
+      : 0
   const usable = convUsableWidth(width, showSidebar)
   // Deterministic numeric sidebar width (same formula convUsableWidth uses for
   // the message wrap width). A percentage would let Ink round independently of
@@ -1649,32 +1847,20 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
                 </Box>
               </Box>
             )}
-          {/* The approval dock lives INSIDE the message column (in-flow) so
-              its width tracks the resizable message box. The QUESTION dock is
-              a FLOATING window instead: it overlays the transcript bottom-
-              anchored above the composer, so answering never compresses or
-              shifts the message area (same treatment as the palette below).
-              The dock reports its REAL height each frame (store.questionRows);
-              the backdrop sizes to that, and the dock hugs the wrapper's
-              bottom — so the popup's BOTTOM edge never moves, only its top
-              grows/shrinks as content changes (Other editor, question switch). */}
+          {/* The approval dock and the QUESTION dock both live IN-FLOW inside
+              the message column, right under the transcript: the open one
+              takes real layout height and pushes the message history above it
+              upward (the transcript Box up there is flexGrow with minHeight 0,
+              so it shrinks by exactly the dock's height). The question dock
+              therefore never paints over transcript text — no opaque backdrop
+              needed — its width tracks the message box, and its real height
+              (reported every frame as store.questionRows) matches the
+              questionH the viewport math reserved above. Typing in the dock's
+              inline "Other" editor grows the dock row by row until its ≤5-row
+              input window caps it; beyond that the text scrolls inside the
+              input window and the transcript stops moving. */}
           {overlay('approval')}
-          {question !== null && questionH > 0 && (
-            <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end">
-              <Box width="100%" height={Math.max(questionH, store.questionRows)} flexDirection="column" justifyContent="flex-end">
-                {/* Opaque backdrop under the dock: Ink Boxes have no
-                    background, so every cell the dock spans is painted
-                    theme.bg first — the transcript text behind a floating
-                    window never shows through its padding/blank rows. */}
-                <Box position="absolute" width="100%" height="100%" flexDirection="column">
-                  {Array.from({ length: Math.max(questionH, store.questionRows) }, (_, r) => (
-                    <Text key={r} backgroundColor={theme.bg} wrap="truncate">{' '.repeat(Math.max(1, usable))}</Text>
-                  ))}
-                </Box>
-                {overlay('question')}
-              </Box>
-            </Box>
-          )}
+          {overlay('question')}
           {/* Command palette as a bottom-anchored ABSOLUTE overlay inside the
               message column: it takes no layout height, so the transcript keeps
               its full viewport (no compression) and the palette floats just
@@ -1738,19 +1924,41 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         </Box>
         </Box>
         {showSidebar && (
-        <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
+        <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingTop={1} gap={1}>
           <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
           {steps.length === 0
             ? <Text color={mutedReadable()}>no plan yet</Text>
             : <StepRows steps={steps} />}
-          <Text color={theme.text}>session {store.session === undefined ? '' : String(store.session.id)}</Text>
+          {/* Right-sidebar session block: heading styled like the sibling
+              "Steps" heading, the session display title (user rename wins
+              over the auto title) directly under it in the REGULAR font and
+              truncated, then the FULL session id in the message-box Think-row
+              color (mutedReadable, non-bold) WRAPPED so the whole id is shown
+              across however many rows it needs. The three rows sit flush (no
+              gap) inside this inner column; the outer sidebar gap still
+              separates the block from the Steps list and the footer. An
+              untitled session keeps the heading + id rows (no title row). */}
+          <Box flexDirection="column">
+            <Text color={theme.accent} bold>Session</Text>
+            {store.session !== undefined && (() => {
+              const title = sessionDisplayTitle(store.session.id)
+              return title === undefined ? null : <Text color={theme.text} wrap="truncate">{title}</Text>
+            })()}
+            {store.session !== undefined
+              ? <Text color={mutedReadable()} wrap="wrap">{String(store.session.id)}</Text>
+              : null}
+          </Box>
           <Box flexGrow={1} />
-          {/* Embedded harness version sits ABOVE the dsh-tui version, flush
-              against the workspace path at the sidebar bottom. Labels use the
-              regular font; the version numbers use the message-box Think
-              color (bold). */}
-          <Text color={theme.text}>deepseek-harness: <Text color={mutedReadable()} bold>{HARNESS_VERSION}</Text></Text>
-          <Text color={theme.text}>dsh-tui: <Text color={mutedReadable()} bold>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
+          {/* Sidebar footer. The two version lines (harness above dsh-tui) sit
+              FLUSH inside one inner column (gap 0) as a group; the outer
+              sidebar gap then keeps exactly ONE blank row between the group
+              and the workspace path, and the path hugs the sidebar's bottom
+              edge (no bottom padding under it). Labels use the regular font;
+              the version numbers use the message-box Think color (bold). */}
+          <Box flexDirection="column">
+            <Text color={theme.text}>deepseek-harness: <Text color={mutedReadable()} bold>{HARNESS_VERSION}</Text></Text>
+            <Text color={theme.text}>dsh-tui: <Text color={mutedReadable()} bold>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
+          </Box>
           <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
@@ -1844,6 +2052,24 @@ export function apply(ctx: Context): void {
     const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
     const composerTop = rows - composerH - STATUS_BAR_HEIGHT + 1
     const y1 = Math.max(0, Math.min(sel.aRow, sel.cRow) - 1)
+    const statusTopGrid = rows - STATUS_BAR_HEIGHT - 1 // grid row of the status bar's first border row
+    // A drag that ANCHORED on the Steps SIDEBAR selects sidebar text only: bound
+    // the LINE/FLOW copy to the sidebar's own content band (grid columns), never
+    // the message column text beside it. The sidebar is a bordered column whose
+    // left border sits right after the message column's last col
+    // (messageRight, 1-based) — its text starts two grid cells in (border +
+    // padding) and ends two before the terminal edge.
+    if (showSidebar && sel.aCol > width - sidebarWidthFor(width)) {
+      const band = sidebarContentBand(width, width - sidebarWidthFor(width))
+      const left = band.left
+      const right = band.right
+      if (left >= right) return null
+      return {
+        rect: { x1: left, y1, x2: right, y2: Math.max(y1, Math.min(statusTopGrid, Math.max(sel.aRow, sel.cRow) - 1)) },
+        left,
+        right,
+      }
+    }
     const y2 = Math.min(composerTop - 2, Math.max(sel.aRow, sel.cRow) - 1)
     if (y2 < y1) return null // selection sits entirely in the composer/status
     // LINE/FLOW selection is bounded by the message column's CONTENT column: the
@@ -1853,7 +2079,7 @@ export function apply(ctx: Context): void {
     // a Steps row that happens to be on the same screen line.
     const left = 1 + MESSAGE_LEFT_COLS
     const right = Math.min(width - 2, left + MESSAGE_TEXT_WIDTH(usable) - 1)
-    return { rect: { x1: left, y1, x2: right, y2 }, right }
+    return { rect: { x1: left, y1, x2: right, y2 }, left, right }
   })
   tui.panels.register({
     id: 'conversation',

@@ -43,11 +43,13 @@ import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
-import { isPinned, prewarmTitles, rememberTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { isPinned, prewarmTitles, rememberFoldedTitle, rememberTitle, sessionDisplayTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
+import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
+import { describeResumeFailure, planResumeFold } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -111,7 +113,7 @@ export const Config: z<Config> = z.object({
 /** One rendered transcript line. */
 export interface TranscriptItem {
   readonly key: number
-  readonly kind: 'user' | 'assistant' | 'reasoning' | 'status' | 'tool' | 'error'
+  readonly kind: 'user' | 'assistant' | 'reasoning' | 'status' | 'tool' | 'error' | 'plan'
   readonly text: string
   readonly dim?: boolean
   /** Tool-row payload: `running` rows carry the (capped) raw arguments for the
@@ -261,6 +263,10 @@ export type RunPhase = 'working' | 'thinking' | 'answering' | 'tool'
 export class Store {
   private items: TranscriptItem[] = []
   private key = 0
+  /** Key of the leading "loading older history" marker row while a chunked
+   *  resume is still folding older slices in the background, or -1 when the
+   *  full history is present (the marker row is always items[0]). */
+  private _historyMarkerKey = -1
   private version = 0
   private listeners = new Set<() => void>()
   private _input = ''
@@ -366,8 +372,8 @@ export class Store {
    *  flow copy stops before the Steps sidebar. The panel clamps to the transcript
    *  viewport so a composer/status selection (which has its own React inverse) is
    *  never double-highlighted by the frame buffer. */
-  private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; right: number } | null) | null = null
-  setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; right: number } | null): void {
+  private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number } | null) | null = null
+  setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number } | null): void {
     this._frameGuard = fn
   }
 
@@ -402,6 +408,12 @@ export class Store {
   /** Bumped on every theme (re)apply so memoized rows re-render with new colors. */
   get themeEpoch(): number { return this._themeEpoch }
   bumpTheme(): void { this._themeEpoch += 1; this.notify() }
+
+  /** Repaint after an asynchronous title-cache write: the sidebar session
+   *  title renders from the cache, so a title that lands after the last
+   *  transcript event would otherwise stay invisible until the next unrelated
+   *  state change forces a render. */
+  notifyTitles(): void { this.notify() }
 
   // ── right sidebar (Steps) visibility ──────────────────────────────────────
   private _sidebarMode: SidebarMode = readSidebarMode()
@@ -629,8 +641,17 @@ export class Store {
 
   /** Append a running tool-call row (opencode-style inline tool). The raw
    *  arguments are kept (capped) for the one-line summary derivation; the
-   *  start timestamp feeds the row's live elapsed-seconds tail. */
+   *  start timestamp feeds the row's live elapsed-seconds tail.
+   *
+   *  A plan submitted for review (harness `exit_plan_mode`) becomes a labelled
+   *  message block in the transcript BEFORE its tool row: the review dock then
+   *  only asks 确认执行/继续规划 while the plan reads in the conversation.
+   *  (Resume replays the same pair from the session log — foldHistoryEvents.) */
   toolCall(name: string, argsRaw?: string): void {
+    const plan = name === EXIT_PLAN_TOOL ? extractPlanMarkdown(argsRaw) : undefined
+    this.items = plan === undefined
+      ? this.items
+      : [...this.items, { key: this.key += 1, kind: 'plan', text: plan }]
     this.items = [...this.items, {
       key: this.key += 1,
       kind: 'tool',
@@ -811,6 +832,7 @@ export class Store {
 
   clear(): void {
     this.items = []
+    this._historyMarkerKey = -1
     this._steps = []
     this._toolBodiesOverride.clear()
     this._toolBodiesDefault = false
@@ -833,6 +855,74 @@ export class Store {
     this._toolBodiesDefault = false
     this._reasoningOverride.clear()
     this._reasoningDefault = false
+    this._measureEpoch += 1
+    this._expansionEpoch += 1
+    this.notify()
+  }
+
+  /** Label of the leading "older history still loading" marker row. */
+  private static historyMarkerText(done: number, total: number): string {
+    return `⋯ 更早历史载入中：${done}/${total} 事件`
+  }
+
+  /** Begin a TAIL-FIRST chunked history load (giant-session resume): paint the
+   *  recent `items` immediately under a leading progress marker row, keying so
+   *  that later prepends (see {@link Store.prependHistory}) and live appends
+   *  never collide with the replayed keys. `olderEvents` = events that still
+   *  need folding in the background (shown in the marker). */
+  beginHistory(items: readonly TranscriptItem[], steps: readonly StepItem[], olderEvents: number): void {
+    const tailMax = items.reduce((max, item) => Math.max(max, item.key), 0)
+    const markerKey = Math.max(this.key, tailMax) + 1
+    this._historyMarkerKey = markerKey
+    this.key = markerKey
+    this.items = [
+      { key: markerKey, kind: 'status', text: Store.historyMarkerText(0, olderEvents), dim: true },
+      ...items,
+    ]
+    this._steps = [...steps]
+    this._toolBodiesOverride.clear()
+    this._toolBodiesDefault = false
+    this._reasoningOverride.clear()
+    this._reasoningDefault = false
+    this._measureEpoch += 1
+    this._expansionEpoch += 1
+    this.notify()
+  }
+
+  /** Prepend one OLDER folded slice in front of the current history (chunked
+   *  resume background fill). The slice is chronologically older than every
+   *  row already shown, so it goes directly before the first history row —
+   *  behind the leading marker when one is still present. Existing item
+   *  objects keep their identity (their row-height estimates stay valid); only
+   *  the incoming slice gets fresh keys from the running counter. */
+  prependHistory(chunk: readonly TranscriptItem[]): void {
+    if (chunk.length === 0) return
+    const keyed: TranscriptItem[] = []
+    for (const item of chunk) keyed.push({ ...item, key: this.key += 1 })
+    const marker = this._historyMarkerKey >= 0 && this.items.length > 0 && this.items[0]?.key === this._historyMarkerKey
+    this.items = marker
+      ? [this.items[0]!, ...keyed, ...this.items.slice(1)]
+      : [...keyed, ...this.items]
+    this._measureEpoch += 1
+    this.notify()
+  }
+
+  /** Refresh the leading marker's progress text while the background fold of
+   *  older events advances. */
+  setHistoryProgress(done: number, total: number): void {
+    if (this._historyMarkerKey < 0 || this.items.length === 0) return
+    const marker = this.items[0]!
+    if (marker.key !== this._historyMarkerKey) return
+    this.items = [{ ...marker, text: Store.historyMarkerText(done, total) }, ...this.items.slice(1)]
+    this.notify()
+  }
+
+  /** Remove the leading marker once every older slice has been prepended: the
+   *  transcript now holds the FULL history. */
+  finishHistory(): void {
+    if (this._historyMarkerKey < 0) return
+    this._historyMarkerKey = -1
+    this.items = this.items.length > 0 ? this.items.slice(1) : this.items
     this._measureEpoch += 1
     this._expansionEpoch += 1
     this.notify()
@@ -961,10 +1051,11 @@ export class Store {
   get question(): PendingQuestion | null { return this._question }
   setQuestion(q: PendingQuestion): void { this._question = q; this._questionScroll = 0; this._questionTabFrom = 0; this._questionRows = 0; this._panel = 'question'; this.notify() }
   /** Measured dock ROW count: the question panel reports the real rendered
-   *  height of its dock every frame; the floating window + its opaque backdrop
-   *  size themselves from THIS value (falling back to the layout estimate
-   *  before the first measurement) so the dock's bottom edge is always pinned
-   *  and only its top moves as content grows/shrinks. */
+   *  height of its dock every frame; the conversation's in-flow reservation
+   *  (modalH) sizes the transcript space from THIS value (falling back to the
+   *  layout estimate before the first measurement), so the reserved rows never
+   *  drift from the painted dock — typing in the "Other" editor pushes the
+   *  message history up row by row until the dock's ≤5-row input cap. */
   private _questionRows = 0
   get questionRows(): number { return this._questionRows }
   setQuestionRows(v: number): void {
@@ -1087,7 +1178,10 @@ export class Store {
       return
     }
     if (q.index === optsLen) {
-      // "Other…" chosen: open the inline editor UNDER the option list.
+      // "Other…" chosen: open the inline editor UNDER the option list. Never
+      // in plan-review — its dock is a bare confirm/decline (see
+      // setQuestionCustom); this arm is unreachable there but kept safe.
+      if (isPlanReview(q.item)) return
       q.customMode = true
       q.customCursor = q.custom.length
       this.notify()
@@ -1155,19 +1249,24 @@ export class Store {
   clearQuestion(): void { this._question = null; this._questionRows = 0; if (this._panel === 'question') this._panel = 'conversation'; this.notify() }
   bumpQuestionIndex(delta: number): void {
     if (this._question === null) return
-    const len = Math.max(1, (this._question.item.options?.length ?? 0) + 1) // +1 = the custom/"Other" row
+    // Plan-review dock = a bare confirm/decline: no "Other" row to wrap into.
+    const review = isPlanReview(this._question.item)
+    const len = Math.max(1, (this._question.item.options?.length ?? 0) + (review ? 0 : 1)) // +1 = the custom/"Other" row
     this._question.index = (this._question.index + delta + len) % len
     this.notify()
   }
   /** Jump the question highlight to `i` (clamped to the options plus the Other row). */
   setQuestionIndex(i: number): void {
     if (this._question === null) return
-    const len = Math.max(1, (this._question.item.options?.length ?? 0) + 1)
+    const review = isPlanReview(this._question.item)
+    const len = Math.max(1, (this._question.item.options?.length ?? 0) + (review ? 0 : 1))
     this._question.index = Math.max(0, Math.min(len - 1, i))
     this.notify()
   }
   setQuestionCustom(value: string, mode: boolean): void {
-    if (this._question === null) return
+    // Plan-review never opens the free-text editor: an opinion goes into the
+    // composer as a normal message (the dock stays confirm/decline only).
+    if (this._question === null || isPlanReview(this._question.item)) return
     this._question.custom = value
     this._question.customMode = mode
     this._question.customCursor = value.length
@@ -1880,15 +1979,17 @@ export class Store {
    *  Set synchronously before notify() so the NEXT frame reads it (no post-commit
    *  race — a post-commit hook would only ever see the previous frame). */
   private syncFrameSelection(): void {
-    const g = globalThis as unknown as { __dshFrameController?: { selection: unknown; bg: string; anchor?: unknown; focus?: unknown; contentRight?: number } }
+    const g = globalThis as unknown as { __dshFrameController?: { selection: unknown; bg: string; anchor?: unknown; focus?: unknown; contentLeft?: number; contentRight?: number } }
     if (!g.__dshFrameController) g.__dshFrameController = { selection: null, bg: '1' }
     const s = this._selection
     const active = s !== null && (Math.abs(s.aRow - s.cRow) + Math.abs(s.aCol - s.cCol)) > 2
     if (!active || s === null) { g.__dshFrameController.selection = null; g.__dshFrameController.anchor = null; g.__dshFrameController.focus = null; return }
     const gr = this._frameGuard ? this._frameGuard(s) : null
     g.__dshFrameController.selection = gr?.rect ?? null
-    // The message column's content right edge (grid col) bounds the flow copy so
-    // it stops before the Steps sidebar (which would otherwise be swept in).
+    // The FLOW copy's content column band (grid cols) — the message column's
+    // content [left .. right], or the STEPS SIDEBAR's own column band when the
+    // anchor started there, so a sidebar drag selects/copies sidebar text only.
+    g.__dshFrameController.contentLeft = gr?.left ?? 4
     g.__dshFrameController.contentRight = gr?.right ?? (this.width - 1)
     // Anchor + focus (the drag endpoints, 1-based SGR) let the frame controller
     // reproduce a LINE/FLOW copy (opencode-style): walking from the anchor cell to
@@ -2148,6 +2249,13 @@ function bashMutates(command: string): boolean {
  *  panel). This replaces Ink's `useInput` (whose parser swallows Alt+Enter/
  *  Home/End and appends SGR mouse bytes as literal text). */
 function handleKey(k: RawKey): void {
+  // The release of a right-click: its PRESS already ran the popup's cancel /
+  // Esc action (or the main surface ignored it). The release carries no button
+  // in the SGR protocol, so without this swallow it would reach the active
+  // panel as a LEFT-click release and confirm/select something the user did not
+  // click. Right-click = Esc means press-only; drop the paired release here,
+  // once, for every panel (overlays included).
+  if (k.mouseRightRelease !== undefined) return
   const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
   def?.handleKey?.(k, store)
 }
@@ -2203,7 +2311,7 @@ function HelpDialog(): React.JSX.Element {
           <Text>Press ctrl+p to see all available actions and commands in any context.</Text>
         </Box>
         <Box marginTop={1}>
-          <Text dimColor>Esc close</Text>
+          <Text dimColor>Esc/right-click close</Text>
         </Box>
       </Box>
     </Box>
@@ -2315,6 +2423,22 @@ export function apply(ctx: Context, config: Config): void {
 
 /** The async session lifetime, started from `apply` and owned by this plugin. */
 async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
+  // ── main-thread liveness heartbeat ─────────────────────────────────────────
+  // A synchronous wedge (a giant session's resume replay/fold, a pathological
+  // layout pass…) blocks the WHOLE event loop, so even the render watchdog
+  // below (which only fires while an agent is running) can never log it. This
+  // unref'd 1s beat measures whether the loop keeps servicing timers at all:
+  // when the first tick after a block runs it records the gap in
+  // ~/.dsh/dsh-tui.log ([stall]) for diagnosis. Armed BEFORE the launch
+  // create/resume so a boot-time wedge is captured too.
+  let lastBeat = Date.now()
+  const heartbeat = setInterval(() => {
+    const now = Date.now()
+    const gap = now - lastBeat
+    if (gap > 4000) logErrorFileOnly('stall', `main loop blocked for ${Math.round(gap / 1000)}s (no timer callback for ${gap}ms)`)
+    lastBeat = now
+  }, 1000)
+  heartbeat.unref?.()
   await ctx.get('loader')?.await()
   // The loader activates entries in service-availability waves, and
   // `loader.await()` can settle at a momentarily quiescent point before the
@@ -2357,15 +2481,30 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // transient gap, so the establish attempt retries with a bounded window.
   let handle: AgentHandle | undefined
   let resumed = false
+  /** Why the launch resume failed (null when none) — the launch then falls
+   *  back to a fresh session instead of dying on a log that another process
+   *  wrote concurrently (see the catch below). */
+  let resumeFailure: string | null = null
   const establish = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
     let nextHandle: AgentHandle | undefined
     let nextResumed = false
     if (config.resume !== undefined) {
-      nextHandle = await agents.resume({ resumeSessionId: SessionId(config.resume), agentOptions, setup })
-      nextResumed = true
+      try {
+        nextHandle = await agents.resume({ resumeSessionId: SessionId(config.resume), agentOptions, setup })
+        nextResumed = true
+      } catch (error) {
+        // A failed resume (e.g. "corrupt session log": the durable log was
+        // written concurrently by another process) must not brick the launch —
+        // record why and continue to a fresh session below.
+        resumeFailure = error instanceof Error ? error.message : String(error)
+      }
     } else if (resolveResumeLast()) {
-      nextHandle = await autoResumeNewest(ctx, agents, config.workspace, agentOptions, setup)
-      nextResumed = nextHandle !== undefined
+      try {
+        nextHandle = await autoResumeNewest(ctx, agents, config.workspace, agentOptions, setup)
+        nextResumed = nextHandle !== undefined
+      } catch (error) {
+        resumeFailure = error instanceof Error ? error.message : String(error)
+      }
     }
     if (nextHandle === undefined) {
       nextHandle = await agents.create({
@@ -2433,12 +2572,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // only receives new events). `/new`-created sessions have no history.
   resetSessionStats()
   if (resumed) {
-    // One pass over the log produces the transcript rows, the step list AND
-    // the bottom-bar stats (see foldSessionReplay) — a second full walk of a
-    // long session log is pure resume latency.
-    const replay = foldSessionReplay(agent.session.snapshotEvents())
-    store.loadHistory(replay.items, replay.steps)
-    store.setStats(replay.stats)
+    // Resume the history into the transcript: small logs fold in one pass,
+    // giant logs paint the recent tail first and fold the older ranges in the
+    // background (see resumeHistoryIntoStore) — the launch must never block
+    // its first frame on a very long durable log.
+    resumeHistoryIntoStore(store, agent.session)
+    // Backfill the sidebar title from the in-memory log: the launch session
+    // may predate this process (its session/title event never reached a live
+    // listener here) and the disk-cache prewarm runs on a delay.
+    rememberFoldedTitle(sessionId, agent.session.snapshotEvents())
   }
   // The merged template directory (core + plugin-registered), read live so a
   // sibling plugin's additions apply without a restart.
@@ -2490,6 +2632,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }
 
   store.append('status', `Session ${sessionId} in ${config.workspace}${resumed ? ' (resumed)' : ''}`, true)
+  // The launch resume failed (corrupt log, concurrent writer…): surface why in
+  // the transcript AND in the log, after the fresh-session line above.
+  if (!resumed && resumeFailure !== null) {
+    logErrorFileOnly('resume', `launch resume failed; started a fresh session instead: ${resumeFailure}`)
+    store.append('status', `${describeResumeFailure(resumeFailure)}；已改为新建会话继续。`, true)
+  }
 
   // Warm the title cache shortly after launch so the first /sessions open
   // already has every title (no visible folding delay).
@@ -2587,6 +2735,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
               true)
           }
         }
+        // A turn just finished: the title service may have appended its
+        // session/title event during the run. The session/title case above
+        // only fires for events this listener sees, so fold the live log when
+        // the cache still has no title for the current session (a no-op once
+        // one exists). Runs at most once per turn until a title is cached.
+        if (sessionDisplayTitle(sessionId) === undefined) {
+          rememberFoldedTitle(sessionId, agent.session.snapshotEvents())
+          store.notifyTitles()
+        }
         break
       }
       // The model's step-by-step plan and progress: latest write wins (sidebar
@@ -2621,6 +2778,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // never need to re-read the log for this session.
       case 'session/title': {
         rememberTitle(sessionId, event.data.title)
+        store.notifyTitles()
         break
       }
       // Non-user user/message = injected context (e.g. the system prompt),
@@ -2645,7 +2803,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     mode: 'fullscreen',
     render: () => <HelpDialog />,
     handleKey: (k) => {
-      if (k.escape || (k.ctrl && (k.char ?? '') === 'c')) store.cancelHelp()
+      if (k.escape || k.mouseRightPress || (k.ctrl && (k.char ?? '') === 'c')) store.cancelHelp()
       return true
     },
   })
@@ -2663,7 +2821,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       void compact(ctx, agent)
     },
   })
-  tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { store.clear() } })
+  tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { abortResumeFold(); store.clear() } })
   tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
 
   store.submitMessage = (text) => {
@@ -2888,6 +3046,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // opencode's command-palette "New session" entry. The harness persists
     // every session durably (write-behind on session/event), so the old one
     // stays reachable from /sessions / --resume after it is torn down here.
+    abortResumeFold() // a chunked resume filling the old transcript is moot now
     if (store.running) {
       try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
     }
@@ -2917,6 +3076,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         store.clear() // transcript + steps from the old session
         store.setRunning(false)
         store.setPaused(false)
+        // A fresh session has no events yet, so this is a no-op today; it
+        // covers a future where /new switches onto an already-titled session.
+        rememberFoldedTitle(sessionId, agent.session.snapshotEvents())
         store.append('status', `New session ${sessionId} in ${config.workspace}`, true)
       } catch (error) {
         store.append('status', `new: ${error instanceof Error ? error.message : String(error)}`, true)
@@ -2932,6 +3094,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       store.append('status', `already on session ${sessionId}`, true)
       return
     }
+    abortResumeFold() // a previous chunked resume must not feed the next session
     if (store.running) {
       try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
     }
@@ -2949,14 +3112,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         void attachSessionToWorkspace(ctx, config.workspace, agent.session.id)
         touchSession(sessionId)
         resetSessionStats()
-        const replay = foldSessionReplay(agent.session.snapshotEvents())
-        store.loadHistory(replay.items, replay.steps)
-        store.setStats(replay.stats)
+        resumeHistoryIntoStore(store, agent.session)
         store.setRunning(false)
         store.setPaused(false)
+        // The title cache may not have seen this session (its session/title
+        // event can have landed while the user was elsewhere): fold the
+        // in-memory log now so the sidebar shows the title immediately.
+        rememberFoldedTitle(sessionId, agent.session.snapshotEvents())
         store.append('status', `Session ${sessionId} in ${config.workspace} (resumed)`, true)
       } catch (error) {
-        store.append('status', `resume: ${error instanceof Error ? error.message : String(error)}`, true)
+        store.append('status', describeResumeFailure(error), true)
       }
     })()
   }
@@ -3316,6 +3481,12 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
       }
       case 'tool/call': {
         const argsRaw = (event.data as { arguments?: string }).arguments
+        // Replay the plan block exactly as the live listener appended it
+        // (same `arguments` source; see the live 'tool/call' case above).
+        if (event.data.name === EXIT_PLAN_TOOL) {
+          const plan = extractPlanMarkdown(argsRaw)
+          if (plan !== undefined) items.push({ key: key += 1, kind: 'plan', text: plan })
+        }
         items.push({
           key: key += 1,
           kind: 'tool',
@@ -3370,6 +3541,88 @@ function foldSessionReplay(events: readonly SessionEvent[]): { items: Transcript
   const stats = createSessionStatsFolding()
   const history = foldHistoryEvents(events, stats)
   return { items: history.items, steps: history.steps, stats: stats.snapshot() }
+}
+
+// ── chunked resume (giant sessions): tail-first fast start ──────────────────
+// A very long durable log folded synchronously blocks the first frame for
+// seconds (a 123k-event session measured here). When the log is large the
+// resume folds ONLY the newest tail for the first paint, marks the older part
+// with a leading progress row, then folds the remaining ranges in background
+// slices (each a setTimeout yield) that are prepended at the front of the
+// transcript. Session stats fold separately in ONE chronological pass (per-step
+// timing is order-sensitive). Any newer resume / /new / /clear aborts the
+// background work (see abortResumeFold) — the transcript is replaced wholesale
+// by the next load anyway, so an in-flight slice can only be dropped.
+let resumeFoldAbort: AbortController | null = null
+
+function abortResumeFold(): void {
+  resumeFoldAbort?.abort()
+  resumeFoldAbort = null
+}
+
+/** Resume one agent's session history into the store without freezing the
+ *  first frame on giant logs (see the block above). Small logs keep the
+ *  original single-pass fold; large logs paint the recent tail synchronously
+ *  (fast), then continue folding older ranges in the background.
+ *  @param store - the transcript store.
+ *  @param session - the resumed agent session (durable log snapshot source). */
+function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEvents(): readonly SessionEvent[] }): void {
+  const events = session.snapshotEvents()
+  const t0 = Date.now()
+  const plan = planResumeFold(events)
+  if (plan.mode === 'fast') {
+    // Small history: the original one-pass fold + full stats, exactly as
+    // before this change.
+    const replay = foldSessionReplay(events)
+    store.loadHistory(replay.items, replay.steps)
+    store.setStats(replay.stats)
+    logErrorFileOnly('resume', `fast session=${session.id} events=${events.length} items=${replay.items.length} ms=${Date.now() - t0}`)
+    return
+  }
+  abortResumeFold()
+  const abort = new AbortController()
+  resumeFoldAbort = abort
+  // The synchronous first frame: fold only the newest tail (already cut at a
+  // safe boundary), show it with a leading "loading older history" marker.
+  const tail = foldHistoryEvents(events.slice(plan.tailStart))
+  store.beginHistory(tail.items, tail.steps, plan.tailStart)
+  // Steps: the tail usually carries the newest todo/write, but a recent tail
+  // may contain none — then the latest step list lives in the newest OLDER
+  // slice (the first one processed below).
+  let bestSteps = tail.steps
+  const t1 = Date.now()
+  void (async (): Promise<void> => {
+    let done = 0
+    try {
+      // Session stats need chronological order (per-step timing pairs
+      // step/start with step/end), so they fold in ONE full pass here instead
+      // of across the out-of-order display slices.
+      const stats = createSessionStatsFolding()
+      for (const event of events) stats.observe(event)
+      // Older transcript slices, folded newest-range-first so each result is
+      // prepended directly in front of the already-painted history.
+      for (let r = plan.olderRanges.length - 1; r >= 0; r--) {
+        if (abort.signal.aborted) return
+        const [from, to] = plan.olderRanges[r]!
+        const chunk = foldHistoryEvents(events.slice(from, to))
+        if (chunk.items.length > 0) store.prependHistory(chunk.items)
+        if (bestSteps.length === 0 && chunk.steps.length > 0) bestSteps = chunk.steps
+        done += to - from
+        store.setHistoryProgress(done, plan.tailStart)
+        await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+      }
+      if (abort.signal.aborted) return
+      store.finishHistory()
+      store.setSteps(bestSteps)
+      store.setStats(stats.snapshot())
+      logErrorFileOnly('resume', `chunked session=${session.id} events=${events.length} items=${store.getItems().length} older=${plan.tailStart} firstFrameMs=${t1 - t0} totalMs=${Date.now() - t0}`)
+    } catch (error) {
+      const message = error instanceof Error ? error.stack ?? error.message : String(error)
+      logErrorFileOnly('resume', `background fold failed: ${message}`)
+    } finally {
+      if (resumeFoldAbort === abort) resumeFoldAbort = null
+    }
+  })()
 }
 
 /** The harness manual-compaction failure texts, verbatim from dsh-command-compact. */

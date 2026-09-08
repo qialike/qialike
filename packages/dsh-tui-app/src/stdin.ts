@@ -36,9 +36,20 @@ export interface RawKey {
   home?: boolean
   end?: boolean
   altEnter?: boolean
-  wheelUp?: boolean
-  wheelDown?: boolean
+  /** Scroll wheel tick; carries the pointer cell so handlers can route the
+   *  scroll by WHERE the pointer is (the dock vs the message column). */
+  wheelUp?: { row: number; col: number }
+  wheelDown?: { row: number; col: number }
   mousePress?: { row: number; col: number }
+  /** Right-button press (SGR button 2). Popups treat it as Esc — close /
+   *  cancel without selecting. */
+  mouseRightPress?: { row: number; col: number }
+  /** The release that follows a right-button press. The SGR protocol cannot
+   *  tell a right-click's release from a left-click's (both arrive as button
+   *  3), so the decoder tags it after a mouseRightPress; popups swallow it —
+   *  the press already ran the cancel, and treating it as a left-click would
+   *  immediately re-enter / confirm a list row. */
+  mouseRightRelease?: { row: number; col: number }
   mouseMove?: { row: number; col: number }
   mouseDrag?: { row: number; col: number }
   mouseRelease?: { row: number; col: number }
@@ -69,6 +80,11 @@ export class StdinDecoder {
   private buf: number[] = []
   /** Accumulated bracketed-paste bytes while a `ESC[200~ … ESC[201~` region is open. */
   private paste: number[] | null = null
+  /** A right-button press was decoded and its (indistinguishable) release is
+   *  still expected: tag that release as `mouseRightRelease` so popups swallow
+   *  it instead of treating it as a left-click confirm. Cleared by any other
+   *  mouse event. */
+  private rightClickPending = false
 
   /** True when a lone `ESC` is awaiting disambiguation (nothing after it yet). */
   get pendingEscape(): boolean {
@@ -240,14 +256,35 @@ export class StdinDecoder {
     const col = fields[1] ?? 0
     const row = fields[2] ?? 0
     if (!Number.isFinite(col) || !Number.isFinite(row)) return
-    if (isRelease) { out.push({ mouseRelease: { row, col } }); return }
+    if (isRelease) {
+      // A release right after a right press is the right-click's own release
+      // (the protocol carries no button on release). Tag it so popups swallow
+      // it — a popup already cancelled on the press; left-click semantics here
+      // would immediately re-enter/confirm a list row.
+      if (this.rightClickPending) {
+        this.rightClickPending = false
+        out.push({ mouseRightRelease: { row, col } })
+      } else {
+        out.push({ mouseRelease: { row, col } })
+      }
+      return
+    }
+    // SGR button codes: bits 0-1 are the button (0 left, 1 middle, 2 right);
+    // bit 5 (32) marks motion (drag); bit 6 (64/65) is wheel up/down.
+    const button = raw & 0x3
+    if (button === 2 && (raw & 0x20) === 0) {
+      this.rightClickPending = true
+      out.push({ mouseRightPress: { row, col } })
+      return
+    }
+    this.rightClickPending = false
     if (raw === 0) out.push({ mousePress: { row, col } })
     else if (raw === 32) out.push({ mouseDrag: { row, col } }) // left + motion (drag)
     else if (raw === 35) out.push({ mouseMove: { row, col } }) // motion without button (hover, ?1003)
     else if (raw === 3) out.push({ mouseRelease: { row, col } }) // X10-style release button
-    else if (raw === 64) out.push({ wheelUp: true })
-    else if (raw === 65) out.push({ wheelDown: true })
-    // other buttons / modifier combos (Shift/alt/ctrl) are ignored so the
-    // terminal can perform its own selection.
+    else if (raw === 64) out.push({ wheelUp: { row, col } })
+    else if (raw === 65) out.push({ wheelDown: { row, col } })
+    // other buttons / modifier combos (Shift/alt/ctrl, right+motion, middle)
+    // are ignored so the terminal can perform its own selection.
   }
 }

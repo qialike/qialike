@@ -18,7 +18,8 @@
 ## 环境要求
 
 - Node.js `^22.19 || >=24`（用于 `pnpm` 构建工具）
-- 一份 DeepSeek Harness 检出（`DSH_HARNESS`，默认 `../deepseek-harness`）
+- bun（用于 `pnpm build` 的 `bun build --compile` 打包与 `pnpm test:unit`；未固定版本，装最新即可，参考已验证 v1.3.14）
+- 一份 DeepSeek Harness 检出（`DSH_HARNESS`，默认 `../deepseek-harness`；仅 `pnpm build` 需要，运行编译好的 `dist/dsh-tui` 无需检出）
 - 跑真实会话时需要 `DEEPSEEK_API_KEY`（环境变量、`~/.dsh` 设置或 `.env`）
 
 ## 构建

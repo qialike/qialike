@@ -89,6 +89,19 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
     const pick = filterSchemes(api.schemes(), state.filter)[state.index]
     if (pick !== undefined) api.apply(pick)
   }
+  const cancel = (): void => {
+    if (state.snapshot !== null) api.restore(state.snapshot, state.previous)
+    state.snapshot = null
+    close()
+  }
+  // Right-click = Esc: exit the popup WITHOUT selecting. A filter in progress is
+  // first cleared (one step), then a second right-click / Esc restores the
+  // pre-open theme and closes — exactly the two-step Esc semantics below.
+  if (k.mouseRightPress) {
+    if (state.filter !== '') { state.filter = ''; state.index = 0; preview() }
+    else cancel()
+    return true
+  }
   // Mouse: consume press (no selection); a left-click runs the current highlight
   // (== Enter) by re-dispatching as a return key.
   if (k.mousePress) return true
@@ -106,11 +119,6 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
   if (k.mouseRelease) {
     if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return themePickerKey({ return: true } as RawKey, store, api)
     return true
-  }
-  const cancel = (): void => {
-    if (state.snapshot !== null) api.restore(state.snapshot, state.previous)
-    state.snapshot = null
-    close()
   }
   if (k.escape) {
     if (state.filter !== '') { state.filter = ''; state.index = 0; preview() }
@@ -204,7 +212,7 @@ export function ThemePicker({ store, api }: { store: Store; api: ThemePickerApi 
           {total === 0 && <Text dimColor>no themes match “{state.filter}”</Text>}
         </Box>
         <Box flexDirection="row">
-          <Text dimColor>↑/↓ move · type to filter · Enter apply · Esc cancel — preview applies live ({allNames.length} schemes)</Text>
+          <Text dimColor>↑/↓ move · type to filter · Enter apply · Esc/right-click cancel — preview applies live ({allNames.length} schemes)</Text>
         </Box>
       </Box>
     </Box>
