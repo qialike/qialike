@@ -272,6 +272,10 @@ export class Store {
    *  resume is still folding older slices in the background, or -1 when the
    *  full history is present (the marker row is always items[0]). */
   private _historyMarkerKey = -1
+  /** Number of OLDER-history items currently loaded behind the marker (rows
+   *  inserted by {@link prependHistory}); lets the resume driver bound memory
+   *  and trim the oldest loaded slices while the user reads the live tail. */
+  private _loadedOlder = 0
   private version = 0
   private listeners = new Set<() => void>()
   private _input = ''
@@ -339,6 +343,11 @@ export class Store {
   private _measureEpoch = 0
   /** Bumped when an expansion toggle changes row heights (/think, per-row). */
   private _expansionEpoch = 0
+  /** Bumped when the transcript is replaced wholesale (clear / loadHistory /
+   *  beginHistory): numeric item keys are then REUSED, so row-keyed caches
+   *  (e.g. the debounced markdown-height estimates) must drop on this — NOT
+   *  on measure/expansion churn, which never re-keys items. */
+  private _loadGeneration = 0
   /** Tool row currently under the mouse (hover affordance: "clickable"), or
    *  null. Only set when the row is a settled tool with a body. */
   private _hoveredToolKey: number | null = null
@@ -382,24 +391,22 @@ export class Store {
     this._frameGuard = fn
   }
 
-  private _notifyScheduled = false
+  /** Render-coalescing window (ms): store mutations schedule AT MOST one
+   *  subscriber render per window, so a session-event storm (hundreds of
+   *  streamed deltas per second) paints at ≤40 fps instead of once per event —
+   *  each event would otherwise force a full ConversationMain render + layout
+   *  pass over the whole transcript. Interactive input latency stays under one
+   *  window; internal arrays are mutated synchronously, only the subscriber
+   *  render is deferred, so no intermediate state is ever lost. */
+  private static readonly NOTIFY_BATCH_MS = 25
+  private _notifyTimer: ReturnType<typeof setTimeout> | null = null
   private notify(): void {
-    // Coalesce bursts of store updates (e.g. a tool run fires tens of session
-    // events synchronously) into ONE render per microtask; firing listeners
-    // synchronously per notify would nest 50+ React renders and trip React's
-    // "Maximum update depth exceeded" guard. The version bump happens in the
-    // SAME microtask as the listeners: a bump landing between a commit and its
-    // passive-effect flush is observed by React's useSyncExternalStore
-    // consistency check, which then force-re-renders DURING the flush and
-    // trips the passive-nested-update guard ("Maximum update depth exceeded",
-    // see dsh-tui.log) under sustained streaming.
-    if (this._notifyScheduled) return
-    this._notifyScheduled = true
-    queueMicrotask(() => {
-      this._notifyScheduled = false
+    if (this._notifyTimer !== null) return
+    this._notifyTimer = setTimeout(() => {
+      this._notifyTimer = null
       this.version += 1
       for (const listener of this.listeners) listener()
-    })
+    }, Store.NOTIFY_BATCH_MS)
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -721,6 +728,8 @@ export class Store {
   private bumpExpansion(): void { this._expansionEpoch += 1 }
   get measureEpoch(): number { return this._measureEpoch }
   get expansionEpoch(): number { return this._expansionEpoch }
+  /** Transcript-load generation: bumps whenever item keys may be reused. */
+  get loadGeneration(): number { return this._loadGeneration }
   /** Toggle ONE tool row (mouse click): records a per-row override of
    *  the current global default, so individual rows stay clickable in both
    *  global modes. */
@@ -838,6 +847,7 @@ export class Store {
   clear(): void {
     this.items = []
     this._historyMarkerKey = -1
+    this._loadedOlder = 0
     this._steps = []
     this._toolBodiesOverride.clear()
     this._toolBodiesDefault = false
@@ -845,6 +855,7 @@ export class Store {
     this._reasoningDefault = false
     this._measureEpoch += 1
     this._expansionEpoch += 1
+    this._loadGeneration += 1
     this._rowResolver = null
     this.notify()
   }
@@ -862,6 +873,7 @@ export class Store {
     this._reasoningDefault = false
     this._measureEpoch += 1
     this._expansionEpoch += 1
+    this._loadGeneration += 1
     this.notify()
   }
 
@@ -889,8 +901,10 @@ export class Store {
     this._toolBodiesDefault = false
     this._reasoningOverride.clear()
     this._reasoningDefault = false
+    this._loadedOlder = 0
     this._measureEpoch += 1
     this._expansionEpoch += 1
+    this._loadGeneration += 1
     this.notify()
   }
 
@@ -908,8 +922,37 @@ export class Store {
     this.items = marker
       ? [this.items[0]!, ...keyed, ...this.items.slice(1)]
       : [...keyed, ...this.items]
+    if (marker) this._loadedOlder += keyed.length
     this._measureEpoch += 1
     this.notify()
+  }
+
+  /** Number of older-history items currently loaded behind the marker row. */
+  get loadedOlder(): number { return this._loadedOlder }
+  /** Whether an "older history still loading" marker row is present (a chunked
+   *  resume has not reached event 0 yet). */
+  get olderLoading(): boolean { return this._historyMarkerKey >= 0 }
+
+  /** Drop the OLDEST loaded older-history items so the transcript holds at
+   *  most `keep` of them (memory bound for very long sessions while the user
+   *  reads the live tail). Only valid while the marker row is present (older
+   *  history is still loading); the dropped slices can be re-folded later by
+   *  the resume driver, so nothing is lost. Row keys of kept items are
+   *  untouched (their height caches stay valid); the visual position is
+   *  bottom-anchored because callers only trim while following the tail.
+   *  @param keep - how many older items to keep after the drop.
+   *  @returns how many items were dropped (0 when nothing to drop). */
+  trimOlderFront(keep: number): number {
+    if (this._historyMarkerKey < 0 || this._loadedOlder <= keep) return 0
+    const drop = this._loadedOlder - keep
+    const dropable = Math.max(0, this.items.length - 1)
+    const dropN = Math.min(drop, dropable)
+    if (dropN <= 0) return 0
+    this.items = [this.items[0]!, ...this.items.slice(1 + dropN)]
+    this._loadedOlder -= dropN
+    this._measureEpoch += 1
+    this.notify()
+    return dropN
   }
 
   /** Refresh the leading marker's progress text while the background fold of
@@ -3559,6 +3602,29 @@ function foldSessionReplay(events: readonly SessionEvent[]): { items: Transcript
 // by the next load anyway, so an in-flight slice can only be dropped.
 let resumeFoldAbort: AbortController | null = null
 
+/** Background-fold idle scheduling. History folding shares the ONE main thread
+ *  with the live session stream: between slices we always yield a beat, and
+ *  while the agent is running with events still arriving (markActivity
+ *  refreshes {@link Store.lastActivityAt}) the fold HOLDS the next slice and
+ *  only continues during quiet gaps, so a folding slice never starves the
+ *  live turn's layout/render (the "main loop blocked" stalls on giant
+ *  sessions). */
+const RESUME_FOLD_YIELD_MS = 16
+const RESUME_FOLD_HOLD_MS = 200
+const RESUME_FOLD_QUIET_GAP_MS = 150
+
+/** Older-history window bound (优化4): while the user reads the live tail the
+ *  resume keeps at most this many older-history items loaded; slices dropped
+ *  beyond it land on an eviction stack and are re-folded on demand when the
+ *  user scrolls back to the top, so very long sessions never hold their whole
+ *  history in the transcript. Sessions whose older history fits under the cap
+ *  load exactly as before (marker removed once event 0 is reached). */
+const RESUME_OLDER_ITEM_CAP = 4000
+
+function sleepFor(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => { setTimeout(resolve, ms) })
+}
+
 function abortResumeFold(): void {
   resumeFoldAbort?.abort()
   resumeFoldAbort = null
@@ -3596,24 +3662,130 @@ function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEve
   let bestSteps = tail.steps
   const t1 = Date.now()
   void (async (): Promise<void> => {
-    let done = 0
     try {
       // Session stats need chronological order (per-step timing pairs
       // step/start with step/end), so they fold in ONE full pass here instead
-      // of across the out-of-order display slices.
+      // of across the out-of-order display slices; bounded into slices so the
+      // pass never blocks the thread for a whole giant log at once.
       const stats = createSessionStatsFolding()
-      for (const event of events) stats.observe(event)
-      // Older transcript slices, folded newest-range-first so each result is
-      // prepended directly in front of the already-painted history.
-      for (let r = plan.olderRanges.length - 1; r >= 0; r--) {
+      const statsSlice = 50_000
+      for (let i = 0; i < events.length; i += statsSlice) {
         if (abort.signal.aborted) return
-        const [from, to] = plan.olderRanges[r]!
+        const end = Math.min(i + statsSlice, events.length)
+        for (let j = i; j < end; j++) stats.observe(events[j]!)
+        if (end < events.length) await sleepFor(RESUME_FOLD_YIELD_MS)
+      }
+      // ── Windowed older-history driver (优化3 idle scheduling + 优化4 on-demand) ──
+      // `plan.olderRanges` is chronological (oldest → newest). Slices are
+      // folded newest-first and each result prepended in front of the
+      // already-painted history, so the transcript under the marker stays
+      // newest-first. `foldedNewestFirst` mirrors that order; eviction pops
+      // from its END (chronological OLDEST, the items directly under the
+      // marker) and pushes onto `evictedOldestFirst` (also oldest-first), so
+      // slices dropped while the user reads the live tail can be re-folded on
+      // demand when the user scrolls back to the top.
+      const ranges = plan.olderRanges
+      const foldedNewestFirst: { from: number; to: number; items: number }[] = []
+      const evictedOldestFirst: { from: number; to: number; items: number }[] = []
+      let cursor = ranges.length - 1 // next ORIGINAL slice to fold (newest-unfolded first)
+      // Unique older-event accounting: loaded = total − not-yet-folded − evicted.
+      let unfoldedEv = plan.tailStart
+      let evictedEv = 0
+      const progress = (): void => {
+        store.setHistoryProgress(Math.max(0, plan.tailStart - unfoldedEv - evictedEv), plan.tailStart)
+      }
+      const foldRange = (from: number, to: number): void => {
         const chunk = foldHistoryEvents(events.slice(from, to))
-        if (chunk.items.length > 0) store.prependHistory(chunk.items)
+        if (chunk.items.length > 0) {
+          store.prependHistory(chunk.items)
+          foldedNewestFirst.push({ from, to, items: chunk.items.length })
+        }
         if (bestSteps.length === 0 && chunk.steps.length > 0) bestSteps = chunk.steps
-        done += to - from
-        store.setHistoryProgress(done, plan.tailStart)
-        await new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+      }
+      /** Fold one slice — an original range first (they are chronologically
+       *  OLDER than anything evicted), then an evicted slice nearest to the
+       *  still-loaded content. Returns false when there is nothing left. */
+      const stepFold = (): boolean => {
+        let from = 0
+        let to = 0
+        if (cursor >= 0) {
+          const range = ranges[cursor]!
+          from = range[0]
+          to = range[1]
+          cursor -= 1
+          unfoldedEv -= to - from
+        } else if (evictedOldestFirst.length > 0) {
+          const rec = evictedOldestFirst.pop()!
+          from = rec.from
+          to = rec.to
+          evictedEv -= to - from
+        } else {
+          return false
+        }
+        foldRange(from, to)
+        progress()
+        return true
+      }
+      const nearTop = (): boolean => !store.followTail && store.layoutScroll <= Math.max(1, store.layoutViewport)
+      /** While the user reads the live tail, drop the oldest loaded older
+       *  slices once more than {@link RESUME_OLDER_ITEM_CAP} are held (memory
+       *  bound for very long sessions); the dropped ranges land on the
+       *  evicted stack and are re-folded near the top on demand. */
+      const evictOverCap = (): void => {
+        let over = store.loadedOlder - RESUME_OLDER_ITEM_CAP
+        if (over <= 0 || foldedNewestFirst.length === 0) return
+        const popped: { from: number; to: number; items: number }[] = []
+        let droppedItems = 0
+        while (droppedItems < over && foldedNewestFirst.length > 0) {
+          const rec = foldedNewestFirst.pop()!
+          popped.push(rec)
+          droppedItems += rec.items
+        }
+        const trimmed = store.trimOlderFront(Math.max(0, store.loadedOlder - droppedItems))
+        if (trimmed > 0) {
+          // popped is already chronological-oldest-first; older content goes to
+          // the FRONT of the evicted stack.
+          evictedOldestFirst.unshift(...popped)
+          for (const rec of popped) evictedEv += rec.to - rec.from
+          progress()
+        } else {
+          // Nothing was trimmed: restore the popped records untouched.
+          for (let i = popped.length - 1; i >= 0; i--) foldedNewestFirst.push(popped[i]!)
+        }
+      }
+      for (;;) {
+        if (abort.signal.aborted) return
+        // Idle scheduling (优化3): while the live turn is running with events
+        // still arriving, hold — the fold must never compete with live
+        // layout/render on the one thread.
+        if (store.running && Date.now() - store.lastActivityAt < RESUME_FOLD_QUIET_GAP_MS) {
+          await sleepFor(RESUME_FOLD_HOLD_MS)
+          continue
+        }
+        // Trim over-cap older while the user stays at the live tail.
+        if (store.followTail && store.loadedOlder > RESUME_OLDER_ITEM_CAP) {
+          evictOverCap()
+          continue
+        }
+        // Done when every original slice and every evicted slice is loaded.
+        if (cursor < 0 && evictedOldestFirst.length === 0) break
+        // Pacing (优化4): at the tail we keep only a bounded window of older
+        // history; in the middle of the transcript we do not grow older
+        // content ABOVE the viewport (inserting it would shift what the user
+        // is reading) — older loads happen near the top and at the tail.
+        if (store.followTail) {
+          if (store.loadedOlder >= RESUME_OLDER_ITEM_CAP) {
+            await sleepFor(RESUME_FOLD_HOLD_MS)
+            continue
+          }
+        } else if (!nearTop()) {
+          await sleepFor(RESUME_FOLD_HOLD_MS)
+          continue
+        }
+        // Fold one slice, then always breathe between slices (even an 8 ms
+        // slice back-to-back with the live stream can starve a frame).
+        if (!stepFold()) break
+        await sleepFor(RESUME_FOLD_YIELD_MS)
       }
       if (abort.signal.aborted) return
       store.finishHistory()

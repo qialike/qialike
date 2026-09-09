@@ -434,6 +434,42 @@ const measuredHeights = new Map<string, number>()
 let lastLayoutWidth = -1 // last width the row-height cache was computed for
 const lastMeasuredNotify = new Map<string, number>()
 
+/** Set when a measured height changed between layout passes (a diff-rendered
+ *  row read, the un-throttled 60/400/900 ms resamples). A layout pass must
+ *  NOT reuse its height prefix while this is set — the changed row may sit
+ *  before the streaming tail — so it forces the full walk, then clears. */
+let measuredDirty = false
+
+/** The previous layout pass, kept for prefix reuse (优化5): when only the
+ *  streaming tail changed and no measurement/epoch/width changed since, the
+ *  next pass reuses the unchanged height/starts PREFIX and re-derives only
+ *  from the first changed row. */
+interface PrevLayout {
+  rows: readonly Row[]
+  hts: number[]
+  starts: number[]
+  content: number
+  usable: number
+  measureEpoch: number
+  expansionEpoch: number
+  loadGeneration: number
+  stepsLength: number
+}
+let prevLayout: PrevLayout | null = null
+
+/** Whether two transcript rows contribute the identical resolved height:
+ *  same shape/margins and — for item rows — the SAME item object (a streamed
+ *  replacement creates a new object, so it compares unequal by design).
+ *  Steps rows depend only on position (their height is
+ *  `stepsBlockHeight(steps.length)`, tracked separately via stepsLength). */
+function rowShapeEqual(a: Row, b: Row): boolean {
+  if (a.top !== b.top || a.bottom !== b.bottom) return false
+  if (a.type === 'item') {
+    return b.type === 'item' && a.item === b.item
+  }
+  return b.type === 'steps'
+}
+
 function setMeasuredHeight(key: string, rows: number): void {
   const prev = measuredHeights.get(key)
   if (prev !== undefined && Math.abs(prev - rows) <= 1) return
@@ -442,6 +478,7 @@ function setMeasuredHeight(key: string, rows: number): void {
   if (last !== undefined && now - last < 250) return
   lastMeasuredNotify.set(key, now)
   measuredHeights.set(key, rows)
+  measuredDirty = true
   // Row heights changed: the layout memo must recompute. The dedicated epoch
   // (not the generic render `version`) is what invalidates it, so typing and
   // phase/hover churn never re-lay the whole transcript.
@@ -466,7 +503,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
   const text = stripTerminalControls(item.text)
   if (item.kind === 'assistant') {
     // Assistant: indent the markdown to the shared content column.
-    return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={text} /></Box>
+    return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={text} usable={MESSAGE_TEXT_WIDTH(usable)} /></Box>
   }
   if (item.kind === 'plan') {
     // A plan submitted for review (harness `exit_plan_mode`): a labelled block
@@ -477,7 +514,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     return (
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
         <Text color={theme.bg} backgroundColor={theme.accent}>{' Plan '}</Text>
-        <MarkdownText text={text} />
+        <MarkdownText text={text} usable={MESSAGE_TEXT_WIDTH(usable)} />
       </Box>
     )
   }
@@ -638,6 +675,7 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
       const rows = measureElement(ref.current).height
       const prev = measuredHeights.get(key)
       if (prev === undefined || Math.abs(prev - rows) > 1) {
+        measuredDirty = true
         measuredHeights.set(key, rows)
         store.touch()
       }
@@ -910,8 +948,64 @@ function composerHeight(width: number, input: string, min: number): number {
  *  Markdown(mdast) parse per assistant row happens ONCE per item, not on every
  *  event/keystroke (measured: 40 assistant rows ≈ 36 ms per pass without this
  *  cache, <1 ms with it). The streaming tail replaces its item each delta, so
- *  only that single row re-parses while it grows. */
+ *  the per-item cache alone would re-parse the markdown on EVERY delta while a
+ *  long answer grows — {@link estimateMarkdownHeightDebounced} bounds that by
+ *  row key instead. */
 const estCache = new WeakMap<TranscriptItem, Map<string, number>>()
+
+/** How many characters a streaming row may grow past its last markdown-height
+ *  parse before the estimate is recomputed. Between parses the painted
+ *  measured height (resolveRowHeight trusts it when ≥ est−1) keeps the live
+ *  layout correct, and settlement (assistant/message) replaces the row with
+ *  authoritative text — growth past the threshold then re-parses once. */
+const MARKDOWN_REPARSE_GROWTH = 1024
+
+interface MarkdownHeightEstimate {
+  /** Item text length at the last mdast parse. */
+  parsedLength: number
+  lines: number
+}
+
+/** Row-keyed markdown-height cache with a generation guard: numeric item keys
+ *  are reused across loads (loadHistory/beginHistory re-key from 0), so the
+ *  cache drops whenever the store's {@link loadGeneration} moves; a width
+ *  change clears it explicitly (wrap counts differ per width). */
+let markdownHeightGeneration = -1
+const markdownHeightsByKey = new Map<number, MarkdownHeightEstimate>()
+
+/** Clear the debounced markdown-height cache (called when the wrap width
+ *  changes; transcript loads clear implicitly via the generation guard). */
+export function clearMarkdownHeightCache(): void {
+  markdownHeightsByKey.clear()
+}
+
+/** Row-height estimate for markdown text (assistant/plan rows), debounced by
+ *  streamed growth: reuse the last mdast parse until the text grew past
+ *  {@link MARKDOWN_REPARSE_GROWTH} since it, so a fast long stream does not
+ *  re-run the parse per delta (measured painted heights cover the gap, and
+ *  settlement re-parses once). No parse for identical text either.
+ *  @param key - stable transcript row key (survives streamed replacements).
+ *  @param text - current row text (markdown source).
+ *  @param width - wrapped content width in columns.
+ *  @param generation - cache generation (store.loadGeneration). */
+export function estimateMarkdownHeightDebounced(key: number, text: string, width: number, generation: number): number {
+  if (generation !== markdownHeightGeneration) {
+    markdownHeightsByKey.clear()
+    markdownHeightGeneration = generation
+  }
+  const hit = markdownHeightsByKey.get(key)
+  if (hit !== undefined && text.length - hit.parsedLength < MARKDOWN_REPARSE_GROWTH) return hit.lines
+  const lines = estimateMarkdownHeight(text, width)
+  markdownHeightsByKey.set(key, { parsedLength: text.length, lines })
+  return lines
+}
+
+/** Whether a row-keyed markdown estimate must re-run its parse: no cache
+ *  entry, or the text has grown at least {@link MARKDOWN_REPARSE_GROWTH}
+ *  characters past the last parse. Exported for tests. */
+export function markdownHeightReparseDue(parsedLength: number | undefined, textLength: number): boolean {
+  return parsedLength === undefined || textLength - parsedLength >= MARKDOWN_REPARSE_GROWTH
+}
 
 /** Decide the row height the layout uses: trust the measured painted height
  *  unless it is implausibly SMALL. The measured value is the truth for any row
@@ -955,10 +1049,10 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
     if (expandReasoning) lines = 1 + countWrappedLines(item.text, w)
     else lines = 2
   } else if (item.kind === 'assistant') {
-    lines = estimateMarkdownHeight(item.text, w)
+    lines = estimateMarkdownHeightDebounced(item.key, item.text, w, store.loadGeneration)
   } else if (item.kind === 'plan') {
     // Label tag row + the FULLY unfolded markdown body (never collapsed).
-    lines = 1 + estimateMarkdownHeight(item.text, w)
+    lines = 1 + estimateMarkdownHeightDebounced(item.key, item.text, w, store.loadGeneration)
   } else if (item.kind === 'user') {
     lines = countWrappedLines(item.text, w)
   } else if (item.kind === 'tool') {
@@ -1715,6 +1809,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // drop the cache so the next pass re-estimates before anything is measured.
     if (usable !== lastLayoutWidth) {
       measuredHeights.clear()
+      clearMarkdownHeightCache()
       lastLayoutWidth = usable
     }
     // Row heights come from the measured cache first; a row that has not been
@@ -1722,7 +1817,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // is cached in place, so later notify cycles only walk the cache instead
     // of re-estimating every row's wrapped-line count (O(total chars) each
     // render on long sessions).
-    const hts = rows.map((r) => {
+    const heightOf = (r: Row): number => {
       // Content rows first (estimated; the measured cache only overrides when
       // it stays within 1 of the estimate — a wildly-off reading is a scroll
       // artifact), then the row's layout margins add their rows so starts[]
@@ -1746,12 +1841,46 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           return resolveRowHeight(est, measured)
         })()
       return content + r.top + r.bottom
-    })
+    }
+    // 优化5 — layout restricted to the changed rows. A streamed delta replaces
+    // only the TAIL row, so when no width/epoch/measurement/steps changed, the
+    // row/height/starts PREFIX is byte-identical to the previous pass: reuse it
+    // and re-derive from the first changed row instead of walking the whole
+    // transcript every event (history rows keep object identity, so the prefix
+    // compare is O(changed) — a long session never re-derives its whole layout
+    // per delta). A measurement update, expansion toggle, transcript load,
+    // width change, or steps change forces the full pass below.
+    const prev = prevLayout
+    const epochsChanged = prev !== null && (
+      prev.usable !== usable
+      || prev.measureEpoch !== store.measureEpoch
+      || prev.expansionEpoch !== store.expansionEpoch
+      || prev.loadGeneration !== store.loadGeneration
+      || prev.stepsLength !== steps.length)
+    if (prev !== null && !epochsChanged && !measuredDirty) {
+      const n = Math.min(rows.length, prev.rows.length)
+      let start = 0
+      while (start < n && rowShapeEqual(rows[start]!, prev.rows[start]!)) start++
+      if (start === n && rows.length === prev.rows.length) return prev // unchanged transcript: reuse whole layout
+      const hts = prev.hts.slice(0, start)
+      const starts = prev.starts.slice(0, start)
+      let s = starts[start] ?? 0
+      for (let i = start; i < rows.length; i++) {
+        hts.push(heightOf(rows[i]!))
+        starts.push(s)
+        s += hts[hts.length - 1]!
+      }
+      prevLayout = { rows, hts, starts, content: s, usable, measureEpoch: store.measureEpoch, expansionEpoch: store.expansionEpoch, loadGeneration: store.loadGeneration, stepsLength: steps.length }
+      return { hts, starts, content: s }
+    }
+    measuredDirty = false
+    const hts = rows.map((r) => heightOf(r))
     const starts: number[] = []
     let s = 0
-    for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i] }
+    for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i]! }
+    prevLayout = { rows, hts, starts, content: s, usable, measureEpoch: store.measureEpoch, expansionEpoch: store.expansionEpoch, loadGeneration: store.loadGeneration, stepsLength: steps.length }
     return { hts, starts, content: s }
-  }, [rows, usable, steps, store.measureEpoch, store.expansionEpoch])
+  }, [rows, usable, steps, store.measureEpoch, store.expansionEpoch, store.loadGeneration])
   const maxScroll = Math.max(0, layout.content - viewportLines)
   const effectiveScroll = store.followTail ? maxScroll : Math.max(0, Math.min(store.scroll, maxScroll))
   const topRow = 2
