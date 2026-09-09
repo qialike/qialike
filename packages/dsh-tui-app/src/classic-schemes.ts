@@ -3,7 +3,7 @@
  * `/theme` can switch to them like vim `:colorscheme` (they show up in the
  * picker dialog and in `resolveScheme` unique-prefix completion).
  *
- * 17-key mapping used for the opencode-derived schemes (roles resolved from
+ * 17-key mapping used for the classic schemes (roles resolved from
  * each theme's `dark` side; `defs` references expanded):
  *   bg/panel/element        ← background / backgroundPanel / backgroundElement
  *   borderSubtle/border/…   ← borderSubtle / border / borderActive
@@ -14,14 +14,18 @@
  *                             syntaxType, warning)
  *
  * LICENSE NOTE: every skin here is MIT-licensed (permissive) so the set is
- * safe to bundle/redistribute. 9 palettes are resolved from the theme files
- * bundled with opencode (`packages/tui/src/theme/assets/<name>.json`, an MIT
- * repo, opencode-1.18.25 checkout); `jellybeans` is mapped from the MIT vim
- * colorscheme by nanoTech. Upstream projects: catppuccin (Catppuccin),
- * dracula (Dracula Theme), everforest (sainnhe), gruvbox (morhetz),
- * kanagawa (rebelot), monokai (Wimer Hazenberg; values via opencode's MIT
- * repo), nord (arcticicestudio), rosepine (Rosé Pine), solarized (Ethan
- * Schoonover) — see THIRD_PARTY_NOTICES.md.
+ * safe to bundle/redistribute. 8 palettes (catppuccin, dracula, everforest,
+ * gruvbox, kanagawa, nord, rosepine, solarized) are the upstream projects'
+ * own palettes, sourced directly from their official repos; their values were
+ * verified against the theme files bundled with opencode
+ * (`packages/tui/src/theme/assets/<name>.json`, an MIT repo, opencode-1.18.25
+ * checkout) and are byte-identical to the upstream palettes. `monokai`
+ * (Wimer Hazenberg) has no single official repo, so its values come via
+ * opencode's MIT assets (upstream terms vary by port). `jellybeans` is
+ * mapped from the MIT vim colorscheme by nanoTech. Upstream projects:
+ * catppuccin (Catppuccin), dracula (Dracula Theme), everforest (sainnhe),
+ * gruvbox (morhetz), kanagawa (rebelot), nord (arcticicestudio), rosepine
+ * (Rosé Pine), solarized (Ethan Schoonover) — see THIRD_PARTY_NOTICES.md.
  * - `jellybeans` maps canonical highlight groups onto our semantic roles:
  *   Normal → text, Comment → textMuted, Function → primary, Identifier →
  *   secondary, Type → accent, String/Title → success, Constant → warning,

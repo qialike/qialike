@@ -19,12 +19,17 @@ and the Bun runtime embeds its own license with the compiled binary.
 ## Classic colorschemes
 
 The 10 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
-palettes imported from the following upstream projects (9 resolved from the theme files bundled
-with [opencode](https://github.com/sst/opencode) — an MIT repo — at
-`packages/tui/src/theme/assets/*.json`; 1 (`jellybeans`) mapped from an MIT vim colorscheme).
-dsh-tui bundles only **resolved hex values** plus its own 17-role mapping — no upstream source
-code is copied. The set is deliberately **MIT-only / permissive** so it is safe to bundle and
-redistribute; each upstream license was verified against its repo LICENSE file before inclusion.
+palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values** plus its own
+17-role mapping — no upstream source code is copied. 8 of them (catppuccin, dracula,
+everforest, gruvbox, kanagawa, nord, rosepine, solarized) are the upstream projects' own
+palettes, referenced directly from their official repos; their values were verified against the
+theme files bundled with [opencode](https://github.com/sst/opencode) — an MIT repo — at
+`packages/tui/src/theme/assets/<name>.json` and are byte-identical to the upstream palettes.
+`monokai` has no single official repository, so its values are taken via opencode's MIT theme
+assets (upstream terms vary by port); `jellybeans` is mapped from the MIT vim colorscheme by
+nanoTech.
+The set is deliberately **MIT-only / permissive** so it is safe to bundle and redistribute; each
+upstream license was verified against its repo LICENSE file before inclusion.
 The rows below list the verified licenses.
 
 | Colorscheme | Upstream | License | Source |
