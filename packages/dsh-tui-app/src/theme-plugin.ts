@@ -10,9 +10,9 @@ import React from 'react'
  *     `packages/tui/src/theme/assets/opencode.json`); the optional Atom skins
  *     `one-dark` / `one-light` (Atom's official repos, GitHub Inc. MIT); plus
  *     the classic third-party set in `classic-schemes.ts` (catppuccin,
- *     dracula, everforest, gruvbox, jellybeans, kanagawa, monokai, nord,
- *     rosepine, solarized — all MIT-licensed; see that module's header for
- *     sources and the 17-key mapping);
+ *     dracula, everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa,
+ *     monokai, nord, panda, rosepine, solarized — all MIT-licensed; see that
+ *     module's header for sources and the 17-key mapping);
  *   - **user schemes** live in `~/.dsh/themes/<name>.json` — like vim's
  *     `colors/*.vim`. Each file is a small JSON palette:
  *

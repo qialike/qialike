@@ -125,7 +125,7 @@ describe('light scheme quality', () => {
   })
 
   test('classic schemes are registered and structurally complete', () => {
-    const classic = ['catppuccin', 'dracula', 'everforest', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'rosepine', 'solarized']
+    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized']
     for (const name of classic) {
       const palette = BUILTIN_SCHEMES[name]
       expect(palette, name).toBeDefined()
@@ -140,9 +140,10 @@ describe('light scheme quality', () => {
 
   test('classic scheme anchor backgrounds match their sources', () => {
     const anchors: Record<string, string> = {
-      catppuccin: '#1e1e2e', dracula: '#282a36', everforest: '#2d353b', gruvbox: '#282828',
+      catppuccin: '#1e1e2e', dracula: '#282a36', everforest: '#2d353b', falcon: '#020221',
+      flexoki: '#100f0f', gruvbox: '#282828',
       jellybeans: '#151515', kanagawa: '#1f1f28', monokai: '#272822', nord: '#2e3440',
-      rosepine: '#191724', solarized: '#002b36',
+      panda: '#292a2b', rosepine: '#191724', solarized: '#002b36',
     }
     for (const [name, bg] of Object.entries(anchors)) {
       expect(BUILTIN_SCHEMES[name]?.bg, name).toBe(bg)

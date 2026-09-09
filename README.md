@@ -175,15 +175,16 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   **picker dialog** (opencode-style Themes list): ↑/↓ to move, type to filter,
   **live preview** while moving, `Enter` applies + persists, `Esc` cancels and
   restores. Fast paths remain: `/theme dark` (or a unique prefix), and
-  `/theme <role> <hex>` overrides. **14 built-ins**: `dark`/`light` —
+  `/theme <role> <hex>` overrides. **17 built-ins**: `dark`/`light` —
   opencode's own default theme (repo `sst/opencode`, MIT:
   `packages/tui/src/theme/assets/opencode.json`) — plus the optional Atom
   skins `one-dark`/`one-light` (Atom's official repos, GitHub Inc. MIT) and
-  10 classic skins — catppuccin, dracula, everforest, gruvbox, jellybeans,
-  kanagawa, monokai, nord, rosepine, solarized (8 resolved from the upstream
-  projects' official repos, monokai via opencode's MIT theme assets,
-  jellybeans mapped from an MIT vim colorscheme; the whole set is
-  MIT/permissive — see `classic-schemes.ts` and THIRD_PARTY_NOTICES.md) —
+  13 classic skins — catppuccin, dracula, everforest, falcon, flexoki,
+  gruvbox, jellybeans, kanagawa, monokai, nord, panda, rosepine, solarized
+  (11 resolved from the upstream projects' official repos, monokai via
+  opencode's MIT theme assets, jellybeans mapped from an MIT vim
+  colorscheme; the whole set is MIT/permissive — see `classic-schemes.ts`
+  and THIRD_PARTY_NOTICES.md) —
   plus user files in `~/.dsh/themes/*.json`; `dsh-tui-theme: { colorscheme:
   light }` persists the
   choice. The scheme's `bg` is painted full-screen and

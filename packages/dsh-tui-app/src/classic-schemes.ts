@@ -14,18 +14,22 @@
  *                             syntaxType, warning)
  *
  * LICENSE NOTE: every skin here is MIT-licensed (permissive) so the set is
- * safe to bundle/redistribute. 8 palettes (catppuccin, dracula, everforest,
- * gruvbox, kanagawa, nord, rosepine, solarized) are the upstream projects'
- * own palettes, sourced directly from their official repos; their values were
- * verified against the theme files bundled with opencode
- * (`packages/tui/src/theme/assets/<name>.json`, an MIT repo, opencode-1.18.25
- * checkout) and are byte-identical to the upstream palettes. `monokai`
- * (Wimer Hazenberg) has no single official repo, so its values come via
- * opencode's MIT assets (upstream terms vary by port). `jellybeans` is
- * mapped from the MIT vim colorscheme by nanoTech. Upstream projects:
- * catppuccin (Catppuccin), dracula (Dracula Theme), everforest (sainnhe),
- * gruvbox (morhetz), kanagawa (rebelot), nord (arcticicestudio), rosepine
- * (Rosé Pine), solarized (Ethan Schoonover) — see THIRD_PARTY_NOTICES.md.
+ * safe to bundle/redistribute. 11 palettes (catppuccin, dracula, everforest,
+ * falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized) are
+ * the upstream projects' own palettes, sourced directly from their official
+ * repos: catppuccin (Catppuccin), dracula (Dracula Theme), everforest
+ * (sainnhe), falcon (fenetikm, MIT), flexoki (kepano/Steph Ango, MIT),
+ * gruvbox (morhetz), kanagawa (rebelot), nord (arcticicestudio), panda
+ * (siamak/atom-panda-syntax, MIT — the VSCode ports PandaTheme/ and
+ * tinkertrain/ ship no LICENSE, so this skin tracks the Atom original),
+ * rosepine (Rosé Pine), solarized (Ethan Schoonover) — see
+ * THIRD_PARTY_NOTICES.md. The catppuccin/dracula/everforest/gruvbox/kanagawa/
+ * nord/rosepine/solarized values were additionally verified against the
+ * theme files bundled with opencode (`packages/tui/src/theme/assets/<name>.json`,
+ * an MIT repo, opencode-1.18.25 checkout) and are byte-identical to the
+ * upstream palettes. `monokai` (Wimer Hazenberg) has no single official
+ * repo, so its values come via opencode's MIT assets (upstream terms vary by
+ * port). `jellybeans` is mapped from the MIT vim colorscheme by nanoTech.
  * - `jellybeans` maps canonical highlight groups onto our semantic roles:
  *   Normal → text, Comment → textMuted, Function → primary, Identifier →
  *   secondary, Type → accent, String/Title → success, Constant → warning,
@@ -61,6 +65,23 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     primary: '#a7c080', secondary: '#7fbbb3', accent: '#d699b6', success: '#a7c080',
     warning: '#e69875', info: '#83c092', error: '#e67e80', yellow: '#dbbc7f',
   },
+  /** Source: fenetikm/falcon (MIT © 2018 fenetikm) — colors/falcon.vim +
+   *  alacritty/alacritty.toml ANSI table (dark only). */
+  falcon: {
+    bg: '#020221', panel: '#18182a', element: '#212127', borderSubtle: '#2f2f3a',
+    border: '#36363a', borderActive: '#787882', text: '#b4b4b9', textMuted: '#787882',
+    primary: '#ffc552', secondary: '#99a4bc', accent: '#bfdaff', success: '#b2bc55',
+    warning: '#ff761a', info: '#34bfa4', error: '#ff3600', yellow: '#ffd392',
+  },
+  /** Source: kepano/flexoki (MIT © 2023 Steph Ango) — css/flexoki.css tones,
+   *  UI/text layers from the official helix flexoki-dark.toml; borders
+   *  interpolated along the grey ramp (dark only). */
+  flexoki: {
+    bg: '#100f0f', panel: '#1c1b1a', element: '#282726', borderSubtle: '#343331',
+    border: '#403e3c', borderActive: '#6f6e69', text: '#cecdc3', textMuted: '#878580',
+    primary: '#da702c', secondary: '#4385be', accent: '#8b7ec8', success: '#879a39',
+    warning: '#d0a215', info: '#3aa99f', error: '#d14d41', yellow: '#d0a215',
+  },
   /** Source: morhetz/gruvbox (dark side). */
   gruvbox: {
     bg: '#282828', panel: '#3c3836', element: '#504945', borderSubtle: '#504945',
@@ -95,6 +116,16 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     border: '#434c5e', borderActive: '#4c566a', text: '#eceff4', textMuted: '#8b95a7',
     primary: '#88c0d0', secondary: '#81a1c1', accent: '#8fbcbb', success: '#a3be8c',
     warning: '#d08770', info: '#88c0d0', error: '#bf616a', yellow: '#d08770',
+  },
+  /** Source: siamak/atom-panda-syntax (MIT © 2016 Siamak Mokhtari) — the
+   *  original Atom palette; neutral greys interpolated between its official
+   *  ramps. NB: the popular VSCode ports (PandaTheme/, tinkertrain/) ship no
+   *  LICENSE, so the clean MIT lineage is this Atom original (dark only). */
+  panda: {
+    bg: '#292a2b', panel: '#2e2f30', element: '#343537', borderSubtle: '#373b41',
+    border: '#4b4d52', borderActive: '#757575', text: '#e6e6e6', textMuted: '#676b79',
+    primary: '#ff75b5', secondary: '#45a9f9', accent: '#b084eb', success: '#19f9d8',
+    warning: '#ffb86c', info: '#6fc1ff', error: '#ff2c6d', yellow: '#ffcc95',
   },
   /** Source: rose-pine/rose-pine-theme (dark side). */
   rosepine: {

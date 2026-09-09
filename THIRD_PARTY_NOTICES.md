@@ -18,16 +18,20 @@ and the Bun runtime embeds its own license with the compiled binary.
 
 ## Classic colorschemes
 
-The 10 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
+The 13 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
 palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values** plus its own
-17-role mapping — no upstream source code is copied. 8 of them (catppuccin, dracula,
-everforest, gruvbox, kanagawa, nord, rosepine, solarized) are the upstream projects' own
-palettes, referenced directly from their official repos; their values were verified against the
-theme files bundled with [opencode](https://github.com/sst/opencode) — an MIT repo — at
-`packages/tui/src/theme/assets/<name>.json` and are byte-identical to the upstream palettes.
-`monokai` has no single official repository, so its values are taken via opencode's MIT theme
-assets (upstream terms vary by port); `jellybeans` is mapped from the MIT vim colorscheme by
-nanoTech.
+17-role mapping — no upstream source code is copied. 11 of them (catppuccin, dracula,
+everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized) are the
+upstream projects' own palettes, referenced directly from their official repos. The
+catppuccin/dracula/everforest/gruvbox/kanagawa/nord/rosepine/solarized values were additionally
+verified against the theme files bundled with [opencode](https://github.com/sst/opencode) — an
+MIT repo — at `packages/tui/src/theme/assets/<name>.json` and are byte-identical to the
+upstream palettes. `monokai` has no single official repository, so its values are taken via
+opencode's MIT theme assets (upstream terms vary by port); `jellybeans` is mapped from the MIT
+vim colorscheme by nanoTech. `panda` tracks the original Atom colorscheme by Siamak Mokhtari
+(`siamak/atom-panda-syntax`, MIT © 2016): the popular VSCode ports (`PandaTheme/panda-syntax-
+vscode`, `tinkertrain/panda-syntax-vscode`) ship no LICENSE file and no package.json `license`
+field, so — per this repo's MIT-only policy — they are **not** used as a source.
 The set is deliberately **MIT-only / permissive** so it is safe to bundle and redistribute; each
 upstream license was verified against its repo LICENSE file before inclusion.
 The rows below list the verified licenses.
@@ -41,7 +45,10 @@ The rows below list the verified licenses.
 | nord | [arcticicestudio/nord](https://github.com/arcticicestudio/nord) | MIT | arcticicestudio/nord |
 | solarized | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | altercation/solarized |
 | everforest | [sainnhe/everforest](https://github.com/sainnhe/everforest) | MIT | sainnhe/everforest |
+| falcon | [fenetikm/falcon](https://github.com/fenetikm/falcon) | MIT (Copyright (c) 2018 fenetikm) | `colors/falcon.vim` + `alacritty/alacritty.toml` (dark side) |
+| flexoki | [kepano/flexoki](https://github.com/kepano/flexoki) | MIT (Copyright (c) 2023 Steph Ango) | `css/flexoki.css` + `helix/flexoki-dark.toml` (dark side) |
 | kanagawa | [rebelot/kanagawa.nvim](https://github.com/rebelot/kanagawa.nvim) | MIT | rebelot/kanagawa.nvim |
+| panda | [siamak/atom-panda-syntax](https://github.com/siamak/atom-panda-syntax) | MIT (Copyright (c) 2016 Siamak Mokhtari) | Atom original `styles/colors.less` + `syntax-variables.less` (VSCode ports license-unclean, not used) |
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
 
