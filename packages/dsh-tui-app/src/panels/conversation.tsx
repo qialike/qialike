@@ -28,7 +28,7 @@ import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import { questionDockRows } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
 import { surfaceRegion, sidebarContentBand, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
-import { formatSessionStats } from '../session-stats.ts'
+import { formatSessionStatsParts } from '../session-stats.ts'
 import { sessionDisplayTitle } from '../session-titles.ts'
 import { logError } from '../log.ts'
 import { HARNESS_VERSION } from '../harness-version.ts'
@@ -745,7 +745,11 @@ function BusyIndicator(props: { animate: boolean; paused: boolean }): React.JSX.
   return (
     <Text color={theme.info}>
       {glyph}
-      <Text color={theme.text}> {runPhaseLabel(store)} · {sinceTurn}s{quiet} · {armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
+      <Text color={theme.text}> {runPhaseLabel(store)} · {sinceTurn}s{quiet} · </Text>
+      {/* Pause hint takes the permission-chip color so it reads as an ACTION
+          affordance (same color as the composer's "(Tab)" hint), not as part
+          of the plain liveness text. */}
+      <Text color={store.permissionColor}>{armed ? 'Esc again to pause' : 'Esc to pause'}</Text>
     </Text>
   )
 }
@@ -1623,9 +1627,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const permissionLabel = store.permissionLabel
   const permissionColor = store.permissionColor
   const modelLabel = store.modelLabel
-  // Bottom-bar session stats text (steps/turns · tokens; LLM/Tool durations
-  // are folded but not displayed); '' until the session has any activity.
-  const statsLine = formatSessionStats(store.stats)
+  // Bottom-bar session stats as VALUE/LABEL segments (steps/turns · tokens;
+  // LLM/Tool durations are folded but not displayed). Segments keep numbers
+  // apart from their labels ("steps", "tok in", …) for two-tone rendering;
+  // empty until the session has any activity.
+  const statsParts = formatSessionStatsParts(store.stats)
   // The composer shows the model with its reasoning effort as a separate
   // warning-colored chip (like opencode's variant); the full label embeds the
   // effort as ` · <name>`, so the base part strips that suffix.
@@ -1960,17 +1966,20 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               : null}
           </Box>
           <Box flexGrow={1} />
-          {/* Sidebar footer. The two version lines (harness above dsh-tui) sit
-              FLUSH inside one inner column (gap 0) as a group; the outer
-              sidebar gap then keeps exactly ONE blank row between the group
-              and the workspace path, and the path hugs the sidebar's bottom
-              edge (no bottom padding under it). Labels use the regular font;
-              the version numbers use the message-box Think color (bold). */}
+          {/* Sidebar footer: the two version lines (harness above dsh-tui) and
+              the workspace path form ONE flush 3-row column (gap 0) hugging
+              the sidebar's bottom edge (no bottom padding under it) — the two
+              version lines sit one row lower than the older layout, directly
+              on the path (the blank row that used to separate group from path
+              now sits above the group, absorbed by the flexible spacer).
+              Labels use the regular font; the version numbers use the same
+              message-box Think color as the composer's reasoning-effort chip
+              ("High"), WITHOUT bold — matching its muted weight exactly. */}
           <Box flexDirection="column">
-            <Text color={theme.text}>deepseek-harness: <Text color={mutedReadable()} bold>{HARNESS_VERSION}</Text></Text>
-            <Text color={theme.text}>dsh-tui: <Text color={mutedReadable()} bold>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
+            <Text color={theme.text}>deepseek-harness: <Text color={mutedReadable()}>{HARNESS_VERSION}</Text></Text>
+            <Text color={theme.text}>dsh-tui: <Text color={mutedReadable()}>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
+            <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
           </Box>
-          <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
         </Box>
         )}
       </Box>
@@ -1989,9 +1998,18 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             flex spacer pushes the stats group flush right, and the group
             truncates instead of wrapping if the terminal is narrow. */}
         <Box flexGrow={1} />
-        {statsLine !== '' && (
+        {statsParts.length > 0 && (
           <Box flexShrink={0}>
-            <Text color={theme.text} wrap="truncate">{statsLine}</Text>
+            {/* Two-tone stat text: the NUMBERS use the regular text color,
+                while their labels ("steps", "turns", "tok in", "tok out") and
+                the separators stay in the muted message-Think color — same as
+                the composer's reasoning-effort chip — so the figures read as
+                plain data next to the busy indicator. */}
+            <Text wrap="truncate">
+              {statsParts.map((part, i) => (
+                <Text key={i} color={part.kind === 'value' ? theme.text : mutedReadable()}>{part.text}</Text>
+              ))}
+            </Text>
           </Box>
         )}
       </Box>

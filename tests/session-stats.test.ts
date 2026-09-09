@@ -13,6 +13,7 @@ import {
   emptySessionStats,
   foldSessionStats,
   formatSessionStats,
+  formatSessionStatsParts,
   formatStatDuration,
   formatStatTokens,
   type SessionStatsEventLike,
@@ -76,6 +77,39 @@ describe('formatting', () => {
     expect(formatSessionStats({
       turns: 1, steps: 1, llmMs: 500, toolMs: 0, inputTokens: 10, outputTokens: 20,
     })).toBe('1 step · 1 turn | 10 tok in · 20 tok out')
+  })
+
+  test('parts keep every numeric value apart from its muted label', () => {
+    expect(formatSessionStatsParts(emptySessionStats())).toEqual([])
+    expect(formatSessionStatsParts({ ...emptySessionStats(), steps: 3, turns: 2 })).toEqual([
+      { text: '3', kind: 'value' }, { text: ' steps', kind: 'muted' }, { text: ' · ', kind: 'muted' },
+      { text: '2', kind: 'value' }, { text: ' turns', kind: 'muted' },
+    ])
+    expect(formatSessionStatsParts({ ...emptySessionStats(), steps: 1, turns: 1 })).toEqual([
+      { text: '1', kind: 'value' }, { text: ' step', kind: 'muted' }, { text: ' · ', kind: 'muted' },
+      { text: '1', kind: 'value' }, { text: ' turn', kind: 'muted' },
+    ])
+  })
+
+  test('parts join the tokens group with a muted separator, values compacted', () => {
+    expect(formatSessionStatsParts({
+      turns: 1, steps: 1, llmMs: 0, toolMs: 0, inputTokens: 1_200, outputTokens: 3_400,
+    })).toEqual([
+      { text: '1', kind: 'value' }, { text: ' step', kind: 'muted' }, { text: ' · ', kind: 'muted' },
+      { text: '1', kind: 'value' }, { text: ' turn', kind: 'muted' },
+      { text: ' | ', kind: 'muted' },
+      { text: '1.2k', kind: 'value' }, { text: ' tok in', kind: 'muted' }, { text: ' · ', kind: 'muted' },
+      { text: '3.4k', kind: 'value' }, { text: ' tok out', kind: 'muted' },
+    ])
+  })
+
+  test('parts drop out whole groups with no data (tokens-only session)', () => {
+    expect(formatSessionStatsParts({
+      turns: 0, steps: 0, llmMs: 0, toolMs: 0, inputTokens: 10, outputTokens: 20,
+    })).toEqual([
+      { text: '10', kind: 'value' }, { text: ' tok in', kind: 'muted' }, { text: ' · ', kind: 'muted' },
+      { text: '20', kind: 'value' }, { text: ' tok out', kind: 'muted' },
+    ])
   })
 })
 

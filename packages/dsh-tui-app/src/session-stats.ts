@@ -169,3 +169,42 @@ export function formatSessionStats(stats: SessionStats): string {
   }
   return groups.join(' | ')
 }
+
+/** One bottom-bar stats segment for two-tone rendering. */
+export interface SessionStatsSegment {
+  /** Verbatim text to paint. */
+  text: string
+  /** `value` → the regular text color (numbers), `muted` → the Think-row
+   *  muted color (labels AND separators: "steps", " · ", " tok in"). */
+  kind: 'value' | 'muted'
+}
+
+/**
+ * Segmented bottom-bar stats (same groups/rules as {@link formatSessionStats})
+ * that keep each numeric VALUE apart from its LABEL ("steps", "tok in", …), so
+ * the status bar can paint the numbers in the regular text color while the
+ * labels stay in the muted message-Think color. Groups drop out whole when
+ * they carry no data; empty when the session has no activity yet.
+ * @param stats - the session stats.
+ * @returns value/muted segments (empty for a session with no activity).
+ */
+export function formatSessionStatsParts(stats: SessionStats): SessionStatsSegment[] {
+  const parts: SessionStatsSegment[] = []
+  const push = (text: string, kind: SessionStatsSegment['kind']): void => { parts.push({ text, kind }) }
+  if (stats.steps > 0) {
+    push(String(stats.steps), 'value')
+    push(` step${stats.steps === 1 ? '' : 's'}`, 'muted')
+    push(' · ', 'muted')
+    push(String(stats.turns), 'value')
+    push(` turn${stats.turns === 1 ? '' : 's'}`, 'muted')
+  }
+  if (stats.inputTokens > 0 || stats.outputTokens > 0) {
+    if (parts.length > 0) push(' | ', 'muted')
+    push(formatStatTokens(stats.inputTokens), 'value')
+    push(' tok in', 'muted')
+    push(' · ', 'muted')
+    push(formatStatTokens(stats.outputTokens), 'value')
+    push(' tok out', 'muted')
+  }
+  return parts
+}
