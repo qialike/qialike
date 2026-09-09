@@ -173,8 +173,8 @@ function renderParagraph(node: MdNode): React.ReactNode {
   )
 }
 
-/** Render a block-level node. */
-function renderBlock(node: MdNode, key: number | string): React.ReactNode {
+/** Render a block-level node. `usable` = available text columns (for tables). */
+function renderBlock(node: MdNode, key: number | string, usable: number): React.ReactNode {
   switch (node.type) {
     case 'paragraph': return React.createElement(React.Fragment, { key }, renderParagraph(node))
     case 'heading': {
@@ -194,7 +194,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
         <Box key={key} width="100%" flexDirection="column">
           {kids.map((child, i) => child.type === 'paragraph'
             ? <Text key={`q-${key}-${i}`} wrap="wrap">│ {renderInlineChildren(child)}</Text>
-            : renderBlock(child, `${key}-q-${i}`))}
+            : renderBlock(child, `${key}-q-${i}`, usable))}
         </Box>
       )
     }
@@ -230,7 +230,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
                   : null)}
               </Text>
               {(item.children ?? []).map((child, j) => child.type !== 'paragraph'
-                ? renderBlock(child, `l-${i}-${j}`)
+                ? renderBlock(child, `l-${i}-${j}`, usable)
                 : null)}
             </Box>
           ))}
@@ -238,20 +238,25 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
       )
     }
     case 'table': {
-      // Best-effort aligned grid; a terminal cannot do rich tables.
-      const rows = (node.children ?? []).map((row: MdNode) =>
-        (row.children ?? []).map((cell: MdNode) =>
-          (cell.children ?? []).map((cellChild: MdNode) => renderInline(cellChild)).join('')) )
-      if (rows.length === 0) return null
-      const header = rows[0] ?? []
-      const pad = (s: string, w: number) => s.padEnd(w).slice(0, w)
+      // Grid via the shared tableGrid (visual-width aligned, never wraps);
+      // header row bold + a ── separator so the table reads as a structure,
+      // not a wall of pipes.
+      const cells = (node.children ?? []).map((row: MdNode) =>
+        (row.children ?? []).map((cell: MdNode) => inlinePlain(cell)))
+      if (cells.length === 0) return null
+      const { lines, widths } = tableGrid(cells, usable)
+      if (lines.length === 0) return null
+      const body = lines.slice(1)
       return (
-        <Text key={key} wrap="wrap">
-          {rows.map((row, r) => (
-            <Text key={r} wrap="wrap">
-              │ {row.map((cell, c) => pad(cell, Math.max(10, (header[c]?.length ?? 10)))).join(' │')} │
-            </Text>))}
-        </Text>
+        <Box key={key} width="100%" flexDirection="column">
+          <Text wrap="truncate"><Text bold color={theme.secondary}>{lines[0]}</Text></Text>
+          {lines.length > 1
+            ? <Text wrap="truncate" color={theme.borderSubtle}>{tableSeparator(widths)}</Text>
+            : null}
+          {body.map((line, r) => (
+            <Text key={r} wrap="truncate">{line}</Text>
+          ))}
+        </Box>
       )
     }
     case 'image': return <Text key={key} dimColor>{`![${node.alt ?? ''}](${node.url ?? ''})`}</Text>
@@ -261,7 +266,7 @@ function renderBlock(node: MdNode, key: number | string): React.ReactNode {
       return (
         <Box key={key} width="100%" flexDirection="column">
           {kids.length > 0
-            ? kids.map((c, i) => renderBlock(c, `${key}-${i}`))
+            ? kids.map((c, i) => renderBlock(c, `${key}-${i}`, usable))
             : (node.value ? <Text wrap="wrap">{node.value}</Text> : null)}
         </Box>
       )
@@ -320,6 +325,71 @@ function blockPlain(node: MdNode): string {
  *  uses, via the same `string-width` library, so estimates match rendering. */
 export function visualWidth(text: string): number {
   return stringWidth(text)
+}
+
+/**
+ * Lay out a markdown table (mdast table rows → cell strings) into a grid of
+ * aligned terminal lines. Single source of truth for BOTH the renderer and the
+ * height estimator, so a table paints exactly as many rows as are counted.
+ *
+ * Rules:
+ *  - column widths are the max VISUAL width (CJK/emoji count 2) across every
+ *    cell of that column (not just the header), with a readable floor;
+ *  - rows never wrap: when the natural grid is wider than `usable`, the widest
+ *    columns are shrunk first (long cells get an ellipsis) until it fits;
+ *  - alignment is by visual width, so the `│` separators line up even with
+ *    wide glyphs (misaligned pipes are what make a table read as "乱");
+ *  - the first row is the header — callers decide how to style it.
+ *
+ * @param cells - table rows as cell-string rows (rows[0] = header).
+ * @param usable - the text columns available (0/undefined → no shrink).
+ * @returns `{ lines, widths }` — every row as one pre-padded, non-wrapping
+ *          line (with surrounding `│ … │`), and the final column widths.
+ */
+export function tableGrid(
+  cells: string[][],
+  usable: number,
+): { lines: string[]; widths: number[] } {
+  if (cells.length === 0) return { lines: [], widths: [] }
+  const colCount = Math.max(...cells.map((r) => r.length), 0)
+  if (colCount === 0) return { lines: [], widths: [] }
+  const pad = (s: string, w: number) => s + ' '.repeat(Math.max(0, w - visualWidth(s)))
+  const cut = (s: string, w: number) => truncateWide(s, w)
+  // Natural visual widths per column.
+  const widths: number[] = []
+  for (let c = 0; c < colCount; c++) {
+    let w = 0
+    for (const row of cells) w = Math.max(w, visualWidth(row[c] ?? ''))
+    widths.push(Math.max(1, w))
+  }
+  // Border overhead of the painted line: `│ ` + pads + ` │`.
+  const paintW = (ws: number[]) => 2 + ws.reduce((s, w) => s + w, 0) + (ws.length - 1) * 3 + 2
+  // Shrink widest columns first until the painted line fits `usable`. The
+  // floor of 1 is the last resort: beyond it a pathological grid (many
+  // columns in a very narrow pane) simply stays wider than `usable` — the
+  // caller's `wrap="truncate"` clips the tail WITHOUT wrapping, so the row
+  // count (and the height estimate) never changes.
+  if (usable > 0) {
+    let budget = usable
+    while (widths.length > 0 && paintW(widths) > budget) {
+      const widest = widths.indexOf(Math.max(...widths))
+      if (widths[widest] <= 1) break // floor reached: caller truncates
+      widths[widest] -= 1
+    }
+  }
+  const lines = cells.map((row) => {
+    const filled = widths.map((w, c) => cut(row[c] ?? '', w))
+    // Pad cells to their column width by VISUAL width; single-line guarantee:
+    // cut() above never exceeds w, so the joined line fits its budget.
+    return `│ ${filled.map((s, c) => pad(s, widths[c])).join(' │')} │`
+  })
+  return { lines, widths }
+}
+
+/** One dashed separator row for a table header, sized to the column widths. */
+export function tableSeparator(widths: number[]): string {
+  if (widths.length === 0) return ''
+  return `├${widths.map((w) => '─'.repeat(w + 2)).join('┼')}┤`
 }
 
 /** Truncate `text` to a visual-width budget, appending an ellipsis when cut
@@ -415,17 +485,12 @@ function blockRows(node: MdNode, usable: number): number {
       return rows
     }
     case 'table': {
-      const rowsArr = (node.children ?? []).map((row) =>
+      const cells = (node.children ?? []).map((row) =>
         (row.children ?? []).map((cell) => inlinePlain(cell)))
-      if (rowsArr.length === 0) return 0
-      const header = rowsArr[0] ?? []
-      const pad = (s: string, w: number) => s.padEnd(w).slice(0, w)
-      let rows = 0
-      for (const row of rowsArr) {
-        const line = `│ ${row.map((cell, c) => pad(cell, Math.max(10, (header[c]?.length ?? 10)))).join(' │')} │`
-        rows += countWrappedLines(line, usable)
-      }
-      return rows
+      if (cells.length === 0) return 0
+      const { lines } = tableGrid(cells, usable)
+      // Painted rows: header + (separator) + data rows — mirrors the renderer.
+      return lines.length + (lines.length > 1 ? 1 : 0)
     }
     case 'image':
       return countWrappedLines(`![${node.alt ?? ''}](${node.url ?? ''})`, usable)
@@ -444,8 +509,11 @@ function blockRows(node: MdNode, usable: number): number {
  * Render assistant Markdown to Ink. User and status text stays plain; only the
  * assistant surface goes through this.
  * @param props.text - the assistant text (possibly streaming).
+ * @param props.usable - available text columns; tables shrink to it (omitting
+ *                       keeps natural widths; long grids truncate at the Ink
+ *                       box edge instead of wrapping).
  */
-export function MarkdownText(props: { text: string }): React.JSX.Element {
+export function MarkdownText(props: { text: string; usable?: number }): React.JSX.Element {
   // Render the live text directly (no debounce): the transcript measures this
   // item's height from what is actually on screen, so display, measurement and
   // layout must all track the same (live) text. A debounced copy would make the
@@ -465,7 +533,7 @@ export function MarkdownText(props: { text: string }): React.JSX.Element {
   return (
     <Box width="100%" flexDirection="column">
       {(tree.children ?? []).map((node, i) => (
-        <Box key={i} marginTop={i > 0 ? 1 : 0} flexShrink={0}>{renderBlock(node, i)}</Box>
+        <Box key={i} marginTop={i > 0 ? 1 : 0} flexShrink={0}>{renderBlock(node, i, props.usable ?? 0)}</Box>
       ))}
     </Box>
   )
