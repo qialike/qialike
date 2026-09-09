@@ -95,24 +95,65 @@ export interface ResumeFoldOptions {
   sliceEvents?: number
 }
 
-/** Whether a resume failure is the "session log corrupt" class (a mid-log seq
- *  gap or an unparsable committed record — the signature of a session log that
- *  two processes wrote concurrently, e.g. the web and a dsh-tui holding the
- *  same session). */
+/** Whether a resume failure is the "session log corrupt" class — a mid-log
+ *  seq gap, an unparsable committed record, OR a "torn JSONL record" across a
+ *  zstd frame seam. All three are the signature of a session log that another
+ *  process is appending to concurrently (e.g. the web and a dsh-tui holding
+ *  the same session): the file is usually healthy and the read merely raced
+ *  the writer's frame boundary. */
 export function isCorruptLogMessage(message: string): boolean {
-  return /corrupt session log/.test(message)
+  return /corrupt( Zstandard)? session log/.test(message)
 }
 
 /** User-facing text for one resume failure. The corrupt-log class gets an
- *  actionable explanation (concurrent writers are the usual cause) instead of
- *  the raw harness error; everything else keeps the previous `resume:` prefix
- *  and passes the message through unchanged. */
+ *  actionable explanation (concurrent writers AND real mid-log damage are both
+ *  possible — do not misattribute) instead of the raw harness error; everything
+ *  else keeps the previous `resume:` prefix and passes the message through. */
 export function describeResumeFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   if (isCorruptLogMessage(message)) {
-    return 'resume: 会话日志乱序（该会话正被并发写入：web 或另一个 dsh-tui 同时在写，或多个进程先后写过同一日志）或已损坏，无法从磁盘重放——先关闭其它持有它的进程；如确已损坏可在 /sessions 里删除后重建'
+    return 'resume: 会话日志被判定损坏（乱序/被截断）。两种可能：① 另一进程正实时追加同一会话（web 或另一个 dsh-tui），读取瞬间恰落在帧缝/记录缝——此类为瞬时误报，已自动重试数次，关闭其它持有者后重试通常即成功；② 真实 seq 损坏——常见于某次工具调用被中断后写方从 checkpoint 重续却未截断残骸行，日志中段出现重复/回退 seq，重放会确定性失败、无法自动修复（可删除重建，或人工删除残骸行修复）'
   }
   return `resume: ${message}`
+}
+
+/** Retry options for {@link withResumeCorruptRetry}. */
+export interface CorruptRetryOptions {
+  /** Extra attempts after the first failure (total attempts = retries + 1). */
+  retries?: number
+  /** Pause between attempts (ms): a concurrent writer usually finishes the
+   *  in-flight frame within a few hundred ms. */
+  waitMs?: number
+}
+
+/** Run `task` (a session open/resume) and, when it fails with a corrupt-log
+ *  error, wait and retry a bounded number of times before giving up. A resume
+ *  that reads a session WHILE another process is appending often trips the
+ *  harness reader's "torn JSONL record / seq gap" check on the frame seam
+ *  even though the file is healthy — retrying after the writer advances makes
+ *  those false positives disappear. Non-corrupt errors throw immediately.
+ *  @param task - the resume/open call.
+ *  @param options - retry count and pause (defaults: 2 extra attempts, 250 ms).
+ *  @returns the task result.
+ *  @throws the last error once every attempt failed. */
+export async function withResumeCorruptRetry<T>(
+  task: () => Promise<T>,
+  options: CorruptRetryOptions = {},
+): Promise<T> {
+  const retries = options.retries ?? 2
+  const waitMs = options.waitMs ?? 250
+  let attempts = 0
+  for (;;) {
+    try {
+      return await task()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (!isCorruptLogMessage(message)) throw error
+      attempts += 1
+      if (attempts > retries) throw error
+      await new Promise<void>((resolve) => { setTimeout(resolve, waitMs) })
+    }
+  }
 }
 
 /** Decide how to fold a resumed session of `events.length` events:

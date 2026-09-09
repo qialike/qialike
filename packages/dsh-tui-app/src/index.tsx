@@ -49,7 +49,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { describeResumeFailure, planResumeFold } from './resume-fold.ts'
+import { describeResumeFailure, planResumeFold, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -2485,6 +2485,12 @@ export function apply(ctx: Context, config: Config): void {
 
 /** The async session lifetime, started from `apply` and owned by this plugin. */
 async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
+  // Boot-phase timing (启动解码段停摆诊断): the harness session open (resume/
+  // create) synchronously decodes + parses the whole durable log BEFORE
+  // dsh-tui's own chunked resume runs, and on a giant log that decode shows
+  // up as seconds-long `[stall]` gaps with no intermediate marker. Logging the
+  // phase boundaries here separates "decode+open" from "history fold" cost.
+  const bootT0 = Date.now()
   // ── main-thread liveness heartbeat ─────────────────────────────────────────
   // A synchronous wedge (a giant session's resume replay/fold, a pathological
   // layout pass…) blocks the WHOLE event loop, so even the render watchdog
@@ -2513,6 +2519,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   while (ctx.get('agentLoop') === undefined && Date.now() < factoryDeadline) {
     await new Promise<void>((resolve) => { setTimeout(resolve, 10) })
   }
+  logErrorFileOnly('boot', `phases: loader+factory ready ms=${Date.now() - bootT0}`)
   const agents = ctx.get('agents')
   const defaultModel = ctx.get('agentDefaultModel')
   const sessions = ctx.get('sessions')
@@ -2547,12 +2554,24 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
    *  back to a fresh session instead of dying on a log that another process
    *  wrote concurrently (see the catch below). */
   let resumeFailure: string | null = null
+  /** Wall-clock when the first session-open attempt started: the bracket from
+   *  here to a settled handle covers the harness's synchronous decode+parse of
+   *  the whole durable log — on a giant log this is where the boot `[stall]`
+   *  gaps land (before the attach/[resume] markers). */
+  const openT0 = Date.now()
+  const resumeId = config.resume
   const establish = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
     let nextHandle: AgentHandle | undefined
     let nextResumed = false
-    if (config.resume !== undefined) {
+    if (resumeId !== undefined) {
       try {
-        nextHandle = await agents.resume({ resumeSessionId: SessionId(config.resume), agentOptions, setup })
+        // A session that another process is appending to often false-positives
+        // as "corrupt" (torn record on a zstd frame seam); retry briefly
+        // before the launch falls back to a fresh session.
+        nextHandle = await withResumeCorruptRetry(
+          () => agents.resume({ resumeSessionId: SessionId(resumeId), agentOptions, setup }),
+          { retries: 3, waitMs: 400 },
+        )
         nextResumed = true
       } catch (error) {
         // A failed resume (e.g. "corrupt session log": the durable log was
@@ -2609,6 +2628,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   if (handle === undefined) {
     throw new Error('tui-runtime: agent handle was not established')
   }
+  logErrorFileOnly('boot', `phases: session open (decode+attach) ms=${Date.now() - openT0} resumed=${resumed}`)
   // `handle` / `agent` / `sessionId` are reassigned by `newSessionAction` when
   // `/new` switches to a fresh session; every closure below reads them through
   // the `let` bindings, so the listeners and slots track the live session.
@@ -3162,7 +3182,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     }
     void (async (): Promise<void> => {
       try {
-        const next = await agents.resume({ resumeSessionId: SessionId(id), agentOptions, setup })
+        const next = await withResumeCorruptRetry(
+          () => agents.resume({ resumeSessionId: SessionId(id), agentOptions, setup }),
+          { retries: 3, waitMs: 400 },
+        )
         const old = handle
         if (old === undefined) return
         try { await old.dispose() } catch (error) { logError('resume: disposing the old session failed', error) }
@@ -3419,7 +3442,13 @@ async function autoResumeNewest(
     })
   for (const header of candidates) {
     try {
-      const handle = await agents.resume({ resumeSessionId: header.id, agentOptions, setup })
+      // Retry a concurrent-write false "corrupt" read before skipping to the
+      // next candidate (the newest session is often the one still being
+      // appended to by the process that owns it).
+      const handle = await withResumeCorruptRetry(
+        () => agents.resume({ resumeSessionId: header.id, agentOptions, setup }),
+        { retries: 2, waitMs: 250 },
+      )
       const hasUserContent = handle.agent.session.snapshotEvents().some(
         (event) => event.type === 'user/message'
           && (event.data as { source?: { kind?: string } }).source?.kind === 'user',

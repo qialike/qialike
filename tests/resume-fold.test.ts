@@ -177,13 +177,16 @@ describe('describeResumeFailure (corrupt-log class gets an actionable hint)', ()
     expect(describeResumeFailure('string failure')).toBe('resume: string failure')
   })
 
-  test('a corrupt log explains concurrent writers instead of the raw harness text', () => {
+  test('a corrupt log explains the possible causes instead of the raw harness text', () => {
     const text = describeResumeFailure(new Error(
       'corrupt session log: seq gap in committed region at line 93359 (expected 1719888, got 1719875)',
     ))
     expect(text).not.toContain('seq gap')
     expect(text).toContain('resume:')
-    expect(text).toContain('并发写入')
-    expect(text).toContain('/sessions')
+    // Both possible causes are stated — transient concurrent-write reads (already
+    // retried) and real mid-log seq damage — with actionable next steps.
+    expect(text).toContain('另一进程正实时追加同一会话')
+    expect(text).toContain('真实 seq 损坏')
+    expect(text).toContain('删除重建')
   })
 })
