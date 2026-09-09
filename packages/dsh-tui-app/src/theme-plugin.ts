@@ -5,13 +5,11 @@ import React from 'react'
  *   - a **colorscheme** is a named palette applied onto the shared `theme`
  *     module object (the surface's "highlight groups"); switching is IMMEDIATE
  *     and persists into the `dsh-tui-theme:` settings section;
- *   - **built-in schemes**: `dark` (the default, shipped by theme.ts —
- *     opencode's dark default, repo `sst/opencode`, MIT:
- *     `packages/tui/src/theme/assets/opencode.json`) and `light` (Atom's
- *     One Light — the former `one-light` skin promoted to the default light
- *     name, GitHub Inc. MIT); the optional skin `one-dark` (Atom, GitHub
- *     Inc. MIT) and `dsh-dark` (the DeepSeek Harness web dark design tokens,
- *     MIT repo `deepseek-harness`); plus the classic third-party set
+ *   - **built-in schemes**: `dark` (the default, shipped by theme.ts — the
+ *     DeepSeek Harness web dark design tokens, MIT repo `deepseek-harness`)
+ *     and `light` (Atom's One Light — the former `one-light` skin promoted to
+ *     the default light name, GitHub Inc. MIT); the optional skin `one-dark`
+ *     (Atom, GitHub Inc. MIT); plus the classic third-party set
  *     in `classic-schemes.ts` (catppuccin, dracula, everforest, falcon,
  *     flexoki, gruvbox, jellybeans, kanagawa, monokai, nord, panda, rosepine,
  *     solarized — all MIT-licensed; see that module's header for sources and
@@ -69,9 +67,11 @@ function themesDir(): string {
 
 /**
  * Built-in schemes. `dark` snapshots the default palette at module load
- * (theme.ts — opencode's default dark, see its header) and is the ONE scheme
- * held to the WCAG AA bar: its text-bearing roles keep ≥4.5:1 contrast on
- * its background.
+ * (theme.ts — the DeepSeek Harness web dark design tokens, see its header)
+ * and is the ONE scheme held to the WCAG AA bar: its text-bearing roles keep
+ * ≥4.5:1 contrast on its background. The former opencode-dark default was
+ * removed when the Harness web dark tokens took over the `dark` name (from
+ * the old `dsh-dark` skin).
  *
  * `light` is Atom's One Light — the former `one-light` optional skin
  * promoted to the default light name, official hexes verbatim: hues from
@@ -84,25 +84,15 @@ function themesDir(): string {
  *
  * `one-dark` keeps Atom's One Dark hexes verbatim from the same family of
  * sources (`atom/one-dark-syntax` / `atom/one-dark-ui`, GitHub Inc., MIT —
- * archived, which does not affect their MIT grant).
- *
- * `dsh-dark` mirrors DeepSeek Harness's dark web UI — the design tokens in
- * `deepseek-harness`'s
- * `packages/client/ui-theme/src/styles/design-platform.css` (MIT © 2026
- * DeepSeek, sibling workspace of this app), the `body[data-ds-dark-theme]`
- * alias block: background layers `neutral-bluish 950/900/850`, borders
- * composited from the alias white alpha ramps over each background, text
- * `neutral-bluish 50`, muted/caption `neutral-bluish 600`, brand `deepseek
- * 300/400/450`, semantic `green-500`, `amber-400`, `blue-400/600`,
- * `red-400/600`. Optional skins (one-dark, dsh-dark, classic) are not held
- * to the AA bar `dark` is.
+ * archived, which does not affect their MIT grant). Optional skins
+ * (one-dark, classic) are not held to the AA bar `dark` is.
  */
 export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
   dark: { ...theme },
   // light = Atom's One Light, promoted from the former `one-light` optional
   // skin to the default light name — pure official hexes (provenance in the
   // docstring above). Its inline-code element #e6e6e6 differs from bg, so
-  // inline code renders as a chip here, like in one-dark / dsh-dark.
+  // inline code renders as a chip here, like in one-dark.
   light: {
     bg: '#fafafa', panel: '#f0f0f0', element: '#e6e6e6', borderSubtle: '#dcdcdc',
     border: '#c9c9c9', borderActive: '#a0a1a7', text: '#383a42', textMuted: '#696c77',
@@ -116,17 +106,6 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
     border: '#5c6370', borderActive: '#828997', text: '#abb2bf', textMuted: '#848b98',
     primary: '#d19a66', secondary: '#61afef', accent: '#c678dd', success: '#98c379',
     warning: '#e2c08d', info: '#56b6c2', error: '#e06c75', yellow: '#e5c07b',
-  },
-  // DeepSeek Harness web dark design tokens (`deepseek-harness`, MIT — see the
-  // docstring above): `dsh-dark` = the `body[data-ds-dark-theme]` alias block
-  // in design-platform.css. `dsh-dark` keeps the web chip background for
-  // inline code (its element #2c2c2e IS the dark alias' markdown-inline-code
-  // token).
-  'dsh-dark': {
-    bg: '#151517', panel: '#1b1b1c', element: '#2c2c2e', borderSubtle: '#313133',
-    border: '#3a3a3c', borderActive: '#444445', text: '#f9fafb', textMuted: '#81858c',
-    primary: '#679efe', secondary: '#5686fe', accent: '#b7c8fe', success: '#22c55e',
-    warning: '#f7ad31', info: '#60a5fa', error: '#f25a5a', yellow: '#f7ad31',
   },
   // Classic third-party skins (11 from upstream official repos, monokai via
   // opencode's MIT assets, jellybeans from an MIT vim colorscheme) —

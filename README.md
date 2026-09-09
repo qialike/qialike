@@ -175,13 +175,14 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   **picker dialog** (opencode-style Themes list): ↑/↓ to move, type to filter,
   **live preview** while moving, `Enter` applies + persists, `Esc` cancels and
   restores. Fast paths remain: `/theme dark` (or a unique prefix), and
-  `/theme <role> <hex>` overrides. **18 built-ins**: `dark` — opencode's
-  default dark theme (repo `sst/opencode`, MIT:
-  `packages/tui/src/theme/assets/opencode.json`) — and `light` (Atom's
-  One Light, GitHub Inc. MIT — the former `one-light` optional skin,
-  promoted to the default light), plus optional skins `one-dark` (Atom,
-  GitHub Inc. MIT), `dsh-dark` (the DeepSeek Harness web dark design
-  tokens, MIT repo `deepseek-harness`), and 14 classic skins — catppuccin,
+  `/theme <role> <hex>` overrides. **17 built-ins**: `dark` — the DeepSeek
+  Harness web dark design tokens (MIT repo `deepseek-harness`,
+  `design-platform.css` `body[data-ds-dark-theme]` alias block; the former
+  opencode-dark default was removed when these tokens took over the `dark`
+  name from the old `dsh-dark` skin) — and `light` (Atom's One Light, GitHub
+  Inc. MIT — the former `one-light` optional skin, promoted to the default
+  light), plus the optional skin `one-dark` (Atom, GitHub Inc. MIT), and 14
+  classic skins — catppuccin,
   dracula, everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa,
   monokai, nord, panda, rosepine, solarized, solarized-light (12 resolved
   from the upstream projects' official repos — solarized-light is the

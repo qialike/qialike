@@ -1,17 +1,24 @@
 /**
- * dsh-tui default theme: opencode's own default **dark** theme, so the
- * terminal looks like the opencode TUI it wraps. Every hex below maps 1:1
- * from the `dark*` defs of opencode's theme file (repo `sst/opencode`, MIT —
- * `packages/tui/src/theme/assets/opencode.json`). opencode's own `light`
- * skin is NOT bundled — the built-in `light` scheme is Atom's One Light
- * (the former `one-light` optional skin) instead; the extra Atom One Dark
- * skin also lives in theme-plugin.ts (see its docstring for provenance). Ink
- * renders hex colors via chalk (truecolor), so the palette below maps 1:1
- * when the terminal supports 24-bit color (GNOME Terminal/VTE does). The
- * conversation frame paints `bg` as a full-screen background layer (see
- * panels/conversation.tsx), so colorscheme switches are visible even when
- * the terminal background would otherwise show through the transparent
- * surfaces.
+ * dsh-tui default theme: the **dark** palette mirrors the **dark** web UI of
+ * the sibling MIT project `deepseek-harness` (Copyright (c) 2026 DeepSeek) —
+ * the `body[data-ds-dark-theme]` alias block of `packages/client/ui-theme/
+ * src/styles/design-platform.css`. Every hex maps 1:1 from one of its static
+ * ramps (background layers `neutral-bluish 950/900/850`, borders composited
+ * from the alias white alpha ramps over each background, text `neutral-bluish
+ * 50`, muted `neutral-bluish 600`, brand `deepseek 300/400/450`, semantic
+ * `green-500`/`amber-400`/`blue-400/600`/`red-400/600`). It previously held
+ * opencode's own default dark theme (repo `sst/opencode`, MIT); when the
+ * Harness web dark tokens took over the `dark` name (renamed from the former
+ * `dsh-dark` skin), the opencode dark palette was removed entirely.
+ * opencode's `light` skin is NOT bundled — the built-in `light` scheme is
+ * Atom's One Light (the former `one-light` optional skin) instead; the extra
+ * Atom One Dark skin also lives in theme-plugin.ts (see its docstring for
+ * provenance). Ink renders hex colors via chalk (truecolor), so the palette
+ * below maps 1:1 when the terminal supports 24-bit color (GNOME
+ * Terminal/VTE does). The conversation frame paints `bg` as a full-screen
+ * background layer (see panels/conversation.tsx), so colorscheme switches are
+ * visible even when the terminal background would otherwise show through the
+ * transparent surfaces.
  *
  * The palette is backed by a PROCESS-WIDE bucket (a `globalThis` singleton
  * behind a Proxy): the SEA build bundles each plugin entry separately, which
@@ -43,40 +50,42 @@ export interface ThemePalette {
   yellow: string
 }
 
-/** opencode default-dark palette (hex) — official `opencode.json` dark defs. */
+/** Harness web dark palette (hex) — the `body[data-ds-dark-theme]` alias
+ *  block of `deepseek-harness`'s `design-platform.css` (MIT © 2026 DeepSeek),
+ *  now the default `dark` scheme after the opencode dark palette was dropped. */
 const DEFAULTS: ThemePalette = {
   /** Near-black page / transcript background (painted as full-screen layer). */
-  bg: '#0a0a0a',
+  bg: '#151517',
   /** Raised panel background (composer, sidebar, dialogs). */
-  panel: '#141414',
+  panel: '#1b1b1c',
   /** Element background (nested surfaces, code inline). */
-  element: '#1e1e1e',
+  element: '#2c2c2e',
   /** Subtle border. */
-  borderSubtle: '#3c3c3c',
+  borderSubtle: '#313133',
   /** Border. */
-  border: '#484848',
+  border: '#3a3a3c',
   /** Active border. */
-  borderActive: '#606060',
+  borderActive: '#444445',
   /** Primary text. */
-  text: '#eeeeee',
+  text: '#f9fafb',
   /** Muted text (status, hints, secondary). */
-  textMuted: '#808080',
+  textMuted: '#81858c',
   /** Primary accent (user role, links, function/primary). */
-  primary: '#fab283',
+  primary: '#679efe',
   /** Secondary accent (agent roles, bold keys, file/path names). */
-  secondary: '#5c9cf5',
+  secondary: '#5686fe',
   /** Accent (headings, command highlights). */
-  accent: '#9d7cd8',
+  accent: '#b7c8fe',
   /** Success / code. */
-  success: '#7fd88f',
+  success: '#22c55e',
   /** Warning / blockquote / type. */
-  warning: '#f5a742',
+  warning: '#f7ad31',
   /** Info / operator. */
-  info: '#56b6c2',
+  info: '#60a5fa',
   /** Error. */
-  error: '#e06c75',
+  error: '#f25a5a',
   /** Emphasis / yellow. */
-  yellow: '#e5c07b',
+  yellow: '#f7ad31',
 }
 
 const GLOBAL = globalThis as {

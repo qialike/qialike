@@ -56,12 +56,18 @@ The rows below list the verified licenses.
 
 ## Default colorscheme (`dark` / `light`) and Atom skin (`one-dark`)
 
-The built-in default scheme `dark` (`packages/dsh-tui-app/src/theme.ts`) is **opencode's own
-default dark theme**: dsh-tui bundles only **resolved hex values** plus its own 17-role mapping —
-no upstream source code is copied. Values map 1:1 from the `dark*` defs of opencode's theme file
-(repo [sst/opencode](https://github.com/sst/opencode), MIT —
-`packages/tui/src/theme/assets/opencode.json`). `dark` is the ONE scheme held to the WCAG AA bar
-(its text-bearing roles keep ≥4.5:1 contrast on its background).
+The built-in default scheme `dark` (`packages/dsh-tui-app/src/theme.ts`) mirrors the **dark** web
+UI of the sibling MIT project [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
+(Copyright (c) 2026 DeepSeek): the `body[data-ds-dark-theme]` alias block of
+`design-platform.css`. dsh-tui bundles only **resolved hex values** plus its own 17-role mapping —
+no CSS source is copied. Every hex comes from one of its static ramps (background layers
+`neutral-bluish 950/900/850`, borders composited from the alias white alpha ramps over each
+background, text `neutral-bluish 50`, muted `neutral-bluish 600`, brand `deepseek 300/400/450`,
+semantic `green-500`/`amber-400`/`blue-400/600`/`red-400/600`). These tokens took over the `dark`
+name from the former `dsh-dark` skin; the earlier opencode-dark default (repo
+[sst/opencode](https://github.com/sst/opencode), MIT —
+`packages/tui/src/theme/assets/opencode.json`) was removed entirely. `dark` is the ONE scheme held
+to the WCAG AA bar (its text-bearing roles keep ≥4.5:1 contrast on its background).
 
 The built-in default `light` is **Atom's One Light** — the former `one-light` optional skin,
 promoted to the default light name. Hues come from Atom's official repos by GitHub Inc.
@@ -82,24 +88,9 @@ their MIT grant), structure steps cross-checked against
 
 | Default scheme | Upstream | License | Source |
 |---|---|---|---|
-| dark | [sst/opencode](https://github.com/sst/opencode) — opencode's default theme | MIT | `packages/tui/src/theme/assets/opencode.json` (`dark*` defs) |
+| dark | [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) web design tokens | MIT (Copyright (c) 2026 DeepSeek) | `design-platform.css` (`body[data-ds-dark-theme]` alias block) |
 | light | GitHub Inc. (Atom) — [atom/one-light-syntax](https://github.com/atom/one-light-syntax) + [atom/one-light-ui](https://github.com/atom/one-light-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
 | one-dark | GitHub Inc. (Atom) — [atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) + [atom/one-dark-ui](https://github.com/atom/one-dark-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
-
-## DeepSeek Harness web dark skin (`dsh-dark`)
-
-The optional skin `dsh-dark` mirrors the **dark** web UI of the sibling MIT project
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (Copyright (c) 2026 DeepSeek):
-the `body[data-ds-dark-theme]` alias block of `design-platform.css`. dsh-tui bundles only
-**resolved hex values** plus its own 17-role mapping — no CSS source is copied. Every hex comes
-from one of its static ramps (background layers `neutral-bluish 950/900/850`, text
-`neutral-bluish 50`, muted `neutral-bluish 600`, brand `deepseek 300/400/450`, semantic
-`green-500`/`amber-400`/`blue-400/600`/`red-400/600`); border hexes are the alias white alpha
-ramps composited over each background. Optional skins are not held to the AA bar `dark` is.
-
-| Default scheme | Upstream | License | Source |
-|---|---|---|---|
-| dsh-dark | [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) web design tokens | MIT (Copyright (c) 2026 DeepSeek) | `design-platform.css` (`body[data-ds-dark-theme]` alias block) |
 
 ## Permissive third-party licenses
 

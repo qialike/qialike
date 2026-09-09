@@ -101,30 +101,34 @@ describe('scheme palettes', () => {
     expect(Object.keys(schemeRegistry())).toContain('one-dark')
   })
 
-  test('dsh-dark tracks the DeepSeek Harness web dark design tokens', () => {
+  test('dark tracks the DeepSeek Harness web dark design tokens', () => {
     // Resolved from deepseek-harness's design-platform.css (MIT © 2026
     // DeepSeek): the body[data-ds-dark-theme] alias block; borders are the
-    // white alpha ramps composited over each background. dsh-dark keeps the
+    // white alpha ramps composited over each background. `dark` keeps the
     // web chip background for inline code — its element #2c2c2e IS the dark
-    // alias' markdown-inline-code token.
-    expect(BUILTIN_SCHEMES['dsh-dark']).toEqual({
+    // alias' markdown-inline-code token. This palette took over the `dark`
+    // name (from the former `dsh-dark` skin); the old opencode dark default
+    // was removed entirely.
+    expect(BUILTIN_SCHEMES.dark).toEqual({
       bg: '#151517', panel: '#1b1b1c', element: '#2c2c2e', borderSubtle: '#313133',
       border: '#3a3a3c', borderActive: '#444445', text: '#f9fafb', textMuted: '#81858c',
       primary: '#679efe', secondary: '#5686fe', accent: '#b7c8fe', success: '#22c55e',
       warning: '#f7ad31', info: '#60a5fa', error: '#f25a5a', yellow: '#f7ad31',
     })
-    expect(Object.keys(schemeRegistry())).toContain('dsh-dark')
+    expect(Object.keys(schemeRegistry())).toContain('dark')
+    expect(Object.keys(schemeRegistry())).not.toContain('dsh-dark')
   })
 
   test('text-bearing roles hold WCAG AA contrast on the dark default', () => {
     // Roles rendered as text on the page/panel background must keep ≥4.5:1
     // (border-only roles are excluded — they pair with text of their own).
-    // Only the CURATED dark default (opencode) is held to AA: the light
-    // default (Atom's One Light, promoted from the one-light skin) keeps the
-    // official hexes verbatim — its muted #696c77 and secondary #a626a4 sit
-    // below 4.5:1 on the near-white #fafafa background — and third-party/
-    // optional schemes (classic-schemes.ts, one-dark, dsh-dark) keep their
-    // upstream contrast by design (e.g. dracula/monokai muted ≈ 3:1).
+    // Only the CURATED dark default (DeepSeek Harness's web dark tokens) is
+    // held to AA: the light default (Atom's One Light, promoted from the
+    // one-light skin) keeps the official hexes verbatim — its muted #696c77
+    // and secondary #a626a4 sit below 4.5:1 on the near-white #fafafa
+    // background — and third-party/optional schemes (classic-schemes.ts,
+    // one-dark) keep their upstream contrast by design (e.g. dracula/monokai
+    // muted ≈ 3:1).
     const textRoles = ['text', 'textMuted', 'primary', 'secondary', 'accent', 'success', 'warning', 'info', 'error', 'yellow']
     for (const schemeName of ['dark'] as const) {
       const { bg, ...rest } = BUILTIN_SCHEMES[schemeName]!
