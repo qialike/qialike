@@ -98,7 +98,7 @@ function themesDir(): string {
  * `neutral-bluish 950/900/850` (dark) and `50` with `element` set equal to
  * the white `bg` (light — the bluish-100 inline-code chip is dropped: any
  * tinted block under bare TUI glyphs reads as a dirty 底纹, so chip-less
- * skins are told apart by the secondary code text color in markdown.tsx),
+ * skins render inline code unstyled in markdown.tsx),
  * borders composited from the alias white/black alpha ramps over each
  * background,
  * text `neutral-bluish 50` / `1000`, muted/caption `neutral-bluish 600`,
@@ -141,8 +141,9 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
   // token bluish-100 #ebeef2 reads as a clean chip in the browser (rounded
   // corners + padding) but ANY tinted block under bare TUI glyphs reads as a
   // dirty text 底纹 — so element is set equal to bg (white) and the renderer
-  // tells chip-less skins apart by the secondary code text color instead (see
-  // the inlineCode case in markdown.tsx). element is used ONLY for inline code.
+  // renders chip-less inline code unstyled, like the surrounding body text
+  // (see the inlineCode case in markdown.tsx). element is used ONLY for
+  // inline code.
   'dsh-light': {
     bg: '#ffffff', panel: '#f9fafb', element: '#ffffff', borderSubtle: '#e6e6e6',
     border: '#e0e0e0', borderActive: '#d6d6d6', text: '#0f1115', textMuted: '#81858c',

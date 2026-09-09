@@ -115,8 +115,8 @@ describe('light scheme quality', () => {
     // composited over each scheme background. light's element equals bg
     // (white): the web inline-code chip (bluish-100) is dropped — any tinted
     // block under bare TUI glyphs reads as a dirty 底纹 — and markdown.tsx
-    // colors chip-less inline code with the secondary text color instead. See
-    // the theme-plugin docstring.
+    // renders chip-less inline code unstyled, like the body text. See the
+    // theme-plugin docstring.
     expect(BUILTIN_SCHEMES['dsh-dark']).toEqual({
       bg: '#151517', panel: '#1b1b1c', element: '#2c2c2e', borderSubtle: '#313133',
       border: '#3a3a3c', borderActive: '#444445', text: '#f9fafb', textMuted: '#81858c',

@@ -91,7 +91,7 @@ border hexes are the alias white/black alpha ramps composited over each scheme b
 One deliberate deviation: `dsh-light`'s `element` (the inline-code background) is set equal to
 `bg` (white) instead of the web token `bluish-100` `#ebeef2` — the web chip has rounded corners
 and padding, but any tinted block under a bare TUI glyph reads as a dirty text 底纹, so the
-renderer distinguishes chip-less inline code by its secondary text color (markdown.tsx).
+renderer renders chip-less inline code unstyled, like the surrounding body text (markdown.tsx).
 Optional skins are not held to the AA bar the two defaults are.
 
 | Default scheme | Upstream | License | Source |
