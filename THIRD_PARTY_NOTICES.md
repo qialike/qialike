@@ -88,9 +88,10 @@ hex comes from one of its static ramps (background layers `neutral-bluish 950/90
 `50`, text `neutral-bluish 50`/`1000`, muted `neutral-bluish 600`, brand `deepseek
 400/450/500/600`, semantic `green-500`/`amber-400/600`/`blue-400/600/800`/`red-400/600`);
 border hexes are the alias white/black alpha ramps composited over each scheme background.
-One deliberate deviation: `dsh-light`'s `element` (the inline-code background) is the web token
-`bluish-100` `#ebeef2` pulled to near-white `#f5f6f7` — the web chip has rounded corners and
-padding, but a bare TUI glyph would read the raw token as a dirty text block.
+One deliberate deviation: `dsh-light`'s `element` (the inline-code background) is set equal to
+`bg` (white) instead of the web token `bluish-100` `#ebeef2` — the web chip has rounded corners
+and padding, but any tinted block under a bare TUI glyph reads as a dirty text 底纹, so the
+renderer distinguishes chip-less inline code by its secondary text color (markdown.tsx).
 Optional skins are not held to the AA bar the two defaults are.
 
 | Default scheme | Upstream | License | Source |

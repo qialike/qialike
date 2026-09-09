@@ -125,7 +125,18 @@ function renderInline(node: MdNode, isKey = false): React.ReactNode {
     case 'strong': return <Text bold color={isKey ? theme.secondary : undefined}>{renderInlineChildren(node)}</Text>
     case 'emphasis': return <Text italic>{renderInlineChildren(node)}</Text>
     case 'delete': return <Text strikethrough>{renderInlineChildren(node)}</Text>
-    case 'inlineCode': return <Text backgroundColor={theme.element}>{node.value ?? ''}</Text>
+    case 'inlineCode': {
+      // Chip-less skins (element == bg, e.g. dsh-light) must not paint a
+      // background: a near-white block under bare TUI glyphs reads as a dirty
+      // text 底纹, not a rounded web chip. Distinguish with the secondary
+      // (blue) text color instead.
+      const chip = theme.element.toLowerCase() !== theme.bg.toLowerCase()
+      return (
+        <Text backgroundColor={chip ? theme.element : undefined} color={chip ? undefined : theme.secondary}>
+          {node.value ?? ''}
+        </Text>
+      )
+    }
     case 'break': return '\n'
     case 'link': return (
       <Text underline>

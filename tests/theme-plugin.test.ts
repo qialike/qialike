@@ -112,10 +112,11 @@ describe('light scheme quality', () => {
     // Resolved from deepseek-harness's design-platform.css (MIT © 2026
     // DeepSeek): dark = the body[data-ds-dark-theme] alias block, light = the
     // light alias defaults; borders are the white/black alpha ramps
-    // composited over each scheme background. light's element is the web
-    // inline-code chip (bluish-100) pulled to near-white #f5f6f7 — a bare TUI
-    // glyph has no chip corners/padding, so the raw token reads as a dirty
-    // block. See the theme-plugin docstring.
+    // composited over each scheme background. light's element equals bg
+    // (white): the web inline-code chip (bluish-100) is dropped — any tinted
+    // block under bare TUI glyphs reads as a dirty 底纹 — and markdown.tsx
+    // colors chip-less inline code with the secondary text color instead. See
+    // the theme-plugin docstring.
     expect(BUILTIN_SCHEMES['dsh-dark']).toEqual({
       bg: '#151517', panel: '#1b1b1c', element: '#2c2c2e', borderSubtle: '#313133',
       border: '#3a3a3c', borderActive: '#444445', text: '#f9fafb', textMuted: '#81858c',
@@ -123,7 +124,7 @@ describe('light scheme quality', () => {
       warning: '#f7ad31', info: '#60a5fa', error: '#f25a5a', yellow: '#f7ad31',
     })
     expect(BUILTIN_SCHEMES['dsh-light']).toEqual({
-      bg: '#ffffff', panel: '#f9fafb', element: '#f5f6f7', borderSubtle: '#e6e6e6',
+      bg: '#ffffff', panel: '#f9fafb', element: '#ffffff', borderSubtle: '#e6e6e6',
       border: '#e0e0e0', borderActive: '#d6d6d6', text: '#0f1115', textMuted: '#81858c',
       primary: '#4176e6', secondary: '#4868b2', accent: '#1e40af', success: '#22c55e',
       warning: '#dd8629', info: '#2563eb', error: '#ec1313', yellow: '#dd8629',

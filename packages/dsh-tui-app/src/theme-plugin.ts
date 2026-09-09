@@ -95,9 +95,10 @@ function themesDir(): string {
  * DeepSeek, sibling workspace of this app). `dsh-dark` resolves the alias
  * block for `body[data-ds-dark-theme]`, `dsh-light` the light alias defaults;
  * every hex comes from one of its static ramps: background layers
- * `neutral-bluish 950/900/850` (dark) and `50` plus a near-white `#f5f6f7`
- * (light — the bluish-100 inline-code chip pulled toward white so it does not
- * read as a dirty glyph block on a bare TUI cell; see the palette comment),
+ * `neutral-bluish 950/900/850` (dark) and `50` with `element` set equal to
+ * the white `bg` (light — the bluish-100 inline-code chip is dropped: any
+ * tinted block under bare TUI glyphs reads as a dirty 底纹, so chip-less
+ * skins are told apart by the secondary code text color in markdown.tsx),
  * borders composited from the alias white/black alpha ramps over each
  * background,
  * text `neutral-bluish 50` / `1000`, muted/caption `neutral-bluish 600`,
@@ -136,13 +137,14 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
     primary: '#679efe', secondary: '#5686fe', accent: '#b7c8fe', success: '#22c55e',
     warning: '#f7ad31', info: '#60a5fa', error: '#f25a5a', yellow: '#f7ad31',
   },
-  // dsh-light: element is the inline-code chip background (markdown.tsx). The
-  // web token bluish-100 #ebeef2 reads as a clean chip there (rounded corners
-  // + padding) but as a dirty glyph "底纹" on a bare TUI cell — pulled to the
-  // near-white #f5f6f7 (the barely-there step opencode's light uses), keeping
-  // a whisper of separation without the block.
+  // dsh-light: element is the inline-code background (markdown.tsx). The web
+  // token bluish-100 #ebeef2 reads as a clean chip in the browser (rounded
+  // corners + padding) but ANY tinted block under bare TUI glyphs reads as a
+  // dirty text 底纹 — so element is set equal to bg (white) and the renderer
+  // tells chip-less skins apart by the secondary code text color instead (see
+  // the inlineCode case in markdown.tsx). element is used ONLY for inline code.
   'dsh-light': {
-    bg: '#ffffff', panel: '#f9fafb', element: '#f5f6f7', borderSubtle: '#e6e6e6',
+    bg: '#ffffff', panel: '#f9fafb', element: '#ffffff', borderSubtle: '#e6e6e6',
     border: '#e0e0e0', borderActive: '#d6d6d6', text: '#0f1115', textMuted: '#81858c',
     primary: '#4176e6', secondary: '#4868b2', accent: '#1e40af', success: '#22c55e',
     warning: '#dd8629', info: '#2563eb', error: '#ec1313', yellow: '#dd8629',
