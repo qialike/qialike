@@ -4,7 +4,8 @@
  * picker dialog and in `resolveScheme` unique-prefix completion).
  *
  * 17-key mapping used for the classic schemes (roles resolved from
- * each theme's `dark` side; `defs` references expanded):
+ * each theme's `dark` side — except `solarized-light`, which mirrors the
+ * official `light` side of altercation/solarized; `defs` expanded):
  *   bg/panel/element        ← background / backgroundPanel / backgroundElement
  *   borderSubtle/border/…   ← borderSubtle / border / borderActive
  *   text/textMuted          ← text / textMuted
@@ -14,16 +15,17 @@
  *                             syntaxType, warning)
  *
  * LICENSE NOTE: every skin here is MIT-licensed (permissive) so the set is
- * safe to bundle/redistribute. 11 palettes (catppuccin, dracula, everforest,
- * falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized) are
+ * safe to bundle/redistribute. 12 palettes (catppuccin, dracula, everforest,
+ * falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized,
+ * solarized-light) are
  * the upstream projects' own palettes, sourced directly from their official
  * repos: catppuccin (Catppuccin), dracula (Dracula Theme), everforest
  * (sainnhe), falcon (fenetikm, MIT), flexoki (kepano/Steph Ango, MIT),
  * gruvbox (morhetz), kanagawa (rebelot), nord (arcticicestudio), panda
  * (siamak/atom-panda-syntax, MIT — the VSCode ports PandaTheme/ and
  * tinkertrain/ ship no LICENSE, so this skin tracks the Atom original),
- * rosepine (Rosé Pine), solarized (Ethan Schoonover) — see
- * THIRD_PARTY_NOTICES.md. The catppuccin/dracula/everforest/gruvbox/kanagawa/
+ * rosepine (Rosé Pine), solarized (Ethan Schoonover — `solarized-light` is
+ * the official light side of the same repo) — see THIRD_PARTY_NOTICES.md. The catppuccin/dracula/everforest/gruvbox/kanagawa/
  * nord/rosepine/solarized values were additionally verified against the
  * theme files bundled with opencode (`packages/tui/src/theme/assets/<name>.json`,
  * an MIT repo, opencode-1.18.25 checkout) and are byte-identical to the
@@ -138,6 +140,16 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
   solarized: {
     bg: '#002b36', panel: '#073642', element: '#073642', borderSubtle: '#073642',
     border: '#073642', borderActive: '#586e75', text: '#839496', textMuted: '#586e75',
+    primary: '#268bd2', secondary: '#6c71c4', accent: '#2aa198', success: '#859900',
+    warning: '#b58900', info: '#cb4b16', error: '#dc322f', yellow: '#b58900',
+  },
+  /** Source: altercation/solarized (light side) — the official light mirror:
+   *  bg base3 #fdf6e3, text base00 #657b83, layers base2 #eee8d5, muted /
+   *  borderActive base1 #93a1a1; the accent roles are shared verbatim with
+   *  the dark side above. */
+  'solarized-light': {
+    bg: '#fdf6e3', panel: '#eee8d5', element: '#eee8d5', borderSubtle: '#eee8d5',
+    border: '#eee8d5', borderActive: '#93a1a1', text: '#657b83', textMuted: '#93a1a1',
     primary: '#268bd2', secondary: '#6c71c4', accent: '#2aa198', success: '#859900',
     warning: '#b58900', info: '#cb4b16', error: '#dc322f', yellow: '#b58900',
   },

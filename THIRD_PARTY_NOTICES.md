@@ -18,10 +18,11 @@ and the Bun runtime embeds its own license with the compiled binary.
 
 ## Classic colorschemes
 
-The 13 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
+The 14 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
 palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values** plus its own
-17-role mapping — no upstream source code is copied. 11 of them (catppuccin, dracula,
-everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized) are the
+17-role mapping — no upstream source code is copied. 12 of them (catppuccin, dracula,
+everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized,
+solarized-light) are the
 upstream projects' own palettes, referenced directly from their official repos. The
 catppuccin/dracula/everforest/gruvbox/kanagawa/nord/rosepine/solarized values were additionally
 verified against the theme files bundled with [opencode](https://github.com/sst/opencode) — an
@@ -43,7 +44,8 @@ The rows below list the verified licenses.
 | gruvbox | [morhetz/gruvbox](https://github.com/morhetz/gruvbox) | MIT | morhetz/gruvbox |
 | monokai | Wimer Hazenberg (Monokai) | values bundled via opencode's MIT repo; upstream terms vary by port | opencode assets/`monokai.json` |
 | nord | [arcticicestudio/nord](https://github.com/arcticicestudio/nord) | MIT | arcticicestudio/nord |
-| solarized | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | altercation/solarized |
+| solarized | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | altercation/solarized (dark side) |
+| solarized-light | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | altercation/solarized (official light side) |
 | everforest | [sainnhe/everforest](https://github.com/sainnhe/everforest) | MIT | sainnhe/everforest |
 | falcon | [fenetikm/falcon](https://github.com/fenetikm/falcon) | MIT (Copyright (c) 2018 fenetikm) | `colors/falcon.vim` + `alacritty/alacritty.toml` (dark side) |
 | flexoki | [kepano/flexoki](https://github.com/kepano/flexoki) | MIT (Copyright (c) 2023 Steph Ango) | `css/flexoki.css` + `helix/flexoki-dark.toml` (dark side) |

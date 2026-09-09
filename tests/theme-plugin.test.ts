@@ -143,7 +143,7 @@ describe('scheme palettes', () => {
   })
 
   test('classic schemes are registered and structurally complete', () => {
-    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized']
+    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light']
     for (const name of classic) {
       const palette = BUILTIN_SCHEMES[name]
       expect(palette, name).toBeDefined()
@@ -162,9 +162,26 @@ describe('scheme palettes', () => {
       flexoki: '#100f0f', gruvbox: '#282828',
       jellybeans: '#151515', kanagawa: '#1f1f28', monokai: '#272822', nord: '#2e3440',
       panda: '#292a2b', rosepine: '#191724', solarized: '#002b36',
+      'solarized-light': '#fdf6e3',
     }
     for (const [name, bg] of Object.entries(anchors)) {
       expect(BUILTIN_SCHEMES[name]?.bg, name).toBe(bg)
+    }
+  })
+
+  test('solarized-light mirrors the official light side of solarized', () => {
+    // Same upstream (altercation/solarized, MIT): the accent roles are shared
+    // verbatim with the dark side; only the base ramp inverts to the official
+    // light recommendation — bg base3 #fdf6e3, layers base2 #eee8d5, muted /
+    // borderActive base1 #93a1a1, text base00 #657b83.
+    const darkSide = BUILTIN_SCHEMES.solarized!
+    const lightSide = BUILTIN_SCHEMES['solarized-light']!
+    expect(lightSide.bg).toBe('#fdf6e3')
+    expect(lightSide.panel).toBe('#eee8d5')
+    expect(lightSide.text).toBe('#657b83')
+    expect(lightSide.textMuted).toBe('#93a1a1')
+    for (const role of ['primary', 'secondary', 'accent', 'success', 'warning', 'info', 'error', 'yellow'] as const) {
+      expect(lightSide[role], `solarized-light.${role}`).toBe(darkSide[role])
     }
   })
 })
