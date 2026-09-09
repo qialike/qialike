@@ -18,18 +18,13 @@ and the Bun runtime embeds its own license with the compiled binary.
 
 ## Classic colorschemes
 
-The 14 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
+The 13 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
 palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values** plus its own
 17-role mapping — no upstream source code is copied. 12 of them (catppuccin, dracula,
 everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized,
 solarized-light) are the
-upstream projects' own palettes, referenced directly from their official repos. The
-catppuccin/dracula/everforest/gruvbox/kanagawa/nord/rosepine/solarized values were additionally
-verified against the theme files bundled with [opencode](https://github.com/sst/opencode) — an
-MIT repo — at `packages/tui/src/theme/assets/<name>.json` and are byte-identical to the
-upstream palettes. `monokai` has no single official repository, so its values are taken via
-opencode's MIT theme assets (upstream terms vary by port); `jellybeans` is mapped from the MIT
-vim colorscheme by nanoTech. `panda` tracks the original Atom colorscheme by Siamak Mokhtari
+upstream projects' own palettes, referenced directly from their official repos; `jellybeans` is
+mapped from the MIT vim colorscheme by nanoTech. `panda` tracks the original Atom colorscheme by Siamak Mokhtari
 (`siamak/atom-panda-syntax`, MIT © 2016): the popular VSCode ports (`PandaTheme/panda-syntax-
 vscode`, `tinkertrain/panda-syntax-vscode`) ship no LICENSE file and no package.json `license`
 field, so — per this repo's MIT-only policy — they are **not** used as a source.
@@ -42,7 +37,6 @@ The rows below list the verified licenses.
 | catppuccin | [Catppuccin](https://github.com/catppuccin/catppuccin) | MIT | catppuccin/catppuccin |
 | dracula | [Dracula Theme](https://github.com/dracula/dracula-theme) | MIT | dracula/dracula-theme |
 | gruvbox | [morhetz/gruvbox](https://github.com/morhetz/gruvbox) | MIT | morhetz/gruvbox |
-| monokai | Wimer Hazenberg (Monokai) | values bundled via opencode's MIT repo; upstream terms vary by port | opencode assets/`monokai.json` |
 | nord | [arcticicestudio/nord](https://github.com/arcticicestudio/nord) | MIT | arcticicestudio/nord |
 | solarized | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | altercation/solarized (dark side) |
 | solarized-light | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | altercation/solarized (official light side) |
@@ -63,10 +57,7 @@ UI of the sibling MIT project [deepseek-harness](https://github.com/deepseek-ai/
 no CSS source is copied. Every hex comes from one of its static ramps (background layers
 `neutral-bluish 950/900/850`, borders composited from the alias white alpha ramps over each
 background, text `neutral-bluish 50`, muted `neutral-bluish 600`, brand `deepseek 300/400/450`,
-semantic `green-500`/`amber-400`/`blue-400/600`/`red-400/600`). These tokens took over the `dark`
-name from the former `dsh-dark` skin; the earlier opencode-dark default (repo
-[sst/opencode](https://github.com/sst/opencode), MIT —
-`packages/tui/src/theme/assets/opencode.json`) was removed entirely. `dark` is the ONE scheme held
+semantic `green-500`/`amber-400`/`blue-400/600`/`red-400/600`). `dark` is the ONE scheme held
 to the WCAG AA bar (its text-bearing roles keep ≥4.5:1 contrast on its background).
 
 The built-in default `light` is **Atom's One Light** — the former `one-light` optional skin,

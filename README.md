@@ -80,8 +80,8 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   objective is achieved, which stops further rounds. The goal domain, model
   tools (`get_goal`/`create_goal`/`update_goal`), and round driver come from
   the harness base bundle — this command is the TUI's human command plane.
-- **`/models`**: manage models and the API key, like the web Models page. It opens an
-  opencode-style full-screen dialog with **two levels**: the first level groups
+- **`/models`**: manage models and the API key, like the web Models page. It opens a
+  full-screen dialog with **two levels**: the first level groups
   providers (one row per provider with its key set, model count on the right —
   e.g. `OpenCode Zen · 63 models`; the current selection is shown on top);
   `↑/↓` moves, `Enter` drills into a provider's **model sub-list** (second
@@ -119,8 +119,7 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   current model's reasoning effort through its declared levels (wrapping, e.g.
   Max→Off→Low→High→…; each press persists and applies to later requests);
   the composer's model label shows the effort as a warning-colored chip
-  (`Model: DeepSeek · DeepSeek V4 Flash · Max`, like opencode's variant
-  badge). The picker shows only providers whose
+  (`Model: DeepSeek · DeepSeek V4 Flash · Max`). The picker shows only providers whose
   API key is set; on the first level press **`Ctrl+D`** (or **`Alt+D`**) to
   deactivate the highlighted provider — it removes the provider's API key AND
   drops it from the /models list (the hidden list persists in `dsh-tui.json`
@@ -172,24 +171,22 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   `dsh-tui-llm` settings section and hot-registers the route, so its models
   appear in the picker). The list scrolls to keep the highlight in view.
   Color schemes (vim-style `:colorscheme`): bare `/theme` opens a theme
-  **picker dialog** (opencode-style Themes list): ↑/↓ to move, type to filter,
+  **picker dialog**: ↑/↓ to move, type to filter,
   **live preview** while moving, `Enter` applies + persists, `Esc` cancels and
   restores. Fast paths remain: `/theme dark` (or a unique prefix), and
-  `/theme <role> <hex>` overrides. **17 built-ins**: `dark` — the DeepSeek
+  `/theme <role> <hex>` overrides. **16 built-ins**: `dark` — the DeepSeek
   Harness web dark design tokens (MIT repo `deepseek-harness`,
-  `design-platform.css` `body[data-ds-dark-theme]` alias block; the former
-  opencode-dark default was removed when these tokens took over the `dark`
-  name from the old `dsh-dark` skin) — and `light` (Atom's One Light, GitHub
+  `design-platform.css` `body[data-ds-dark-theme]` alias block) — and
+  `light` (Atom's One Light, GitHub
   Inc. MIT — the former `one-light` optional skin, promoted to the default
-  light), plus the optional skin `one-dark` (Atom, GitHub Inc. MIT), and 14
+  light), plus the optional skin `one-dark` (Atom, GitHub Inc. MIT), and 13
   classic skins — catppuccin,
   dracula, everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa,
-  monokai, nord, panda, rosepine, solarized, solarized-light (12 resolved
+  nord, panda, rosepine, solarized, solarized-light (12 resolved
   from the upstream projects' official repos — solarized-light is the
-  official light side of the same altercation/solarized repo; monokai via
-  opencode's MIT theme assets, jellybeans mapped from an MIT vim
-  colorscheme; the whole set is MIT/permissive — see `classic-schemes.ts`
-  and THIRD_PARTY_NOTICES.md) —
+  official light side of the same altercation/solarized repo; jellybeans
+  mapped from an MIT vim colorscheme; the whole set is MIT/permissive — see
+  `classic-schemes.ts` and THIRD_PARTY_NOTICES.md) —
   plus user files in `~/.dsh/themes/*.json`; `dsh-tui-theme: { colorscheme:
   light }` persists the
   choice. The scheme's `bg` is painted full-screen and
@@ -213,7 +210,7 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
 - **Approval dialog**: when a tool requests approval, an in-band prompt appears with the tool name
   and reason. `y`/`a` allow the call once, `n`/`Esc` reject. (Under the no-sandbox profile no tool
   currently asks, so the dialog stays dormant — wired for when a tool requests approval.)
-- **`/sessions` session manager**: the one session picker — an opencode-style full-screen dialog
+- **`/sessions` session manager**: the one session picker — a full-screen dialog
    listing persisted sessions **of the current working directory only** (same-directory semantics as
    the auto-resume default)
    (title / id — no date/time, the day headers carry it) with **live type-to-filter**
@@ -229,11 +226,11 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
    The dialog lists historical session records only — starting a brand-new session is `/new`'s job.
    Content-level search is not available in the single-file process (the harness exposes
    session-content search only through its remote client layer, used by the web app).
- - **`/new` new session**: start a brand-new session in place (opencode's "New session" entry).
+ - **`/new` new session**: start a brand-new session in place.
    The current turn is cancelled, a fresh agent is created, and the old agent is disposed — the
    harness persists every session durably, so the previous conversation stays reachable from
    `/sessions` / `--resume`. The current model selection and workspace carry over.
- - **`/export` session export**: bare `/export` opens an **export dialog** (format JSON/Markdown, editable file name, sanitize toggle; `↑/↓` move fields, `←/→` toggle, type the name, `Enter` export); with flags it exports directly: **JSON** (machine-readable, opencode `export` shape) or **Markdown** (human-readable replay): `/export` exports the current session, `/export <sessionId>` a given one, `--markdown` switches format, `--sanitize` redacts content (`[redacted:…]`), `--output <name>` sets a custom file name (extension added; may include subdirectories, e.g. `notes/summary`). Writes `export-<ts>-<id>.(json|md)` into the **workspace root** and shows the path in the status line.
+ - **`/export` session export**: bare `/export` opens an **export dialog** (format JSON/Markdown, editable file name, sanitize toggle; `↑/↓` move fields, `←/→` toggle, type the name, `Enter` export); with flags it exports directly: **JSON** (machine-readable) or **Markdown** (human-readable replay): `/export` exports the current session, `/export <sessionId>` a given one, `--markdown` switches format, `--sanitize` redacts content (`[redacted:…]`), `--output <name>` sets a custom file name (extension added; may include subdirectories, e.g. `notes/summary`). Writes `export-<ts>-<id>.(json|md)` into the **workspace root** and shows the path in the status line.
 - **`/sidebar` right-panel toggle**: the right-hand **Steps** panel (session id, `Steps X/Y`
   progress and the step checklist, `no plan yet` when the model did not use `todo_write`) shows
   automatically when the terminal is wide enough (≥110 columns). `/sidebar` toggles it — bare
@@ -243,7 +240,7 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   The choice persists in `~/.dsh/dsh-tui.json` (`sidebar_mode`, default `auto`); every geometry —
   message-column/composer width, wrapping, caret cell, mouse clicks, selection guards — follows the
   same visibility rule, so layout and caret never misalign when the panel is shown or hidden.
-- **OpenCode-style layout**: a conversation column (transcript + bottom input dock) with the Steps
+- **Layout**: a conversation column (transcript + bottom input dock) with the Steps
   panel to its right when visible (auto at ≥110 columns, or forced with `/sidebar`); the old
   Activity panel and `/activity` command were removed long ago.
 - **Live run status — the screen never *looks* frozen while the agent works**: while a run is in

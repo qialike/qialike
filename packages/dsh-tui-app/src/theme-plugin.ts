@@ -11,7 +11,7 @@ import React from 'react'
  *     the default light name, GitHub Inc. MIT); the optional skin `one-dark`
  *     (Atom, GitHub Inc. MIT); plus the classic third-party set
  *     in `classic-schemes.ts` (catppuccin, dracula, everforest, falcon,
- *     flexoki, gruvbox, jellybeans, kanagawa, monokai, nord, panda, rosepine,
+ *     flexoki, gruvbox, jellybeans, kanagawa, nord, panda, rosepine,
  *     solarized — all MIT-licensed; see that module's header for sources and
  *     the 17-key mapping);
  *   - **user schemes** live in `~/.dsh/themes/<name>.json` — like vim's
@@ -69,9 +69,7 @@ function themesDir(): string {
  * Built-in schemes. `dark` snapshots the default palette at module load
  * (theme.ts — the DeepSeek Harness web dark design tokens, see its header)
  * and is the ONE scheme held to the WCAG AA bar: its text-bearing roles keep
- * ≥4.5:1 contrast on its background. The former opencode-dark default was
- * removed when the Harness web dark tokens took over the `dark` name (from
- * the old `dsh-dark` skin).
+ * ≥4.5:1 contrast on its background.
  *
  * `light` is Atom's One Light — the former `one-light` optional skin
  * promoted to the default light name, official hexes verbatim: hues from
@@ -107,9 +105,8 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
     primary: '#d19a66', secondary: '#61afef', accent: '#c678dd', success: '#98c379',
     warning: '#e2c08d', info: '#56b6c2', error: '#e06c75', yellow: '#e5c07b',
   },
-  // Classic third-party skins (11 from upstream official repos, monokai via
-  // opencode's MIT assets, jellybeans from an MIT vim colorscheme) —
-  // provenance in classic-schemes.ts.
+  // Classic third-party skins (12 from upstream official repos, jellybeans
+  // from an MIT vim colorscheme) — provenance in classic-schemes.ts.
   ...CLASSIC_SCHEMES,
 }
 

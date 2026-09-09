@@ -106,9 +106,7 @@ describe('scheme palettes', () => {
     // DeepSeek): the body[data-ds-dark-theme] alias block; borders are the
     // white alpha ramps composited over each background. `dark` keeps the
     // web chip background for inline code — its element #2c2c2e IS the dark
-    // alias' markdown-inline-code token. This palette took over the `dark`
-    // name (from the former `dsh-dark` skin); the old opencode dark default
-    // was removed entirely.
+    // alias' markdown-inline-code token.
     expect(BUILTIN_SCHEMES.dark).toEqual({
       bg: '#151517', panel: '#1b1b1c', element: '#2c2c2e', borderSubtle: '#313133',
       border: '#3a3a3c', borderActive: '#444445', text: '#f9fafb', textMuted: '#81858c',
@@ -116,7 +114,6 @@ describe('scheme palettes', () => {
       warning: '#f7ad31', info: '#60a5fa', error: '#f25a5a', yellow: '#f7ad31',
     })
     expect(Object.keys(schemeRegistry())).toContain('dark')
-    expect(Object.keys(schemeRegistry())).not.toContain('dsh-dark')
   })
 
   test('text-bearing roles hold WCAG AA contrast on the dark default', () => {
@@ -127,8 +124,8 @@ describe('scheme palettes', () => {
     // one-light skin) keeps the official hexes verbatim — its muted #696c77
     // and secondary #a626a4 sit below 4.5:1 on the near-white #fafafa
     // background — and third-party/optional schemes (classic-schemes.ts,
-    // one-dark) keep their upstream contrast by design (e.g. dracula/monokai
-    // muted ≈ 3:1).
+    // one-dark) keep their upstream contrast by design (e.g. dracula muted
+    // ≈ 3:1).
     const textRoles = ['text', 'textMuted', 'primary', 'secondary', 'accent', 'success', 'warning', 'info', 'error', 'yellow']
     for (const schemeName of ['dark'] as const) {
       const { bg, ...rest } = BUILTIN_SCHEMES[schemeName]!
@@ -140,7 +137,7 @@ describe('scheme palettes', () => {
   })
 
   test('classic schemes are registered and structurally complete', () => {
-    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light']
+    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light']
     for (const name of classic) {
       const palette = BUILTIN_SCHEMES[name]
       expect(palette, name).toBeDefined()
@@ -157,7 +154,7 @@ describe('scheme palettes', () => {
     const anchors: Record<string, string> = {
       catppuccin: '#1e1e2e', dracula: '#282a36', everforest: '#2d353b', falcon: '#020221',
       flexoki: '#100f0f', gruvbox: '#282828',
-      jellybeans: '#151515', kanagawa: '#1f1f28', monokai: '#272822', nord: '#2e3440',
+      jellybeans: '#151515', kanagawa: '#1f1f28', nord: '#2e3440',
       panda: '#292a2b', rosepine: '#191724', solarized: '#002b36',
       'solarized-light': '#fdf6e3',
     }

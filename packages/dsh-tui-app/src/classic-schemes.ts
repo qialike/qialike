@@ -25,13 +25,8 @@
  * (siamak/atom-panda-syntax, MIT — the VSCode ports PandaTheme/ and
  * tinkertrain/ ship no LICENSE, so this skin tracks the Atom original),
  * rosepine (Rosé Pine), solarized (Ethan Schoonover — `solarized-light` is
- * the official light side of the same repo) — see THIRD_PARTY_NOTICES.md. The catppuccin/dracula/everforest/gruvbox/kanagawa/
- * nord/rosepine/solarized values were additionally verified against the
- * theme files bundled with opencode (`packages/tui/src/theme/assets/<name>.json`,
- * an MIT repo, opencode-1.18.25 checkout) and are byte-identical to the
- * upstream palettes. `monokai` (Wimer Hazenberg) has no single official
- * repo, so its values come via opencode's MIT assets (upstream terms vary by
- * port). `jellybeans` is mapped from the MIT vim colorscheme by nanoTech.
+ * the official light side of the same repo) — see THIRD_PARTY_NOTICES.md.
+ * `jellybeans` is mapped from the MIT vim colorscheme by nanoTech.
  * - `jellybeans` maps canonical highlight groups onto our semantic roles:
  *   Normal → text, Comment → textMuted, Function → primary, Identifier →
  *   secondary, Type → accent, String/Title → success, Constant → warning,
@@ -104,13 +99,6 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     border: '#54546d', borderActive: '#c38d9d', text: '#dcd7ba', textMuted: '#727169',
     primary: '#7e9cd8', secondary: '#957fb8', accent: '#d27e99', success: '#98bb6c',
     warning: '#d7a657', info: '#76946a', error: '#e82424', yellow: '#c38d9d',
-  },
-  /** Source: opencode assets/monokai.json (dark side). */
-  monokai: {
-    bg: '#272822', panel: '#1e1f1c', element: '#3e3d32', borderSubtle: '#1e1f1c',
-    border: '#3e3d32', borderActive: '#66d9ef', text: '#f8f8f2', textMuted: '#75715e',
-    primary: '#66d9ef', secondary: '#ae81ff', accent: '#a6e22e', success: '#a6e22e',
-    warning: '#e6db74', info: '#fd971f', error: '#f92672', yellow: '#e6db74',
   },
   /** Source: arcticicestudio/nord (dark side). */
   nord: {

@@ -63,7 +63,7 @@ dist/dsh-tui --help
   `/goal edit <objective>` 修改目标；`/goal pause` / `/goal resume` / `/goal clear` 控制目标。
   模型确认目标达成后会把目标标记为 complete 并停止续跑。目标域、模型工具（`get_goal`/`create_goal`/`update_goal`）与
   round driver 均来自 harness base bundle——本命令只是补上 TUI 的人类命令平面。
-- **`/models`**：管理模型与 API key，与 web Models 页一致。弹出 opencode 式全屏对话框，**两级导航**：第一级按供应商归类
+- **`/models`**：管理模型与 API key，与 web Models 页一致。弹出全屏对话框，**两级导航**：第一级按供应商归类
   （每个已配置 key 的提供商一行，行尾标注其模型数，如 `OpenCode Zen · 63 models`；当前选择的模型显示在顶部）；
   `↑/↓` 选择、`Enter` 打开该供应商的**模型子列表**（第二级）、`Esc` 返回一级；
   **一级/二级/Add provider 三个列表都支持打字即过滤**（顶部边框搜索框 `⌕ type to filter`，直接输入关键字实时过滤，如 `gpt` 只显示 GPT 系列），`Backspace` 删字符、`Esc` 先清过滤再退出；
@@ -84,7 +84,7 @@ dist/dsh-tui --help
   未静态声明的模型——UI/循环/持久化零改动。
   主窗口随时按 **`Ctrl+T`**（终端占用该组合键时用 **`Alt+T`** 备用）可**循环切换**当前模型的推理强度
   （按声明档位 wrap，如 Max→Off→Low→High→…；切换即持久化并作用于后续请求）；
-  composer 的 Model 标签里档名以警示色高亮显示（如 `Model: DeepSeek · DeepSeek V4 Flash · Max`，对齐 opencode 的 variant 角标）。
+  composer 的 Model 标签里档名以警示色高亮显示（如 `Model: DeepSeek · DeepSeek V4 Flash · Max`）。
   选择器只显示已配置 API key 的提供商；一级列表按 **`Ctrl+D`（备用 `Alt+D`）可停用高亮供应商**
   ——**同步移除其 API key** 并从 /models 一级消失（隐藏列表持久化于 `dsh-tui.json` 的 `hidden_providers`；
   key 来自环境变量时无法删除、会提示，隐藏集仍使其不显示）；重新加入 = 到 "Add provider" 列表选择该家并
@@ -110,7 +110,7 @@ dist/dsh-tui --help
   （已有 key 时对话框提示 "replaces the current key"）；给休眠的模板路由设 key 会**当场激活**
   （把模板的完整 profile——端点与模型目录——写入 `dsh-tui-llm` 设置节并热注册路由，其模型随即出现在选择器）；
   列表支持滚动（高亮始终可见）。
-  配色方案（vim 风格 `:colorscheme`）：直接输入 `/theme`（不带参数）弹出**主题选择对话框**（类 opencode 的 Themes 列表）——`↑/↓` 移动、直接打字过滤、移动时**实时预览**、`Enter` 应用并持久化、`Esc` 取消并还原；也支持 `/theme dark`（或唯一前缀，如 `d` 或 `da`）、`/theme <name>`、`/theme <role> <hex>` 快捷路径。内置 **17 套**方案：`dark`（DeepSeek Harness 网页深色设计令牌——仓库 `deepseek-harness` MIT：`design-platform.css` 的 `body[data-ds-dark-theme]` 别名块；原先的 opencode 深色默认已移除，改由这批令牌占据 `dark` 之名，即旧 `dsh-dark` 皮肤）与 `light`（Atom One Light——原 `one-light` 可选皮肤提升为默认浅色，官方仓库 GitHub Inc. MIT），外加可选皮肤 `one-dark`（Atom 官方仓库，GitHub Inc. MIT）+ **14 套经典皮肤** `catppuccin`/`dracula`/`everforest`/`falcon`/`flexoki`/`gruvbox`/`jellybeans`/`kanagawa`/`monokai`/`nord`/`panda`/`rosepine`/`solarized`/`solarized-light`（solarized-light 为同一上游仓库的官方浅色面；12 套解析自上游项目官方仓库——falcon 与 flexoki 为各自官方 MIT 仓库、panda 取 Atom 原版 MIT 配色、`monokai` 经 opencode MIT 主题资产、`jellybeans` 按 MIT vim colorscheme 语义映射；**全部 MIT/宽松许可**，来源与许可见 `classic-schemes.ts` 与 THIRD_PARTY_NOTICES），外加 `~/.dsh/themes/*.json` 用户文件；`dsh-tui-theme: { colorscheme: light }` 持久化。方案的 `bg` 会作为全屏背景层涂色，字素由补丁帧写入器强制 `theme.bg`/`theme.text`，切换 dark/light 时整屏底色与字色（不止边框/文字）随之变化。
+  配色方案（vim 风格 `:colorscheme`）：直接输入 `/theme`（不带参数）弹出**主题选择对话框**——`↑/↓` 移动、直接打字过滤、移动时**实时预览**、`Enter` 应用并持久化、`Esc` 取消并还原；也支持 `/theme dark`（或唯一前缀，如 `d` 或 `da`）、`/theme <name>`、`/theme <role> <hex>` 快捷路径。内置 **16 套**方案：`dark`（DeepSeek Harness 网页深色设计令牌——仓库 `deepseek-harness` MIT：`design-platform.css` 的 `body[data-ds-dark-theme]` 别名块）与 `light`（Atom One Light——原 `one-light` 可选皮肤提升为默认浅色，官方仓库 GitHub Inc. MIT），外加可选皮肤 `one-dark`（Atom 官方仓库，GitHub Inc. MIT）+ **13 套经典皮肤** `catppuccin`/`dracula`/`everforest`/`falcon`/`flexoki`/`gruvbox`/`jellybeans`/`kanagawa`/`nord`/`panda`/`rosepine`/`solarized`/`solarized-light`（solarized-light 为同一上游仓库的官方浅色面；12 套解析自上游项目官方仓库——falcon 与 flexoki 为各自官方 MIT 仓库、panda 取 Atom 原版 MIT 配色、`jellybeans` 按 MIT vim colorscheme 语义映射；**全部 MIT/宽松许可**，来源与许可见 `classic-schemes.ts` 与 THIRD_PARTY_NOTICES），外加 `~/.dsh/themes/*.json` 用户文件；`dsh-tui-theme: { colorscheme: light }` 持久化。方案的 `bg` 会作为全屏背景层涂色，字素由补丁帧写入器强制 `theme.bg`/`theme.text`，切换 dark/light 时整屏底色与字色（不止边框/文字）随之变化。
   Add-provider 列表按显示名 A–Z 排序，一级列表 `＋ Add provider` 行尾显示可加供应商总数。
   "＋ Add a custom provider" 进入逐字段表单（步骤以 `[ N ]` 标示；第一步为提供商模板下拉——DeepSeek / OpenAI / OpenRouter / Groq 等
   或自定义，自动预填 route/显示名/base URL；再填 API key / 模型 id），写入
@@ -120,11 +120,11 @@ dist/dsh-tui --help
   可接收会话中附带的图片，适配器转成 OpenAI `image_url` parts 或 Anthropic base64 source 块。
 - **审批对话框**：某工具请求审批时，带内弹窗显示工具名与原因。`y`/`a` 允许一次，`n`/`Esc` 拒绝。
   （无沙箱 profile 下当前无工具会请求审批，故对话框默认休眠——已在需要时接线就绪。）
-- **`/sessions` 会话管理器（唯一的会话选择入口）**：opencode 风格全屏对话框——列出持久化会话（**仅当前工作目录**，与自动恢复同目录语义一致）（**标题**/id，不显示日期时间——日期由分组组头承载），**打字即过滤**（标题/id/cwd），`Enter` 恢复所选、`Ctrl+R` 改名所选（本地持久，重启仍有效）、`Ctrl+F` 置顶/取消置顶（置顶会话在顶部 `📌 Pinned` 组，持久）、`Ctrl+D` 删除所选历史会话（两次确认；当前会话受保护）、`Esc` 两级退出；列表超页支持 `PgUp`/`PgDn`/`Home`/`End`，**按创建时间倒序（最新在前）并按创建日期分组**（`Today` / `Yesterday` / 日期组头）。每行以会话**标题**打头——即**第一个任务的摘要**（如 `你是谁 · @9/1/2026, 5:47:18 PM · /home/pipo/temp`）：harness 的 `session-title` 服务从会话第一条消息折叠生成（确定性 fallback，可被 LLM 标题提供者润色），随会话持久化——包括 `/new` 切换掉的旧会话。该对话框只承载历史会话记录——开启全新会话由 `/new` 负责。内容级搜索暂不可用（harness 单文件进程无 remote 层的会话内容搜索 API）。
-- **`/new` 新会话**：就地开启一个全新会话（对应 opencode 的 "New session" 入口）。取消当前回合、创建新 agent、拆除旧 agent——harness 对所有会话自动持久化，因此之前的对话仍可从 `/sessions` / `--resume` 找回；当前模型选择与工作目录保留。
-- **`/export` 会话导出**：输入 `/export` 弹出**导出对话框**（格式 JSON/Markdown、文件名可编辑、脱敏开关；`↑/↓` 移动字段、`←/→` 切换、输入文件名、`Enter` 导出）；带参数直达：导出会话为 **JSON**（机器可读，opencode `export` 同型）或 **Markdown**（人类可读回放）。`/export` 导出当前会话、`/export <sessionId>` 指定会话、`--markdown` 切换格式、`--sanitize` 脱敏（文本/工具输出替换为 `[redacted:…]`）、`--output <名称>` 自定义文件名（自动加扩展名,可含子目录,如 `notes/summary`）。写入**工作区根目录** `export-<时间>-<id>.(json|md)`，状态行显示路径。
+- **`/sessions` 会话管理器（唯一的会话选择入口）**：全屏对话框——列出持久化会话（**仅当前工作目录**，与自动恢复同目录语义一致）（**标题**/id，不显示日期时间——日期由分组组头承载），**打字即过滤**（标题/id/cwd），`Enter` 恢复所选、`Ctrl+R` 改名所选（本地持久，重启仍有效）、`Ctrl+F` 置顶/取消置顶（置顶会话在顶部 `📌 Pinned` 组，持久）、`Ctrl+D` 删除所选历史会话（两次确认；当前会话受保护）、`Esc` 两级退出；列表超页支持 `PgUp`/`PgDn`/`Home`/`End`，**按创建时间倒序（最新在前）并按创建日期分组**（`Today` / `Yesterday` / 日期组头）。每行以会话**标题**打头——即**第一个任务的摘要**（如 `你是谁 · @9/1/2026, 5:47:18 PM · /home/pipo/temp`）：harness 的 `session-title` 服务从会话第一条消息折叠生成（确定性 fallback，可被 LLM 标题提供者润色），随会话持久化——包括 `/new` 切换掉的旧会话。该对话框只承载历史会话记录——开启全新会话由 `/new` 负责。内容级搜索暂不可用（harness 单文件进程无 remote 层的会话内容搜索 API）。
+- **`/new` 新会话**：就地开启一个全新会话。取消当前回合、创建新 agent、拆除旧 agent——harness 对所有会话自动持久化，因此之前的对话仍可从 `/sessions` / `--resume` 找回；当前模型选择与工作目录保留。
+- **`/export` 会话导出**：输入 `/export` 弹出**导出对话框**（格式 JSON/Markdown、文件名可编辑、脱敏开关；`↑/↓` 移动字段、`←/→` 切换、输入文件名、`Enter` 导出）；带参数直达：导出会话为 **JSON**（机器可读）或 **Markdown**（人类可读回放）。`/export` 导出当前会话、`/export <sessionId>` 指定会话、`--markdown` 切换格式、`--sanitize` 脱敏（文本/工具输出替换为 `[redacted:…]`）、`--output <名称>` 自定义文件名（自动加扩展名,可含子目录,如 `notes/summary`）。写入**工作区根目录** `export-<时间>-<id>.(json|md)`，状态行显示路径。
 - **`/sidebar` 右侧栏开关**：右侧 **Steps** 面板（`session <id>` + `Steps X/Y` 进度 + 步骤清单；模型未用 `todo_write` 时显示 `no plan yet`）默认在终端足够宽（≥110 列）时自动显示。输入 `/sidebar` 可切换——无参时循环 `auto → on → off`，`/sidebar on|off|auto` 直接设档；**鼠标左键点击 Steps 标题栏**同样可切换。`auto` 随宽度、`on` 恒显（窄窗也显示）、`off` 恒隐（消息列与输入框随之变宽，等同窄窗布局）。选择持久化到 `~/.dsh/dsh-tui.json` 的 `sidebar_mode`（默认 `auto`）；消息列/输入框宽度、换行、光标格、鼠标点击、选区保护等全部几何与显隐判定一致，切换后布局与光标不会错位。
-- **opencode 式布局**：对话列（转写区 + 底部输入框）+ 右侧 Steps 面板（≥110 列自动显示，或经 `/sidebar` 强制显隐）；旧的 Activity 面板与 `/activity` 命令早已移除。
+- **布局**：对话列（转写区 + 底部输入框）+ 右侧 Steps 面板（≥110 列自动显示，或经 `/sidebar` 强制显隐）；旧的 Activity 面板与 `/activity` 命令早已移除。
 - **运行状态"活性指示"（界面不会"看起来像卡死"）**：agent 运行期间，底部状态栏持续显示**相位与经过秒数**——`⠙ thinking · 12s · Esc to pause`（模型思考）、`⠴ answering · Ns`（正文流式）、工具调用时显示**当前工具名**（并行折叠为 `name ×n`），事件静默 ≥4s 会标出 `Ns since last event`——长任务中画面始终在动。若渲染循环真停摆（agent 仍在后台工作），**内置看门狗**自动两级强制重绘（并在 `~/.dsh/dsh-tui.log` 记录 `[watchdog]` 行），按任意键也可立即救回画面；单条异常消息导致的渲染错误只把该行降级为 `⚠ row dropped` 警告（`[row]` 日志），不会冻结整个界面。工具行完成后默认**折叠为摘要卡片**（bash/read/todo 等按参数生成摘要，如 `✓ bash · ls -la …`、`✓ todo_write · 3/5`；成功/失败着色、可展开标记 `…`），**鼠标点击该行**或 **`/think`**（统一展开/收起下方内容：Think 推理全文 + 全部工具行正文）展开/收起完整结果（限长，完整内容保留在会话日志——对齐 web 的摘要+展开语义）；模型输出达到长度上限且未产出正文时，对话区会给出明确提示（可发送任意消息继续，或用 Ctrl+T 调低推理档减少额度消耗）。
 - **用户提问弹窗（`ask_user_question`，卡片式 + 悬窗 + Tab）**：一次询问含多题时使用**单卡片**逐题作答——标题显示 `Ask question k/N`，每题一个可点击 **Tab**（题目短标/题号，已答 `✓`、当前 `[n]`）；答题后自动进入下一题、`←/→`（或 Tab）回看改答、全部答完一次提交、Esc 取消整批；题多放不下时 Tab 栏自动**分页翻滚**（`…` 标记 + `←/→` 翻页）。选 **Other…** 时直接在**选项列表正下方行内输入**（不另弹框，Enter 提交并进入下一题）；弹窗为**悬窗式**——浮动在消息区上方、不压缩/不跳动会话区。问题与选项一律**完整换行不截断**，内容超高时弹窗内部滚动查看。鼠标可点选选项与 Tab（多行选项、已答标记均正确映射）。
 - **工具行运行中活性**：Bash/Read/Write 等工具**执行期间**该行动态显示——行首转圈、行尾实时耗时 `· Ns`（与 web 运行态 sweep 对应的终端动效），完成后回到静态图标行并可点击展开结果。

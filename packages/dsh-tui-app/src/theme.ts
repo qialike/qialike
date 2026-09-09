@@ -6,14 +6,10 @@
  * ramps (background layers `neutral-bluish 950/900/850`, borders composited
  * from the alias white alpha ramps over each background, text `neutral-bluish
  * 50`, muted `neutral-bluish 600`, brand `deepseek 300/400/450`, semantic
- * `green-500`/`amber-400`/`blue-400/600`/`red-400/600`). It previously held
- * opencode's own default dark theme (repo `sst/opencode`, MIT); when the
- * Harness web dark tokens took over the `dark` name (renamed from the former
- * `dsh-dark` skin), the opencode dark palette was removed entirely.
- * opencode's `light` skin is NOT bundled — the built-in `light` scheme is
- * Atom's One Light (the former `one-light` optional skin) instead; the extra
- * Atom One Dark skin also lives in theme-plugin.ts (see its docstring for
- * provenance). Ink renders hex colors via chalk (truecolor), so the palette
+ * `green-500`/`amber-400`/`blue-400/600`/`red-400/600`). The `light` scheme
+ * is Atom's One Light and `one-dark` is Atom One Dark (both live in
+ * theme-plugin.ts; see its docstring for provenance). Ink renders hex colors
+ * via chalk (truecolor), so the palette
  * below maps 1:1 when the terminal supports 24-bit color (GNOME
  * Terminal/VTE does). The conversation frame paints `bg` as a full-screen
  * background layer (see panels/conversation.tsx), so colorscheme switches are
@@ -52,7 +48,7 @@ export interface ThemePalette {
 
 /** Harness web dark palette (hex) — the `body[data-ds-dark-theme]` alias
  *  block of `deepseek-harness`'s `design-platform.css` (MIT © 2026 DeepSeek),
- *  now the default `dark` scheme after the opencode dark palette was dropped. */
+ *  the default `dark` scheme. */
 const DEFAULTS: ThemePalette = {
   /** Near-black page / transcript background (painted as full-screen layer). */
   bg: '#151517',
