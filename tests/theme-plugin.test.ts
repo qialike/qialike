@@ -137,7 +137,7 @@ describe('scheme palettes', () => {
   })
 
   test('classic schemes are registered and structurally complete', () => {
-    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light', 'twilight']
+    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light']
     for (const name of classic) {
       const palette = BUILTIN_SCHEMES[name]
       expect(palette, name).toBeDefined()
@@ -156,7 +156,7 @@ describe('scheme palettes', () => {
       flexoki: '#100f0f', gruvbox: '#282828',
       jellybeans: '#151515', kanagawa: '#1f1f28', nord: '#2e3440',
       panda: '#292a2b', rosepine: '#191724', solarized: '#002b36',
-      'solarized-light': '#fdf6e3', twilight: '#141414',
+      'solarized-light': '#fdf6e3',
     }
     for (const [name, bg] of Object.entries(anchors)) {
       expect(BUILTIN_SCHEMES[name]?.bg, name).toBe(bg)

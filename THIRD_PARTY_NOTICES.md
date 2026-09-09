@@ -18,16 +18,13 @@ and the Bun runtime embeds its own license with the compiled binary.
 
 ## Classic colorschemes
 
-The 14 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
+The 13 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
 palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values** plus its own
 17-role mapping — no upstream source code is copied. 12 of them (catppuccin, dracula,
 everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized,
 solarized-light) are the
 upstream projects' own palettes, referenced directly from their official repos; `jellybeans` is
-mapped from the MIT vim colorscheme by nanoTech; `twilight` is mapped from a theme file whose
-own in-file header is the full MIT license text (© 2008 Fabio Zendhi Nagao, 2011–2014 Renato
-Silva) — the grant comes straight from that declaration; see the table row below for the file
-link and the in-file header detail. `panda` tracks the original Atom colorscheme by Siamak
+mapped from the MIT vim colorscheme by nanoTech. `panda` tracks the original Atom colorscheme by Siamak
 Mokhtari
 (`siamak/atom-panda-syntax`, MIT © 2016): the popular VSCode ports (`PandaTheme/panda-syntax-
 vscode`, `tinkertrain/panda-syntax-vscode`) ship no LICENSE file and no package.json `license`
@@ -51,7 +48,6 @@ The rows below list the verified licenses.
 | panda | [siamak/atom-panda-syntax](https://github.com/siamak/atom-panda-syntax) | MIT (Copyright (c) 2016 Siamak Mokhtari) | Atom original `styles/colors.less` + `syntax-variables.less` (VSCode ports license-unclean, not used) |
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
-| twilight | [Fabio Zendhi Nagao / Renato Silva (TextMate Twilight port)](https://github.com/notepad-plus-plus/notepad-plus-plus/blob/master/PowerEditor/installer/themes/Twilight.xml) | MIT (© 2008 Fabio Zendhi Nagao, 2011–2014 Renato Silva, in-file header) | `PowerEditor/installer/themes/Twilight.xml` (own in-file MIT header) |
 
 ## Default colorscheme (`dark` / `light`) and Atom skin (`one-dark`)
 

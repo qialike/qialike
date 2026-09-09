@@ -10,11 +10,10 @@ import React from 'react'
  *     and `light` (Atom's One Light — the former `one-light` skin promoted to
  *     the default light name, GitHub Inc. MIT); the optional skin `one-dark`
  *     (Atom, GitHub Inc. MIT); plus the classic third-party set
- *     in `classic-schemes.ts` — 14 MIT skins (catppuccin, dracula,
+ *     in `classic-schemes.ts` — 13 MIT skins (catppuccin, dracula,
  *     everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa, nord,
- *     panda, rosepine, solarized, solarized-light, plus twilight mapped from
- *     the MIT `Twilight.xml` theme file of the official Notepad++
- *     distribution — see that module's header for sources and the
+ *     panda, rosepine, solarized, solarized-light — see that module's
+ *     header for sources and the
  *     17-key mapping);
  *   - **user schemes** live in `~/.dsh/themes/<name>.json` — like vim's
  *     `colors/*.vim`. Each file is a small JSON palette:
@@ -108,8 +107,7 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
     warning: '#e2c08d', info: '#56b6c2', error: '#e06c75', yellow: '#e5c07b',
   },
   // Classic third-party skins (12 from upstream official repos + jellybeans
-  // from an MIT vim colorscheme + twilight mapped from Notepad++'s MIT
-  // `Twilight.xml` theme file) — provenance in classic-schemes.ts.
+  // from an MIT vim colorscheme) — provenance in classic-schemes.ts.
   ...CLASSIC_SCHEMES,
 }
 

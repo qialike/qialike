@@ -32,19 +32,6 @@
  *   secondary, Type → accent, String/Title → success, Constant → warning,
  *   PreProc → info, plus a computed neutral ramp (bg→comment blend) for the
  *   panel/border roles (values from nanotech/jellybeans.vim, MIT).
- * `twilight` is mapped from `Twilight.xml`, a theme file of the official
- * Notepad++ distribution (notepad-plus-plus/notepad-plus-plus,
- * `PowerEditor/installer/themes/Twilight.xml`), whose own full MIT header
- * (© 2008 Fabio Zendhi Nagao, 2011–2014 Renato Silva) is the palette's
- * direct license source. Its fg hexes are kept verbatim and mapped by syntax
- * role: text ← Default fg, textMuted ← comment fg, primary ← the main
- * keyword/instruction tone (tan CDA869), secondary ← the cool preprocessor
- * tone, accent ← the vivid instruction tone (cream F9EE98), success ← sage
- * strings 8F9D6A, warning ← warm numbers E9C062, info ← cool variable tone
- * 7587A6, error ← terracotta CF6A4C, yellow ← the muted FUNCTION tone
- * DAD085; the panel/element roles take the XML's own current-line and
- * selection colours (GlobalStyles), with the border steps computed as
- * neutral blends between them.
  *
  * @module @yourname/dsh-tui-app/classic-schemes
  */
@@ -153,17 +140,5 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     border: '#eee8d5', borderActive: '#93a1a1', text: '#657b83', textMuted: '#93a1a1',
     primary: '#268bd2', secondary: '#6c71c4', accent: '#2aa198', success: '#859900',
     warning: '#b58900', info: '#cb4b16', error: '#dc322f', yellow: '#b58900',
-  },
-  /** Source: the MIT Twilight.xml bundled with Notepad++ (© 2008 Fabio
-   *  Zendhi Nagao, 2011–2014 Renato Silva — the TextMate Twilight palette).
-   *  Accents verbatim: tan keywords CDA869, cream instructions F9EE98,
-   *  terracotta numbers/identifiers CF6A4C, sage strings 8F9D6A, muted
-   *  yellow functions DAD085 (yellow role); layers from its current-line
-   *  292929 / selection 3E3E3E + computed blends. */
-  twilight: {
-    bg: '#141414', panel: '#292929', element: '#3e3e3e', borderSubtle: '#1f1f1f',
-    border: '#2f2f2f', borderActive: '#cda869', text: '#f8f8f8', textMuted: '#5f5a60',
-    primary: '#cda869', secondary: '#8996a8', accent: '#f9ee98', success: '#8f9d6a',
-    warning: '#e9c062', info: '#7587a6', error: '#cf6a4c', yellow: '#dad085',
   },
 }

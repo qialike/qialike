@@ -174,20 +174,18 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   **picker dialog**: ↑/↓ to move, type to filter,
   **live preview** while moving, `Enter` applies + persists, `Esc` cancels and
   restores. Fast paths remain: `/theme dark` (or a unique prefix), and
-  `/theme <role> <hex>` overrides. **17 built-ins**: `dark` — the DeepSeek
+  `/theme <role> <hex>` overrides. **16 built-ins**: `dark` — the DeepSeek
   Harness web dark design tokens (MIT repo `deepseek-harness`,
   `design-platform.css` `body[data-ds-dark-theme]` alias block) — and
   `light` (Atom's One Light, GitHub
   Inc. MIT — the former `one-light` optional skin, promoted to the default
-  light), plus the optional skin `one-dark` (Atom, GitHub Inc. MIT), and 14
+  light), plus the optional skin `one-dark` (Atom, GitHub Inc. MIT), and 13
   classic skins — catppuccin,
   dracula, everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa,
-  nord, panda, rosepine, solarized, solarized-light, twilight (12 resolved
+  nord, panda, rosepine, solarized, solarized-light (12 resolved
   from the upstream projects' official repos — solarized-light is the
   official light side of the same altercation/solarized repo; jellybeans
-  mapped from an MIT vim colorscheme; twilight
-  mapped from `Twilight.xml` of the official Notepad++ distribution,
-  whose own full MIT header is its direct license source;
+  mapped from an MIT vim colorscheme;
   the whole set is MIT/permissive — see
   `classic-schemes.ts` and THIRD_PARTY_NOTICES.md) —
   plus user files in `~/.dsh/themes/*.json`; `dsh-tui-theme: { colorscheme:
