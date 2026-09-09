@@ -85,9 +85,12 @@ its design tokens in `packages/client/ui-theme/src/styles/design-platform.css`. 
 only **resolved hex values** plus its own 17-role mapping — no CSS source is copied. `dsh-dark`
 resolves the `body[data-ds-dark-theme]` alias block, `dsh-light` the light alias defaults; every
 hex comes from one of its static ramps (background layers `neutral-bluish 950/900/850` and
-`50/100`, text `neutral-bluish 50`/`1000`, muted `neutral-bluish 600`, brand `deepseek
+`50`, text `neutral-bluish 50`/`1000`, muted `neutral-bluish 600`, brand `deepseek
 400/450/500/600`, semantic `green-500`/`amber-400/600`/`blue-400/600/800`/`red-400/600`);
 border hexes are the alias white/black alpha ramps composited over each scheme background.
+One deliberate deviation: `dsh-light`'s `element` (the inline-code background) is the web token
+`bluish-100` `#ebeef2` pulled to near-white `#f5f6f7` — the web chip has rounded corners and
+padding, but a bare TUI glyph would read the raw token as a dirty text block.
 Optional skins are not held to the AA bar the two defaults are.
 
 | Default scheme | Upstream | License | Source |
