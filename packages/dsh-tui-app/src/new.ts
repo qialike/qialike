@@ -1,6 +1,5 @@
 /**
- * The `/new` plugin (`tui-new`): start a brand-new session in place, modeled
- * on the command-palette "New session" entry (`/new`).
+ * The `/new` plugin (`tui-new`): start a brand-new session in place.
  *
  * dsh-tui is single-session: one process hosts one live agent. `/new`
  * therefore switches in place — the current turn is cancelled, a fresh agent

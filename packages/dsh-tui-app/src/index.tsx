@@ -3046,10 +3046,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
   }
   store.newSessionAction = () => {
-    // The `/new` command: start a brand-new session in place, modeled on
-    // the command-palette "New session" entry. The harness persists
-    // every session durably (write-behind on session/event), so the old one
-    // stays reachable from /sessions / --resume after it is torn down here.
+    // The `/new` command: start a brand-new session in place. The harness
+    // persists every session durably (write-behind on session/event), so the
+    // old one stays reachable from /sessions / --resume after it is torn
+    // down here.
     abortResumeFold() // a chunked resume filling the old transcript is moot now
     if (store.running) {
       try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }

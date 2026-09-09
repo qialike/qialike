@@ -1,10 +1,9 @@
 /**
  * The sessions panel plugin (`tui-sessions`): the `/sessions` command and its
- * full-screen dialog — a session manager modeled on the command-palette
- * sessions group: list persisted sessions, live type-to-filter, resume on
- * Enter. The dialog lists historical session records only; starting a brand-new
- * session is `/new`'s job (`tui-new`). Registers the `sessions` (fullscreen)
- * panel against the `tui` service.
+ * full-screen dialog — a session manager: list persisted sessions, live
+ * type-to-filter, resume on Enter. The dialog lists historical session
+ * records only; starting a brand-new session is `/new`'s job (`tui-new`).
+ * Registers the `sessions` (fullscreen) panel against the `tui` service.
  *
  * Content search (message-content search) is NOT available in the
  * single-file process: the harness `sessions` service exposed here is the
