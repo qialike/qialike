@@ -126,7 +126,7 @@ function renderInline(node: MdNode, isKey = false): React.ReactNode {
     case 'emphasis': return <Text italic>{renderInlineChildren(node)}</Text>
     case 'delete': return <Text strikethrough>{renderInlineChildren(node)}</Text>
     case 'inlineCode': {
-      // Chip-less skins (element == bg, e.g. dsh-light) must not paint a
+      // Chip-less skins (element == bg, e.g. light) must not paint a
       // background: any tinted block under bare TUI glyphs reads as a dirty
       // text 底纹, not a rounded web chip. Render the code unstyled so it
       // reads exactly like the surrounding body text (the patched frame

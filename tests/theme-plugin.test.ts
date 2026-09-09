@@ -75,18 +75,17 @@ describe('plugin apply wiring', () => {
   })
 })
 
-describe('light scheme quality', () => {
-  // The light skin mirrors the OFFICIAL light definition of opencode's own
-  // default theme (sst/opencode, MIT — packages/tui/src/theme/assets/
-  // opencode.json, defs lightStep1..12 / lightSecondary / lightAccent /
-  // lightRed…), with semantic text colors deepened one step within the
-  // official hue family to hold WCAG AA (≥4.5:1) on white.
-  test('light palette equals the official opencode light mapping', () => {
+describe('scheme palettes', () => {
+  // The light skin mirrors the DeepSeek Harness web LIGHT alias defaults
+  // (deepseek-harness, MIT © 2026 DeepSeek — design-platform.css). Unlike
+  // dark it is deliberately not re-pushed to AA: it keeps the web's own
+  // contrast levels (see the AA test below).
+  test('light palette equals the DeepSeek Harness web light tokens', () => {
     expect(BUILTIN_SCHEMES.light).toEqual({
-      bg: '#ffffff', panel: '#fafafa', element: '#f5f5f5', borderSubtle: '#d4d4d4',
-      border: '#b8b8b8', borderActive: '#a0a0a0', text: '#1a1a1a', textMuted: '#707070',
-      primary: '#3473c6', secondary: '#7b5bb6', accent: '#a96410', success: '#2f7d45',
-      warning: '#a96410', info: '#2b7884', error: '#d1383d', yellow: '#8f6c13',
+      bg: '#ffffff', panel: '#f9fafb', element: '#ffffff', borderSubtle: '#e6e6e6',
+      border: '#e0e0e0', borderActive: '#d6d6d6', text: '#0f1115', textMuted: '#81858c',
+      primary: '#4176e6', secondary: '#4868b2', accent: '#1e40af', success: '#22c55e',
+      warning: '#dd8629', info: '#2563eb', error: '#ec1313', yellow: '#dd8629',
     })
   })
 
@@ -108,40 +107,33 @@ describe('light scheme quality', () => {
     }
   })
 
-  test('dsh-dark / dsh-light track the DeepSeek Harness web design tokens', () => {
+  test('dsh-dark tracks the DeepSeek Harness web dark design tokens', () => {
     // Resolved from deepseek-harness's design-platform.css (MIT © 2026
-    // DeepSeek): dark = the body[data-ds-dark-theme] alias block, light = the
-    // light alias defaults; borders are the white/black alpha ramps
-    // composited over each scheme background. light's element equals bg
-    // (white): the web inline-code chip (bluish-100) is dropped — any tinted
-    // block under bare TUI glyphs reads as a dirty 底纹 — and markdown.tsx
-    // renders chip-less inline code unstyled, like the body text. See the
-    // theme-plugin docstring.
+    // DeepSeek): the body[data-ds-dark-theme] alias block; borders are the
+    // white alpha ramps composited over each background. (The light alias
+    // defaults are the `light` scheme tested above.) dsh-dark keeps the web
+    // chip background for inline code — its element #2c2c2e IS the dark
+    // alias' markdown-inline-code token.
     expect(BUILTIN_SCHEMES['dsh-dark']).toEqual({
       bg: '#151517', panel: '#1b1b1c', element: '#2c2c2e', borderSubtle: '#313133',
       border: '#3a3a3c', borderActive: '#444445', text: '#f9fafb', textMuted: '#81858c',
       primary: '#679efe', secondary: '#5686fe', accent: '#b7c8fe', success: '#22c55e',
       warning: '#f7ad31', info: '#60a5fa', error: '#f25a5a', yellow: '#f7ad31',
     })
-    expect(BUILTIN_SCHEMES['dsh-light']).toEqual({
-      bg: '#ffffff', panel: '#f9fafb', element: '#ffffff', borderSubtle: '#e6e6e6',
-      border: '#e0e0e0', borderActive: '#d6d6d6', text: '#0f1115', textMuted: '#81858c',
-      primary: '#4176e6', secondary: '#4868b2', accent: '#1e40af', success: '#22c55e',
-      warning: '#dd8629', info: '#2563eb', error: '#ec1313', yellow: '#dd8629',
-    })
-    for (const name of ['dsh-dark', 'dsh-light']) {
-      expect(Object.keys(schemeRegistry())).toContain(name)
-    }
+    expect(Object.keys(schemeRegistry())).toContain('dsh-dark')
   })
 
-  test('text-bearing roles hold WCAG AA contrast on their scheme background', () => {
+  test('text-bearing roles hold WCAG AA contrast on the dark default', () => {
     // Roles rendered as text on the page/panel background must keep ≥4.5:1
     // (border-only roles are excluded — they pair with text of their own).
-    // Only the two CURATED defaults are held to AA: third-party classic
-    // schemes (classic-schemes.ts) keep their upstream comment/muted contrast
-    // by design (e.g. dracula/monokai muted ≈ 3:1).
+    // Only the CURATED dark default (opencode) is held to AA: the light
+    // default mirrors the DeepSeek Harness web light tokens and keeps the
+    // web's own contrast levels (its muted/semantic roles sit below 4.5:1 on
+    // white exactly as they do in the browser), and third-party/optional
+    // schemes (classic-schemes.ts, one-*, dsh-dark) keep their upstream
+    // contrast by design (e.g. dracula/monokai muted ≈ 3:1).
     const textRoles = ['text', 'textMuted', 'primary', 'secondary', 'accent', 'success', 'warning', 'info', 'error', 'yellow']
-    for (const schemeName of ['dark', 'light'] as const) {
+    for (const schemeName of ['dark'] as const) {
       const { bg, ...rest } = BUILTIN_SCHEMES[schemeName]!
       for (const role of textRoles) {
         const ratio = contrastRatio(rest[role as keyof typeof rest]!, bg)

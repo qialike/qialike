@@ -175,12 +175,13 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   **picker dialog** (opencode-style Themes list): ↑/↓ to move, type to filter,
   **live preview** while moving, `Enter` applies + persists, `Esc` cancels and
   restores. Fast paths remain: `/theme dark` (or a unique prefix), and
-  `/theme <role> <hex>` overrides. **19 built-ins**: `dark`/`light` —
-  opencode's own default theme (repo `sst/opencode`, MIT:
-  `packages/tui/src/theme/assets/opencode.json`) — plus optional skins
-  `one-dark`/`one-light` (Atom's official repos, GitHub Inc. MIT),
-  `dsh-dark`/`dsh-light` (the DeepSeek Harness web design tokens, MIT repo
-  `deepseek-harness`), and 13 classic skins — catppuccin, dracula,
+  `/theme <role> <hex>` overrides. **18 built-ins**: `dark` — opencode's
+  default dark theme (repo `sst/opencode`, MIT:
+  `packages/tui/src/theme/assets/opencode.json`) — and `light` (the DeepSeek
+  Harness web light design tokens, MIT repo `deepseek-harness`), plus
+  optional skins `one-dark`/`one-light` (Atom's official repos, GitHub Inc.
+  MIT), `dsh-dark` (the DeepSeek Harness web dark design tokens), and 13
+  classic skins — catppuccin, dracula,
   everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa, monokai, nord,
   panda, rosepine, solarized (11 resolved from the upstream projects'
   official repos, monokai via opencode's MIT theme assets, jellybeans mapped

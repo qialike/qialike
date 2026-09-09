@@ -4,7 +4,7 @@
  * transcript. Two tiers:
  *
  *  - **in-process checks** (always, works inside the SEA single-file binary):
- *    colorscheme registry integrity (19 built-ins, 17 keys, hex format),
+ *    colorscheme registry integrity (18 built-ins, 17 keys, hex format),
  *    vim-like unique-prefix resolution, picker filter/clamp helpers, the
  *    raw-mode stdin decoder, the core provider-template catalog, and the
  *    panel/command registries as seen by the running tree. Nothing is
@@ -58,10 +58,11 @@ export function syncChecks(deps: SyncCheckDeps): CheckResult[] {
     out.push({ name, ok, detail })
   }
 
-  // 1) colorscheme registry: 19 built-ins present (2 curated opencode
-  //    defaults + 4 optional skins + 13 classic).
+  // 1) colorscheme registry: 18 built-ins present (2 curated defaults — dark
+  //    from opencode, light from DeepSeek Harness — + 3 optional skins + 13
+  //    classic).
   const schemes = schemeRegistry()
-  const required = ['dark', 'light', 'one-dark', 'one-light', 'dsh-dark', 'dsh-light', 'catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized']
+  const required = ['dark', 'light', 'one-dark', 'one-light', 'dsh-dark', 'catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized']
   const missingSchemes = required.filter((n) => !(n in schemes))
   check('colorscheme registry', missingSchemes.length === 0, missingSchemes.length === 0 ? `${required.length} built-ins` : `missing: ${missingSchemes.join(', ')}`)
 
@@ -80,7 +81,8 @@ export function syncChecks(deps: SyncCheckDeps): CheckResult[] {
 
   // 3) vim-like unique-prefix resolution over the registry: probe any scheme
   //    (besides dark/light) whose 3-char prefix resolves unambiguously — e.g.
-  //    `one` is shared by one-dark/one-light, `dsh` by dsh-dark/dsh-light.
+  //    `one` is shared by one-dark/one-light (dsh and every other 3-char
+  //    prefix are unique).
   const prefixProbe = (name: string): string | undefined => resolveScheme(name.slice(0, Math.min(3, name.length)).toLowerCase())
   const nonCurated = required.filter((n) => n !== 'light' && n !== 'dark')
   const probe = nonCurated.find((n) => prefixProbe(n) === n) ?? nonCurated[0] ?? 'catppuccin'
