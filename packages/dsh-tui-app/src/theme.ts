@@ -2,8 +2,10 @@
  * dsh-tui default theme: opencode's own default **dark** theme, so the
  * terminal looks like the opencode TUI it wraps. Every hex below maps 1:1
  * from the `dark*` defs of opencode's theme file (repo `sst/opencode`, MIT —
- * `packages/tui/src/theme/assets/opencode.json`); the matching `light` skin
- * and the extra Atom One Dark / One Light skins live in theme-plugin.ts. Ink
+ * `packages/tui/src/theme/assets/opencode.json`). opencode's own `light`
+ * skin is NOT bundled — the built-in `light` scheme mirrors DeepSeek
+ * Harness's web light tokens instead; the extra Atom One Dark / One Light
+ * skins live in theme-plugin.ts (see its docstring for provenance). Ink
  * renders hex colors via chalk (truecolor), so the palette below maps 1:1
  * when the terminal supports 24-bit color (GNOME Terminal/VTE does). The
  * conversation frame paints `bg` as a full-screen background layer (see
