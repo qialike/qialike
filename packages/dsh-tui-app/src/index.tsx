@@ -399,8 +399,23 @@ export class Store {
    *  window; internal arrays are mutated synchronously, only the subscriber
    *  render is deferred, so no intermediate state is ever lost. */
   private static readonly NOTIFY_BATCH_MS = 25
+  private static readonly NOTIFY_LEGACY = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_LEGACY_NOTIFY ?? '')
   private _notifyTimer: ReturnType<typeof setTimeout> | null = null
+  private _notifyScheduled = false
   private notify(): void {
+    if (Store.NOTIFY_LEGACY) {
+      // Plan-B A/B switch (DSH_TUI_LEGACY_NOTIFY=1): the pre-优化2 behavior —
+      // coalesce a burst of synchronous updates into ONE render per microtask
+      // (per-macrotask) instead of the 25ms render window.
+      if (this._notifyScheduled) return
+      this._notifyScheduled = true
+      queueMicrotask(() => {
+        this._notifyScheduled = false
+        this.version += 1
+        for (const listener of this.listeners) listener()
+      })
+      return
+    }
     if (this._notifyTimer !== null) return
     this._notifyTimer = setTimeout(() => {
       this._notifyTimer = null

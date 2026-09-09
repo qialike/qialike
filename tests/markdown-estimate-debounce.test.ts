@@ -34,11 +34,11 @@ describe('estimateMarkdownHeightDebounced', () => {
     clearMarkdownHeightCache()
   })
 
-  test('reparse predicate: no entry or growth ≥1024 chars', () => {
+  test('reparse predicate: no entry or growth ≥512 chars', () => {
     expect(markdownHeightReparseDue(undefined, 10)).toBe(true)
-    expect(markdownHeightReparseDue(100, 200)).toBe(false) // growth 100 < 1024
-    expect(markdownHeightReparseDue(100, 1123)).toBe(false) // growth 1023
-    expect(markdownHeightReparseDue(100, 1124)).toBe(true) // growth 1024
+    expect(markdownHeightReparseDue(100, 200)).toBe(false) // growth 100 < 512
+    expect(markdownHeightReparseDue(100, 611)).toBe(false) // growth 511
+    expect(markdownHeightReparseDue(100, 612)).toBe(true) // growth 512
   })
 
   test('first call parses; small growth reuses the cached line count', () => {
@@ -46,7 +46,7 @@ describe('estimateMarkdownHeightDebounced', () => {
     const first = estimateMarkdownHeightDebounced(key, baseText, W, GEN)
     expect(first).toBe(estimateMarkdownHeight(baseText, W))
 
-    const grown = baseText + ' extra '.repeat(50) // +300 chars < 1024
+    const grown = baseText + ' extra '.repeat(50) // +300 chars < 512
     const grownLines = estimateMarkdownHeight(grown, W)
     expect(grownLines).not.toBe(first) // would differ if parsed
 
@@ -56,7 +56,7 @@ describe('estimateMarkdownHeightDebounced', () => {
 
   test('growth past the threshold re-parses', () => {
     const key = 2
-    const big = baseText + ' extra '.repeat(400) // +2400 chars ≥ 1024
+    const big = baseText + ' extra '.repeat(400) // +2400 chars ≥ 512
     expect(estimateMarkdownHeightDebounced(key, big, W, GEN)).toBe(estimateMarkdownHeight(big, W))
   })
 
@@ -73,7 +73,7 @@ describe('estimateMarkdownHeightDebounced', () => {
     const key = 4
     const first = estimateMarkdownHeightDebounced(key, baseText, W, GEN)
     clearMarkdownHeightCache()
-    const grown = baseText + ' extra '.repeat(50) // < 1024 growth
+    const grown = baseText + ' extra '.repeat(50) // < 512 growth
     // Cache gone: even small growth now parses at the (new) width.
     expect(estimateMarkdownHeightDebounced(key, grown, W, GEN)).toBe(estimateMarkdownHeight(grown, W))
     void first

@@ -434,51 +434,21 @@ const measuredHeights = new Map<string, number>()
 let lastLayoutWidth = -1 // last width the row-height cache was computed for
 const lastMeasuredNotify = new Map<string, number>()
 
-/** Set when a measured height changed between layout passes (a diff-rendered
- *  row read, the un-throttled 60/400/900 ms resamples). A layout pass must
- *  NOT reuse its height prefix while this is set — the changed row may sit
- *  before the streaming tail — so it forces the full walk, then clears. */
-let measuredDirty = false
-
-/** The previous layout pass, kept for prefix reuse (优化5): when only the
- *  streaming tail changed and no measurement/epoch/width changed since, the
- *  next pass reuses the unchanged height/starts PREFIX and re-derives only
- *  from the first changed row. */
-interface PrevLayout {
-  rows: readonly Row[]
-  hts: number[]
-  starts: number[]
-  content: number
-  usable: number
-  measureEpoch: number
-  expansionEpoch: number
-  loadGeneration: number
-  stepsLength: number
-}
-let prevLayout: PrevLayout | null = null
-
-/** Whether two transcript rows contribute the identical resolved height:
- *  same shape/margins and — for item rows — the SAME item object (a streamed
- *  replacement creates a new object, so it compares unequal by design).
- *  Steps rows depend only on position (their height is
- *  `stepsBlockHeight(steps.length)`, tracked separately via stepsLength). */
-function rowShapeEqual(a: Row, b: Row): boolean {
-  if (a.top !== b.top || a.bottom !== b.bottom) return false
-  if (a.type === 'item') {
-    return b.type === 'item' && a.item === b.item
-  }
-  return b.type === 'steps'
-}
+/** Minimum gap between measured-height writes for one row (ms). Kept short
+ *  enough that the streaming tail's real height becomes authoritative within
+ *  ~100 ms (the mdast estimate is deliberately debounced — 优化1 — so measured
+ *  heights must lead the layout while a row grows), yet long enough that a
+ *  per-delta notify storm never re-lays the whole transcript every frame. */
+const MEASURE_THROTTLE_MS = 100
 
 function setMeasuredHeight(key: string, rows: number): void {
   const prev = measuredHeights.get(key)
   if (prev !== undefined && Math.abs(prev - rows) <= 1) return
   const now = Date.now()
   const last = lastMeasuredNotify.get(key)
-  if (last !== undefined && now - last < 250) return
+  if (last !== undefined && now - last < MEASURE_THROTTLE_MS) return
   lastMeasuredNotify.set(key, now)
   measuredHeights.set(key, rows)
-  measuredDirty = true
   // Row heights changed: the layout memo must recompute. The dedicated epoch
   // (not the generic render `version`) is what invalidates it, so typing and
   // phase/hover churn never re-lay the whole transcript.
@@ -662,9 +632,9 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
     const key = String(props.item.key)
-    // Measure immediately (setMeasuredHeight is throttled to 250 ms, so a
-    // per-delta notify storm is avoided) so the very next frame lays out with
-    // the current height and no content overlaps. Ink can finish laying out a
+    // Measure immediately (setMeasuredHeight is throttled, so a per-delta
+    // notify storm is avoided) so the very next frame lays out with the
+    // current height and no content overlaps. Ink can finish laying out a
     // frame AFTER React commits, so also re-measure at 60/400/900 ms through
     // the UN-throttled path: without it a stale (smaller) height would linger
     // in the cache and drift the scroll — the clip boundary lands one row off
@@ -675,8 +645,13 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
       const rows = measureElement(ref.current).height
       const prev = measuredHeights.get(key)
       if (prev === undefined || Math.abs(prev - rows) > 1) {
-        measuredDirty = true
         measuredHeights.set(key, rows)
+        // bumpMeasure too, not just touch(): the layout memo must recompute
+        // against the refreshed measured height. touch() alone re-renders but
+        // leaves the memoized layout (deps unchanged) serving the OLD height —
+        // with the debounced markdown estimate that stale height would keep
+        // clipping the streaming tail until some unrelated deps change.
+        store.bumpMeasure()
         store.touch()
       }
     }
@@ -942,6 +917,14 @@ function composerHeight(width: number, input: string, min: number): number {
   return Math.min(min + wrapped - 1, cap)
 }
 
+/** Plan-B A/B switch (diagnosis only): `DSH_TUI_LEGACY_EST=1` re-parses the
+ *  markdown height estimate on every item change instead of using the
+ *  growth-debounced estimate (优化1). 优化2/3/4 (notify batching, idle resume
+ *  fold, windowed older history) stay active either way. The incremental
+ *  layout reuse (original 优化5) was REMOVED — real-terminal A/B showed it
+ *  garbles streaming messages — so the layout is always a full walk now. */
+const legacyEstimate = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_LEGACY_EST ?? '')
+
 /** Per-item row-height estimates, memoized by (item, usable, reasoning flags,
  *  tool-expansion). History rows keep the same item object across renders, so
  *  once an estimate is computed a layout pass only walks the cache — the
@@ -955,10 +938,13 @@ const estCache = new WeakMap<TranscriptItem, Map<string, number>>()
 
 /** How many characters a streaming row may grow past its last markdown-height
  *  parse before the estimate is recomputed. Between parses the painted
- *  measured height (resolveRowHeight trusts it when ≥ est−1) keeps the live
- *  layout correct, and settlement (assistant/message) replaces the row with
- *  authoritative text — growth past the threshold then re-parses once. */
-const MARKDOWN_REPARSE_GROWTH = 1024
+ *  measured height (updated at ~100 ms cadence + 60/400/900 ms resamples,
+ *  and authoritative for the layout via measureEpoch) keeps the live row
+ *  correct, and settlement (assistant/message) replaces the row with
+ *  authoritative text — growth past the threshold then re-parses once. The
+ *  threshold is small so stale estimates never under-count by much even in
+ *  the brief window before the next measured write. */
+const MARKDOWN_REPARSE_GROWTH = 512
 
 interface MarkdownHeightEstimate {
   /** Item text length at the last mdast parse. */
@@ -1049,10 +1035,14 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
     if (expandReasoning) lines = 1 + countWrappedLines(item.text, w)
     else lines = 2
   } else if (item.kind === 'assistant') {
-    lines = estimateMarkdownHeightDebounced(item.key, item.text, w, store.loadGeneration)
+    lines = legacyEstimate
+      ? estimateMarkdownHeight(item.text, w)
+      : estimateMarkdownHeightDebounced(item.key, item.text, w, store.loadGeneration)
   } else if (item.kind === 'plan') {
     // Label tag row + the FULLY unfolded markdown body (never collapsed).
-    lines = 1 + estimateMarkdownHeightDebounced(item.key, item.text, w, store.loadGeneration)
+    lines = 1 + (legacyEstimate
+      ? estimateMarkdownHeight(item.text, w)
+      : estimateMarkdownHeightDebounced(item.key, item.text, w, store.loadGeneration))
   } else if (item.kind === 'user') {
     lines = countWrappedLines(item.text, w)
   } else if (item.kind === 'tool') {
@@ -1842,43 +1832,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         })()
       return content + r.top + r.bottom
     }
-    // 优化5 — layout restricted to the changed rows. A streamed delta replaces
-    // only the TAIL row, so when no width/epoch/measurement/steps changed, the
-    // row/height/starts PREFIX is byte-identical to the previous pass: reuse it
-    // and re-derive from the first changed row instead of walking the whole
-    // transcript every event (history rows keep object identity, so the prefix
-    // compare is O(changed) — a long session never re-derives its whole layout
-    // per delta). A measurement update, expansion toggle, transcript load,
-    // width change, or steps change forces the full pass below.
-    const prev = prevLayout
-    const epochsChanged = prev !== null && (
-      prev.usable !== usable
-      || prev.measureEpoch !== store.measureEpoch
-      || prev.expansionEpoch !== store.expansionEpoch
-      || prev.loadGeneration !== store.loadGeneration
-      || prev.stepsLength !== steps.length)
-    if (prev !== null && !epochsChanged && !measuredDirty) {
-      const n = Math.min(rows.length, prev.rows.length)
-      let start = 0
-      while (start < n && rowShapeEqual(rows[start]!, prev.rows[start]!)) start++
-      if (start === n && rows.length === prev.rows.length) return prev // unchanged transcript: reuse whole layout
-      const hts = prev.hts.slice(0, start)
-      const starts = prev.starts.slice(0, start)
-      let s = starts[start] ?? 0
-      for (let i = start; i < rows.length; i++) {
-        hts.push(heightOf(rows[i]!))
-        starts.push(s)
-        s += hts[hts.length - 1]!
-      }
-      prevLayout = { rows, hts, starts, content: s, usable, measureEpoch: store.measureEpoch, expansionEpoch: store.expansionEpoch, loadGeneration: store.loadGeneration, stepsLength: steps.length }
-      return { hts, starts, content: s }
-    }
-    measuredDirty = false
+    // Full layout walk every pass (optimization-5 incremental prefix reuse was
+    // REMOVED: real-terminal A/B showed it garbled streaming messages — stale
+    // prefix heights combined with the debounced estimate clipped the live
+    // tail. A full walk over cached per-row heights is cheap (est/measured
+    // maps), and notify batching (优化2) bounds it to ≤40fps.)
     const hts = rows.map((r) => heightOf(r))
     const starts: number[] = []
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i]! }
-    prevLayout = { rows, hts, starts, content: s, usable, measureEpoch: store.measureEpoch, expansionEpoch: store.expansionEpoch, loadGeneration: store.loadGeneration, stepsLength: steps.length }
     return { hts, starts, content: s }
   }, [rows, usable, steps, store.measureEpoch, store.expansionEpoch, store.loadGeneration])
   const maxScroll = Math.max(0, layout.content - viewportLines)
