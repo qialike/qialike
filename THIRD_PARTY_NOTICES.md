@@ -54,7 +54,7 @@ The rows below list the verified licenses.
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
 
-## Default colorscheme (`dark` / `light`) and Atom skins (`one-dark` / `one-light`)
+## Default colorscheme (`dark` / `light`) and Atom skin (`one-dark`)
 
 The built-in default scheme `dark` (`packages/dsh-tui-app/src/theme.ts`) is **opencode's own
 default dark theme**: dsh-tui bundles only **resolved hex values** plus its own 17-role mapping —
@@ -63,38 +63,32 @@ no upstream source code is copied. Values map 1:1 from the `dark*` defs of openc
 `packages/tui/src/theme/assets/opencode.json`). `dark` is the ONE scheme held to the WCAG AA bar
 (its text-bearing roles keep ≥4.5:1 contrast on its background).
 
-The built-in default `light` mirrors the **light** web UI of the sibling MIT project
-[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (Copyright (c) 2026 DeepSeek):
-the light alias defaults of `packages/client/ui-theme/src/styles/design-platform.css`. dsh-tui
-bundles only **resolved hex values** plus its own 17-role mapping — no CSS source is copied.
-Every hex comes from one of its static ramps (background `neutral-bluish 00`/`50`, text
-`neutral-bluish 1000`, muted `neutral-bluish 600`, brand `deepseek 500/600`, semantic
-`green-500`/`amber-600`/`blue-600/800`/`red-600`); border hexes are the alias black alpha ramps
-composited over the white background. Unlike `dark`, `light` keeps the web's own contrast levels
-**faithfully and is deliberately not re-pushed to AA**: several muted/semantic roles sit below
-4.5:1 on white exactly as they do in the browser (the browser renders those tokens on tinted
-fills or at larger sizes). One deliberate deviation: `light`'s `element` (the inline-code
-background) is set equal to `bg` (white) instead of the web token `bluish-100` `#ebeef2` — the
-web chip has rounded corners and padding, but any tinted block under a bare TUI glyph reads as a
-dirty text 底纹, so the renderer renders chip-less inline code unstyled, like the surrounding
-body text (markdown.tsx).
+The built-in default `light` is **Atom's One Light** — the former `one-light` optional skin,
+promoted to the default light name. Hues come from Atom's official repos by GitHub Inc.
+([atom/one-light-syntax](https://github.com/atom/one-light-syntax) +
+[atom/one-light-ui](https://github.com/atom/one-light-ui), both archived, which does not affect
+their MIT grant); dsh-tui bundles only **resolved hex values** plus its own 17-role mapping — no
+upstream source code is copied. Structure steps are cross-checked against
+[navarasu/onedark.nvim](https://github.com/navarasu/onedark.nvim) (MIT). Hexes are kept verbatim;
+like every non-dark skin, `light` is deliberately not held to the AA bar `dark` is (muted
+`#696c77` / secondary `#a626a4` keep their official values rather than being re-pushed).
 
-The optional skins `one-dark`/`one-light` are the classic **Atom One Dark / One Light**
-palettes: hues come from Atom's official repos by GitHub Inc. (both archived, which does not
-affect their MIT grant), structure steps cross-checked against
+The optional skin `one-dark` is the classic **Atom One Dark** palette: hues come from Atom's
+official repos by GitHub Inc. ([atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) +
+[atom/one-dark-ui](https://github.com/atom/one-dark-ui), both archived, which does not affect
+their MIT grant), structure steps cross-checked against
 [navarasu/onedark.nvim](https://github.com/navarasu/onedark.nvim) (MIT); hexes are kept verbatim
 (optional skins are not held to the AA bar `dark` is).
 
 | Default scheme | Upstream | License | Source |
 |---|---|---|---|
 | dark | [sst/opencode](https://github.com/sst/opencode) — opencode's default theme | MIT | `packages/tui/src/theme/assets/opencode.json` (`dark*` defs) |
-| light | [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) web design tokens | MIT (Copyright (c) 2026 DeepSeek) | `design-platform.css` (light alias defaults) |
+| light | GitHub Inc. (Atom) — [atom/one-light-syntax](https://github.com/atom/one-light-syntax) + [atom/one-light-ui](https://github.com/atom/one-light-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
 | one-dark | GitHub Inc. (Atom) — [atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) + [atom/one-dark-ui](https://github.com/atom/one-dark-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
-| one-light | GitHub Inc. (Atom) — [atom/one-light-syntax](https://github.com/atom/one-light-syntax) + [atom/one-light-ui](https://github.com/atom/one-light-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
 
 ## DeepSeek Harness web dark skin (`dsh-dark`)
 
-The optional skin `dsh-dark` mirrors the **dark** web UI of the same sibling MIT project
+The optional skin `dsh-dark` mirrors the **dark** web UI of the sibling MIT project
 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (Copyright (c) 2026 DeepSeek):
 the `body[data-ds-dark-theme]` alias block of `design-platform.css`. dsh-tui bundles only
 **resolved hex values** plus its own 17-role mapping — no CSS source is copied. Every hex comes

@@ -126,9 +126,10 @@ function renderInline(node: MdNode, isKey = false): React.ReactNode {
     case 'emphasis': return <Text italic>{renderInlineChildren(node)}</Text>
     case 'delete': return <Text strikethrough>{renderInlineChildren(node)}</Text>
     case 'inlineCode': {
-      // Chip-less skins (element == bg, e.g. light) must not paint a
-      // background: any tinted block under bare TUI glyphs reads as a dirty
-      // text 底纹, not a rounded web chip. Render the code unstyled so it
+      // Chip-less skins (element == bg — e.g. a user theme whose element
+      // equals its background) must not paint a background: any tinted block
+      // under bare TUI glyphs reads as a dirty text 底纹, not a rounded web
+      // chip. Render the code unstyled so it
       // reads exactly like the surrounding body text (the patched frame
       // writer paints unstyled glyphs with the theme text color).
       const chip = theme.element.toLowerCase() !== theme.bg.toLowerCase()
