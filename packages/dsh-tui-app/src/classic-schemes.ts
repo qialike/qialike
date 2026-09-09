@@ -32,11 +32,11 @@
  *   secondary, Type → accent, String/Title → success, Constant → warning,
  *   PreProc → info, plus a computed neutral ramp (bg→comment blend) for the
  *   panel/border roles (values from nanotech/jellybeans.vim, MIT).
- * `twilight` is mapped from the MIT theme XML bundled with the official
+ * `twilight` is mapped from `Twilight.xml`, a theme file of the official
  * Notepad++ distribution (notepad-plus-plus/notepad-plus-plus,
- * `PowerEditor/installer/themes/`): that file carries its own MIT header
- * inside the GPL-3.0 repository — © 2008 Fabio Zendhi Nagao, 2011–2014
- * Renato Silva. Its own fg hexes are kept verbatim and mapped by syntax
+ * `PowerEditor/installer/themes/Twilight.xml`), whose own full MIT header
+ * (© 2008 Fabio Zendhi Nagao, 2011–2014 Renato Silva) is the palette's
+ * direct license source. Its fg hexes are kept verbatim and mapped by syntax
  * role: text ← Default fg, textMuted ← comment fg, primary ← the main
  * keyword/instruction tone (tan CDA869), secondary ← the cool preprocessor
  * tone, accent ← the vivid instruction tone (cream F9EE98), success ← sage

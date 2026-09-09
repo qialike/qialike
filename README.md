@@ -186,8 +186,8 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   from the upstream projects' official repos — solarized-light is the
   official light side of the same altercation/solarized repo; jellybeans
   mapped from an MIT vim colorscheme; twilight
-  mapped from the theme XML of the official Notepad++ distribution,
-  carrying its own full MIT header inside that GPL-3.0 repo;
+  mapped from `Twilight.xml` of the official Notepad++ distribution,
+  whose own full MIT header is its direct license source;
   the whole set is MIT/permissive — see
   `classic-schemes.ts` and THIRD_PARTY_NOTICES.md) —
   plus user files in `~/.dsh/themes/*.json`; `dsh-tui-theme: { colorscheme:

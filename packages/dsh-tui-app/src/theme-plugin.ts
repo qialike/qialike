@@ -13,8 +13,9 @@ import React from 'react'
  *     in `classic-schemes.ts` — 14 MIT skins (catppuccin, dracula,
  *     everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa, nord,
  *     panda, rosepine, solarized, solarized-light, plus twilight mapped from
- *     the MIT theme XML of the official Notepad++ distribution — see that
- *     module's header for sources and the 17-key mapping);
+ *     the MIT `Twilight.xml` theme file of the official Notepad++
+ *     distribution — see that module's header for sources and the
+ *     17-key mapping);
  *   - **user schemes** live in `~/.dsh/themes/<name>.json` — like vim's
  *     `colors/*.vim`. Each file is a small JSON palette:
  *
@@ -108,7 +109,7 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
   },
   // Classic third-party skins (12 from upstream official repos + jellybeans
   // from an MIT vim colorscheme + twilight mapped from Notepad++'s MIT
-  // theme XML) — provenance in classic-schemes.ts.
+  // `Twilight.xml` theme file) — provenance in classic-schemes.ts.
   ...CLASSIC_SCHEMES,
 }
 

@@ -24,12 +24,12 @@ palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values*
 everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized,
 solarized-light) are the
 upstream projects' own palettes, referenced directly from their official repos; `jellybeans` is
-mapped from the MIT vim colorscheme by nanoTech; `twilight` is mapped from a theme XML file that
-ships inside the official
-[notepad-plus-plus/notepad-plus-plus](https://github.com/notepad-plus-plus/notepad-plus-plus)
-repository (`PowerEditor/installer/themes/`) — that repository is GPL-3.0, but the XML file
-carries its own full MIT header inside the file, so the palette is MIT and safe to
-bundle. `panda` tracks the original Atom colorscheme by Siamak Mokhtari
+mapped from the MIT vim colorscheme by nanoTech; `twilight` is mapped from
+[`Twilight.xml`](https://github.com/notepad-plus-plus/notepad-plus-plus/blob/master/PowerEditor/installer/themes/Twilight.xml),
+a theme file of the official Notepad++ distribution that carries its own full MIT license header
+(© 2008 Fabio Zendhi Nagao, 2011–2014 Renato Silva) — the palette's MIT grant comes straight
+from that in-file declaration, so it is safe to bundle. `panda` tracks the original Atom
+colorscheme by Siamak Mokhtari
 (`siamak/atom-panda-syntax`, MIT © 2016): the popular VSCode ports (`PandaTheme/panda-syntax-
 vscode`, `tinkertrain/panda-syntax-vscode`) ship no LICENSE file and no package.json `license`
 field, so — per this repo's MIT-only policy — they are **not** used as a source.
@@ -52,7 +52,7 @@ The rows below list the verified licenses.
 | panda | [siamak/atom-panda-syntax](https://github.com/siamak/atom-panda-syntax) | MIT (Copyright (c) 2016 Siamak Mokhtari) | Atom original `styles/colors.less` + `syntax-variables.less` (VSCode ports license-unclean, not used) |
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
-| twilight | [Fabio Zendhi Nagao / Renato Silva (TextMate Twilight port)](https://github.com/notepad-plus-plus/notepad-plus-plus) | MIT (© 2008 Fabio Zendhi Nagao, 2011–2014 Renato Silva, in-file header) | Notepad++ `PowerEditor/installer/themes/Twilight.xml` |
+| twilight | [Fabio Zendhi Nagao / Renato Silva (TextMate Twilight port)](https://github.com/notepad-plus-plus/notepad-plus-plus/blob/master/PowerEditor/installer/themes/Twilight.xml) | MIT (© 2008 Fabio Zendhi Nagao, 2011–2014 Renato Silva, in-file header) | Notepad++ `PowerEditor/installer/themes/Twilight.xml` |
 
 ## Default colorscheme (`dark` / `light`) and Atom skin (`one-dark`)
 
