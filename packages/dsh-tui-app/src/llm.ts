@@ -208,20 +208,23 @@ export interface TuiProviderTemplate extends TuiProviderProfile {
  */
 
 /** The TUI's own provider: `deepseek-official` runs out of the box. */
-// `maxTokens` is the PER-REQUEST output ceiling the provider honours (8192 =
-// the DeepSeek API output cap; reasoning tokens count against it). The cap is
-// the model's own, not a UI choice — a max-tokens turn/end with no body text
-// is surfaced by the TUI (see the turn/end max-tokens hint) instead of being
-// silently clipped. Raising this above the provider cap would be rejected or
-// clamped server-side.
+// `maxTokens` is the PER-REQUEST output ceiling requested from the provider;
+// reasoning tokens count against it. The catalog asks for the same generous
+// cap the harness's own deepseek adapter defaults to (256000,
+// DEFAULT_MAX_TOKENS) instead of the historical 8192: with high reasoning
+// effort a single planning chain burns through 8192 before emitting body
+// text, which ends the turn as a max-tokens truncation (see the turn/end
+// max-tokens hint). DeepSeek's endpoint accepts the larger cap (verified over
+// many real runs — zero truncations at 256000 vs 50 at 8192), so the higher
+// ceiling makes output truncation effectively unreachable.
 const DEEPSEEK_OFFICIAL: TuiProviderProfile = {
   displayName: 'DeepSeek',
   baseURL: 'https://api.deepseek.com',
   apiKeyEnv: 'DEEPSEEK_API_KEY',
   models: [
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 128000, maxTokens: 8192, reasoningEfforts: REASONING_EFFORTS },
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 128000, maxTokens: 8192, reasoningEfforts: REASONING_EFFORTS },
-    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', contextWindow: 128000, maxTokens: 8192, reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 128000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 128000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', contextWindow: 128000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
   ],
 }
 

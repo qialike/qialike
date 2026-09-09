@@ -2730,7 +2730,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           if (!textSinceThisTurn) {
             // The whole output budget went to reasoning (no body text yet).
             store.append('status',
-              '⚠ 上一轮输出达到长度上限(8192 tok，多为推理消耗)且未产出正文 — 发送任意消息即可继续；长任务可用 Ctrl+T 调低推理档。',
+              '⚠ 上一轮输出达到长度上限（多为推理消耗）且未产出正文 — 发送任意消息即可继续；长任务可用 Ctrl+T 调低推理档。',
               true)
           } else {
             // Harness-web parity: output was truncated but kept — tell the
