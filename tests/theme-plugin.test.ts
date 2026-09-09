@@ -76,17 +76,36 @@ describe('plugin apply wiring', () => {
 })
 
 describe('light scheme quality', () => {
-  // The light skin is Atom One Light (atom/one-light-syntax + one-light-ui,
-  // GitHub Inc., MIT; structure steps cross-checked against
-  // navarasu/onedark.nvim), with semantic text colors that fall short of AA
-  // deepened one step within their official hue family.
-  test('light palette equals the official Atom One Light mapping', () => {
+  // The light skin mirrors the OFFICIAL light definition of opencode's own
+  // default theme (sst/opencode, MIT — packages/tui/src/theme/assets/
+  // opencode.json, defs lightStep1..12 / lightSecondary / lightAccent /
+  // lightRed…), with semantic text colors deepened one step within the
+  // official hue family to hold WCAG AA (≥4.5:1) on white.
+  test('light palette equals the official opencode light mapping', () => {
     expect(BUILTIN_SCHEMES.light).toEqual({
+      bg: '#ffffff', panel: '#fafafa', element: '#f5f5f5', borderSubtle: '#d4d4d4',
+      border: '#b8b8b8', borderActive: '#a0a0a0', text: '#1a1a1a', textMuted: '#707070',
+      primary: '#3473c6', secondary: '#7b5bb6', accent: '#a96410', success: '#2f7d45',
+      warning: '#a96410', info: '#2b7884', error: '#d1383d', yellow: '#8f6c13',
+    })
+  })
+
+  test('Atom one-dark / one-light skins keep the official hexes verbatim', () => {
+    expect(BUILTIN_SCHEMES['one-dark']).toEqual({
+      bg: '#282c34', panel: '#31353f', element: '#393f4a', borderSubtle: '#3b3f4c',
+      border: '#5c6370', borderActive: '#828997', text: '#abb2bf', textMuted: '#848b98',
+      primary: '#d19a66', secondary: '#61afef', accent: '#c678dd', success: '#98c379',
+      warning: '#e2c08d', info: '#56b6c2', error: '#e06c75', yellow: '#e5c07b',
+    })
+    expect(BUILTIN_SCHEMES['one-light']).toEqual({
       bg: '#fafafa', panel: '#f0f0f0', element: '#e6e6e6', borderSubtle: '#dcdcdc',
       border: '#c9c9c9', borderActive: '#a0a1a7', text: '#383a42', textMuted: '#696c77',
-      primary: '#2464f0', secondary: '#a626a4', accent: '#986801', success: '#3f7e3e',
-      warning: '#986801', info: '#0175a7', error: '#d93020', yellow: '#986801',
+      primary: '#4078f2', secondary: '#a626a4', accent: '#986801', success: '#50a14f',
+      warning: '#986801', info: '#0184bc', error: '#e45649', yellow: '#986801',
     })
+    for (const name of ['one-dark', 'one-light']) {
+      expect(Object.keys(schemeRegistry())).toContain(name)
+    }
   })
 
   test('text-bearing roles hold WCAG AA contrast on their scheme background', () => {

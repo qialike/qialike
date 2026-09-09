@@ -5,12 +5,14 @@ import React from 'react'
  *   - a **colorscheme** is a named palette applied onto the shared `theme`
  *     module object (the surface's "highlight groups"); switching is IMMEDIATE
  *     and persists into the `dsh-tui-theme:` settings section;
- *   - **built-in schemes**: `dark` (the default, shipped by theme.ts as Atom
- *     One Dark), `light` (Atom One Light), plus the classic third-party set in
- *     `classic-schemes.ts` (catppuccin, dracula, everforest, gruvbox,
- *     jellybeans, kanagawa, monokai, nord, rosepine, solarized — all
- *     MIT-licensed; see that module's header for sources and the 17-key
- *     mapping);
+ *   - **built-in schemes**: `dark` (the default, shipped by theme.ts) and
+ *     `light` — opencode's own default theme (repo `sst/opencode`, MIT:
+ *     `packages/tui/src/theme/assets/opencode.json`); the optional Atom skins
+ *     `one-dark` / `one-light` (Atom's official repos, GitHub Inc. MIT); plus
+ *     the classic third-party set in `classic-schemes.ts` (catppuccin,
+ *     dracula, everforest, gruvbox, jellybeans, kanagawa, monokai, nord,
+ *     rosepine, solarized — all MIT-licensed; see that module's header for
+ *     sources and the 17-key mapping);
  *   - **user schemes** live in `~/.dsh/themes/<name>.json` — like vim's
  *     `colors/*.vim`. Each file is a small JSON palette:
  *
@@ -63,30 +65,53 @@ function themesDir(): string {
 }
 
 /**
- * Built-in schemes. `dark` snapshots the default palette at module load.
+ * Built-in schemes. `dark` snapshots the default palette at module load
+ * (theme.ts — opencode's default dark, see its header).
  *
- * `light` is **Atom One Light**, sourced from Atom's official repos —
- * `atom/one-light-syntax` (white syntax bg `hsl(230,1%,98%)` = #fafafa, mono
- * ramp, 10 syntax colors) and `atom/one-light-ui` — with structure steps
- * cross-checked against `navarasu/onedark.nvim`'s palette.lua (MIT), the same
- * way theme.ts sources One Dark. Semantic text colors that fall short of WCAG
- * AA (≥4.5:1) on #fafafa are deepened one step *within their official hue
- * family* (same policy as the dark skin's lightened roles in theme.ts):
- *   primary #4078f2→#2464f0 · success #50a14f→#3f7e3e · info #0184bc→#0175a7 ·
- *   error #e45649→#d93020
- * (accent/warning/yellow share #986801 — One Light's only AA-passing orange
- * tone; secondary #a626a4 and the mono ramp already pass).
+ * `light` mirrors the OFFICIAL light definition shipped inside opencode's own
+ * default theme (repo `sst/opencode`, MIT — `packages/tui/src/theme/assets/
+ * opencode.json`, defs `lightStep1…12` / `lightSecondary` / `lightAccent` /
+ * `lightRed`…): white page background, neutral-gray borders, blue primary,
+ * purple secondary, orange accent/warning. Semantic text colors are deepened
+ * one step within the official hue family so they hold WCAG AA (≥4.5:1)
+ * contrast on the white background:
+ *   primary #3b7dd8→#3473c6 · accent/warning #d68c27→#a96410 ·
+ *   success #3d9a57→#2f7d45 · info #318795→#2b7884 · yellow #b0851f→#8f6c13 ·
+ *   muted #8a8a8a→#707070 (error #d1383d and secondary #7b5bb6 already pass).
+ *
+ * The extra Atom skins `one-dark` / `one-light` below keep Atom's official
+ * hexes verbatim (optional skins are not held to the AA bar the two opencode
+ * defaults are): hues from the official repos `atom/one-dark-syntax` /
+ * `atom/one-dark-ui` and `atom/one-light-syntax` / `atom/one-light-ui`
+ * (GitHub Inc., MIT — both archived, which does not affect their MIT grant),
+ * structure steps cross-checked against `navarasu/onedark.nvim`'s
+ * palette.lua (MIT), which reproduces the same ramps for terminal ports.
  */
 export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
   dark: { ...theme },
   light: {
+    bg: '#ffffff', panel: '#fafafa', element: '#f5f5f5', borderSubtle: '#d4d4d4',
+    border: '#b8b8b8', borderActive: '#a0a0a0', text: '#1a1a1a', textMuted: '#707070',
+    primary: '#3473c6', secondary: '#7b5bb6', accent: '#a96410', success: '#2f7d45',
+    warning: '#a96410', info: '#2b7884', error: '#d1383d', yellow: '#8f6c13',
+  },
+  // Atom One Dark / One Light — optional skins, pure official hexes (provenance
+  // in the docstring above).
+  'one-dark': {
+    bg: '#282c34', panel: '#31353f', element: '#393f4a', borderSubtle: '#3b3f4c',
+    border: '#5c6370', borderActive: '#828997', text: '#abb2bf', textMuted: '#848b98',
+    primary: '#d19a66', secondary: '#61afef', accent: '#c678dd', success: '#98c379',
+    warning: '#e2c08d', info: '#56b6c2', error: '#e06c75', yellow: '#e5c07b',
+  },
+  'one-light': {
     bg: '#fafafa', panel: '#f0f0f0', element: '#e6e6e6', borderSubtle: '#dcdcdc',
     border: '#c9c9c9', borderActive: '#a0a1a7', text: '#383a42', textMuted: '#696c77',
-    primary: '#2464f0', secondary: '#a626a4', accent: '#986801', success: '#3f7e3e',
-    warning: '#986801', info: '#0175a7', error: '#d93020', yellow: '#986801',
+    primary: '#4078f2', secondary: '#a626a4', accent: '#986801', success: '#50a14f',
+    warning: '#986801', info: '#0184bc', error: '#e45649', yellow: '#986801',
   },
-  // Classic third-party skins (all MIT: 9 from opencode theme assets +
-  // jellybeans from a vim colorscheme) — provenance in classic-schemes.ts.
+  // Classic third-party skins (8 from upstream official repos, monokai via
+  // opencode's MIT assets, jellybeans from an MIT vim colorscheme) —
+  // provenance in classic-schemes.ts.
   ...CLASSIC_SCHEMES,
 }
 

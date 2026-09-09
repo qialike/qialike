@@ -45,23 +45,30 @@ The rows below list the verified licenses.
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
 
-## Default colorscheme (`dark` / `light`)
+## Default colorscheme (`dark` / `light`) and Atom skins (`one-dark` / `one-light`)
 
-The built-in default schemes in `packages/dsh-tui-app/src/theme.ts` (`dark`) and
-`theme-plugin.ts` (`light`) are the classic **Atom One Dark / One Light** palettes: dsh-tui
-bundles only **resolved hex values** plus its own 17-role mapping — no upstream source code is
-copied. Hues come from Atom's official repos by GitHub Inc. (both archived, which does not affect
-their MIT grant); the structure steps between them (panel/element/border tones) are cross-checked
-against `navarasu/onedark.nvim`, whose palette.lua reproduces the same ramp for terminal ports.
-Two roles per scheme are nudged one lightness step *within their official hue family* so they hold
-WCAG AA (≥4.5:1) on the scheme background (same policy for both skins, documented in the module
-headers): `dark` textMuted #828997→#9096a2 and error #e06c75→#e27881; `light` deepens primary
-#4078f2→#2464f0, success #50a14f→#3f7e3e, info #0184bc→#0175a7 and error #e45649→#d93020.
+The built-in default schemes `dark` (`packages/dsh-tui-app/src/theme.ts`) and `light`
+(`theme-plugin.ts`) are **opencode's own default theme**: dsh-tui bundles only **resolved hex
+values** plus its own 17-role mapping — no upstream source code is copied. Values map 1:1 from
+the `dark*`/`light*` defs of opencode's theme file (repo [sst/opencode](https://github.com/sst/opencode),
+MIT — `packages/tui/src/theme/assets/opencode.json`). The `light` semantic text colors are
+deepened one step *within the official hue family* so they hold WCAG AA (≥4.5:1) on the white
+background (documented in theme-plugin.ts): primary #3b7dd8→#3473c6, accent/warning
+#d68c27→#a96410, success #3d9a57→#2f7d45, info #318795→#2b7884, yellow #b0851f→#8f6c13, muted
+#8a8a8a→#707070.
+
+The optional skins `one-dark`/`one-light` are the classic **Atom One Dark / One Light**
+palettes: hues come from Atom's official repos by GitHub Inc. (both archived, which does not
+affect their MIT grant), structure steps cross-checked against
+[navarasu/onedark.nvim](https://github.com/navarasu/onedark.nvim) (MIT); hexes are kept verbatim
+(optional skins are not held to the AA bar the two defaults are).
 
 | Default scheme | Upstream | License | Source |
 |---|---|---|---|
-| dark | GitHub Inc. (Atom) — [atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) + [atom/one-dark-ui](https://github.com/atom/one-dark-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with [navarasu/onedark.nvim](https://github.com/navarasu/onedark.nvim) (MIT) |
-| light | GitHub Inc. (Atom) — [atom/one-light-syntax](https://github.com/atom/one-light-syntax) + [atom/one-light-ui](https://github.com/atom/one-light-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
+| dark | [sst/opencode](https://github.com/sst/opencode) — opencode's default theme | MIT | `packages/tui/src/theme/assets/opencode.json` (`dark*` defs) |
+| light | [sst/opencode](https://github.com/sst/opencode) — opencode's default theme | MIT | `opencode.json` (`light*` defs), semantic text AA-deepened (see above) |
+| one-dark | GitHub Inc. (Atom) — [atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) + [atom/one-dark-ui](https://github.com/atom/one-dark-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
+| one-light | GitHub Inc. (Atom) — [atom/one-light-syntax](https://github.com/atom/one-light-syntax) + [atom/one-light-ui](https://github.com/atom/one-light-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
 
 ## Permissive third-party licenses
 
