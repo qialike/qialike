@@ -173,7 +173,7 @@
     - id: tui-panel-models
       name: '@yourname/dsh-tui-app/panels-models'
 
-    # /sessions dialog: list / search / resume persisted sessions (opencode-style).
+    # /sessions dialog: list / search / resume persisted sessions.
     - id: tui-sessions
       name: '@yourname/dsh-tui-app/sessions'
 
@@ -181,8 +181,8 @@
     - id: tui-export
       name: '@yourname/dsh-tui-app/export'
 
-    # /new: start a brand-new session in place (opencode-style; the old
-    # session is persisted by the harness and stays resumable).
+    # /new: start a brand-new session in place; the old
+    # session is persisted by the harness and stays resumable.
     - id: tui-new
       name: '@yourname/dsh-tui-app/new'
 
@@ -206,7 +206,7 @@
 
     # Image drag-in: detects a dragged image file (the terminal pastes its path),
     # reads + saves it through the attachment store, and presents a composer
-    # [Image: name] chip; submit emits an image content block (opencode-style).
+    # [Image: name] chip; submit emits an image content block.
     - id: tui-image-attach
       name: '@yourname/dsh-tui-app/image-attach'
 
