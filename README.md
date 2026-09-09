@@ -174,20 +174,19 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   **picker dialog**: ↑/↓ to move, type to filter,
   **live preview** while moving, `Enter` applies + persists, `Esc` cancels and
   restores. Fast paths remain: `/theme dark` (or a unique prefix), and
-  `/theme <role> <hex>` overrides. **20 built-ins**: `dark` — the DeepSeek
+  `/theme <role> <hex>` overrides. **17 built-ins**: `dark` — the DeepSeek
   Harness web dark design tokens (MIT repo `deepseek-harness`,
   `design-platform.css` `body[data-ds-dark-theme]` alias block) — and
   `light` (Atom's One Light, GitHub
   Inc. MIT — the former `one-light` optional skin, promoted to the default
-  light), plus the optional skin `one-dark` (Atom, GitHub Inc. MIT), and 17
-  classic skins — bespin,
-  blackboard, catppuccin, dracula, everforest, falcon, flexoki, gruvbox,
-  jellybeans, kanagawa, monokai, nord, panda, rosepine, solarized,
-  solarized-light, twilight (12 resolved
+  light), plus the optional skin `one-dark` (Atom, GitHub Inc. MIT), and 14
+  classic skins — catppuccin,
+  dracula, everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa,
+  nord, panda, rosepine, solarized, solarized-light, twilight (12 resolved
   from the upstream projects' official repos — solarized-light is the
   official light side of the same altercation/solarized repo; jellybeans
-  mapped from an MIT vim colorscheme; bespin/blackboard/monokai/twilight
-  mapped from the theme XMLs of the official Notepad++ distribution, each
+  mapped from an MIT vim colorscheme; twilight
+  mapped from the theme XML of the official Notepad++ distribution,
   carrying its own full MIT header inside that GPL-3.0 repo;
   the whole set is MIT/permissive — see
   `classic-schemes.ts` and THIRD_PARTY_NOTICES.md) —

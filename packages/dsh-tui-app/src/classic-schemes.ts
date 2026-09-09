@@ -32,22 +32,17 @@
  *   secondary, Type → accent, String/Title → success, Constant → warning,
  *   PreProc → info, plus a computed neutral ramp (bg→comment blend) for the
  *   panel/border roles (values from nanotech/jellybeans.vim, MIT).
- * `bespin`, `blackboard`, `monokai` and `twilight` are mapped from the MIT
- * theme XML files bundled with the official Notepad++ distribution
- * (notepad-plus-plus/notepad-plus-plus, `PowerEditor/installer/themes/`):
- * each file carries its own MIT header inside that GPL-3.0 repository —
- * bespin © 2009 Oren Farhi / Orizen Designs; blackboard and monokai © 2008
- * Fabio Zendhi Nagao (conversions of the TextMate palettes of the same names
- * via his tmTheme2nppStyler); twilight © 2008 Fabio Zendhi Nagao and
- * 2011–2014 Renato Silva. For these four, the XMLs' own fg hexes are kept
- * verbatim and mapped by syntax role: text ← Default fg, textMuted ←
- * comment fg (Bespin's comments are its signature blue), primary ← the
- * skin's main keyword/instruction tone, secondary ← a cool second tone
- * (identifier or preprocessor), accent ← the vivid attribute/instruction
- * tone, warning/info/error ← the warm/number/cool accents (error takes the
- * reddest tone the skin has — e.g. Monokai's F92672, Blackboard's FF6400
- * tags), yellow ← the yellow/cream emphasis tone (Twilight's FUNCTION
- * DAD085); the panel/element roles take the XMLs' own current-line and
+ * `twilight` is mapped from the MIT theme XML bundled with the official
+ * Notepad++ distribution (notepad-plus-plus/notepad-plus-plus,
+ * `PowerEditor/installer/themes/`): that file carries its own MIT header
+ * inside the GPL-3.0 repository — © 2008 Fabio Zendhi Nagao, 2011–2014
+ * Renato Silva. Its own fg hexes are kept verbatim and mapped by syntax
+ * role: text ← Default fg, textMuted ← comment fg, primary ← the main
+ * keyword/instruction tone (tan CDA869), secondary ← the cool preprocessor
+ * tone, accent ← the vivid instruction tone (cream F9EE98), success ← sage
+ * strings 8F9D6A, warning ← warm numbers E9C062, info ← cool variable tone
+ * 7587A6, error ← terracotta CF6A4C, yellow ← the muted FUNCTION tone
+ * DAD085; the panel/element roles take the XML's own current-line and
  * selection colours (GlobalStyles), with the border steps computed as
  * neutral blends between them.
  *
@@ -59,27 +54,6 @@ import type { ThemePalette } from './theme.ts'
 /** The merged classic set (alphabetical; built-in `dark`/`light` and these
  *  schemes win over user `~/.dsh/themes` files of the same name). */
 export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
-  /** Source: the MIT Bespin.xml bundled with Notepad++ (Bespin.xml, © 2009
-   *  Oren Farhi / Orizen Designs — a TextMate-style palette). Syntax accents
-   *  verbatim: orange keywords/operators, green strings, salmon identifiers,
-   *  blue comments; layers from current-line/selection + computed blends. */
-  bespin: {
-    bg: '#2a211c', panel: '#4b3c34', element: '#83675a', borderSubtle: '#3b2f28',
-    border: '#524138', borderActive: '#ffaa00', text: '#bdae9d', textMuted: '#1e9ae0',
-    primary: '#ffaa00', secondary: '#eb939a', accent: '#e5c138', success: '#55e439',
-    warning: '#efe900', info: '#37a3ed', error: '#ff3a83', yellow: '#f6f080',
-  },
-  /** Source: the MIT Black board.xml bundled with Notepad++ (© 2008 Fabio
-   *  Zendhi Nagao — a port of the TextMate Blackboard palette). Syntax
-   *  accents verbatim: yellow keywords FBDE2D, green strings 61CE3C, lime
-   *  numbers D8FA3C, blue identifiers 8DA6CE, orange tags FF6400 (error);
-   *  layers from current-line 121830 / selection 253B76 + computed blends. */
-  blackboard: {
-    bg: '#0c1021', panel: '#121830', element: '#253b76', borderSubtle: '#0e1226',
-    border: '#182345', borderActive: '#fbde2d', text: '#f8f8f8', textMuted: '#aeaeae',
-    primary: '#fbde2d', secondary: '#8da6ce', accent: '#61ce3c', success: '#61ce3c',
-    warning: '#d8fa3c', info: '#8da6ce', error: '#ff6400', yellow: '#fbde2d',
-  },
   /** Source: catppuccin/catppuccin (dark side). */
   catppuccin: {
     bg: '#1e1e2e', panel: '#181825', element: '#11111b', borderSubtle: '#585b70',
@@ -138,17 +112,6 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     border: '#54546d', borderActive: '#c38d9d', text: '#dcd7ba', textMuted: '#727169',
     primary: '#7e9cd8', secondary: '#957fb8', accent: '#d27e99', success: '#98bb6c',
     warning: '#d7a657', info: '#76946a', error: '#e82424', yellow: '#c38d9d',
-  },
-  /** Source: the MIT Monokai.xml bundled with Notepad++ (© 2008 Fabio Zendhi
-   *  Nagao — the classic TextMate Monokai palette). Accents verbatim:
-   *  F8F8F2 text, 66D9EF instructions, F92672 keywords/operators, AE81FF
-   *  numbers, E6DB74 strings, A6E22E attributes; layers from its
-   *  current-line 3E3D32 / selection 49483E + computed blends. */
-  monokai: {
-    bg: '#272822', panel: '#3e3d32', element: '#49483e', borderSubtle: '#2e2e27',
-    border: '#444338', borderActive: '#66d9ef', text: '#f8f8f2', textMuted: '#75715e',
-    primary: '#66d9ef', secondary: '#ae81ff', accent: '#a6e22e', success: '#a6e22e',
-    warning: '#fd971f', info: '#66d9ef', error: '#f92672', yellow: '#e6db74',
   },
   /** Source: arcticicestudio/nord (dark side). */
   nord: {

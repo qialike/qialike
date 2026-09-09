@@ -137,7 +137,7 @@ describe('scheme palettes', () => {
   })
 
   test('classic schemes are registered and structurally complete', () => {
-    const classic = ['bespin', 'blackboard', 'catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light', 'twilight']
+    const classic = ['catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light', 'twilight']
     for (const name of classic) {
       const palette = BUILTIN_SCHEMES[name]
       expect(palette, name).toBeDefined()
@@ -152,10 +152,9 @@ describe('scheme palettes', () => {
 
   test('classic scheme anchor backgrounds match their sources', () => {
     const anchors: Record<string, string> = {
-      bespin: '#2a211c', blackboard: '#0c1021',
       catppuccin: '#1e1e2e', dracula: '#282a36', everforest: '#2d353b', falcon: '#020221',
       flexoki: '#100f0f', gruvbox: '#282828',
-      jellybeans: '#151515', kanagawa: '#1f1f28', monokai: '#272822', nord: '#2e3440',
+      jellybeans: '#151515', kanagawa: '#1f1f28', nord: '#2e3440',
       panda: '#292a2b', rosepine: '#191724', solarized: '#002b36',
       'solarized-light': '#fdf6e3', twilight: '#141414',
     }
