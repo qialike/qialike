@@ -10,10 +10,12 @@ import React from 'react'
  *     and `light` (Atom's One Light — the former `one-light` skin promoted to
  *     the default light name, GitHub Inc. MIT); the optional skin `one-dark`
  *     (Atom, GitHub Inc. MIT); plus the classic third-party set
- *     in `classic-schemes.ts` (catppuccin, dracula, everforest, falcon,
- *     flexoki, gruvbox, jellybeans, kanagawa, nord, panda, rosepine,
- *     solarized — all MIT-licensed; see that module's header for sources and
- *     the 17-key mapping);
+ *     in `classic-schemes.ts` — 17 MIT skins (catppuccin, dracula,
+ *     everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa, nord,
+ *     panda, rosepine, solarized, solarized-light, plus the four mapped from
+ *     the MIT theme XMLs of the official Notepad++ distribution: bespin,
+ *     blackboard, monokai, twilight — see that module's header for sources
+ *     and the 17-key mapping);
  *   - **user schemes** live in `~/.dsh/themes/<name>.json` — like vim's
  *     `colors/*.vim`. Each file is a small JSON palette:
  *
@@ -105,8 +107,9 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
     primary: '#d19a66', secondary: '#61afef', accent: '#c678dd', success: '#98c379',
     warning: '#e2c08d', info: '#56b6c2', error: '#e06c75', yellow: '#e5c07b',
   },
-  // Classic third-party skins (12 from upstream official repos, jellybeans
-  // from an MIT vim colorscheme) — provenance in classic-schemes.ts.
+  // Classic third-party skins (12 from upstream official repos + jellybeans
+  // from an MIT vim colorscheme + 4 mapped from Notepad++'s MIT theme XMLs:
+  // bespin, blackboard, monokai, twilight) — provenance in classic-schemes.ts.
   ...CLASSIC_SCHEMES,
 }
 

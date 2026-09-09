@@ -18,13 +18,18 @@ and the Bun runtime embeds its own license with the compiled binary.
 
 ## Classic colorschemes
 
-The 13 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
+The 17 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
 palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values** plus its own
 17-role mapping — no upstream source code is copied. 12 of them (catppuccin, dracula,
 everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized,
 solarized-light) are the
 upstream projects' own palettes, referenced directly from their official repos; `jellybeans` is
-mapped from the MIT vim colorscheme by nanoTech. `panda` tracks the original Atom colorscheme by Siamak Mokhtari
+mapped from the MIT vim colorscheme by nanoTech; `bespin`, `blackboard`, `monokai` and
+`twilight` are mapped from theme XML files that ship inside the official
+[notepad-plus-plus/notepad-plus-plus](https://github.com/notepad-plus-plus/notepad-plus-plus)
+repository (`PowerEditor/installer/themes/`) — that repository is GPL-3.0, but each of these four
+XML files carries its own full MIT header inside the file, so the palettes are MIT and safe to
+bundle. `panda` tracks the original Atom colorscheme by Siamak Mokhtari
 (`siamak/atom-panda-syntax`, MIT © 2016): the popular VSCode ports (`PandaTheme/panda-syntax-
 vscode`, `tinkertrain/panda-syntax-vscode`) ship no LICENSE file and no package.json `license`
 field, so — per this repo's MIT-only policy — they are **not** used as a source.
@@ -34,6 +39,8 @@ The rows below list the verified licenses.
 
 | Colorscheme | Upstream | License | Source |
 |---|---|---|---|
+| bespin | [Oren Farhi / Bespin palette](https://github.com/notepad-plus-plus/notepad-plus-plus) | MIT (© 2009 Oren Farhi / Orizen Designs, in-file header) | Notepad++ `PowerEditor/installer/themes/Bespin.xml` |
+| blackboard | [Fabio Zendhi Nagao (TextMate Blackboard port)](https://github.com/notepad-plus-plus/notepad-plus-plus) | MIT (© 2008 Fabio Zendhi Nagao, in-file header) | Notepad++ `PowerEditor/installer/themes/Black board.xml` |
 | catppuccin | [Catppuccin](https://github.com/catppuccin/catppuccin) | MIT | catppuccin/catppuccin |
 | dracula | [Dracula Theme](https://github.com/dracula/dracula-theme) | MIT | dracula/dracula-theme |
 | gruvbox | [morhetz/gruvbox](https://github.com/morhetz/gruvbox) | MIT | morhetz/gruvbox |
@@ -47,6 +54,8 @@ The rows below list the verified licenses.
 | panda | [siamak/atom-panda-syntax](https://github.com/siamak/atom-panda-syntax) | MIT (Copyright (c) 2016 Siamak Mokhtari) | Atom original `styles/colors.less` + `syntax-variables.less` (VSCode ports license-unclean, not used) |
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
+| monokai | [Fabio Zendhi Nagao (TextMate Monokai port)](https://github.com/notepad-plus-plus/notepad-plus-plus) | MIT (© 2008 Fabio Zendhi Nagao, in-file header) | Notepad++ `PowerEditor/installer/themes/Monokai.xml` |
+| twilight | [Fabio Zendhi Nagao / Renato Silva (TextMate Twilight port)](https://github.com/notepad-plus-plus/notepad-plus-plus) | MIT (© 2008 Fabio Zendhi Nagao, 2011–2014 Renato Silva, in-file header) | Notepad++ `PowerEditor/installer/themes/Twilight.xml` |
 
 ## Default colorscheme (`dark` / `light`) and Atom skin (`one-dark`)
 

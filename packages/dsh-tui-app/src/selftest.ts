@@ -4,7 +4,7 @@
  * transcript. Two tiers:
  *
  *  - **in-process checks** (always, works inside the SEA single-file binary):
- *    colorscheme registry integrity (16 built-ins, 17 keys, hex format),
+ *    colorscheme registry integrity (20 built-ins, 17 keys, hex format),
  *    vim-like unique-prefix resolution, picker filter/clamp helpers, the
  *    raw-mode stdin decoder, the core provider-template catalog, and the
  *    panel/command registries as seen by the running tree. Nothing is
@@ -58,11 +58,11 @@ export function syncChecks(deps: SyncCheckDeps): CheckResult[] {
     out.push({ name, ok, detail })
   }
 
-  // 1) colorscheme registry: 16 built-ins present (2 curated defaults — dark
+  // 1) colorscheme registry: 20 built-ins present (2 curated defaults — dark
   //    from DeepSeek Harness's web design tokens, light from Atom's One Light
-  //    — + 1 optional skin + 13 classic).
+  //    — + 1 optional skin + 17 classic).
   const schemes = schemeRegistry()
-  const required = ['dark', 'light', 'one-dark', 'catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light']
+  const required = ['dark', 'light', 'one-dark', 'bespin', 'blackboard', 'catppuccin', 'dracula', 'everforest', 'falcon', 'flexoki', 'gruvbox', 'jellybeans', 'kanagawa', 'monokai', 'nord', 'panda', 'rosepine', 'solarized', 'solarized-light', 'twilight']
   const missingSchemes = required.filter((n) => !(n in schemes))
   check('colorscheme registry', missingSchemes.length === 0, missingSchemes.length === 0 ? `${required.length} built-ins` : `missing: ${missingSchemes.join(', ')}`)
 
