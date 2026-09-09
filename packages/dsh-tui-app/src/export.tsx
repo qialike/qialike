@@ -21,7 +21,7 @@
 import { Box, Text } from 'ink'
 import React from 'react'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { TuiService, Store } from './index.tsx'
@@ -185,6 +185,25 @@ function renderMarkdown(doc: ExportDoc, sanitize: boolean): string {
   return lines.join('\n')
 }
 
+/** Resolve the export destination under the workspace root, refusing any
+ *  custom name whose resolved path escapes it (`../` segments, absolute
+ *  paths). Subdirectory names inside the workspace are allowed (mkdir
+ *  recursive covers them). Exported for the containment unit tests
+ *  (fix 2, dsh-tui-security.md). */
+export function resolveExportDestination(
+  workspace: string,
+  base: string,
+  ext: string,
+): { ok: true; file: string } | { ok: false; reason: string } {
+  const root = resolve(workspace)
+  const file = resolve(join(workspace, `${base}.${ext}`))
+  const rel = relative(root, file)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) {
+    return { ok: false, reason: `path escapes workspace ("${base}")` }
+  }
+  return { ok: true, file }
+}
+
 /** One export run: inspect the session, fold, render, write to the workspace. */
 function doExport(ctx: Context, sessionId: string, opts: { markdown: boolean; sanitize: boolean; output?: string }): void {
   const persistence = ctx.get('sessionPersistence') as {
@@ -206,7 +225,15 @@ function doExport(ctx: Context, sessionId: string, opts: { markdown: boolean; sa
     // Export into the workspace root, under a custom name when supplied (may
     // include subdirectories); otherwise a timestamped default.
     const base = opts.output !== undefined && opts.output.trim() !== '' ? opts.output.trim() : `session-${sessionId.slice(-8)}`
-    const file = join(store.workspace, `${base}.${ext}`)
+    // Containment guard (fix 2, dsh-tui-security.md): `../`/absolute custom
+    // names are refused before any write, so /export can never touch a file
+    // outside the workspace root.
+    const resolved = resolveExportDestination(store.workspace, base, ext)
+    if (!resolved.ok) {
+      store.append('status', `export: ${resolved.reason}`, true)
+      return
+    }
+    const file = resolved.file
     mkdirSync(dirname(file), { recursive: true })
     writeFileSync(file, body, 'utf8')
     store.append('status', `export: ${file} (${doc.messages.length} messages)`, true)

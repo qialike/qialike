@@ -25,6 +25,7 @@ import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 import { useRowGeometry, dialogRowIndexFromCol, measureDomTop } from '../list-geometry.ts'
 import { pointerRegion, composerStripRows, messageRightFor } from '../pointer-region.ts'
+import { stripTerminalControls } from '../terminal-safe.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-approval'
@@ -87,9 +88,9 @@ function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element
   }, [store.rows, store.width, store.input, store.composerImage !== null, req.toolName])
   return (
     <Box ref={dockRef} flexShrink={0} borderStyle="round" borderColor={theme.warning} flexDirection="column" paddingX={1} paddingY={1}>
-      <Text color={theme.warning} bold wrap="wrap">⚠ Permission required · {req.toolName}</Text>
+      <Text color={theme.warning} bold wrap="wrap">⚠ Permission required · {stripTerminalControls(req.toolName)}</Text>
       <Box marginTop={1}>
-        <Text wrap="truncate">{conciseReason(req.reason, req.toolName)}</Text>
+        <Text wrap="truncate">{stripTerminalControls(conciseReason(req.reason, req.toolName))}</Text>
       </Box>
       <Box flexDirection="row" gap={2} marginTop={1} ref={rowRef}>
         {APPROVAL_CHOICES.map((label, i) => (

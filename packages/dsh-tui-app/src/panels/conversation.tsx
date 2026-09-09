@@ -12,7 +12,6 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
-import { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import {
   APP_VERSION,
   BETA_FOOTER_SUFFIX,
@@ -23,6 +22,7 @@ import {
   type TuiService,
 } from '../index.tsx'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
+import { stripTerminalControls } from '../terminal-safe.ts'
 import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import { questionDockRows } from '../question-layout.ts'
@@ -460,9 +460,13 @@ type Row =
   | { type: 'steps'; top: number; bottom: number }
 
 function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpanded: boolean, hovered: boolean, usable: number, toolLive: boolean, reasoningLive: boolean): React.ReactNode {
+  // Terminal-injection guard: strip control bytes from every untrusted text
+  // surface before it enters the render tree (dsh-tui-security.md). The store
+  // keeps the original text; only the display is sanitized.
+  const text = stripTerminalControls(item.text)
   if (item.kind === 'assistant') {
     // opencode-style assistant: indent the markdown to the shared content column.
-    return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={item.text} /></Box>
+    return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={text} /></Box>
   }
   if (item.kind === 'plan') {
     // A plan submitted for review (harness `exit_plan_mode`): a labelled block
@@ -473,7 +477,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     return (
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
         <Text color={theme.bg} backgroundColor={theme.accent}>{' Plan '}</Text>
-        <MarkdownText text={item.text} />
+        <MarkdownText text={text} />
       </Box>
     )
   }
@@ -490,8 +494,8 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
         <Text inverse={hovered || undefined} color={mutedReadable()}>{expandReasoning ? '-' : '+'} Think</Text>
         {expandReasoning
-          ? <Text color={mutedReadable()} wrap="wrap">{item.text}</Text>
-          : <Text color={mutedReadable()} wrap="wrap">{thinkPreviewLine(item.text, reasoningLive, usable)}</Text>}
+          ? <Text color={mutedReadable()} wrap="wrap">{text}</Text>
+          : <Text color={mutedReadable()} wrap="wrap">{thinkPreviewLine(text, reasoningLive, usable)}</Text>}
       </Box>
     )
   }
@@ -511,8 +515,11 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     // memoized row re-renders on a click or a run start/stop (a store read
     // inside this component would be invisible to the memo — that was why
     // Think toggled but tool rows did not).
-    const isError = item.text.startsWith('✗ ')
-    const body = item.tool?.body
+    const isError = text.startsWith('✗ ')
+    // Tool body (result/error output) is untrusted content: strip control
+    // bytes before it can reach the terminal via the expanded row.
+    const rawBody = item.tool?.body
+    const body = rawBody === undefined ? undefined : stripTerminalControls(rawBody)
     const expanded = body !== undefined && toolExpanded
     const startedAt = item.tool?.startedAt
     const runningLive = toolLive
@@ -523,7 +530,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
         {runningLive
           ? <ToolLiveHeader item={item} usable={usable} />
-          : <Text inverse={hovered || undefined} color={mutedReadable()} wrap="wrap">{toolRowHeader(item, usable)}</Text>}
+          : <Text inverse={hovered || undefined} color={mutedReadable()} wrap="wrap">{stripTerminalControls(toolRowHeader(item, usable))}</Text>}
         {body !== undefined && expanded && (
           <Text color={isError ? theme.error : mutedReadable()} wrap="wrap">{body}</Text>
         )}
@@ -540,7 +547,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     // wrapper (see buildRows), not painted rows: painted blanks collapse in
     // scroll re-layouts (the PgUp gap bug); margins always survive.
     const w = MESSAGE_TEXT_WIDTH(usable)
-    const lines = wrapRows(item.text, w)
+    const lines = wrapRows(text, w)
     return (
       <Box flexDirection="column">
         {lines.map((line, i) => {
@@ -560,14 +567,14 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     // web turn-error parity — visibly an error, not a silent stop.
     return (
       <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
-        <Text color={theme.error} wrap="wrap">⚠ {item.text}</Text>
+        <Text color={theme.error} wrap="wrap">⚠ {text}</Text>
       </Box>
     )
   }
   return (
     <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}>
       <Text color={mutedReadable()} wrap="wrap">
-        {item.text}
+        {text}
       </Text>
     </Box>
   )
@@ -592,7 +599,7 @@ function ToolLiveHeader(props: { item: TranscriptItem; usable: number }): React.
   const seconds = started === undefined ? null : Math.max(0, Math.floor((now - started) / 1000))
   return (
     <Text color={mutedReadable()} wrap="wrap">
-      {toolRowHeader(props.item, props.usable, { frame, seconds })}
+      {stripTerminalControls(toolRowHeader(props.item, props.usable, { frame, seconds }))}
     </Text>
   )
 }
@@ -786,7 +793,7 @@ function StepRows(props: { steps: readonly StepItem[] }): React.JSX.Element {
     <Box flexDirection="column">
       {props.steps.map((step, i) => (
         <Text key={i} color={stepColor(step.status)}>
-          {STEP_ICON[step.status]} {step.content}
+          {STEP_ICON[step.status]} {stripTerminalControls(step.content)}
         </Text>
       ))}
     </Box>
@@ -1539,10 +1546,14 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     const next = store.cyclePermission()
     const session = store.session
     if (session !== undefined) {
+      // The sandbox mode and the approval policy are INDEPENDENT (review F2:
+      // dsh-tui-security.md). Cycling to danger-full-access raises the file
+      // boundary alone — it must NOT silently flip the approval policy to
+      // never, or one Tab press would disable both the sandbox and asking.
+      // The policy stays whatever the user last chose (default ask); turning
+      // approvals off stays an explicit human action (the dock's "Allow
+      // always" per tool), never a side effect of a mode switch.
       try { setSandboxMode(session, next) } catch { /* best-effort */ }
-      // Mirror the harness danger-full-access preset: full access also stops
-      // asking for approval; every other mode keeps ask.
-      try { setApprovalPolicy(session, next === 'danger-full-access' ? 'never' : 'ask') } catch { /* best-effort */ }
     }
     return
   }
@@ -1942,7 +1953,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             <Text color={theme.accent} bold>Session</Text>
             {store.session !== undefined && (() => {
               const title = sessionDisplayTitle(store.session.id)
-              return title === undefined ? null : <Text color={theme.text} wrap="truncate">{title}</Text>
+              return title === undefined ? null : <Text color={theme.text} wrap="truncate">{stripTerminalControls(title)}</Text>
             })()}
             {store.session !== undefined
               ? <Text color={mutedReadable()} wrap="wrap">{String(store.session.id)}</Text>

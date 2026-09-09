@@ -40,6 +40,7 @@ import {
 } from '../question-layout.ts'
 import { pointerRegion, composerStripRows, messageRightFor, type PointerRegion } from '../pointer-region.ts'
 import { isPlanReview, questionPresentation } from '../plan-review.ts'
+import { stripTerminalControls } from '../terminal-safe.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-question'
@@ -141,8 +142,10 @@ export function questionTabWindow(q: PendingQuestion, dockInner: number, tabFrom
   segs: { from: number; to: number }[]
 } {
   const total = q.questions.length
+  // Tab headers are external text (ask_user_question): strip control bytes so
+  // a header can never inject terminal sequences through the tab bar.
   const labels = q.questions.map((it, i) =>
-    `${q.answers[i] === null ? '' : '✓'}${(it.header ?? String(i + 1)).slice(0, 14)}`)
+    `${q.answers[i] === null ? '' : '✓'}${stripTerminalControls(it.header ?? String(i + 1)).slice(0, 14)}`)
   if (total <= 1) return { labels, total, from: 0, visible: total, overflow: false, segs: [] }
   const display = (i: number): string => (q.active === i ? `[${labels[i]!}]` : labels[i]!)
   const widthAll = labels.reduce((sum, _, i) => sum + visualWidth(display(i)) + (i > 0 ? 2 : 0), 0)
@@ -446,7 +449,8 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   // that must span several lines is shown completely). Plan-review paints its
   // own Chinese wording via questionPresentation.
   const pres = questionPresentation(item)
-  const qText = pres.question
+  // The question sentence is external text: strip control bytes before wrap.
+  const qText = stripTerminalControls(pres.question)
   const questionLines = qText === '' ? [] : visualWrap(qText, dockInner)
   // Body rows: detail (if any) + every option's wrapped block + Other… row
   // (plan-review drops detail and the Other row — see questionPresentation).
@@ -600,7 +604,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
             color={row.kind === 'detail' || row.kind === 'sep' ? undefined : rowColor(row)}
             dimColor={row.kind === 'detail'}
             inverse={rowInverse(row)}>
-            {row.text === '' ? ' ' : row.text}
+            {row.text === '' ? ' ' : stripTerminalControls(row.text)}
           </Text>
         ))}
       </Box>

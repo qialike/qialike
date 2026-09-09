@@ -175,10 +175,15 @@ declare module '@deepseek-ai/dsh-session' {
 /** Session file-permission mode, cycled by Tab in the composer (matches the web surface). */
 export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 export const SANDBOX_CYCLE: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access']
-const PERMISSION_LABEL: Record<SandboxMode, string> = {
+/** Status-bar labels for the sandbox modes. Exported so the decoupling
+ *  contract is testable (fix 3, dsh-tui-security.md). */
+export const PERMISSION_LABEL: Record<SandboxMode, string> = {
   'read-only': 'Read Only',
   'workspace-write': 'Workspace Write',
-  'danger-full-access': 'Full access · no approval',
+  // Mode and approval policy are decoupled (fix 3, dsh-tui-security.md): Full
+  // access lifts the file boundary only; tool approvals still ask unless the
+  // user picks Allow always per tool.
+  'danger-full-access': 'Full access',
 }
 /** Sandbox-mode → theme role; resolved LIVE (theme changes must repaint it). */
 const PERMISSION_ROLE: Record<SandboxMode, keyof ThemePalette> = {

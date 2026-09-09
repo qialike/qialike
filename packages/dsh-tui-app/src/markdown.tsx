@@ -34,6 +34,7 @@ import { gfm } from 'micromark-extension-gfm'
 import { gfmFromMarkdown } from 'mdast-util-gfm'
 import stringWidth from 'string-width'
 import wrapAnsi from 'wrap-ansi'
+import { stripTerminalControls } from './terminal-safe.ts'
 import { theme } from './theme.ts'
 
 /** Structural subset of mdast the renderer touches (avoids a hard mdast types dependency). */
@@ -440,8 +441,11 @@ export function MarkdownText(props: { text: string }): React.JSX.Element {
   // layout must all track the same (live) text. A debounced copy would make the
   // measured height lag the store text, under-sizing the row and keeping old
   // messages on screen while new content is clipped below the viewport.
-  const tree = useMemo(() => parse(props.text), [props.text])
-  if (props.text.length > 8_000) return <Text wrap="wrap">{props.text}</Text>
+  // Terminal-injection guard: untrusted model/tool text is stripped of control
+  // bytes BEFORE parsing or the long-text plain path (dsh-tui-security.md).
+  const safe = useMemo(() => stripTerminalControls(props.text), [props.text])
+  const tree = useMemo(() => parse(safe), [safe])
+  if (safe.length > 8_000) return <Text wrap="wrap">{safe}</Text>
   // Block separation is a LAYOUT MARGIN on each block (opencode's margin
   // model), never a painted blank row: a painted blank can measure 0 rows in a
   // scroll re-layout and merge into the next line (the glyph overwrites the

@@ -26,6 +26,7 @@ import { deleteSession } from './session-files.ts'
 import { forgetTitle, isPinned, listWithTitles, renameTitle, togglePin, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { forgetActivity } from './session-activity.ts'
 import { theme } from './theme.ts'
+import { stripTerminalControls } from './terminal-safe.ts'
 import type { RawKey } from './stdin.ts'
 
 /** Stable Cordis plugin name. */
@@ -87,7 +88,7 @@ function SessionsDialog(): React.JSX.Element {
       </Box>
       <Box width={72} borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1}>
         <Text color={theme.accent} bold>Sessions</Text>
-        <Text dimColor>current: {truncateWide(store.sessionsFiltered[store.sessionsDialogIndex]?.title ?? store.sessionsFiltered[store.sessionsDialogIndex]?.label ?? '', 60)}</Text>
+        <Text dimColor>current: {stripTerminalControls(truncateWide(store.sessionsFiltered[store.sessionsDialogIndex]?.title ?? store.sessionsFiltered[store.sessionsDialogIndex]?.label ?? '', 60))}</Text>
         <Box borderStyle="round" borderColor={theme.accent} paddingX={1} marginY={1}>
           <Text color={theme.accent} bold>
             {store.sessionsRenaming !== null
@@ -118,7 +119,8 @@ function SessionsDialog(): React.JSX.Element {
               // TIME (HH:MM, the day lives in the group header above); a long
               // title is truncated so it cannot wrap and inflate the dialog
               // past the terminal height.
-              const display = s.title !== undefined && s.title.trim() !== '' ? s.title.trim() : '(untitled)'
+              const raw = s.title !== undefined && s.title.trim() !== '' ? s.title.trim() : '(untitled)'
+              const display = stripTerminalControls(raw)
               const title = truncateWide(display, 50)
               // 24-hour local clock (deterministic — not toLocaleTimeString,
               // whose AM/PM or locale wording would widen the row).
