@@ -15,7 +15,7 @@
  *     enabled: false   # unloads the gateways from the catalog
  *   ```
  *
- * Model lists mirror the models.dev catalog (the same source opencode uses).
+ * Model lists mirror the models.dev catalog.
  * `needsBaseURL` rows (Cloudflare) keep the deployment-configured form.
  *
  * @module @yourname/dsh-tui-app/foreign-gateways

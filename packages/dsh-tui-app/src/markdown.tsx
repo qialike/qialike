@@ -68,7 +68,7 @@ function parse(text: string): MdNode {
   }
 }
 
-/** All heading levels share the opencode accent (opencode uses one markdownHeading color). */
+/** All heading levels share one accent (a single markdown-heading color). */
 function headingColor(_depth: number): string {
   return theme.accent
 }
@@ -446,8 +446,8 @@ export function MarkdownText(props: { text: string }): React.JSX.Element {
   const safe = useMemo(() => stripTerminalControls(props.text), [props.text])
   const tree = useMemo(() => parse(safe), [safe])
   if (safe.length > 8_000) return <Text wrap="wrap">{safe}</Text>
-  // Block separation is a LAYOUT MARGIN on each block (opencode's margin
-  // model), never a painted blank row: a painted blank can measure 0 rows in a
+  // Block separation is a LAYOUT MARGIN on each block, never
+  // a painted blank row: a painted blank can measure 0 rows in a
   // scroll re-layout and merge into the next line (the glyph overwrites the
   // next line's first cell, deleting the gap); a margin is pure layout and
   // survives every paint path. estimateMarkdownHeight adds the same +1 per

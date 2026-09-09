@@ -8,7 +8,7 @@
  *   - slash command palette (type `/`)
  *   - a `approval/request` answerer that prompts for tool approval in-band
  *   - launch auto-resume (`resume_last`) / `--resume <id>` over persisted sessions
- *   - an opencode-style two-panel layout (conversation + activity) and input dock
+ *   - a two-panel layout (conversation + activity) and an input dock
  *
  * @module @yourname/dsh-tui-app
  */
@@ -216,7 +216,7 @@ export interface PendingApproval {
 /** One in-band user-question ask shown as a single card dock. A request may
  *  carry several questions; the card shows them ONE at a time, keeps each
  *  committed answer, and submits the whole batch once every question is
- *  answered (opencode question-dock semantics — no popup-per-question).
+ *  answered (question-dock semantics — no popup-per-question).
  *
  *  `questions`/`answers`/… are the batch state; `item`/`index`/`custom`/…
  *  are the ACTIVE question's editable snapshot (`questions[active]`), so the
@@ -644,7 +644,7 @@ export class Store {
     this.notify()
   }
 
-  /** Append a running tool-call row (opencode-style inline tool). The raw
+  /** Append a running tool-call row (rendered inline). The raw
    *  arguments are kept (capped) for the one-line summary derivation; the
    *  start timestamp feeds the row's live elapsed-seconds tail.
    *
@@ -759,7 +759,7 @@ export class Store {
   resolveRow(row: number): TranscriptItem | null {
     return this._rowResolver === null ? null : this._rowResolver(row)
   }
-  /** Hover state for the tool-row affordance (opencode-style: a row that can be
+  /** Hover state for the tool-row affordance (a row that can be
    *  clicked highlights under the cursor). */
   get hoveredToolKey(): number | null { return this._hoveredToolKey }
   setHoverTool(key: number | null): void {
@@ -1047,7 +1047,7 @@ export class Store {
     this._approvalChoice = Math.max(0, Math.min(2, i))
     this.notify()
   }
-  /** Tool names the user chose "Allow always" for this session (in-memory, opencode-style). */
+  /** Tool names the user chose "Allow always" for this session (in-memory). */
   private _allowAlways = new Set<string>()
   /** Tools allowed without asking for the rest of this session. */
   get allowAlways(): readonly string[] { return [...this._allowAlways] }
@@ -1149,8 +1149,7 @@ export class Store {
     this._questionScroll = 0
     this.notify()
   }
-  /** Jump straight to question `i` (clicking the card's tab bar / opencode
-   *  dock semantics). */
+  /** Jump straight to question `i` (clicking the card's tab bar). */
   questionJump(i: number): void {
     const q = this._question
     if (q === null) return
@@ -1414,7 +1413,7 @@ export class Store {
   /** The reasoning-effort display name shown in the composer label ('' when
    *  the current model has no effort chosen or supports none). The full
    *  `modelLabel` already embeds it as ` · <name>`; the composer renders the
-   *  effort part separately (warning color, like opencode's variant chip). */
+   *  effort part separately (warning color, as a variant chip). */
   get modelEffortName(): string { return this._modelEffortName }
   setModelLabel(label: string, effortName = ''): void { this._modelLabel = label; this._modelEffortName = effortName; this.notify() }
   get session(): Session | undefined { return this._session }
@@ -1997,7 +1996,7 @@ export class Store {
     g.__dshFrameController.contentLeft = gr?.left ?? 4
     g.__dshFrameController.contentRight = gr?.right ?? (this.width - 1)
     // Anchor + focus (the drag endpoints, 1-based SGR) let the frame controller
-    // reproduce a LINE/FLOW copy (opencode-style): walking from the anchor cell to
+    // reproduce a LINE/FLOW copy, walking from the anchor cell to
     // the focus cell following the text flow, so e.g. dragging from the start of a
     // line into the middle of the next copies the whole first line + that prefix.
     g.__dshFrameController.anchor = { row: s.aRow, col: s.aCol }
@@ -2045,13 +2044,13 @@ export class Store {
   scrollPage(dir: -1 | 1): void {
     // A mouse-selection highlight is baked into the SCREEN cells; once the
     // content scrolls those coordinates no longer point at the selected text, so
-    // clear it (opencode's visible-region selection also clears on scroll).
+    // clear it (visible-region selections also clear on scroll).
     this.clearSelection()
     const page = Math.max(1, this._layoutViewport)
     // While following the tail, _scroll is never kept in sync (the effective
     // scroll IS maxScroll), so a first PgUp would page from stale 0 and clamp
-    // to the TOP of the transcript. Sync to the tail first: opencode's sticky
-    // scroll pages up from the bottom edge, one viewport at a time.
+    // to the TOP of the transcript. Sync to the tail first: sticky scroll
+    // pages up from the bottom edge, one viewport at a time.
     if (this._followTail) this._scroll = this._maxScroll()
     this._followTail = false
     this._scroll = Math.max(0, Math.min(this._scroll + dir * page, this._maxScroll()))
@@ -2384,7 +2383,7 @@ export function apply(ctx: Context, config: Config): void {
     if (sessionRef.current === undefined || req.agent.session.id !== sessionRef.current) return next()
     let timer: ReturnType<typeof setTimeout> | undefined
     const result = await new Promise<ApprovalOutcome>((resolve) => {
-      // opencode-style "allow always": a tool the user approved with `a` this
+      // "allow always": a tool the user approved with `a` this
       // session is auto-allowed without prompting again.
       if (req.toolName !== undefined && store.isAllowAlways(req.toolName)) {
         store.append('status', `approval: ${req.toolName} auto-allowed (allow always)`, true)
@@ -2758,7 +2757,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         if (todos.length > 0) store.setSteps(todos)
         break
       }
-      // Tool calls/results shown inline like opencode (icon + name rows); the
+      // Tool calls/results shown inline as icon + name rows; the
       // result also closes the tool's wall-time bucket (FIFO per turn:step).
       case 'tool/call': {
         const data = event.data as { turn?: number; step?: number }
@@ -2878,7 +2877,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.append('status', `models: ${providerName} · ${modelName}${effortSuffix}`, true)
   }
   // Ctrl+T / Alt+T: cycle the current model's reasoning effort through its
-  // declared levels (wraps), like opencode's variant_cycle; the save path
+  // declared levels (wraps); the save path
   // above persists the new effort and updates the composer label/status.
   store.cycleEffort = () => {
     const { provider, model } = store.currentModel
@@ -3048,7 +3047,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }
   store.newSessionAction = () => {
     // The `/new` command: start a brand-new session in place, modeled on
-    // opencode's command-palette "New session" entry. The harness persists
+    // the command-palette "New session" entry. The harness persists
     // every session durably (write-behind on session/event), so the old one
     // stays reachable from /sessions / --resume after it is torn down here.
     abortResumeFold() // a chunked resume filling the old transcript is moot now
@@ -3268,9 +3267,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
  */
 /**
  * The user-questions answerer: present the model's questions in-band as ONE
- * card dock (opencode-style: one question at a time inside the card, answers
- * accumulated, whole batch submitted once every question is answered) and
- * return the human's answers. Single-select options plus a typeable "Other"
+ * card dock: one question at a time inside the card, answers accumulated,
+ * and the whole batch submits once every question is answered — then return
+ * the human's answers. Single-select options plus a typeable "Other"
  * row whose editor opens inline under the option list — no second dialog.
  * @param request - the ask_user_question request.
  * @returns the structured answers.

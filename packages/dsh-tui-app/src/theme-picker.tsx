@@ -1,13 +1,13 @@
 /**
- * The `/theme` picker dialog — an opencode `DialogThemeList`-style colorscheme
- * browser (see `opencode/…/component/dialog-theme-list.tsx`):
+ * The `/theme` picker dialog — a colorscheme browser with
+ * the following interactions:
  *
  *   - typing `/theme` (no arguments) opens a fullscreen dialog listing every
  *     scheme (built-in `dark`/`light` + user `~/.dsh/themes/*.json`), so no
  *     scheme name has to be typed;
  *   - ↑/↓ (and PgUp/PgDn/Home/End) move, typing filters the list, Enter
  *     applies + persists, Esc cancels;
- *   - like opencode, moving/filtering **previews live** (the scheme is applied
+ *   - moving/filtering **previews live** (the scheme is applied
  *     to the shared `theme` object) and cancel restores the exact palette that
  *     was active when the dialog opened.
  *

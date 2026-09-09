@@ -1,8 +1,7 @@
 /**
  * The export plugin (`tui-export`): the `/export` command — export a session
- * (current by default, or a given id) to a JSON transcript (machine-readable,
- * opencode's `export` shape) or a human-readable Markdown replay. Modeled on
- * opencode's `opencode export [sessionID] --sanitize`:
+ * (current by default, or a given id) to a JSON transcript or a human-readable
+ * Markdown replay, with an optional `--sanitize` redaction mode:
  *
  *   /export                     → open the export dialog (format / file name /
  *                                 sanitize), exporting the current session
@@ -136,7 +135,7 @@ function foldEvents(events: readonly { type: string; data?: Record<string, unkno
   return out
 }
 
-/** Redact sensitive content while keeping the structure (opencode `--sanitize`). */
+/** Redact sensitive content while keeping the structure (the `--sanitize` mode). */
 function sanitizeDoc(doc: ExportDoc): ExportDoc {
   let n = 0
   const redact = (value: string | undefined, kind: string): string | undefined =>
@@ -242,7 +241,7 @@ function doExport(ctx: Context, sessionId: string, opts: { markdown: boolean; sa
   })
 }
 
-/** The `/export` dialog: format / file name / sanitize (opencode-style form). */
+/** The `/export` dialog: a format / file-name / sanitize form. */
 function ExportDialog(): React.JSX.Element {
   const [cursorOn, setCursorOn] = React.useState(true)
   React.useEffect(() => {

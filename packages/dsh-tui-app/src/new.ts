@@ -1,6 +1,6 @@
 /**
  * The `/new` plugin (`tui-new`): start a brand-new session in place, modeled
- * on opencode's command-palette "New session" entry (`/new`).
+ * on the command-palette "New session" entry (`/new`).
  *
  * dsh-tui is single-session: one process hosts one live agent. `/new`
  * therefore switches in place — the current turn is cancelled, a fresh agent

@@ -434,7 +434,7 @@ function createResolveFarm() {
   // after serialization. Patch it to expose the grid and bake a mouse-selection
   // highlight (inverse SGR) onto the selected cells BEFORE serialization, so the
   // transcript keeps its real markdown/rail/colors and only the selected cells
-  // are inverted (opencode-style in-place highlight).
+  // are inverted (an in-place highlight).
   patchInkFrameController(nm)
 
   // Ink's Output.write decides a glyph's column count from ansi-tokenize's
@@ -856,8 +856,8 @@ globalThis.__dshTuiRepaintLastFrame = () => {
  *  (`cells: output`) and (b) bake a mouse-selection highlight onto the exact
  *  selected cells BEFORE serialization — inverse SGR (7/27), which stacks over
  *  any existing fg/bg without stripping it, so code/panel/diff backgrounds and
- *  the text colors survive and only the selected region is inverted. This is the
- *  opencode-style in-place highlight that a React-level flat-text view cannot do.
+ *  the text colors survive and only the selected region is inverted. This is an
+ *  in-place highlight that a React-level flat-text view cannot do.
  *  The app drives it via `globalThis.__dshFrameController = { selection, bg }`. */
 export function patchInkFrameController(nm) {
   const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
@@ -884,12 +884,12 @@ export function patchInkFrameController(nm) {
         // Markdown/terminal DECORATION characters (box-drawing + the user ┃ rail)
         // must not enter the copy or the highlight: a code block / table / blockquote
         // borders (│ ╭ ╮ ╰ ╯ ─ …) and the user rail ┃ are chrome, not the text the
-        // user wants (opencode excludes these via selectable metadata; we use a
+        // user wants (some clients exclude these via selectable metadata; we use a
         // box-drawing-range heuristic). Skips them so e.g. copying a code block yields
         // the code, not its border box.
         const __deco = /^[\\u2500-\\u257F]$/;
         const __invAppend = (cell, line) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code) || __deco.test(cell.value)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; line.v += cell.value; };
-        // LINE/FLOW selection (opencode-style): walk from the anchor cell to the
+        // LINE/FLOW selection: walk from the anchor cell to the
         // focus cell following the text flow. Highlighting + copying both use the
         // SAME flow, so a drag from the start of a line into the middle of the next
         // highlights (and copies) the whole first line + that prefix — NOT a
@@ -1247,7 +1247,7 @@ function packageBinary(name) {
 }
 
 /**
- * Bundle the entry with Bun into single self-contained binaries (opencode-style).
+ * Bundle the entry with Bun into single self-contained binaries.
  *
  * Target selection:
  *   - `DSH_TUI_TARGETS=linux-x64,darwin-arm64` -> build exactly those;
@@ -1256,7 +1256,7 @@ function packageBinary(name) {
  * Cross-target binaries land in per-target dirs `dist/<name>/dsh-tui[.exe]` (so
  * both Windows arches can keep the generic `dsh-tui.exe` name). Packaging:
  * `--package` archives them into `dist/dsh-tui-<name>.tar.gz/.zip`, mirroring
- * opencode's release gating. `--single` skips packaging.
+ * the project's release gating. `--single` skips packaging.
  */
 function bundle() {
   const args = process.argv.slice(2)

@@ -94,7 +94,7 @@ function modelListGeomCount(): number {
 }
 
 /**
- * The `/models` dialog (opencode-style fullscreen modal): provider/model
+ * The `/models` dialog (a fullscreen modal): provider/model
  * picker, key status, "Add provider" flows. Reads all state from the store.
  */
 function ModelsDialog(): React.JSX.Element {

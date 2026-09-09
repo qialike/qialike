@@ -64,13 +64,13 @@ function mutedReadable(): string {
   return isLightTheme() ? theme.textMuted : '#b8b8c0'
 }
 
-// opencode-style message area (mirrors ~/opencode routes/session/index.tsx):
+// Message-area layout:
 // a USER message is a left colored rail (┃ + space) with the text in a column
 // next to it (hanging indent), and an ASSISTANT message is indented by a few
 // columns before its markdown. Both reduce the text column width by the same
 // amount, so estItemLines/layout stay in sync.
 //
-// Spacing is LAYOUT MARGINS on the message blocks (opencode's model), never
+// Spacing is LAYOUT MARGINS on the message blocks, never
 // painted blank rows: a blank row rendered as text can measure 0 rows in a
 // scroll re-layout and merge into the next line (the glyph overwrites the next
 // line's first cell — the observed PgUp gap collapse), while a margin is pure
@@ -79,7 +79,7 @@ function mutedReadable(): string {
 //                          row, where a between-message pad also applies) and
 //                          1 blank below (bottom rail pad);
 //   every other row      : 1 blank above (between-message pad), none below.
-// Message-body alignment (opencode-style, mirrored from the /sessions screenshot):
+// Message-body alignment (mirrored from the /sessions screenshot):
 // the content text starts 4 char-widths from the terminal line start (column 5)
 // and leaves 4 char-widths blank at the right, so user and assistant bodies land
 // on the SAME left column and never hug the right edge. The message column's
@@ -95,9 +95,9 @@ const MESSAGE_TEXT_WIDTH = (usable: number): number =>
 // rendering; once the flat rows carry the same rail/indent as the normal view
 // the selectable span is offset by the inset, so column→char maps with this.
 const FLAT_COL_OFFSET = 2 + MESSAGE_LEFT_COLS
-// Between-message pad rows (opencode marginTop={1} between messages).
+// Between-message pad rows (marginTop={1} between messages).
 const MESSAGE_PAD_ROWS = 1
-// Rail pads above/below a user message's text (opencode keeps user messages
+// Rail pads above/below a user message's text (keeping user messages
 // visually separated); these plus MESSAGE_PAD_ROWS give the user block its
 // 2 blank rows above and below (matches the legacy blank-row layout).
 const USER_PAD_ROWS = 1
@@ -222,7 +222,7 @@ const TOOL_ROW_TITLES: Readonly<Record<string, string>> = {
 }
 
 /** Per-tool leading GLYPH (terminal stand-in for harness-web vector icons;
- *  opencode-TUI family). The glyph is fixed per tool — while the tool is in
+ *  terminal-TUI family). The glyph is fixed per tool — while the tool is in
  *  flight the render swaps it for a live spinner frame (see ToolLiveHeader);
  *  after settling it returns and ok/error read via the header color/✗. */
 const TOOL_ROW_ICONS: Readonly<Record<string, string>> = {
@@ -295,7 +295,7 @@ interface ToolLive {
 }
 
 /** One-line tool summary row text: a per-tool GLYPH icon (terminal stand-in
- *  for the harness web vector icons — opencode-TUI family: `$` bash, `←`
+ *  for the harness web vector icons — terminal-TUI family: `$` bash, `←`
  *  read/edit, `⚙` write, `✱` search, `%` web fetch, `◈` web search, `☑`
  *  todo, `◇` unknown) + canonical TITLE (harness-web `tool.title.*`, e.g.
  *  "Bash") with the argument detail appended when the args parse and name a
@@ -465,7 +465,7 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
   // keeps the original text; only the display is sanitized.
   const text = stripTerminalControls(item.text)
   if (item.kind === 'assistant') {
-    // opencode-style assistant: indent the markdown to the shared content column.
+    // Assistant: indent the markdown to the shared content column.
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={text} /></Box>
   }
   if (item.kind === 'plan') {
@@ -538,11 +538,11 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
     )
   }
   if (item.kind === 'user') {
-    // opencode-style user block: a primary left border (┃) with the text on a
+    // User block: a primary left border (┃) with the text on a
     // panel background. Ink's Box has no background, so each wrapped line is its
-    // own pair of <Text> spans; the ┃ rail runs down every line (opencode's
-    // border=["left"]) and the text is padded to the content width so the panel
-    // block spans from the content column to the right margin.
+    // own pair of <Text> spans — a ┃ rail span plus the text span — padded to
+    // the content width so the panel block spans from the content column to the
+    // right margin.
     // The blank rows above/below the block are LAYOUT MARGINS on the row's
     // wrapper (see buildRows), not painted rows: painted blanks collapse in
     // scroll re-layouts (the PgUp gap bug); margins always survive.
@@ -766,7 +766,7 @@ function buildRows(items: readonly TranscriptItem[], steps: readonly StepItem[])
     if (steps.length > 0 && !inserted && it.kind === 'user') { base.push({ type: 'steps' }); inserted = true }
   }
   if (steps.length > 0 && !inserted) base.push({ type: 'steps' })
-  // Spacing is LAYOUT MARGINS on the rows (opencode's margin model), never
+  // Spacing is LAYOUT MARGINS on the rows, never
   // blank text rows: a painted blank collapses to 0 rows in a scroll
   // re-layout and merges into the next line, deleting the gap. Margins are
   // pure layout, so they survive every paint path. Each row's wrapper carries
@@ -1232,7 +1232,7 @@ export function writeClipboard(text: string): void {
     return
   }
   // Linux: no single clipboard tool is guaranteed (X11 vs Wayland). Try the
-  // Wayland tool and the two X11 tools in order — opencode does the same
+  // Wayland tool and the two X11 tools in order
   // (wl-copy / xclip / xsel) — so whichever is installed and matches the session
   // sets the system clipboard. xclip/xsel default to the PRIMARY selection, so
   // the -selection clipboard / --clipboard flag is required for Ctrl+V paste.
@@ -1300,7 +1300,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   const input = store.input
   const char = k.char ?? ''
   if (char === '\n' || k.altEnter) { resetHistoryBrowse(); store.insertAtCursor('\n'); return }
-  // Bracketed paste: if it is a local image path, attach it (opencode-style);
+  // Bracketed paste: if it is a local image path, attach it;
   // otherwise insert the pasted text at the cursor.
   if (k.paste !== undefined) {
     resetHistoryBrowse()
@@ -1313,7 +1313,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     return
   }
   // Ctrl+T (Alt+T fallback) cycles the current model's reasoning effort,
-  // opencode-style (`variant_cycle`); no-op status for models without one.
+  // (wrapping at the ends); a no-op for models without one.
   if ((k.ctrl && char === 't') || (k.meta && char === 't')) {
     resetHistoryBrowse()
     store.cycleEffort()
@@ -1488,9 +1488,9 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   if (k.mouseMove) {
     // HOVER: with ?1003 any-motion the terminal reports motion without a button.
     // While the '/' palette is open, highlight the command under the cursor
-    // (opencode-style). Elsewhere the hover feeds the tool-row affordance: a
-    // settled tool row (expandable) highlights under the cursor like opencode's
-    // clickable headers.
+    // Elsewhere the hover feeds the tool-row affordance: a
+    // settled tool row (expandable) highlights under the cursor on hover, like
+    // a clickable header.
     if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mouseMove.row, tui); if (idx >= 0) store.setCommandIndex(idx); return }
     const hit = store.resolveRow(k.mouseMove.row)
     // Same rule as Think rows: any settled tool row (or any reasoning row) is
@@ -1515,7 +1515,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     if (kind === 'click') {
       // Click on a SETTLED tool row toggles it exactly like a Think row (no
       // "must have a body" gate); a click on a Think header toggles that
-      // reasoning row (web/opencode parity). Only a click that ANCHORED on the
+      // reasoning row (cross-surface parity). Only a click that ANCHORED on the
       // MESSAGE column may toggle transcript rows — a click that started on the
       // sidebar / composer / status only clears its selection and, on the
       // composer, places the caret. Everything else falls through to the
@@ -1633,7 +1633,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // empty until the session has any activity.
   const statsParts = formatSessionStatsParts(store.stats)
   // The composer shows the model with its reasoning effort as a separate
-  // warning-colored chip (like opencode's variant); the full label embeds the
+  // warning-colored chip (an effort chip); the full label embeds the
   // effort as ` · <name>`, so the base part strips that suffix.
   const effortName = store.modelEffortName
   const modelBaseLabel = effortName === '' || !modelLabel.endsWith(` · ${effortName}`)

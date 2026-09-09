@@ -4,8 +4,8 @@
  * (there is no file-drag event a terminal app can receive). This plugin detects
  * that the pasted text is a local image path, reads the file, saves it through
  * the harness attachment store, and presents it as a `[Image: name]` chip on the
- * composer (see the conversation panel / submit). Mirrors opencode's
- * `pastedFilepath` + `readLocalAttachment` + `pasteAttachment` flow.
+ * composer (see the conversation panel / submit). A pasted local
+ * image path is detected, read, and saved through the attachment store.
  *
  * The conversation panel calls `tui.imageAttach.imagePathFor` on a paste; if it
  * returns a path, `attachLocalImage` reads + saves the image and sets the chip.

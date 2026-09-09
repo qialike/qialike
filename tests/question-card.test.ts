@@ -1,5 +1,5 @@
 /**
- * Card-logic tests for the multi-question ask dock (opencode question-dock
+ * Card-logic tests for the multi-question ask dock (question-dock
  * semantics): one PendingQuestion holds the whole batch; answering commits a
  * question and advances, answers persist across back-navigation, the "Other"
  * row opens an INLINE editor (no second dialog), and the batch submits once
@@ -145,7 +145,7 @@ describe('multi-question ask card', () => {
   })
 })
 
-describe('question tab bar (opencode dock)', () => {
+describe('question tab bar (dock)', () => {
   test('questionJump opens any question directly without committing', () => {
     const store = new Store()
     const questions: AskUserQuestionItem[] = [

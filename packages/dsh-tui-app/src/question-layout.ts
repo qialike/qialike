@@ -157,7 +157,7 @@ export function customInputRows(text: string, usable: number): number {
  *  the panel paints. The dock is a per-question card of a possibly
  *  multi-question ask:
  *  with more than one question a TAB BAR row (one segment per question, click
- *  to jump — opencode dock style) sits right under the title; then the pinned
+ *  to jump) sits right under the title; then the pinned
  *  question + the bounded option body; when the "Other" row is being answered
  *  the ≤5-row inline editor sits directly UNDER that body (same dock — no
  *  second dialog). Structure (each margin is 1 row, mirroring how Ink lays the
@@ -192,7 +192,7 @@ export function questionDockRows(
   let rows = chrome + (showTabs ? 1 : 0) + qBlock + 1 + shown
   if (customMode) {
     // The Other editor is ONE extra block (label + caret window) under the
-    // body — the options stay visible above it (opencode dock semantics).
+    // body — the options stay visible above it (dock semantics).
     rows += 1 + customInputRows(customText, dockInner)
   }
   return rows

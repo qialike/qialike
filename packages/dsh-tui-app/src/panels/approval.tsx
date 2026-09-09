@@ -36,7 +36,7 @@ let store!: Store
 /** The `tui` service must be available to register the panel. */
 export const inject = ['tui']
 
-/** The three approval actions, selectable with ←/→ (opencode-style dock). */
+/** The three approval actions, selectable with ←/→ (dock choices). */
 const APPROVAL_CHOICES = ['Deny', 'Allow always', 'Allow once'] as const
 
 /** Latest measured SCREEN ROW SPAN of the whole approval dock (its root Box;

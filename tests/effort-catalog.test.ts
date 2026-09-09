@@ -37,7 +37,7 @@ const synthetic: EffortCatalogFile = {
 }
 
 describe('EFFORT_VOCABULARY', () => {
-  test('covers the opencode canonical set', () => {
+  test('covers the canonical effort set', () => {
     expect(EFFORT_VOCABULARY).toEqual(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'])
   })
 })

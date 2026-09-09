@@ -1,6 +1,6 @@
 /**
  * Effort catalog: a bundled, offline snapshot of "which reasoning-effort
- * values each model exposes", modeled on ~/opencode's models.dev catalog
+ * values each model exposes", modeled on the models.dev catalog
  * (`reasoning_options.type === 'effort'`, `values`, where `null` means "no
  * thinking" and becomes the `none` level) plus the canonical effort
  * vocabulary it validates against.
@@ -11,7 +11,7 @@
  * `effortWire: 'reasoning-effort'` before catalog values can ride on its
  * requests — the wire is a single OpenAI-compatible `reasoning_effort`, so a
  * catalog value is only meaningful when the endpoint genuinely accepts that
- * field (opencode instead translates per provider-SDK family; dsh-tui has one
+ * field (some clients instead translate per provider-SDK family; dsh-tui has one
  * wire, so the gate is the route declaration, not an npm table).
  *
  * @module @yourname/dsh-tui-app/effort-catalog
@@ -20,8 +20,8 @@
 import type { ReasoningEffortOption, TuiProviderProfile } from './llm.ts'
 import effortCatalogData from './effort-catalog.json' with { type: 'json' }
 
-/** Canonical effort ids the catalog may contribute (mirrors opencode's
- *  `ReasoningEfforts` schema). Values outside this vocabulary are dropped —
+/** Canonical effort ids the catalog may contribute (the `ReasoningEfforts`
+ *  schema). Values outside this vocabulary are dropped —
  *  adapter-owned extras (e.g. DeepSeek's `off`) still work when a model
  *  declares them statically. */
 export const EFFORT_VOCABULARY: readonly string[] = [
@@ -52,8 +52,8 @@ const EFFORT_DESCRIPTIONS: Readonly<Record<string, string>> = {
   max: 'Reserve for the hardest quality-first tasks.',
 }
 
-/** Build one catalog-derived level option (`none` = no thinking, like
- *  opencode's `null → none` no-thinking variant). */
+/** Build one catalog-derived level option (`none` = no thinking — the
+ *  `null → none` variant). */
 function catalogOption(id: string): ReasoningEffortOption {
   return {
     id,

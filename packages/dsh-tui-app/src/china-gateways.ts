@@ -15,7 +15,7 @@
  *     enabled: false   # unloads Qiniu / SiliconFlow from the catalog
  *   ```
  *
- * Model lists mirror the models.dev catalog (the same source opencode uses).
+ * Model lists mirror the models.dev catalog.
  *
  * @module @yourname/dsh-tui-app/china-gateways
  */

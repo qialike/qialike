@@ -1,7 +1,7 @@
 /**
  * The question panel plugin (`tui-panel-question`): the in-band
  * `ask_user_question` CARD dialog. One ask request may carry several
- * questions; the card shows them ONE at a time (opencode question-dock
+ * questions; the card shows them ONE at a time (question-dock
  * semantics), keeps each committed answer, lets the user move back/forth
  * (←/→ or Tab), and submits the whole batch once every question is answered.
  * Each question offers single-select options plus a typeable "Other" row
@@ -83,7 +83,7 @@ let questionBodyGeo: { top: number; owners: number[] } | null = null
 /** Latest measured geometry of the multi-question TAB BAR row (its screen row,
  *  its first visible question index, plus one horizontal column span per
  *  VISIBLE segment), so a click on a tab jumps straight to that question
- *  (opencode dock semantics). */
+ *  (dock semantics). */
 let questionTabsGeo: { top: number; left: number; from: number; segs: { from: number; to: number }[] } | null = null
 
 /** Latest measured SCREEN ROW SPAN of the whole question dock (its root Box;
@@ -611,7 +611,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
       {customMode && (
         <>
           {/* The inline Other editor lives UNDER the option body, in the SAME
-              dock — no second dialog (opencode dock semantics). ≤5 visible
+              dock — no second dialog. ≤5 visible
               rows, caret-following window (see inputWindow). The caret cell is
               the character under it shown inverse (same width, no reflow); an
               end-of-input caret appends an inverted NBSP block. A live mouse

@@ -1,12 +1,12 @@
 /**
  * The sessions panel plugin (`tui-sessions`): the `/sessions` command and its
- * full-screen dialog — a session manager modeled on opencode's command-palette
+ * full-screen dialog — a session manager modeled on the command-palette
  * sessions group: list persisted sessions, live type-to-filter, resume on
  * Enter. The dialog lists historical session records only; starting a brand-new
  * session is `/new`'s job (`tui-new`). Registers the `sessions` (fullscreen)
  * panel against the `tui` service.
  *
- * Content search (opencode's message-content search) is NOT available in the
+ * Content search (message-content search) is NOT available in the
  * single-file process: the harness `sessions` service exposed here is the
  * internal agent registry (no `search`/list snapshot — those live in the
  * remote client layer used by the web app). The dialog therefore filters the
@@ -55,7 +55,7 @@ function dayLabel(createdAt: number | undefined): string {
   return date.toDateString()
 }
 
-/** The /sessions dialog (opencode-style fullscreen modal). */
+/** The /sessions dialog (fullscreen modal). */
 function SessionsDialog(): React.JSX.Element {
   const [cursorOn, setCursorOn] = React.useState(true)
   React.useEffect(() => {
