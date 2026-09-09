@@ -29,15 +29,15 @@ The rows below list the verified licenses.
 
 | Colorscheme | Upstream | License | Source |
 |---|---|---|---|
-| catppuccin | [Catppuccin](https://github.com/catppuccin/catppuccin) | MIT | opencode assets/`catppuccin.json` |
-| dracula | [Dracula Theme](https://github.com/dracula/dracula-theme) | MIT | opencode assets/`dracula.json` |
-| gruvbox | [morhetz/gruvbox](https://github.com/morhetz/gruvbox) | MIT | opencode assets/`gruvbox.json` |
+| catppuccin | [Catppuccin](https://github.com/catppuccin/catppuccin) | MIT | catppuccin/catppuccin |
+| dracula | [Dracula Theme](https://github.com/dracula/dracula-theme) | MIT | dracula/dracula-theme |
+| gruvbox | [morhetz/gruvbox](https://github.com/morhetz/gruvbox) | MIT | morhetz/gruvbox |
 | monokai | Wimer Hazenberg (Monokai) | values bundled via opencode's MIT repo; upstream terms vary by port | opencode assets/`monokai.json` |
-| nord | [arcticicestudio/nord](https://github.com/arcticicestudio/nord) | MIT | opencode assets/`nord.json` |
-| solarized | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | opencode assets/`solarized.json` |
-| everforest | [sainnhe/everforest](https://github.com/sainnhe/everforest) | MIT | opencode assets/`everforest.json` |
-| kanagawa | [rebelot/kanagawa.nvim](https://github.com/rebelot/kanagawa.nvim) | MIT | opencode assets/`kanagawa.json` |
-| rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | opencode assets/`rosepine.json` |
+| nord | [arcticicestudio/nord](https://github.com/arcticicestudio/nord) | MIT | arcticicestudio/nord |
+| solarized | [Ethan Schoonover / Solarized](https://github.com/altercation/solarized) | MIT | altercation/solarized |
+| everforest | [sainnhe/everforest](https://github.com/sainnhe/everforest) | MIT | sainnhe/everforest |
+| kanagawa | [rebelot/kanagawa.nvim](https://github.com/rebelot/kanagawa.nvim) | MIT | rebelot/kanagawa.nvim |
+| rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
 
 ## Permissive third-party licenses

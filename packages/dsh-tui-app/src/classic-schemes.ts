@@ -36,28 +36,28 @@ import type { ThemePalette } from './theme.ts'
 /** The merged classic set (alphabetical; built-in `dark`/`light` and these
  *  schemes win over user `~/.dsh/themes` files of the same name). */
 export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
-  /** Source: opencode assets/catppuccin.json (dark side). */
+  /** Source: catppuccin/catppuccin (dark side). */
   catppuccin: {
     bg: '#1e1e2e', panel: '#181825', element: '#11111b', borderSubtle: '#585b70',
     border: '#313244', borderActive: '#45475a', text: '#cdd6f4', textMuted: '#9399b2',
     primary: '#89b4fa', secondary: '#cba6f7', accent: '#f5c2e7', success: '#a6e3a1',
     warning: '#f9e2af', info: '#94e2d5', error: '#f38ba8', yellow: '#f9e2af',
   },
-  /** Source: opencode assets/dracula.json (dark side). */
+  /** Source: dracula/dracula-theme (dark side). */
   dracula: {
     bg: '#282a36', panel: '#21222c', element: '#44475a', borderSubtle: '#191a21',
     border: '#44475a', borderActive: '#bd93f9', text: '#f8f8f2', textMuted: '#6272a4',
     primary: '#bd93f9', secondary: '#ff79c6', accent: '#8be9fd', success: '#50fa7b',
     warning: '#f1fa8c', info: '#ffb86c', error: '#ff5555', yellow: '#f1fa8c',
   },
-  /** Source: opencode assets/everforest.json (dark side). */
+  /** Source: sainnhe/everforest (dark side). */
   everforest: {
     bg: '#2d353b', panel: '#333c43', element: '#343f44', borderSubtle: '#7a8478',
     border: '#859289', borderActive: '#9da9a0', text: '#d3c6aa', textMuted: '#7a8478',
     primary: '#a7c080', secondary: '#7fbbb3', accent: '#d699b6', success: '#a7c080',
     warning: '#e69875', info: '#83c092', error: '#e67e80', yellow: '#dbbc7f',
   },
-  /** Source: opencode assets/gruvbox.json (dark side). */
+  /** Source: morhetz/gruvbox (dark side). */
   gruvbox: {
     bg: '#282828', panel: '#3c3836', element: '#504945', borderSubtle: '#504945',
     border: '#665c54', borderActive: '#ebdbb2', text: '#ebdbb2', textMuted: '#928374',
@@ -71,7 +71,7 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     primary: '#fad07a', secondary: '#c6b6ee', accent: '#ffb964', success: '#99ad6a',
     warning: '#cf6a4c', info: '#8fbfdc', error: '#de5577', yellow: '#dad085',
   },
-  /** Source: opencode assets/kanagawa.json (dark side). */
+  /** Source: rebelot/kanagawa.nvim (dark side). */
   kanagawa: {
     bg: '#1f1f28', panel: '#2a2a37', element: '#363646', borderSubtle: '#363646',
     border: '#54546d', borderActive: '#c38d9d', text: '#dcd7ba', textMuted: '#727169',
@@ -85,21 +85,21 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     primary: '#66d9ef', secondary: '#ae81ff', accent: '#a6e22e', success: '#a6e22e',
     warning: '#e6db74', info: '#fd971f', error: '#f92672', yellow: '#e6db74',
   },
-  /** Source: opencode assets/nord.json (dark side). */
+  /** Source: arcticicestudio/nord (dark side). */
   nord: {
     bg: '#2e3440', panel: '#3b4252', element: '#434c5e', borderSubtle: '#434c5e',
     border: '#434c5e', borderActive: '#4c566a', text: '#eceff4', textMuted: '#8b95a7',
     primary: '#88c0d0', secondary: '#81a1c1', accent: '#8fbcbb', success: '#a3be8c',
     warning: '#d08770', info: '#88c0d0', error: '#bf616a', yellow: '#d08770',
   },
-  /** Source: opencode assets/rosepine.json (dark side). */
+  /** Source: rose-pine/rose-pine-theme (dark side). */
   rosepine: {
     bg: '#191724', panel: '#1f1d2e', element: '#26233a', borderSubtle: '#21202e',
     border: '#403d52', borderActive: '#9ccfd8', text: '#e0def4', textMuted: '#6e6a86',
     primary: '#9ccfd8', secondary: '#c4a7e7', accent: '#ebbcba', success: '#31748f',
     warning: '#f6c177', info: '#9ccfd8', error: '#eb6f92', yellow: '#f6c177',
   },
-  /** Source: opencode assets/solarized.json (dark side). */
+  /** Source: altercation/solarized (dark side). */
   solarized: {
     bg: '#002b36', panel: '#073642', element: '#073642', borderSubtle: '#073642',
     border: '#073642', borderActive: '#586e75', text: '#839496', textMuted: '#586e75',
