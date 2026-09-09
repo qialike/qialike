@@ -76,15 +76,16 @@ describe('plugin apply wiring', () => {
 })
 
 describe('light scheme quality', () => {
-  // The light skin mirrors opencode's official light definition (its default
-  // theme file ships lightStep1..12 / lightSecondary / lightAccent / lightRed
-  // …), with semantic text colors deepened one step for WCAG AA on white.
-  test('light palette equals the official opencode light mapping', () => {
+  // The light skin is Atom One Light (atom/one-light-syntax + one-light-ui,
+  // GitHub Inc., MIT; structure steps cross-checked against
+  // navarasu/onedark.nvim), with semantic text colors that fall short of AA
+  // deepened one step within their official hue family.
+  test('light palette equals the official Atom One Light mapping', () => {
     expect(BUILTIN_SCHEMES.light).toEqual({
-      bg: '#ffffff', panel: '#fafafa', element: '#f5f5f5', borderSubtle: '#d4d4d4',
-      border: '#b8b8b8', borderActive: '#a0a0a0', text: '#1a1a1a', textMuted: '#707070',
-      primary: '#3473c6', secondary: '#7b5bb6', accent: '#a96410', success: '#2f7d45',
-      warning: '#a96410', info: '#2b7884', error: '#d1383d', yellow: '#8f6c13',
+      bg: '#fafafa', panel: '#f0f0f0', element: '#e6e6e6', borderSubtle: '#dcdcdc',
+      border: '#c9c9c9', borderActive: '#a0a1a7', text: '#383a42', textMuted: '#696c77',
+      primary: '#2464f0', secondary: '#a626a4', accent: '#986801', success: '#3f7e3e',
+      warning: '#986801', info: '#0175a7', error: '#d93020', yellow: '#986801',
     })
   })
 

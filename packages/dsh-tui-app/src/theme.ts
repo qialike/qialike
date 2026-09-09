@@ -1,11 +1,22 @@
 /**
- * dsh-tui theme: approximates the opencode default dark theme (`opencode.json`)
- * so the terminal looks like opencode TUI. Ink renders hex colors via chalk
- * (truecolor), so the palette below maps 1:1 when the terminal supports 24-bit
- * color (GNOME Terminal/VTE does). The conversation frame paints `bg` as a
- * full-screen background layer (see panels/conversation.tsx), so colorscheme
- * switches are visible even when the terminal background would otherwise show
- * through the transparent surfaces.
+ * dsh-tui default theme: the classic **Atom One Dark** palette, so the
+ * terminal looks like GitHub's Atom editor dark theme. Ink renders hex colors
+ * via chalk (truecolor), so the palette below maps 1:1 when the terminal
+ * supports 24-bit color (GNOME Terminal/VTE does). The conversation frame
+ * paints `bg` as a full-screen background layer (see panels/conversation.tsx),
+ * so colorscheme switches are visible even when the terminal background would
+ * otherwise show through the transparent surfaces.
+ *
+ * Sources (all MIT): the hues come from Atom's official One Dark repos —
+ * `atom/one-dark-syntax` (syntax bg `hsl(220,13%,18%)` = #282c34, the mono
+ * ramp, and the 10 syntax colors) and `atom/one-dark-ui` (its `text-color-*`
+ * UI tones); the structure steps between them (panel/element/border tones)
+ * are cross-checked against `navarasu/onedark.nvim`'s palette.lua (MIT),
+ * which reproduces the same ramp for terminal ports. Two text roles are
+ * nudged one lightness step *within their official hue family* so they hold
+ * WCAG AA (≥4.5:1) on the #282c34 background — same policy the light skin
+ * applies (see theme-plugin.ts):
+ *   textMuted #828997→#9096a2 · error #e06c75→#e27881.
  *
  * The palette is backed by a PROCESS-WIDE bucket (a `globalThis` singleton
  * behind a Proxy): the SEA build bundles each plugin entry separately, which
@@ -37,38 +48,38 @@ export interface ThemePalette {
   yellow: string
 }
 
-/** opencode default-dark palette (hex). */
+/** Atom One Dark palette (hex); two roles AA-adjusted — see the header. */
 const DEFAULTS: ThemePalette = {
-  /** Near-black page / transcript background (painted as full-screen layer). */
-  bg: '#0a0a0a',
+  /** Blue-gray page / transcript background (Atom syntax background). */
+  bg: '#282c34',
   /** Raised panel background (composer, sidebar, dialogs). */
-  panel: '#141414',
+  panel: '#31353f',
   /** Element background (nested surfaces, code inline). */
-  element: '#1e1e1e',
+  element: '#393f4a',
   /** Subtle border. */
-  borderSubtle: '#3c3c3c',
+  borderSubtle: '#3b3f4c',
   /** Border. */
-  border: '#484848',
+  border: '#5c6370',
   /** Active border. */
-  borderActive: '#606060',
+  borderActive: '#828997',
   /** Primary text. */
-  text: '#eeeeee',
-  /** Muted text (status, hints, secondary). */
-  textMuted: '#808080',
+  text: '#abb2bf',
+  /** Muted text (status, hints, secondary). AA-lightened one step (#828997). */
+  textMuted: '#9096a2',
   /** Primary accent (user role, links, function/primary). */
-  primary: '#fab283',
+  primary: '#d19a66',
   /** Secondary accent (agent roles, bold keys, file/path names). */
-  secondary: '#6ba6f7',
+  secondary: '#61afef',
   /** Accent (headings, command highlights). */
-  accent: '#b18ae8',
+  accent: '#c678dd',
   /** Success / code. */
-  success: '#7fd88f',
+  success: '#98c379',
   /** Warning / blockquote / type. */
-  warning: '#f7b45a',
+  warning: '#e2c08d',
   /** Info / operator. */
   info: '#56b6c2',
-  /** Error. */
-  error: '#e06c75',
+  /** Error. AA-lightened one step (#e06c75). */
+  error: '#e27881',
   /** Emphasis / yellow. */
   yellow: '#e5c07b',
 }

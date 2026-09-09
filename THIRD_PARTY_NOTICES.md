@@ -45,6 +45,24 @@ The rows below list the verified licenses.
 | rosepine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | rose-pine/rose-pine-theme |
 | jellybeans | [nanotech/jellybeans.vim](https://github.com/nanotech/jellybeans.vim) | MIT | vim colorscheme (semantic 17-key mapping) |
 
+## Default colorscheme (`dark` / `light`)
+
+The built-in default schemes in `packages/dsh-tui-app/src/theme.ts` (`dark`) and
+`theme-plugin.ts` (`light`) are the classic **Atom One Dark / One Light** palettes: dsh-tui
+bundles only **resolved hex values** plus its own 17-role mapping — no upstream source code is
+copied. Hues come from Atom's official repos by GitHub Inc. (both archived, which does not affect
+their MIT grant); the structure steps between them (panel/element/border tones) are cross-checked
+against `navarasu/onedark.nvim`, whose palette.lua reproduces the same ramp for terminal ports.
+Two roles per scheme are nudged one lightness step *within their official hue family* so they hold
+WCAG AA (≥4.5:1) on the scheme background (same policy for both skins, documented in the module
+headers): `dark` textMuted #828997→#9096a2 and error #e06c75→#e27881; `light` deepens primary
+#4078f2→#2464f0, success #50a14f→#3f7e3e, info #0184bc→#0175a7 and error #e45649→#d93020.
+
+| Default scheme | Upstream | License | Source |
+|---|---|---|---|
+| dark | GitHub Inc. (Atom) — [atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) + [atom/one-dark-ui](https://github.com/atom/one-dark-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with [navarasu/onedark.nvim](https://github.com/navarasu/onedark.nvim) (MIT) |
+| light | GitHub Inc. (Atom) — [atom/one-light-syntax](https://github.com/atom/one-light-syntax) + [atom/one-light-ui](https://github.com/atom/one-light-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
+
 ## Permissive third-party licenses
 
 Most of the harness and Cordis dependencies this project bundles are MIT. A small number are under
