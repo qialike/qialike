@@ -7,12 +7,14 @@ import React from 'react'
  *     and persists into the `dsh-tui-theme:` settings section;
  *   - **built-in schemes**: `dark` (the default, shipped by theme.ts) and
  *     `light` — opencode's own default theme (repo `sst/opencode`, MIT:
- *     `packages/tui/src/theme/assets/opencode.json`); the optional Atom skins
- *     `one-dark` / `one-light` (Atom's official repos, GitHub Inc. MIT); plus
- *     the classic third-party set in `classic-schemes.ts` (catppuccin,
- *     dracula, everforest, falcon, flexoki, gruvbox, jellybeans, kanagawa,
- *     monokai, nord, panda, rosepine, solarized — all MIT-licensed; see that
- *     module's header for sources and the 17-key mapping);
+ *     `packages/tui/src/theme/assets/opencode.json`); the optional skins
+ *     `one-dark` / `one-light` (Atom's official repos, GitHub Inc. MIT) and
+ *     `dsh-dark` / `dsh-light` (the DeepSeek Harness web design tokens, MIT
+ *     repo `deepseek-harness`); plus the classic third-party set in
+ *     `classic-schemes.ts` (catppuccin, dracula, everforest, falcon, flexoki,
+ *     gruvbox, jellybeans, kanagawa, monokai, nord, panda, rosepine,
+ *     solarized — all MIT-licensed; see that module's header for sources and
+ *     the 17-key mapping);
  *   - **user schemes** live in `~/.dsh/themes/<name>.json` — like vim's
  *     `colors/*.vim`. Each file is a small JSON palette:
  *
@@ -86,6 +88,19 @@ function themesDir(): string {
  * (GitHub Inc., MIT — both archived, which does not affect their MIT grant),
  * structure steps cross-checked against `navarasu/onedark.nvim`'s
  * palette.lua (MIT), which reproduces the same ramps for terminal ports.
+ *
+ * The `dsh-dark` / `dsh-light` skins mirror DeepSeek Harness's own web UI —
+ * the design tokens in `deepseek-harness`'s
+ * `packages/client/ui-theme/src/styles/design-platform.css` (MIT © 2026
+ * DeepSeek, sibling workspace of this app). `dsh-dark` resolves the alias
+ * block for `body[data-ds-dark-theme]`, `dsh-light` the light alias defaults;
+ * every hex comes from one of its static ramps: background layers
+ * `neutral-bluish 950/900/850` (dark) and `50/100` (light), borders
+ * composited from the alias white/black alpha ramps over each background,
+ * text `neutral-bluish 50` / `1000`, muted/caption `neutral-bluish 600`,
+ * brand `deepseek 400/450/500/600`, semantic `green-500`, `amber-400/600`,
+ * `blue-400/600/800`, `red-400/600`. Optional skins are not held to the AA
+ * bar the two opencode defaults are.
  */
 export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
   dark: { ...theme },
@@ -109,7 +124,22 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
     primary: '#4078f2', secondary: '#a626a4', accent: '#986801', success: '#50a14f',
     warning: '#986801', info: '#0184bc', error: '#e45649', yellow: '#986801',
   },
-  // Classic third-party skins (8 from upstream official repos, monokai via
+  // DeepSeek Harness web design tokens (`deepseek-harness`, MIT — see the
+  // docstring above): `dsh-dark` = the `body[data-ds-dark-theme]` alias block,
+  // `dsh-light` = the light alias defaults in design-platform.css.
+  'dsh-dark': {
+    bg: '#151517', panel: '#1b1b1c', element: '#2c2c2e', borderSubtle: '#313133',
+    border: '#3a3a3c', borderActive: '#444445', text: '#f9fafb', textMuted: '#81858c',
+    primary: '#679efe', secondary: '#5686fe', accent: '#b7c8fe', success: '#22c55e',
+    warning: '#f7ad31', info: '#60a5fa', error: '#f25a5a', yellow: '#f7ad31',
+  },
+  'dsh-light': {
+    bg: '#ffffff', panel: '#f9fafb', element: '#ebeef2', borderSubtle: '#e6e6e6',
+    border: '#e0e0e0', borderActive: '#d6d6d6', text: '#0f1115', textMuted: '#81858c',
+    primary: '#4176e6', secondary: '#4868b2', accent: '#1e40af', success: '#22c55e',
+    warning: '#dd8629', info: '#2563eb', error: '#ec1313', yellow: '#dd8629',
+  },
+  // Classic third-party skins (11 from upstream official repos, monokai via
   // opencode's MIT assets, jellybeans from an MIT vim colorscheme) —
   // provenance in classic-schemes.ts.
   ...CLASSIC_SCHEMES,

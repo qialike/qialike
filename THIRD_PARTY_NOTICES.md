@@ -77,6 +77,24 @@ affect their MIT grant), structure steps cross-checked against
 | one-dark | GitHub Inc. (Atom) — [atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) + [atom/one-dark-ui](https://github.com/atom/one-dark-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
 | one-light | GitHub Inc. (Atom) — [atom/one-light-syntax](https://github.com/atom/one-light-syntax) + [atom/one-light-ui](https://github.com/atom/one-light-ui) | MIT (Copyright (c) 2016 GitHub Inc.) | official repos (hex from their LESS hsl definitions); structure steps cross-checked with navarasu/onedark.nvim (MIT) |
 
+## DeepSeek Harness web skins (`dsh-dark` / `dsh-light`)
+
+The optional skins `dsh-dark`/`dsh-light` mirror the web UI of the sibling MIT project
+[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) (Copyright (c) 2026 DeepSeek):
+its design tokens in `packages/client/ui-theme/src/styles/design-platform.css`. dsh-tui bundles
+only **resolved hex values** plus its own 17-role mapping — no CSS source is copied. `dsh-dark`
+resolves the `body[data-ds-dark-theme]` alias block, `dsh-light` the light alias defaults; every
+hex comes from one of its static ramps (background layers `neutral-bluish 950/900/850` and
+`50/100`, text `neutral-bluish 50`/`1000`, muted `neutral-bluish 600`, brand `deepseek
+400/450/500/600`, semantic `green-500`/`amber-400/600`/`blue-400/600/800`/`red-400/600`);
+border hexes are the alias white/black alpha ramps composited over each scheme background.
+Optional skins are not held to the AA bar the two defaults are.
+
+| Default scheme | Upstream | License | Source |
+|---|---|---|---|
+| dsh-dark | [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) web design tokens | MIT (Copyright (c) 2026 DeepSeek) | `packages/client/ui-theme/src/styles/design-platform.css` (`body[data-ds-dark-theme]` alias block) |
+| dsh-light | [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness) web design tokens | MIT (Copyright (c) 2026 DeepSeek) | `design-platform.css` (light alias defaults) |
+
 ## Permissive third-party licenses
 
 Most of the harness and Cordis dependencies this project bundles are MIT. A small number are under
