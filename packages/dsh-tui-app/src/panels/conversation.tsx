@@ -1898,6 +1898,10 @@ function conversationKey(k: RawKey, tui: TuiService): void {
       if (chosen !== undefined) { resetHistoryBrowse(); store.setInput(`/${chosen.name} `); return }
     }
     const next = store.cyclePermission()
+    // Host mode: the child process owns the session, so it is the one that must
+    // both enforce the new mode (bash fence + fs row) and record the durable
+    // `sandbox/mode` event. `cyclePermission` notifies through the shared store
+    // (importing a mirror hook from index.tsx would hit a second module copy).
     const session = store.session
     if (session !== undefined) {
       // The sandbox mode and the approval policy are INDEPENDENT (review F2:

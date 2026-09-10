@@ -20,16 +20,20 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { planResumeFold } from './resume-fold.ts'
+import { readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session, SessionId } from '@deepseek-ai/dsh-session'
 import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
+import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { logErrorFileOnly } from './log.ts'
 
 /** Messages the client sends. */
 interface HostRequest {
   id?: number
-  type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown'
+  type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy'
   /** `prompt`: the user message's content blocks, sent as plain JSON. */
   blocks?: unknown[]
   /** `attach`: explicit session id (absent = newest with content in the cwd). */
@@ -37,7 +41,16 @@ interface HostRequest {
   /** `page`: inclusive-exclusive event range. */
   from?: number
   to?: number
+  /** `answer`: which ask this settles (the id from the host's `ask`). */
+  requestId?: number
+  /** `answer`: the kind-specific answer payload. */
+  payload?: Record<string, unknown>
+  /** `policy`: the sandbox mode the client's status bar shows. */
+  permission?: string
 }
+
+/** The two host-side waterfalls that need the CLIENT's Ink dialogs. */
+type AskKind = 'approval' | 'question'
 
 /** Minimal shape of the services the host needs from the harness. */
 interface AgentsLike {
@@ -67,6 +80,16 @@ interface PersistenceLike {
 /** One line writer: the protocol owns stdout, so nothing else may print there. */
 function send(message: Record<string, unknown>): void {
   process.stdout.write(`${JSON.stringify(message)}\n`)
+}
+
+/** Clamp a sandbox-mode string from the wire. An unrecognized mode fails CLOSED
+ *  (`read-only`): over-enforcing is recoverable, a silently weaker fence is not
+ *  — and a mismatch with the chip the client draws is a protocol bug either way,
+ *  so it is logged loudly. */
+function normalizePermission(value: string | undefined): SandboxMode {
+  if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value
+  logErrorFileOnly('host', `unknown sandbox mode from client: ${String(value)}`)
+  return 'read-only'
 }
 
 /**
@@ -106,6 +129,90 @@ export async function startHost(
   /** The client's page cache is the handle's snapshot; fetched per `page`. */
   const snapshot = (): readonly SessionEventLike[] => handle?.agent.session.snapshotEvents() ?? []
 
+  // ── The three waterfalls (P4c M3) ────────────────────────────────────────
+  // The harness calls these on the thread that owns the session — this one. The
+  // DIALOGS live in the client, so an approval or a user question blocks this
+  // turn while the answer travels back over stdio. The third waterfall
+  // (`tools/pre-execute`) is pure policy and is NOT bridged: the client mirrors
+  // its sandbox mode down (`policy`) and this process applies the very same
+  // rule from `bash-policy.ts`, so a tool execution never waits on the client's
+  // render loop.
+  let permission: SandboxMode = 'workspace-write'
+  let permissionFromClient = false
+  let askSerial = 0
+  /** Pending asks keyed by the id sent to the client; the value settles it. */
+  const pendingAsks = new Map<number, (answer: Record<string, unknown> | undefined) => void>()
+
+  /**
+   * Ask the client and wait for its answer. The ask is withdrawn — and the
+   * waiter settled — when the harness aborts the request (its own timeout) or
+   * after a last-resort timeout, so the turn can never hang on a dead client.
+   * @param kind - which waterfall is asking.
+   * @param payload - JSON-only payload the client's dialog renders.
+   * @param signal - the harness's abort signal for this request, when it has one.
+   * @returns the client's answer payload, or `undefined` when it was withdrawn.
+   */
+  const ask = (kind: AskKind, payload: Record<string, unknown>, signal?: AbortSignal): Promise<Record<string, unknown> | undefined> => {
+    const requestId = ++askSerial
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const finish = (answer: Record<string, unknown> | undefined): void => {
+        if (!pendingAsks.delete(requestId)) return
+        if (timer !== undefined) clearTimeout(timer)
+        signal?.removeEventListener('abort', withdraw)
+        resolve(answer)
+      }
+      const withdraw = (): void => {
+        send({ type: 'ask-cancelled', requestId })
+        finish(undefined)
+      }
+      if (signal?.aborted === true) {
+        send({ type: 'ask-cancelled', requestId })
+        resolve(undefined)
+        return
+      }
+      if (signal !== undefined) {
+        timer = setTimeout(withdraw, 5 * 60_000)
+        signal.addEventListener('abort', withdraw, { once: true })
+      }
+      pendingAsks.set(requestId, finish)
+      send({ type: 'ask', requestId, kind, payload })
+    })
+  }
+
+  /** Claim this session's approvals and user questions for the client. */
+  const registerWaterfalls = (wanted: string): void => {
+    ctx.on('approval/request', async (req, next): Promise<ApprovalOutcome> => {
+      if (req.agent?.session.id !== wanted) return next()
+      const answer = await ask('approval', { toolName: req.toolName, reason: req.reason })
+      const outcome = answer?.outcome
+      return outcome === 'allowed-once' || outcome === 'rejected' ? outcome : 'cancelled'
+    })
+    ctx.on('user-questions/request', async (request, next) => {
+      if (request.agent !== undefined && request.agent.session.id !== wanted) return next()
+      const answer = await ask('question', { questions: request.questions })
+      // Parity with the in-process answerer: an unanswered (withdrawn) ask is a
+      // rejection, which the tool surfaces as a cancelled `ask_user_question`.
+      if (answer === undefined) throw new Error('ask_user_question was cancelled')
+      return { answers: (answer.answers ?? []) as Array<{ id: string; selected: string[]; custom?: string }> }
+    })
+    ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
+      return readOnlyBashDecision(exec, permission) ?? next()
+    })
+  }
+
+  /** Apply the client's mirrored sandbox mode to the session this host owns.
+   *  The write is a durable `sandbox/mode` event, so it only ever happens for a
+   *  mode the user really chose (Tab in the composer) — never for the default,
+   *  which would append an event to the log on every launch. */
+  const applyPermission = (mode: SandboxMode): void => {
+    permission = mode
+    permissionFromClient = true
+    const session = handle?.agent.session as unknown as Session | undefined
+    if (session === undefined) return
+    try { setSandboxMode(session, mode) } catch (error) { logErrorFileOnly('host', error) }
+  }
+
   const pickSessionId = async (): Promise<string | undefined> => {
     if (config.resume !== undefined) return config.resume
     try {
@@ -129,6 +236,7 @@ export async function startHost(
     // them into the same listener the in-process path uses.
     if (!forwarding) {
       forwarding = true
+      registerWaterfalls(wanted)
       // `agent/status` is a SERVICE event, not a session event: without it the
       // client never learns the turn is running (so Esc-to-cancel and the busy
       // indicator would stay dead). Forward it verbatim.
@@ -157,6 +265,9 @@ export async function startHost(
     logErrorFileOnly('host', `attach: resuming ${wanted}`)
     handle = await agents.resume({ resumeSessionId: wanted as SessionId, agentOptions, setup })
     logErrorFileOnly('host', `attach: resumed in ${Date.now() - t0}ms events=${snapshot().length}`)
+    // A mode the client already chose (Tab pressed while this session was still
+    // decoding) belongs to the session, so replay/consumers see it too.
+    if (permissionFromClient) applyPermission(permission)
     // The decode+attach happened HERE — on the host's thread, which is the
     // whole point: the client was free to keep painting while this ran.
     // The fold PLAN is computed here, where the whole log already lives: the
@@ -233,6 +344,18 @@ export async function startHost(
     send({ id: requestId, type: 'accepted' })
   }
 
+  /** The client's answer to a pending ask; a late answer for a withdrawn ask is
+   *  dropped here (the harness's own "late answer is discarded" rule). */
+  const answer = (requestId: number | undefined, payload: Record<string, unknown> | undefined): void => {
+    if (requestId === undefined) return
+    const settle = pendingAsks.get(requestId)
+    if (settle === undefined) {
+      if (process.env.DSH_TUI_HOST_TRACE === '1') logErrorFileOnly('host', `answer for unknown ask #${requestId}`)
+      return
+    }
+    settle(payload ?? {})
+  }
+
   const dispatch = (line: string): void => {
     if (process.env.DSH_TUI_HOST_TRACE === '1') logErrorFileOnly('host', `request: ${line.slice(0, 120)}`)
     let request: HostRequest
@@ -249,6 +372,8 @@ export async function startHost(
           case 'page': page(request.id, request.from ?? 0, request.to ?? Number.MAX_SAFE_INTEGER); break
           case 'prompt': prompt(request.id, request.blocks); break
           case 'cancel': cancel(request.id); break
+          case 'answer': answer(request.requestId, request.payload); break
+          case 'policy': applyPermission(normalizePermission(request.permission)); break
           case 'shutdown': await shutdown(); break
           default: send({ id: request.id, type: 'error', code: 'unknown-request', message: String(request.type) })
         }

@@ -22,6 +22,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { startHost } from './host.ts'
+import { readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import { spawnHostClient, type HostClient, type HostEvent } from './host-client.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
@@ -35,7 +36,7 @@ import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-tools'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
-import type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'
+import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type {
   AskUserQuestionAnswer,
   AskUserQuestionAnswerItem,
@@ -191,8 +192,10 @@ declare module '@deepseek-ai/dsh-session' {
   }
 }
 
-/** Session file-permission mode, cycled by Tab in the composer (matches the web surface). */
-export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+/** Session file-permission mode, cycled by Tab in the composer (matches the web surface).
+ *  The union itself lives in `bash-policy.ts`, next to the rule it selects, so
+ *  the host process can enforce the very same fence (P4c M3). */
+export type { SandboxMode }
 export const SANDBOX_CYCLE: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access']
 /** Status-bar labels for the sandbox modes. Exported so the decoupling
  *  contract is testable (fix 3, dsh-tui-security.md). */
@@ -230,9 +233,18 @@ export interface SessionSummary {
   readonly updatedAt?: number
 }
 
+/** What the approval dock needs from a request in flight: the tool and the
+ *  asker's reason. Structural rather than the harness's full `ApprovalRequest`
+ *  (which carries a live `Agent`) because in host mode (P4c M3) the ask is
+ *  raised in the host process and only these fields cross the wire. */
+export interface ApprovalPrompt {
+  readonly toolName: string
+  readonly reason?: string
+}
+
 /** An in-progress tool approval question awaiting the user's decision. */
 export interface PendingApproval {
-  readonly req: ApprovalRequest
+  readonly req: ApprovalPrompt
   readonly resolve: (outcome: ApprovalOutcome) => void
 }
 
@@ -1920,9 +1932,16 @@ export class Store {
   get permission(): SandboxMode { return this._permission }
   get permissionLabel(): string { return PERMISSION_LABEL[this._permission] }
   get permissionColor(): string { return theme[PERMISSION_ROLE[this._permission]] }
+  /** P4c M3: notified when the sandbox mode is cycled, so the process that OWNS
+   *  the session can mirror it (in host mode the child enforces the bash fence
+   *  and writes the durable `sandbox/mode` event). A callback on the shared
+   *  store — not a module export — because the panel bundles each get their own
+   *  copy of every module VALUE (only this store instance is shared). */
+  onPermissionChange: (mode: SandboxMode) => void = () => {}
   cyclePermission(): SandboxMode {
     const i = SANDBOX_CYCLE.indexOf(this._permission)
     this._permission = SANDBOX_CYCLE[(i + 1) % SANDBOX_CYCLE.length] ?? 'workspace-write'
+    this.onPermissionChange(this._permission)
     this.notify()
     return this._permission
   }
@@ -2777,20 +2796,6 @@ function providerDisplayName(provider: string, templates: readonly TuiProviderTe
 /** Heuristic: does this bash command modify the filesystem? (best-effort; the
  *  real fence for file tools is fs-sandbox, and OS-level denial needs a native
  *  sandbox that the single-file binary does not bundle.) */
-function bashMutates(command: string): boolean {
-  const c = command.trim()
-  if (c === '') return false
-  if (/(^|\s)(rm|mv|cp|mkdir|rmdir|touch|truncate|install|dd|ln)\b/.test(c)) return true
-  if (/(^|\s)(echo|printf|tee|cat|sed|awk)\b[^|;]*[>»]/.test(c)) return true
-  if (/(^|\s)sed\b[^|;]*-i\b/.test(c)) return true
-  if (/(^|\s)(chmod|chown|chattr)\b/.test(c)) return true
-  if (/(^|\s)git\b.*\b(add|commit|checkout|reset|clean|restore)\b/.test(c)) return true
-  if (/(^|\s)(python3?|python|node|deno|bun|ruby|perl)\b.*(-c|-e|-w)\b/.test(c)) return true
-  if (/(^|\s)(python3?|python|node|deno|bun|ruby|perl)\b.*[>»]/.test(c)) return true
-  if (/[^|;]*(>|»|>>)[^|;]*/.test(c)) return true
-  return false
-}
-
 /**
  * Mount one long-lived terminal session: create or resume an agent, bind the
  * event stream to the transcript, register the approval answerer, and wire the
@@ -2943,6 +2948,9 @@ export function apply(ctx: Context, config: Config): void {
 
   // Register the approval answerer: claim questions for our agent and block on
   // the in-band dialog; delegate every other agent to the rest of the chain.
+  // In host mode this handler never fires (the session lives in the child
+  // process, so the host's own handler claims the ask and forwards it here —
+  // see the `onAsk` bridge in start()).
   ctx.on('approval/request', async (req, next) => {
     if (sessionRef.current === undefined || req.agent.session.id !== sessionRef.current) return next()
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -2969,16 +2977,10 @@ export function apply(ctx: Context, config: Config): void {
   // (pure-JS) fs-sandbox row. Bash bypasses those tools, so in `read-only` we
   // deny commands that would modify the filesystem, carrying the `[sandbox: …]`
   // marker the model surfaces for a `sandbox_permissions` escalation (which
-  // routes to the approval answerer above).
+  // routes to the approval answerer above). The rule itself lives in
+  // `bash-policy.ts` because the HOST enforces it too when it owns the session.
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
-    if (store.permission !== 'read-only') return next()
-    const name = (exec as { name?: unknown }).name
-    const args = (exec as { args?: unknown }).args
-    const command = String(typeof args === 'string' ? args : typeof args === 'object' && args !== null ? (args as Record<string, unknown>).command ?? '' : '')
-    if (typeof name === 'string' && (name === 'bash' || name === 'pwsh' || name.includes('bash')) && bashMutates(command)) {
-      return { kind: 'deny', reason: '[sandbox: file access denied under read-only mode]' }
-    }
-    return next()
+    return readOnlyBashDecision(exec, store.permission) ?? next()
   })
 
   void start(ctx, config, io).catch((error: unknown) => {
@@ -3074,8 +3076,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   const resumeId = config.resume
   /** P4c client mode (`DSH_TUI_HOST=1`): the harness lives in a child process,
    *  so the frames below keep flowing while the giant session decodes over
-   *  there. M1 slice = read-only attach + tail page; prompting/approval/
-   *  cancellation arrive in later milestones (see dsh-tui-p4c-spike.md). */
+   *  there. M1 slice = read-only attach + tail page; M2 = chunked paging; M3 =
+   *  the approval/question waterfalls answered from this process's dialogs plus
+   *  the mirrored sandbox mode (see dsh-tui-p4c-spike.md). */
   let hostClient: HostClient | undefined
   const hostMode = process.env.DSH_TUI_HOST === '1'
   /** Build the client-side stand-ins for a host-owned agent: the transcript
@@ -3119,6 +3122,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       ...resumeId === undefined ? {} : { resume: resumeId },
     })
     hostClient = client
+    // The host enforces the sandbox mode (bash fence + the durable
+    // `sandbox/mode` event) because it owns the session: mirror every Tab press
+    // there, through the shared store (the panels' bundles cannot see a module
+    // export from this file). Sent on demand only — a mode the user never chose
+    // must not append an event to the log.
+    store.onPermissionChange = (mode) => { client.setPolicy(mode) }
     const info = await client.ready
     logErrorFileOnly('host', `client: host ready pid=${String(info.pid)} model=${String(info.model)}`)
     // No session yet: empty shim ⇒ the app mounts on the hero screen.
@@ -3215,7 +3224,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // one exists — e.g. the web-created "deepseek" workspace) so it groups
       // under the SAME workspace instead of Ungrouped. Best-effort: a path or
       // registry mismatch must never break the TUI boot.
-      if (handle !== undefined) {
+      if (handle !== undefined && !hostMode) {
+        // Host mode: this handle is the placeholder shim (`host-pending`), not a
+        // real session — the attached session is grouped once the host answers
+        // the attach request (see the host attach block below).
         void attachSessionToWorkspace(ctx, config.workspace, handle.agent.session.id)
       }
       break
@@ -3275,6 +3287,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         agent = shim.agent as typeof agent
         sessionId = SessionId(attached.sessionId)
         sessionRef.current = sessionId
+        // Group the host-owned session under this workspace for the web listing
+        // (the boot-time attach above is skipped in host mode: no real session).
+        void attachSessionToWorkspace(ctx, config.workspace, attached.sessionId)
         store.setSession(agent.session)
         touchSession(sessionId)
         resetSessionStats()
@@ -3660,6 +3675,55 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     hostClient.onStatus((status) => {
       if (status === 'running') store.lastEscTime = 0
       store.setRunning(status === 'running')
+    })
+    // ── M3: the host's waterfalls, answered by THIS process's dialogs ───────
+    // The harness raises approvals and `ask_user_question` in the host (it owns
+    // the session) and blocks its turn on the answer, exactly as the in-process
+    // handlers above do. Same dialogs, same store, one wire hop.
+    const approvalAsks = new Map<number, (outcome: ApprovalOutcome) => void>()
+    const questionAsks = new Map<number, () => void>()
+    hostClient.onAsk((ask) => {
+      void (async (): Promise<void> => {
+        if (ask.kind === 'approval') {
+          const toolName = String(ask.payload.toolName ?? 'tool')
+          const reason = typeof ask.payload.reason === 'string' ? ask.payload.reason : undefined
+          // "allow always" is a CLIENT-side memory (the dock's `a`), so the
+          // short-circuit lives here: the host still asks, we answer at once.
+          if (store.isAllowAlways(toolName)) {
+            store.append('status', `approval: ${toolName} auto-allowed (allow always)`, true)
+            hostClient?.answer(ask.requestId, { outcome: 'allowed-once' })
+            return
+          }
+          const outcome = await new Promise<ApprovalOutcome>((resolve) => {
+            approvalAsks.set(ask.requestId, resolve)
+            store.setApproval({ req: { toolName, reason }, resolve })
+          })
+          approvalAsks.delete(ask.requestId)
+          store.setApproval(null)
+          hostClient?.answer(ask.requestId, { outcome })
+          return
+        }
+        // Question dock. The host's own abort/timeout arrives as `ask-cancelled`
+        // (there is no AbortSignal across the wire), which aborts this
+        // controller and makes `askUser` reject exactly like the abort path.
+        const questions = ((ask.payload.questions ?? []) as AskUserQuestionItem[])
+        const controller = new AbortController()
+        questionAsks.set(ask.requestId, () => controller.abort())
+        try {
+          const answer = await askUser({ questions, signal: controller.signal })
+          hostClient?.answer(ask.requestId, { answers: answer.answers })
+        } catch {
+          hostClient?.answer(ask.requestId, { cancelled: true })
+        } finally {
+          questionAsks.delete(ask.requestId)
+        }
+      })()
+    })
+    hostClient.onAskCancelled((requestId) => {
+      // The host withdrew the ask: close whatever dialog it opened, so the user
+      // is never left staring at a dead dock.
+      approvalAsks.get(requestId)?.('cancelled')
+      questionAsks.get(requestId)?.()
     })
   }
 

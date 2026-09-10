@@ -60,8 +60,29 @@ export interface HostClient {
   onEvents(handler: (batch: HostEvent[]) => void): void
   /** Subscribe to the host's turn-status beats (`agent/status`). */
   onStatus(handler: (status: 'idle' | 'running') => void): void
+  /** Subscribe to host-side asks (approvals, user questions) this process must
+   *  answer; the host's turn blocks until `answer` is sent. */
+  onAsk(handler: (ask: HostAsk) => void): void
+  /** The host withdrew an ask (its request aborted or timed out): close the
+   *  dialog that ask opened. */
+  onAskCancelled(handler: (requestId: number) => void): void
+  /** Answer a pending ask (fire and forget: the host sends no reply). */
+  answer(requestId: number, payload: Record<string, unknown>): void
+  /** Mirror the sandbox mode this client shows: the host enforces the
+   *  `read-only` bash fence with the SAME rule (`bash-policy.ts`). */
+  setPolicy(permission: string): void
   /** Ask the host to dispose and exit. */
   close(): void
+}
+
+/** An ask the host raised and is waiting on. */
+export interface HostAsk {
+  /** Correlation id echoed back with the answer. */
+  requestId: number
+  /** `approval` = tool approval dock; `question` = `ask_user_question` dock. */
+  kind: 'approval' | 'question'
+  /** Kind-specific payload (JSON only — it crossed the wire). */
+  payload: Record<string, unknown>
 }
 
 interface Pending {
@@ -89,6 +110,8 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
   const pending = new Map<number, Pending>()
   const eventHandlers = new Set<(batch: HostEvent[]) => void>()
   const statusHandlers = new Set<(status: 'idle' | 'running') => void>()
+  const askHandlers = new Set<(ask: HostAsk) => void>()
+  const askCancelledHandlers = new Set<(requestId: number) => void>()
   let readyResolve: ((value: { model?: string; pid?: number }) => void) | undefined
   let readyReject: ((error: Error) => void) | undefined
   const ready = new Promise<{ model?: string; pid?: number }>((resolve, reject) => {
@@ -132,6 +155,23 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
       case 'agent-status': {
         const status = message.status as 'idle' | 'running' | undefined
         if (status !== undefined) for (const handler of statusHandlers) handler(status)
+        return
+      }
+      case 'ask': {
+        const ask: HostAsk = {
+          requestId: Number(message.requestId),
+          kind: message.kind === 'question' ? 'question' : 'approval',
+          payload: (message.payload ?? {}) as Record<string, unknown>,
+        }
+        if (process.env.DSH_TUI_HOST_TRACE === '1') {
+          logErrorFileOnly('host', `ask #${String(ask.requestId)} ${ask.kind}: ${JSON.stringify(ask.payload).slice(0, 120)}`)
+        }
+        for (const handler of askHandlers) handler(ask)
+        return
+      }
+      case 'ask-cancelled': {
+        const requestId = Number(message.requestId)
+        for (const handler of askCancelledHandlers) handler(requestId)
         return
       }
       case 'accepted':
@@ -198,6 +238,18 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
     forwardHostStderr(tail)
   })()
 
+  /** Fire-and-forget write: the host answers some messages (`answer`, `policy`)
+   *  with nothing at all, so they must not allocate a pending entry that would
+   *  only ever time out. */
+  const write = (message: Record<string, unknown>): void => {
+    try {
+      child.stdin.write(`${JSON.stringify(message)}\n`)
+      void child.stdin.flush?.()
+    } catch (error) {
+      logErrorFileOnly('host', `write failed (${String(message.type)}): ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   function request<T>(message: Record<string, unknown>, timeoutMs = 120_000): Promise<T> {
     const id = nextId++
     return new Promise<T>((resolve, reject) => {
@@ -239,6 +291,12 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
     cancel: () => request<void>({ type: 'cancel' }),
     onEvents: (handler: (batch: HostEvent[]) => void) => { eventHandlers.add(handler) },
     onStatus: (handler: (status: 'idle' | 'running') => void) => { statusHandlers.add(handler) },
+    onAsk: (handler: (ask: HostAsk) => void) => { askHandlers.add(handler) },
+    onAskCancelled: (handler: (requestId: number) => void) => { askCancelledHandlers.add(handler) },
+    answer: (requestId: number, payload: Record<string, unknown>) => {
+      write({ type: 'answer', requestId, payload })
+    },
+    setPolicy: (permission: string) => { write({ type: 'policy', permission }) },
     close: () => {
       try { child.stdin.write(`${JSON.stringify({ type: 'shutdown' })}\n`) } catch { /* best-effort */ }
       setTimeout(() => { try { child.kill() } catch { /* already gone */ } }, 500)
