@@ -59,7 +59,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { HISTORY_FAST_EVENTS, HISTORY_SLICE_EVENTS, HISTORY_TAIL_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
+import { HISTORY_FAST_EVENTS, HISTORY_SLICE_EVENTS, HISTORY_TAIL_EVENTS, describeResumeFailure, isCorruptLogMessage, localCut, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -3131,6 +3131,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   /** The host has resumed the session and can accept prompts (M6: the transcript
    *  is readable from the log file long before this is true). */
   let hostReady = false
+  /** How far past a slice start the file source looks for a safe boundary (M6.1b). */
+  const SAFE_LOOKAHEAD = 512
   /** Prompts typed in that window, flushed when the host is ready. */
   const pendingPrompts: unknown[][] = []
   /** Build the client-side stand-ins for a host-owned agent: the transcript
@@ -3507,19 +3509,46 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     touchSession(sessionId)
     resetSessionStats()
     // Chunked when there is older history to fetch lazily; a small log folds whole.
-    if (tail.startSeq > 0) {
+    // Cut the tail at a safe boundary too (the window we already hold is enough to
+    // find one): the top edge of the first painted frame must not be a half turn.
+    const tailBounds = safeBoundaries(events)
+    const tailCut = tailBounds.find((boundary) => boundary > 0) ?? 0
+    const tailEvents = tailCut > 0 ? events.slice(tailCut) : events
+    const tailStartSeq = tail.startSeq + tailCut
+    if (tailStartSeq > 0) {
       const olderRanges: Array<readonly [number, number]> = []
-      for (let cursor = 0; cursor < tail.startSeq; cursor += HISTORY_SLICE_EVENTS) {
-        olderRanges.push([cursor, Math.min(cursor + HISTORY_SLICE_EVENTS, tail.startSeq)])
+      for (let cursor = 0; cursor < tailStartSeq; cursor += HISTORY_SLICE_EVENTS) {
+        olderRanges.push([cursor, Math.min(cursor + HISTORY_SLICE_EVENTS, tailStartSeq)])
       }
-      resumeHistoryIntoStore(store, agent.session, events, {
-        plan: { mode: 'chunked', tailStart: tail.startSeq, olderRanges },
+      // Local safe cuts: a slice may legitimately begin a little later than the
+      // plan asked, and the range OLDER than it then ends where it began — that
+      // keeps coverage exact (no gap) and duplicate-free, because the ranges are
+      // folded newest-first and re-folded with the same cuts after eviction.
+      const adjustedEnds = new Map<number, number>()
+      /** Starts already certified safe (chained slices must not be re-cut). */
+      const safeStarts = new Set<number>()
+      const readRange = async (requestedFrom: number, requestedTo: number): Promise<readonly SessionEvent[]> => {
+        const end = adjustedEnds.get(requestedTo) ?? requestedTo
+        const look = await reader.read(requestedFrom, Math.min(end, requestedFrom + SAFE_LOOKAHEAD))
+        if (look.length === 0) return []
+        const start = safeStarts.has(requestedFrom)
+          ? requestedFrom
+          : localCut(look as unknown as { type: string }[], requestedFrom, requestedFrom, end)
+        if (start !== requestedFrom) {
+          safeStarts.add(start)
+          adjustedEnds.set(requestedFrom, start)
+        }
+        if (start === requestedFrom) return look as unknown as readonly SessionEvent[]
+        return await reader.read(start, end) as unknown as readonly SessionEvent[]
+      }
+      resumeHistoryIntoStore(store, agent.session, tailEvents, {
+        plan: { mode: 'chunked', tailStart: tailStartSeq, olderRanges },
         total: tail.total,
-        readRange: async (from, to) => await reader.read(from, to) as unknown as readonly SessionEvent[],
+        readRange,
       })
       store.setStatsWindowOnly(true)
     } else {
-      resumeHistoryIntoStore(store, agent.session, events)
+      resumeHistoryIntoStore(store, agent.session, tailEvents)
     }
     logErrorFileOnly('host',
       `client: opened from the log file id=${sessionId_} rows=${events.length} total=${tail.total} start=${tail.startSeq} ms=${Date.now() - t0}`)
@@ -4469,7 +4498,27 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       void (async (): Promise<void> => {
         try {
           await paintBeforeBlock()
-          await serveHostSession(client, await client.attach(String(id)), true)
+          // M6.1b: switch the same way the boot does — read the target's log file
+          // (≈100 ms) and let the host catch up in the background for turns. A
+          // switch to a giant session no longer waits ~12 s for its materialization.
+          let servedFromFile = false
+          try {
+            servedFromFile = await serveFromLog(
+              client, String(id), picked?.cwd ?? config.workspace, undefined, true,
+            )
+          } catch (error) {
+            logErrorFileOnly('host', `client: file-backed switch unavailable: ${error instanceof Error ? error.message : String(error)}`)
+          }
+          const attached = await client.attach(String(id))
+          hostReady = true
+          for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
+            void client.prompt(blocks).catch(() => { /* best-effort */ })
+          }
+          if (!servedFromFile) await serveHostSession(client, attached, true)
+          else if (attached.title !== undefined) {
+            rememberTitle(sessionId, attached.title)
+            store.notifyTitles()
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
           logErrorFileOnly('host', `client: switch failed: ${message}`)
