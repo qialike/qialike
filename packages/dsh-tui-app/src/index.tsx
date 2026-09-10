@@ -395,6 +395,19 @@ export function sessionLoadErrorText(error: unknown): string {
   return `Load session failed: ${clip === '' ? 'unknown error' : clip}`
 }
 
+/** Status-bar label shown while the harness assembles a model request.
+ *
+ *  Why it exists: submitting is fast (`agent.followup()` returns in ~25-58 ms,
+ *  the first event 1-35 ms later) — what freezes the UI for **4-6 s** on a
+ *  1.45 M-event session is the request assembly that happens SYNCHRONOUSLY on
+ *  this same thread right after `step/start` (user log: `[stall] main loop
+ *  blocked for 4s`, repeatedly, around submits). Nothing can repaint during that
+ *  block, so the label is set at the last moment we control — on `step/start`
+ *  (and on submit, before the turn's first step) — and `paintBeforeBlock()`
+ *  flushes the frame BEFORE the thread is taken. It clears on the first content
+ *  event of that step (chunk / tool call / settled message / turn end). */
+export const PREPARING_REQUEST_LABEL = 'Working…  preparing the request'
+
 /** Mutable UI store the Ink app subscribes to. */
 export class Store {
   private items: TranscriptItem[] = []
@@ -428,6 +441,9 @@ export class Store {
   private _approval: PendingApproval | null = null
   /** In-flight session switch (banner + key suppression); null when idle. */
   private _sessionLoading: SessionLoadingState | null = null
+  /** True while a step's request is being assembled (see
+   *  {@link PREPARING_REQUEST_LABEL}). */
+  private _preparingRequest = false
   /** In-flight manual `/compact` (status bar + Esc cancel), or null. */
   private _compaction: CompactionState | null = null
   /** True once the compaction ticker fired (loop alive → show elapsed). */
@@ -1227,6 +1243,25 @@ export class Store {
     if (this._sessionLoading === null) return
     this._sessionLoading = null
     this._sessionLoadingTicked = false
+    this.notify()
+  }
+
+  /** Whether a request is being assembled (see {@link PREPARING_REQUEST_LABEL}). */
+  get preparingRequest(): boolean { return this._preparingRequest }
+
+  /** Mark the assembly window: set on `step/start` (and on submit), i.e. right
+   *  before the harness takes the thread. */
+  beginPreparingRequest(): void {
+    if (this._preparingRequest) return
+    this._preparingRequest = true
+    this.notify()
+  }
+
+  /** Leave it: the step produced content, the turn ended, or the safety timeout
+   *  fired. */
+  endPreparingRequest(): void {
+    if (!this._preparingRequest) return
+    this._preparingRequest = false
     this.notify()
   }
 
@@ -3274,6 +3309,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.markActivity()
     switch (event.type) {
       case 'assistant/chunk': {
+        store.endPreparingRequest()
         const chunk = event.data.chunk
         // Reasoning is shown as a collapsed Think block; text streams as the
         // answer. Tool-call deltas are dropped (the settled tool/call row is
@@ -3283,6 +3319,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         break
       }
       case 'assistant/message': {
+        store.endPreparingRequest()
         const data = event.data as {
           turn?: number
           step?: number
@@ -3314,6 +3351,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // A fresh step begins with the model computing (reasoning deltas flip
         // the phase to `thinking` as they arrive).
         store.setRunPhase('working')
+        // The harness assembles this step's request SYNCHRONOUSLY right after
+        // this event — measured 4-6 s on a 1.45 M-event session. Label it and
+        // make sure the labelled frame reaches the terminal before the block;
+        // the state is cleared by the step's first content event below.
+        store.beginPreparingRequest()
+        // Flush the labelled frame before the assembly takes the thread; the
+        // state is cleared by this step's first content event (below) or by
+        // turn/end, so a bare flush needs no cleanup of its own.
+        void paintBeforeBlock()
         break
       }
       // Between steps the model is computing the next one; keep the phase
@@ -3332,6 +3378,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         break
       }
       case 'turn/end': {
+        store.endPreparingRequest()
         const reason = (event.data as { reason?: { kind?: string } }).reason
         if (reason?.kind === 'max-tokens') {
           if (!textSinceThisTurn) {
@@ -3368,6 +3415,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // Tool calls/results shown inline as icon + name rows; the
       // result also closes the tool's wall-time bucket (FIFO per turn:step).
       case 'tool/call': {
+        store.endPreparingRequest()
         const data = event.data as { turn?: number; step?: number }
         const key = `${data.turn}:${data.step}`
         const queue = toolCallsAt.get(key) ?? []
@@ -3526,8 +3574,25 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const image = store.composerImage
     const content: ContentBlock[] = [{ type: 'text', text }]
     if (image !== null) content.push({ type: 'image', attachment: image.ref })
-    agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
-    pendingSubmitProbe?.noteFollowup()
+    // Paint the "working" frame BEFORE the harness takes the thread: the
+    // followup call returns fast, but the turn's first request is assembled
+    // synchronously right after, and no frame can be produced during it. The
+    // state clears on the step's first content event (below), on a failed
+    // submit, and on a safety timeout.
+    store.beginPreparingRequest()
+    const pendingTimeout = setTimeout(() => store.endPreparingRequest(), 30_000)
+    void (async (): Promise<void> => {
+      await paintBeforeBlock()
+      try {
+        agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
+      } catch (error) {
+        clearTimeout(pendingTimeout)
+        store.endPreparingRequest()
+        logErrorFileOnly('submit', error)
+        return
+      }
+      pendingSubmitProbe?.noteFollowup()
+    })()
     store.clearComposerImage()
   }
   store.cancelAction = () => { /* nothing: keep the session open */ }
@@ -4511,6 +4576,13 @@ function sessionLogBytes(cwd: string, id: string): number | undefined {
  *  `globalThis.__dshTuiLastFlushAt` on every flush, so we can wait for the
  *  NEXT flush (bounded — never stall the switch itself). */
 async function paintBeforeBlock(timeoutMs = 150): Promise<void> {
+  // `notify()` only SCHEDULES a render; a flush observed immediately after it
+  // can still be the PREVIOUS frame (e.g. a fold-driven repaint). Give React a
+  // tick to commit and Ink a frame to produce before waiting for the flush —
+  // otherwise a labelled frame is "confirmed" by a stale one and the label never
+  // reaches the terminal before the harness block (measured: the label frame
+  // only surfaced 5.4 s later, after the block).
+  await sleepFor(16)
   const host = globalThis as { __dshTuiLastFlushAt?: number }
   const before = host.__dshTuiLastFlushAt ?? 0
   const t0 = Date.now()

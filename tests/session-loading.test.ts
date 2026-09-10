@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { COMPACT_HINT_EVENTS, OVERSIZED_LOG_BYTES, STATS_FULL_SCAN_MAX, Store, oversizedResumeNotice, oversizedResumeWarning, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
+import { PREPARING_REQUEST_LABEL, COMPACT_HINT_EVENTS, OVERSIZED_LOG_BYTES, STATS_FULL_SCAN_MAX, Store, oversizedResumeNotice, oversizedResumeWarning, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
 import type { SessionLoadingState } from '../packages/dsh-tui-app/src/index.tsx'
 
 const BASE: SessionLoadingState = { id: 'session-3c1c6602-1ddc-40ee-a295-f34348c87153', title: 'fix the tests', bytes: 19_300_000, startedAt: 1_000 }
@@ -231,6 +231,26 @@ describe('P2: window-only stats for oversized sessions', () => {
 
   test('the threshold keeps small sessions exact', () => {
     expect(STATS_FULL_SCAN_MAX).toBe(200_000)
+  })
+})
+
+describe('request-assembly label (step/start → first content event)', () => {
+  test('the label states what the wait is', () => {
+    expect(PREPARING_REQUEST_LABEL).toContain('Working')
+    expect(PREPARING_REQUEST_LABEL).toContain('request')
+  })
+
+  test('the window opens at step/start and closes on content events', () => {
+    const store = new Store()
+    expect(store.preparingRequest).toBe(false)
+    store.beginPreparingRequest() // step/start
+    expect(store.preparingRequest).toBe(true)
+    store.beginPreparingRequest() // idempotent across steps
+    expect(store.preparingRequest).toBe(true)
+    store.endPreparingRequest() // first chunk / tool call / turn end
+    expect(store.preparingRequest).toBe(false)
+    store.endPreparingRequest() // safe when already clear
+    expect(store.preparingRequest).toBe(false)
   })
 })
 
