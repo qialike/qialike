@@ -1257,8 +1257,13 @@ function frameGapProbe(items: number, scroll: number, followTail: boolean): void
   if (!debugLayout) return
   const now = Date.now()
   const gap = lastFrameAt === 0 ? 0 : now - lastFrameAt
+  // A gap only means STALL when a mutation was waiting for a frame: an idle app
+  // deliberately paints nothing (Ink writes only on change), and reporting that
+  // silence as a freeze was a false positive (see dsh-tui-development §2.5.31).
+  const pendingSince = store.lastMutationAt
+  const stalled = gap > 1000 && pendingSince > lastFrameAt - 1 && pendingSince !== 0
   lastFrameAt = now
-  if (gap > 1000) {
+  if (stalled) {
     // `heap` before/after a gap is the cheap GC discriminator: a major GC pause
     // shows up as a large DROP across the freeze, harness recomputation does not.
     const heap = Math.round(process.memoryUsage().heapUsed / 1048576)

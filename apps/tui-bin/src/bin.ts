@@ -423,7 +423,10 @@ async function main(): Promise<void> {
   // writer and issues the leave; this backstop only covers exits before that
   // handler exists (boot failure, early fatal errors), which is why it is a
   // no-op once `appMounted` is set.
-  const leaveAlt = (): void => { try { process.stdout.write('\x1b[?25h\x1b[?1049l') } catch { /* ignore */ } }
+  const leaveAlt = (): void => {
+    if (args.includes('--dsh-host')) return // host mode never entered it
+    try { process.stdout.write('\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
+  }
   // Enter the alternate screen buffer. `--help` must keep its exact current
   // output — the commander-rendered text is the process's only write after
   // this entry — so the splash below is skipped for help invocations; it is
@@ -435,9 +438,12 @@ async function main(): Promise<void> {
   // before the app mounts exits through the backstop above, which leaves the
   // alternate buffer and discards the splash with it. Nothing reaches the
   // normal screen buffer, so no residue.
-  process.stdout.write('\x1b[?1049h')
+  // P4c host mode owns stdout as a JSONL protocol channel: no alternate
+  // screen, no splash — anything written there would corrupt the protocol.
+  const hostMode = args.includes('--dsh-host')
+  if (!hostMode) process.stdout.write('\x1b[?1049h')
   const wantsHelp = args.some((arg) => arg === '--help' || arg === '-h')
-  if (!wantsHelp && process.stdout.isTTY === true) {
+  if (!hostMode && !wantsHelp && process.stdout.isTTY === true) {
     process.stdout.write('\x1b[2J\x1b[H')
     // Version verbatim (no `v` prefix) — same shape as the hero headline.
     process.stdout.write(`\x1b[90m${NAME} ${readVersion()} — starting…\x1b[0m`)

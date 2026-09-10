@@ -30,6 +30,8 @@ export interface TuiStartupValues {
    *  it the launch never auto-resumes: it opens/reuses an unused New Session
    *  placeholder and shows the hero screen (web parity). */
   resumeNewest: boolean
+  /** P4c: boot as the headless HOST (`--dsh-host`) instead of the Ink client. */
+  host: boolean
   /** Optional model override (e.g. `deepseek-v4-flash`). */
   model: string | undefined
 }
@@ -62,6 +64,10 @@ export function tuiCommand(): Command {
     .option('--workspace <dir>', 'the directory the agent operates in (default: the invoking directory)')
     .option('--resume <sessionId>', 'resume a specific persisted session (opens the conversation view directly)')
     .option('--model <model>', 'a provider/name model override, e.g. deepseek-v4-flash')
+    // P4c host mode (internal): the same binary boots the harness WITHOUT the
+    // Ink surface and speaks JSONL over stdio, so the client's render thread is
+    // never blocked by the harness (see dsh-tui-p4c-spike.md).
+    .option('--dsh-host', 'run as the headless host (JSONL over stdio) instead of the TUI')
     .addHelpText('after', `
 Examples:
   dsh-tui                     start a NEW session and show the hero screen (never auto-resumes)
@@ -83,11 +89,12 @@ export function apply(ctx: Context): void {
     // Fail loud on an unknown positional instead of silently starting fresh
     // (a typo like `dsh-tui resme` must not look like "no argument").
     const resumeNewest = parseResumeMode(mode)
-    const options = program.opts<{ workspace?: string; resume?: string; model?: string }>()
+    const options = program.opts<{ workspace?: string; resume?: string; model?: string; dshHost?: boolean }>()
     ctx.provide(TUI_STARTUP_SERVICE, {
       workspace: options.workspace ?? process.cwd(),
       resume: options.resume,
       resumeNewest,
+      host: options.dshHost === true,
       model: options.model,
     } satisfies TuiStartupValues)
   })

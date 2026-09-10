@@ -159,6 +159,8 @@
         workspace: !!js ctx.tuiStartup.workspace
         resume: !!js ctx.tuiStartup.resume
         resumeNewest: !!js ctx.tuiStartup.resumeNewest
+        # P4c host mode: the same binary as a headless JSONL host.
+        host: !!js ctx.tuiStartup.host
         model: !!js ctx.tuiStartup.model
 
     # ── surface panels (plugins; register against the `tui` service) ────────

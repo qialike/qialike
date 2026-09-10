@@ -21,6 +21,8 @@ import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { startHost } from './host.ts'
+import { spawnHostClient, type HostClient, type HostEvent } from './host-client.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
@@ -53,7 +55,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { describeResumeFailure, isCorruptLogMessage, planResumeFold, withResumeCorruptRetry } from './resume-fold.ts'
+import { HISTORY_FAST_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -109,6 +111,8 @@ export interface Config {
    *  directory and open the conversation view directly. A bare launch never
    *  auto-resumes (it opens/reuses the New Session placeholder + hero). */
   resumeNewest: boolean | undefined
+  /** P4c: run as the headless host (JSONL over stdio) instead of the Ink app. */
+  host: boolean | undefined
   model: string | undefined
 }
 
@@ -116,6 +120,7 @@ export const Config: z<Config> = z.object({
   workspace: z.string().required(),
   resume: z.string(),
   resumeNewest: z.boolean(),
+  host: z.boolean(),
   model: z.string(),
 })
 
@@ -581,7 +586,14 @@ export class Store {
   private static readonly NOTIFY_LEGACY = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_LEGACY_NOTIFY ?? '')
   private _notifyTimer: ReturnType<typeof setTimeout> | null = null
   private _notifyScheduled = false
+  /** Epoch ms of the last store mutation (any `notify`): lets a frame-gap probe
+   *  tell a STALL (a mutation was pending and no frame came) from plain
+   *  IDLENESS (nothing changed, so Ink paints nothing). */
+  private _lastMutationAt = 0
+  get lastMutationAt(): number { return this._lastMutationAt }
+
   private notify(): void {
+    this._lastMutationAt = Date.now()
     if (Store.NOTIFY_LEGACY) {
       // Plan-B A/B switch (DSH_TUI_LEGACY_NOTIFY=1): the pre-优化2 behavior —
       // coalesce a burst of synchronous updates into ONE render per microtask
@@ -3014,6 +3026,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     await new Promise<void>((resolve) => { setTimeout(resolve, 10) })
   }
   logErrorFileOnly('boot', `phases: loader+factory ready ms=${Date.now() - bootT0}`)
+  // P4c host mode: serve a session over stdio instead of mounting the Ink
+  // surface. Everything below this line is the client.
+  if (config.host === true) {
+    await startHost(ctx, { workspace: config.workspace, resume: config.resume, model: config.model })
+    return
+  }
   const agents = ctx.get('agents')
   const defaultModel = ctx.get('agentDefaultModel')
   const sessions = ctx.get('sessions')
@@ -3054,7 +3072,57 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
    *  gaps land (before the attach/[resume] markers). */
   const openT0 = Date.now()
   const resumeId = config.resume
+  /** P4c client mode (`DSH_TUI_HOST=1`): the harness lives in a child process,
+   *  so the frames below keep flowing while the giant session decodes over
+   *  there. M1 slice = read-only attach + tail page; prompting/approval/
+   *  cancellation arrive in later milestones (see dsh-tui-p4c-spike.md). */
+  let hostClient: HostClient | undefined
+  const hostMode = process.env.DSH_TUI_HOST === '1'
+  /** Build the client-side stand-ins for a host-owned agent: the transcript
+   *  fold, the store and the commands only need `id` / `snapshotEvents()` /
+   *  `followup` / `cancel`, all of which are served over the protocol. */
+  const hostAgentShim = (
+    client: HostClient,
+    info: { sessionId: string; eventCount: number },
+    events: readonly SessionEvent[],
+  ): { handle: AgentHandle; agent: unknown } => {
+    const session = {
+      id: info.sessionId,
+      snapshotEvents: () => events,
+      requestHeader: () => undefined,
+    }
+    const agent = {
+      id: SessionId(info.sessionId),
+      session,
+      options: { provider: selection.provider, model: config.model ?? selection.model },
+      followup: () => {
+        store.append('status', 'host mode (M1): prompting lands in the next milestone', true)
+      },
+      cancel: () => { /* host-side cancel lands with prompting */ },
+      whenIdle: () => Promise.resolve(),
+    }
+    return {
+      handle: { agent, dispose: async () => { client.close() } } as unknown as AgentHandle,
+      agent,
+    }
+  }
+  /** Mount FIRST, attach second: the Ink surface (hero + the `Load session:`
+   *  status) is up before the host starts decoding, so the ~12 s it spends on a
+   *  giant log are spent with a live UI instead of a dead splash. */
+  const establishFromHost = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
+    const client = spawnHostClient({
+      workspace: config.workspace,
+      ...resumeId === undefined ? {} : { resume: resumeId },
+    })
+    hostClient = client
+    const info = await client.ready
+    logErrorFileOnly('host', `client: host ready pid=${String(info.pid)} model=${String(info.model)}`)
+    // No session yet: empty shim ⇒ the app mounts on the hero screen.
+    const placeholder = hostAgentShim(client, { sessionId: 'host-pending', eventCount: 0 }, [])
+    return { handle: placeholder.handle, resumed: false }
+  }
   const establish = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
+    if (hostMode) return establishFromHost()
     let nextHandle: AgentHandle | undefined
     let nextResumed = false
     if (resumeId !== undefined) {
@@ -3177,6 +3245,50 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     toolCallsAt.clear()
     store.resetStats()
   }
+  // ── P4c host attach (client side) ────────────────────────────────────────
+  // The surface is already mounted, so everything below runs with frames
+  // flowing: the host decodes the giant log on ITS thread while this window
+  // shows the hero plus a `Load session:` banner.
+  if (hostMode && hostClient !== undefined) {
+    const client = hostClient
+    const startedAt = Date.now()
+    store.beginSessionLoading({ id: 'host', startedAt })
+    const ticker = setInterval(() => store.tickSessionLoading(), 250)
+    void (async (): Promise<void> => {
+      try {
+        const attached = await client.attach(resumeId)
+        store.beginSessionLoadStep('attaching', attached.openMs)
+        const tailStart = Math.max(0, attached.eventCount - HISTORY_FAST_EVENTS)
+        const events = await client.page(tailStart, attached.eventCount) as unknown as SessionEvent[]
+        const shim = hostAgentShim(client, attached, events)
+        handle = shim.handle
+        agent = shim.agent as typeof agent
+        sessionId = SessionId(attached.sessionId)
+        sessionRef.current = sessionId
+        store.setSession(agent.session)
+        touchSession(sessionId)
+        resetSessionStats()
+        store.beginSessionLoadStep('tail', 0)
+        resumeHistoryIntoStore(store, agent.session, events)
+        // Only the newest page is loaded, so the footer numbers must say so.
+        store.setStatsWindowOnly(true)
+        if (attached.title !== undefined) {
+          rememberTitle(sessionId, attached.title)
+          store.notifyTitles()
+        }
+        logErrorFileOnly('host',
+          `client: attached id=${attached.sessionId} events=${attached.eventCount} open=${attached.openMs}ms tail=${events.length}`)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        logErrorFileOnly('host', `client: attach failed: ${message}`)
+        store.failSessionLoad(`host attach failed: ${message}`)
+      } finally {
+        clearInterval(ticker)
+        store.endSessionLoading()
+      }
+    })()
+  }
+
   // The active session is the most recently used one (drives list ordering and
   // the launch auto-resume).
   touchSession(sessionId)
@@ -3191,6 +3303,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // its first frame on a very long durable log.
     const launchSnapshot = agent.session.snapshotEvents()
     resumeHistoryIntoStore(store, agent.session, launchSnapshot)
+    // The host page covers only the newest window, so the footer numbers must
+    // say so (the same `window ·` marker an oversized session already uses).
+    if (hostMode) store.setStatsWindowOnly(true)
     // Backfill the sidebar title from the in-memory log: the launch session
     // may predate this process (its session/title event never reached a live
     // listener here) and the disk-cache prewarm runs on a delay. The SAME
@@ -3280,7 +3395,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           const facts = probeSessionHead(header.cwd ?? config.workspace, String(header.id))
           return facts === undefined ? undefined : { ...facts }
         })
-        await prewarmTitles(persistence, await persistence.list())
+        // Host mode: the host owns the session (and supplies the title in
+        // `attached`), so the local prewarm must NOT inspect logs — an
+        // `inspect()` of a 28 MB session would block this client for ~5 s, the
+        // very freeze P4c exists to remove.
+        if (!hostMode) await prewarmTitles(persistence, await persistence.list())
       } catch {
         // Prewarm is best-effort; a failing list must not disturb the session.
       }
