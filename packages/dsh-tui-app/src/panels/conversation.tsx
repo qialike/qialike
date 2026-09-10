@@ -13,6 +13,8 @@ import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import {
+  describeActivity,
+  eventRateTick,
   APP_VERSION,
   sessionLoadBar,
   sessionLoadPercent,
@@ -1244,8 +1246,34 @@ const debugLayout = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_LAYOUT ?
  *  window-size A/B needs totals. Reports frames, both row builders and heap
  *  every 2 s. No behaviour change; off unless `DSH_TUI_DEBUG_LAYOUT=1`. */
 const perf = { frames: 0, rowsMs: 0, rowsMax: 0, itemsMs: 0, itemsMax: 0, at: 0, items: 0, heapMb: 0 }
+
+/** WHOLE-FRAME gap probe (`DSH_TUI_DEBUG_LAYOUT=1`): the two row builders are
+ *  cheap (<1 ms), so a multi-second freeze has to be found elsewhere — between
+ *  consecutive panel renders. Measures the gap between render bodies, which
+ *  covers React commit, Ink layout and every synchronous block in between. */
+let lastFrameAt = 0
+let lastHeapMb = 0
+function frameGapProbe(items: number, scroll: number, followTail: boolean): void {
+  if (!debugLayout) return
+  const now = Date.now()
+  const gap = lastFrameAt === 0 ? 0 : now - lastFrameAt
+  lastFrameAt = now
+  if (gap > 1000) {
+    // `heap` before/after a gap is the cheap GC discriminator: a major GC pause
+    // shows up as a large DROP across the freeze, harness recomputation does not.
+    const heap = Math.round(process.memoryUsage().heapUsed / 1048576)
+    const drop = lastHeapMb === 0 ? 0 : lastHeapMb - heap
+    logErrorFileOnly('frame',
+      `slow gap=${gap}ms items=${items} scroll=${scroll} followTail=${followTail} `
+      + `heap=${heap}MB heapDrop=${drop}MB activity=${describeActivity()}`)
+    lastHeapMb = heap
+  } else {
+    lastHeapMb = Math.round(process.memoryUsage().heapUsed / 1048576)
+  }
+}
 function perfTick(which: 'rows' | 'items', ms: number, items: number, heapMb: number): void {
   if (!debugLayout) return
+  eventRateTick()
   perf.frames += 1
   if (which === 'items') { perf.itemsMs += ms; perf.itemsMax = Math.max(perf.itemsMax, ms) } else { perf.rowsMs += ms; perf.rowsMax = Math.max(perf.rowsMax, ms) }
   perf.items = items
@@ -1928,6 +1956,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const version = store.getVersion()
   const themeEpoch = store.themeEpoch
   const items = store.getItems()
+  frameGapProbe(items.length, store.layoutScroll, store.followTail)
   const steps = store.steps
   const stepsDone = store.stepsDone
   const stepsTotal = store.stepsTotal
@@ -2076,6 +2105,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // capTail), so the row heights are independent of whether the model is
   // actively streaming — the layout never jumps mid-think.
   const layout = useMemo(() => {
+    const tLayout0 = debugLayout ? Date.now() : 0
+    let mdMs = 0
+    let mdCalls = 0
     // A width change invalidates every cached row height (wrap counts differ);
     // drop the cache so the next pass re-estimates before anything is measured.
     if (usable !== lastLayoutWidth) {
@@ -2102,7 +2134,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           // height, e.g. 1 instead of 3). Use the measured value only when it
           // stays within 1 of the estimate — a wildly-off reading is a scroll
           // artifact, so fall back to the estimate to keep every gap stable.
+          const tEst = debugLayout ? Date.now() : 0
           const est = estItemLines(r.item, usable, reasoningExpandedFor(r.item))
+          if (debugLayout && (r.item.kind === 'assistant' || r.item.kind === 'plan' || r.item.kind === 'compaction')) {
+            mdCalls += 1
+            mdMs += Date.now() - tEst
+          }
           const measured = measuredHeights.get(key)
           // Cache the estimate for an unpainted row, and for a reading that is
           // implausibly small (a diff-rendered row can read a collapsed height);
@@ -2119,6 +2156,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // tail. A full walk over cached per-row heights is cheap (est/measured
     // maps), and notify batching (优化2) bounds it to ≤40fps.)
     const hts = rows.map((r) => heightOf(r))
+    if (debugLayout) {
+      const ms = Date.now() - tLayout0
+      if (ms > 200) {
+        logErrorFileOnly('layout',
+          `pass rows=${rows.length} ms=${ms} markdownRows=${mdCalls} markdownMs=${mdMs} `
+          + `items=${items.length} heap=${Math.round(process.memoryUsage().heapUsed / 1048576)}MB`)
+      }
+    }
     const starts: number[] = []
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i]! }

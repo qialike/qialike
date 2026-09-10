@@ -3294,6 +3294,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
 
   ctx.on('session/event', (session, event: SessionEvent) => {
     if (session.id === sessionId) sessionEventCount += 1
+    if (debugLayoutEvents) { eventsThisWindow += 1; if (session.id === sessionId) eventsForSession += 1 }
     // P0 probe: the gap submit → first live event is where a giant session's
     // context assembly (harness side, same thread) shows up.
     if (pendingSubmitProbe !== null && session.id === sessionId) {
@@ -4593,6 +4594,26 @@ async function paintBeforeBlock(timeoutMs = 150): Promise<void> {
   }
 }
 
+/** Event-rate probe (`DSH_TUI_DEBUG_LAYOUT=1`): counts `session/event`
+ *  emissions so a multi-second freeze can be attributed to (or cleared of) an
+ *  event storm hitting the TUI listener — the harness emits nothing while it
+ *  recomputes internally, so a flat counter during a freeze proves the block is
+ *  not ours. */
+const debugLayoutEvents = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_LAYOUT ?? '')
+let eventsThisWindow = 0
+let eventsForSession = 0
+let eventRateAt = 0
+export function eventRateTick(): void {
+  if (!debugLayoutEvents) return
+  const now = Date.now()
+  if (eventRateAt === 0) { eventRateAt = now; return }
+  if (now - eventRateAt < 2000) return
+  logErrorFileOnly('events', `window=${Math.round((now - eventRateAt) / 1000)}s all=${eventsThisWindow} session=${eventsForSession}`)
+  eventsThisWindow = 0
+  eventsForSession = 0
+  eventRateAt = now
+}
+
 /** Largest session size (events) for which the TUI still recommends running
  *  `/compact`: a 1.4M-event log makes every resume open decode tens of MB and
  *  every full pass expensive, and the harness's own compaction is the intended
@@ -4741,6 +4762,14 @@ let pendingCompactionFacts: CompactionRowFacts | undefined
  *  the snapshot the resume path already holds, then incremented per live event. */
 let sessionEventCount = 0
 
+/** Last long-running activity (diagnostic): the panel's slow-frame probe prints
+ *  it so a multi-second freeze says what the loop was doing when frames
+ *  stopped. Cheap enough to call at every suspicious site; off unless
+ *  `DSH_TUI_DEBUG_LAYOUT=1` gates the consumer. */
+let activityLabel = 'idle'
+export function noteActivity(label: string): void { activityLabel = `${label}@${Date.now()}` }
+export function describeActivity(): string { return activityLabel }
+
 function sleepFor(ms: number): Promise<void> {
   return new Promise<void>((resolve) => { setTimeout(resolve, ms) })
 }
@@ -4843,8 +4872,10 @@ function resumeHistoryIntoStore(
         // here, so an oversized session pays ONE bounded pass per slice instead
         // of a full 1.4M-event scan up front.
         if (!statsFullScan) for (let j = from; j < to; j++) stats.observe(events[j]!)
+        noteActivity(`fold slice ${from}-${to} events=${to - from}`)
         const chunk = foldHistoryEvents(events.slice(from, to))
         if (chunk.items.length > 0) {
+          noteActivity(`prepend ${chunk.items.length} items`)
           store.prependHistory(chunk.items)
           foldedNewestFirst.push({ from, to, items: chunk.items.length })
         }
