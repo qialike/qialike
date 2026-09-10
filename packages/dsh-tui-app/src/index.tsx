@@ -3174,7 +3174,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
    *  log file), and a prompt must never be delivered to the session the user just
    *  left. Held prompts are sent in arrival order on release. */
   const promptQueue = createPromptQueue()
-  const BLANK_SESSION_EVENTS = 32
 /** How far past a slice start the file source looks for a safe boundary (M6.1b). */
   const SAFE_LOOKAHEAD = 512
   /** Send one prompt to the host, reporting a failure instead of swallowing it. */
@@ -3649,6 +3648,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const wantsExistingSession = resumeId !== undefined
       || config.resumeNewest === true
       || resolveResumeLast()
+    // An explicit resume request is a request for that session's CONVERSATION
+    // view — even when the most recently active session happens to be an unused
+    // blank. The hero stays a bare-`dsh-tui` screen.
+    if (wantsExistingSession) store.leaveHero()
     store.beginSessionLoading({ id: 'host', startedAt, keepHero: !wantsExistingSession })
     const ticker = setInterval(() => store.tickSessionLoading(), 250)
     void (async (): Promise<void> => {
@@ -3672,7 +3675,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // needs ~12 s to materialize every event, and the host is only needed for
         // what happens NEXT (a turn), so it resumes in the background meanwhile.
         if (wantsExisting && wantedId === undefined) {
-          wantedId = await newestSessionWithContent(config.workspace)
+          wantedId = await mostRecentlyActiveSession(config.workspace)
         }
         if (wantedId !== undefined) {
           try {
@@ -4893,10 +4896,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   await agent.whenIdle()
 }
 
-/** A session with no turn yet holds only its seed rows; above this it has content
- *  (used to resolve the positional `resume` from the files, without the host). */
-const BLANK_SESSION_EVENTS = 32
-
 /**
  * The newest session WITH CONTENT in one workspace, read from the session files
  * themselves (P4c M6.2).
@@ -4923,7 +4922,18 @@ export function orderResumeCandidates<T extends { readonly createdAt: number; re
   return [...candidates].sort((a, b) => (b.activeAt - a.activeAt) || (b.createdAt - a.createdAt))
 }
 
-async function newestSessionWithContent(workspace: string): Promise<string | undefined> {
+/** The session the positional `resume` continues: the one with the most RECENT
+ *  ACTIVITY (log mtime; creation time breaks ties).
+ *
+ *  Content is deliberately NOT a criterion: `resume` means "open the session I was
+ *  last working in", and if that session happens to still be an unused blank, that
+ *  is the session to open (in the conversation view — the hero is a launch-only
+ *  screen). Requiring content used to fall back to an older session the user was
+ *  not working in. A directory whose log is missing or unreadable is the only kind
+ *  skipped, because nothing can be served from it.
+ *  @param workspace - the workspace whose sessions to search.
+ *  @returns the session id, or undefined when there is nothing to open. */
+async function mostRecentlyActiveSession(workspace: string): Promise<string | undefined> {
   try {
     const dir = join(dshHomePath('sessions'), projectKey(workspace))
     const entries = readdirSync(dir, { withFileTypes: true })
@@ -4942,13 +4952,7 @@ async function newestSessionWithContent(workspace: string): Promise<string | und
       try { activeAt = statSync(logPath).mtimeMs } catch { /* keep createdAt */ }
       candidates.push({ id: entry.name, createdAt, activeAt })
     }
-    for (const candidate of orderResumeCandidates(candidates)) {
-      const reader = new SessionLogReader(join(dir, candidate.id, 'session.jsonl.zstd'))
-      // A blank placeholder session holds only its seed rows; anything that ran a
-      // turn is far past this bound (and reading the count costs a frame probe).
-      if (await reader.totalEvents() > BLANK_SESSION_EVENTS) return candidate.id
-    }
-    return undefined
+    return orderResumeCandidates(candidates)[0]?.id
   } catch (error) {
     logErrorFileOnly('resume', `newest session lookup failed: ${error instanceof Error ? error.message : String(error)}`)
     return undefined

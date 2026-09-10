@@ -15,6 +15,7 @@
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -147,6 +148,24 @@ describe('leaveHero (explicit session actions)', () => {
     expect(store.hero).toBe(false)
     store.leaveHero() // idempotent
     expect(store.hero).toBe(false)
+  })
+})
+
+describe('resume targets the most recently active session, content or not', () => {
+  const source = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf8')
+
+  test('the picker has no content filter any more', () => {
+    // Requiring >32 events fell through to an older session the user was not
+    // working in, which is the opposite of "resume what I was just using".
+    const picker = source.slice(source.indexOf('async function mostRecentlyActiveSession'))
+    const body = picker.slice(0, picker.indexOf('\n}'))
+    expect(body).toContain('return orderResumeCandidates(candidates)[0]?.id')
+    expect(body).not.toContain('totalEvents()')
+    expect(source).not.toContain('BLANK_SESSION_EVENTS')
+  })
+
+  test('an explicit resume leaves the hero, so a blank target is still the conversation view', () => {
+    expect(source).toContain('if (wantsExistingSession) store.leaveHero()')
   })
 })
 
