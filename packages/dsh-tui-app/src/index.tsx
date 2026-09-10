@@ -4889,9 +4889,9 @@ function resumeHistoryIntoStore(
        *  slices once more than {@link RESUME_OLDER_ITEM_CAP} are held (memory
        *  bound for very long sessions); the dropped ranges land on the
        *  evicted stack and are re-folded near the top on demand. */
-      const evictOverCap = (): void => {
+      const evictOverCap = (): boolean => {
         let over = store.loadedOlder - olderItemCap(store.rows)
-        if (over <= 0 || foldedNewestFirst.length === 0) return
+        if (over <= 0 || foldedNewestFirst.length === 0) return false
         const popped: { from: number; to: number; items: number }[] = []
         let droppedItems = 0
         while (droppedItems < over && foldedNewestFirst.length > 0) {
@@ -4906,12 +4906,30 @@ function resumeHistoryIntoStore(
           evictedOldestFirst.unshift(...popped)
           for (const rec of popped) evictedEv += rec.to - rec.from
           progress()
-        } else {
-          // Nothing was trimmed: restore the popped records untouched.
-          for (let i = popped.length - 1; i >= 0; i--) foldedNewestFirst.push(popped[i]!)
+          return true
         }
+        // Nothing was trimmed: restore the popped records untouched. The caller
+        // MUST NOT retry in a tight loop — this is the shape of a hang (see the
+        // no-progress guard below), so report failure and let it rest.
+        for (let i = popped.length - 1; i >= 0; i--) foldedNewestFirst.push(popped[i]!)
+        return false
       }
       let lastLoopState = ''
+      /** Set once the tail window has filled (cap reached / an eviction was
+       *  needed). While the reader stays at the live tail the driver then RESTS
+       *  instead of folding more: anything it folded next would be evicted on
+       *  the following iteration, and the evicted ranges are exactly as cheap to
+       *  fold on demand when the reader scrolls up. Measured before this guard:
+       *  `evictedEv=757,661` — **53% of the 1.43M folded events were folded and
+       *  thrown away**, the resume's fold ran ~130 s and kept the process at
+       *  24-39% CPU for minutes after opening a giant session. Cleared whenever
+       *  the reader leaves the tail, so scrolling up resumes folding. */
+      let tailWindowFilled = false
+      /** Consecutive iterations that changed nothing (belt and braces against a
+       *  future no-progress path: an unguarded `continue` in this loop takes the
+       *  only JS thread and kills keyboard/mouse input outright). */
+      let stalled = 0
+      let lastProgressKey = ''
       for (;;) {
         // Diagnostic (gated: `DSH_TUI_DEBUG_RESUME=1`), logged only when the
         // driver's STATE changes — never 1 Hz spam while resting. It exists
@@ -4935,10 +4953,19 @@ function resumeHistoryIntoStore(
           await sleepFor(RESUME_FOLD_HOLD_MS)
           continue
         }
-        // Trim over-cap older while the user stays at the live tail.
+        // Trim over-cap older while the user stays at the live tail. The yield
+        // is mandatory: this branch used to `continue` with no await, so an
+        // eviction that could not get under the cap spun the thread forever.
         if (store.followTail && store.loadedOlder > olderItemCap(store.rows)) {
           store.setHistoryHolding(true)
-          evictOverCap()
+          tailWindowFilled = true
+          const trimmed = evictOverCap()
+          if (!trimmed) {
+            logErrorFileOnly('resume',
+              `evict made no progress (loadedOlder=${store.loadedOlder} cap=${olderItemCap(store.rows)} `
+              + `pending=${foldedNewestFirst.length}); resting instead of spinning`)
+          }
+          await sleepFor(RESUME_FOLD_YIELD_MS)
           continue
         }
         // Done when every original slice and every evicted slice is loaded.
@@ -4959,7 +4986,8 @@ function resumeHistoryIntoStore(
           //     the readout looking permanently stuck).
           // Resting shows an honest readout; folding resumes when the reader
           // scrolls back up (nearTop → followTail false).
-          if (store.loadedOlder >= olderItemCap(store.rows)
+          if (tailWindowFilled
+            || store.loadedOlder >= olderItemCap(store.rows)
             || (cursor < 0 && evictedOldestFirst.length > 0)) {
             store.setHistoryHolding(true)
             // Loaded as much as this view needs: report it ONCE and drop the
@@ -4968,15 +4996,28 @@ function resumeHistoryIntoStore(
             await sleepFor(RESUME_FOLD_HOLD_MS)
             continue
           }
-        } else if (!nearTop()) {
-          store.setHistoryHolding(true)
-          await sleepFor(RESUME_FOLD_HOLD_MS)
-          continue
+        } else {
+          // Reader left the live tail: folding is wanted again.
+          tailWindowFilled = false
+          if (!nearTop()) {
+            store.setHistoryHolding(true)
+            await sleepFor(RESUME_FOLD_HOLD_MS)
+            continue
+          }
         }
         // Fold one slice, then always breathe between slices (even an 8 ms
         // slice back-to-back with the live stream can starve a frame).
         store.setHistoryHolding(false)
         store.unsettleHistoryLoad()
+        const progressKey = `${cursor}|${evictedOldestFirst.length}|${store.loadedOlder}|${unfoldedEv}`
+        if (progressKey === lastProgressKey) stalled += 1
+        else { stalled = 0; lastProgressKey = progressKey }
+        if (stalled > 5) {
+          logErrorFileOnly('resume', `fold driver made no progress for ${stalled} iterations (${progressKey}); resting`)
+          stalled = 0
+          await sleepFor(RESUME_FOLD_HOLD_MS)
+          continue
+        }
         if (!stepFold()) break
         await sleepFor(RESUME_FOLD_YIELD_MS)
       }
