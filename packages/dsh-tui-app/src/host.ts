@@ -25,6 +25,8 @@ import { planResumeFold } from './resume-fold.ts'
 import { findReusableBlank, foldSessionBlank, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext } from '@deepseek-ai/dsh-compaction'
+import { GoalError } from '@deepseek-ai/dsh-goal'
+import type { HostCommand, HostCommandResult } from './host-command.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -37,7 +39,7 @@ import { logErrorFileOnly } from './log.ts'
 interface HostRequest {
   id?: number
   type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy' | 'new'
-    | 'model' | 'compact' | 'abort-compact'
+    | 'model' | 'compact' | 'abort-compact' | 'command'
   /** `prompt`: the user message's content blocks, sent as plain JSON. */
   blocks?: unknown[]
   /** `attach`: explicit session id (absent = newest with content in the cwd). */
@@ -53,6 +55,8 @@ interface HostRequest {
   permission?: string
   /** `model`: the selection the client's `/models` dialog applied. */
   selection?: { provider: string; model: string; reasoningEffort?: string }
+  /** `command`: one `/goal` or `/plan` seam call. */
+  command?: HostCommand
 }
 
 /** The two host-side waterfalls that need the CLIENT's Ink dialogs. */
@@ -268,6 +272,76 @@ export async function startHost(
     try { await agent.whenIdle?.() } catch { /* best-effort */ }
     try { await sessions?.flush?.(agent.session) } catch (error) { logErrorFileOnly('host', error) }
     try { await previous.dispose() } catch (error) { logErrorFileOnly('host', error) }
+  }
+
+  /**
+   * `/goal` and `/plan`: run one seam call on the agent this host owns.
+   *
+   * Both services reject anything that is not the live agent, so the work cannot
+   * happen in the client; the client keeps the grammar and the wording and sends
+   * one semantic operation per call. Rejections come back CLASSIFIED
+   * (`GoalError` code) so the client's existing copy mapping stays in one place.
+   * @param requestId - protocol id to answer.
+   * @param command - the operation to perform.
+   */
+  const runCommand = (requestId: number | undefined, command: HostCommand | undefined): void => {
+    const fail = (code: string, message: string): void => {
+      send({ id: requestId, type: 'command-result', result: { error: { code, message } } })
+    }
+    if (command === undefined) {
+      fail('bad-command', 'missing command')
+      return
+    }
+    const agent = handle?.agent
+    if (agent === undefined) {
+      fail('no-agent', 'no session is attached')
+      return
+    }
+    try {
+      const result: Record<string, unknown> = {}
+      if (command.kind === 'goal') {
+        const goals = ctx.get('goals') as unknown as {
+          get(agent: unknown): unknown
+          create(agent: unknown, input: { objective: string }): unknown
+          edit(agent: unknown, ref: unknown, input: { objective: string }): unknown
+          pause(agent: unknown, ref: unknown): unknown
+          resume(agent: unknown, ref: unknown): unknown
+          clear(agent: unknown, ref: unknown): void
+        }
+        switch (command.op) {
+          case 'get': result.goal = goals.get(agent); break
+          case 'create': result.goal = goals.create(agent, { objective: command.objective }); break
+          case 'edit': result.goal = goals.edit(agent, command.ref, { objective: command.objective ?? '' }); break
+          case 'pause': result.goal = goals.pause(agent, command.ref); break
+          case 'resume': result.goal = goals.resume(agent, command.ref); break
+          case 'clear': goals.clear(agent, command.ref); break
+        }
+      } else {
+        const planMode = ctx.get('planMode') as unknown as {
+          get(agent: unknown): { active: boolean }
+          set(agent: unknown, active: boolean): string
+        }
+        if (command.op === 'get') {
+          result.active = planMode.get(agent).active
+        } else {
+          result.outcome = planMode.set(agent, command.active)
+          if (command.message !== undefined && command.message !== '') {
+            // `/plan <message>` also steers the text into the session — the host
+            // owns the real agent, so the client ships the text instead of
+            // calling `agent.steer` on its (session-less) shim.
+            const steer = (agent as unknown as { steer?(message: unknown): void }).steer
+            steer?.call(agent, createUserMessage({
+              content: [{ type: 'text', text: command.message }],
+              source: { kind: 'user' },
+            }))
+          }
+        }
+      }
+      send({ id: requestId, type: 'command-result', result: result as HostCommandResult })
+    } catch (error) {
+      const code = error instanceof GoalError ? error.code : 'failed'
+      fail(code, error instanceof Error ? error.message : String(error))
+    }
   }
 
   /**
@@ -610,6 +684,7 @@ export async function startHost(
           case 'model': setModel(request.id, request.selection); break
           case 'compact': await startCompact(request.id); break
           case 'abort-compact': abortCompact(); break
+          case 'command': runCommand(request.id, request.command); break
           case 'page': page(request.id, request.from ?? 0, request.to ?? Number.MAX_SAFE_INTEGER); break
           case 'prompt': prompt(request.id, request.blocks); break
           case 'cancel': cancel(request.id); break

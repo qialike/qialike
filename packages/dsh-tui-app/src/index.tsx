@@ -25,6 +25,7 @@ import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { startHost } from './host.ts'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import { spawnHostClient, type HostAttached, type HostClient, type HostEvent } from './host-client.ts'
+import type { HostCommand, HostCommandResult } from './host-command.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
@@ -1933,6 +1934,12 @@ export class Store {
   get permission(): SandboxMode { return this._permission }
   get permissionLabel(): string { return PERMISSION_LABEL[this._permission] }
   get permissionColor(): string { return theme[PERMISSION_ROLE[this._permission]] }
+  /** P4c M4.3: the session-scoped command plane (`/goal`, `/plan`) when the
+   *  session lives in another process. The command plugins call it through this
+   *  shared store — their bundles cannot see a module VALUE of this file — and
+   *  the runtime assigns it in host mode only (in-process they use the local
+   *  harness seams directly). */
+  hostCommand?: (command: HostCommand) => Promise<HostCommandResult>
   /** P4c M3: notified when the sandbox mode is cycled, so the process that OWNS
    *  the session can mirror it (in host mode the child enforces the bash fence
    *  and writes the durable `sandbox/mode` event). A callback on the shared
@@ -3141,6 +3148,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // export from this file). Sent on demand only — a mode the user never chose
     // must not append an event to the log.
     store.onPermissionChange = (mode) => { client.setPolicy(mode) }
+    // `/goal` and `/plan` need the live agent: in host mode that is the child's,
+    // so the command plugins go through this seam instead of the local services.
+    store.hostCommand = (command) => client.command(command)
     const info = await client.ready
     logErrorFileOnly('host', `client: host ready pid=${String(info.pid)} model=${String(info.model)}`)
     // No session yet: empty shim ⇒ the app mounts on the hero screen.

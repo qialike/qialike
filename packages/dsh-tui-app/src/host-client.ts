@@ -10,6 +10,7 @@
  */
 
 import { logErrorFileOnly } from './log.ts'
+import type { HostCommand, HostCommandResult } from './host-command.ts'
 
 /** The Bun global is not in the typecheck project's lib set; declare only the
  *  spawn surface this module uses (the build bundles Bun's real implementation). */
@@ -83,6 +84,8 @@ export interface HostClient {
   compact(): Promise<CompactionOutcome>
   /** Esc during `/compact`: abort it through the harness's own signal. */
   abortCompact(): void
+  /** One `/goal` or `/plan` seam call on the agent the host owns. */
+  command(command: HostCommand): Promise<HostCommandResult>
   /** Fetch `[from, to)` of the durable event log. */
   page(from: number, to: number): Promise<HostEvent[]>
   /** Submit a user message (the host's `agent.followup`). */
@@ -220,6 +223,9 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
       case 'compacted':
         settle(message.id, message as CompactionOutcome)
         return
+      case 'command-result':
+        settle(message.id, message.result as HostCommandResult)
+        return
       case 'bye':
         settle(message.id, undefined)
         return
@@ -327,6 +333,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
     setModel: (selection) => request<void>({ type: 'model', selection }, 20_000),
     compact: () => request<CompactionOutcome>({ type: 'compact' }, 10 * 60_000),
     abortCompact: () => { write({ type: 'abort-compact' }) },
+    command: (command) => request<HostCommandResult>({ type: 'command', command }, 30_000),
     page: (from: number, to: number) => request<HostEvent[]>({ type: 'page', from, to }),
     prompt: (blocks: readonly unknown[]) => request<void>({ type: 'prompt', blocks }),
     cancel: () => request<void>({ type: 'cancel' }),

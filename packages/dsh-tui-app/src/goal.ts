@@ -12,7 +12,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { GoalError, type GoalPhase, type GoalRef, type GoalView } from '@deepseek-ai/dsh-goal'
+import { GoalError, type GoalErrorCode, type GoalPhase, type GoalRef, type GoalView } from '@deepseek-ai/dsh-goal'
+import type { HostCommandResult } from './host-command.ts'
 import type { TuiService, Store } from './index.tsx'
 
 /** Stable Cordis plugin name. */
@@ -97,100 +98,148 @@ function goalRef(goal: GoalView): GoalRef {
   return { id: goal.id, revision: goal.revision }
 }
 
-/** Register the `/goal` command; the harness seams throw when the agent is
- *  not the registry's live instance, so the live agent is resolved first. */
+/**
+ * Turn a host answer into the value the local seam would have returned, or throw
+ * the SAME `GoalError` the harness would have thrown — so every message below
+ * (and the `instanceof GoalError` branch that renders the state hint) behaves
+ * identically whether the goal lives here or in the host.
+ * @param result - the host's answer.
+ * @param value - the field to return on success.
+ * @returns the service value.
+ */
+function fromHost<T>(result: HostCommandResult, value: (r: HostCommandResult) => T): T {
+  if (result.error !== undefined) {
+    throw new GoalError(result.error.message, result.error.code as GoalErrorCode)
+  }
+  return value(result)
+}
+
+/**
+ * Run one `/goal` request: the state machine, the grammar and every human
+ * message live HERE, and the seam calls go either to the local harness or (host
+ * mode) over the protocol — the goal service only accepts the registry's live
+ * agent, so in host mode that agent is the child's.
+ * @param arg - the raw composer argument.
+ */
+async function runGoal(ctx: Context, arg: string): Promise<void> {
+  const session = store.session
+  if (session === undefined) {
+    store.append('status', 'goal: no active session', true)
+    return
+  }
+  const host = store.hostCommand
+  const localAgent = host === undefined
+    ? (ctx.agents as { get(id: string): unknown }).get(String(session.id))
+    : undefined
+  if (host === undefined && localAgent === undefined) {
+    store.append('status', 'goal: no active agent', true)
+    return
+  }
+  const agent = localAgent
+  const get = async (): Promise<GoalView | undefined> => host === undefined
+    ? ctx.goals.get(agent as never)
+    : fromHost(await host({ kind: 'goal', op: 'get' }), (r) => r.goal)
+  const create = async (objective: string): Promise<GoalView> => host === undefined
+    ? ctx.goals.create(agent as never, { objective })
+    : fromHost(await host({ kind: 'goal', op: 'create', objective }), (r) => r.goal as GoalView)
+  const edit = async (ref: GoalRef, objective: string): Promise<GoalView> => host === undefined
+    ? ctx.goals.edit(agent as never, ref, { objective })
+    : fromHost(await host({ kind: 'goal', op: 'edit', ref, objective }), (r) => r.goal as GoalView)
+  const pause = async (ref: GoalRef): Promise<GoalView> => host === undefined
+    ? ctx.goals.pause(agent as never, ref)
+    : fromHost(await host({ kind: 'goal', op: 'pause', ref }), (r) => r.goal as GoalView)
+  const resume = async (ref: GoalRef): Promise<GoalView> => host === undefined
+    ? ctx.goals.resume(agent as never, ref)
+    : fromHost(await host({ kind: 'goal', op: 'resume', ref }), (r) => r.goal as GoalView)
+  const clear = async (ref: GoalRef): Promise<void> => {
+    if (host === undefined) {
+      ctx.goals.clear(agent as never, ref)
+      return
+    }
+    fromHost(await host({ kind: 'goal', op: 'clear', ref }), () => undefined)
+  }
+
+  const command = parseGoalCommand(arg)
+  try {
+    switch (command.kind) {
+      case 'show': {
+        const current = await get()
+        store.append('status', current === undefined
+          ? `No goal is currently set.\n${USAGE}`
+          : renderGoal('Goal', current), true)
+        return
+      }
+      case 'invalid-edit':
+        store.append('status', `Goal editing requires a replacement objective.\n${USAGE}`, true)
+        return
+      case 'create': {
+        const current = await get()
+        if (current !== undefined && current.phase !== 'complete') {
+          store.append('status',
+            `A goal is already ${phaseLabel(current.phase)}. Use /goal edit <objective> to change it or /goal clear before replacing it.`, true)
+          return
+        }
+        store.append('status', renderGoal('Goal created', await create(command.objective)), true)
+        return
+      }
+      case 'edit': {
+        const current = await get()
+        if (current === undefined) {
+          store.append('status', `No goal is currently set; /goal edit requires one. ${USAGE}`, true)
+          return
+        }
+        if (current.phase === 'complete') {
+          store.append('status', renderGoal('Goal created', await create(command.objective)), true)
+          return
+        }
+        store.append('status', renderGoal('Goal updated', await edit(goalRef(current), command.objective)), true)
+        return
+      }
+      case 'pause': {
+        const current = await get()
+        if (current === undefined) {
+          store.append('status', `No goal is currently set; /goal pause requires one. ${USAGE}`, true)
+          return
+        }
+        store.append('status', renderGoal('Goal paused', await pause(goalRef(current))), true)
+        return
+      }
+      case 'resume': {
+        const current = await get()
+        if (current === undefined) {
+          store.append('status', `No goal is currently set; /goal resume requires one. ${USAGE}`, true)
+          return
+        }
+        store.append('status', renderGoal('Goal resumed', await resume(goalRef(current))), true)
+        return
+      }
+      case 'clear': {
+        const current = await get()
+        if (current === undefined) {
+          store.append('status', 'No goal to clear.', true)
+          return
+        }
+        await clear(goalRef(current))
+        store.append('status', 'Goal cleared.', true)
+        return
+      }
+    }
+  } catch (error) {
+    if (error instanceof GoalError) {
+      store.append('status', 'The goal command is not valid for the current state. Run /goal to view available commands.', true)
+      return
+    }
+    store.append('status', `goal: ${error instanceof Error ? error.message : String(error)}`, true)
+  }
+}
+
+/** Register the `/goal` command. */
 export function apply(ctx: Context): void {
   store = ctx.get('tuiStore') as Store
   const tui = ctx.get('tui') as TuiService
   tui.commands.register({
     name: 'goal',
     hint: 'set or view the goal for a long-running task',
-    run: (arg) => {
-      const session = store.session
-      if (session === undefined) {
-        store.append('status', 'goal: no active session', true)
-        return
-      }
-      const agent = ctx.agents.get(session.id)
-      if (agent === undefined) {
-        store.append('status', 'goal: no active agent', true)
-        return
-      }
-      const command = parseGoalCommand(arg)
-      try {
-        switch (command.kind) {
-          case 'show': {
-            const current = ctx.goals.get(agent)
-            store.append('status', current === undefined
-              ? `No goal is currently set.\n${USAGE}`
-              : renderGoal('Goal', current), true)
-            return
-          }
-          case 'invalid-edit':
-            store.append('status', `Goal editing requires a replacement objective.\n${USAGE}`, true)
-            return
-          case 'create': {
-            const current = ctx.goals.get(agent)
-            if (current !== undefined && current.phase !== 'complete') {
-              store.append('status',
-                `A goal is already ${phaseLabel(current.phase)}. Use /goal edit <objective> to change it or /goal clear before replacing it.`, true)
-              return
-            }
-            const created = ctx.goals.create(agent, { objective: command.objective })
-            store.append('status', renderGoal('Goal created', created), true)
-            return
-          }
-          case 'edit': {
-            const current = ctx.goals.get(agent)
-            if (current === undefined) {
-              store.append('status', `No goal is currently set; /goal edit requires one. ${USAGE}`, true)
-              return
-            }
-            if (current.phase === 'complete') {
-              const replaced = ctx.goals.create(agent, { objective: command.objective })
-              store.append('status', renderGoal('Goal created', replaced), true)
-              return
-            }
-            const edited = ctx.goals.edit(agent, goalRef(current), { objective: command.objective })
-            store.append('status', renderGoal('Goal updated', edited), true)
-            return
-          }
-          case 'pause': {
-            const current = ctx.goals.get(agent)
-            if (current === undefined) {
-              store.append('status', `No goal is currently set; /goal pause requires one. ${USAGE}`, true)
-              return
-            }
-            store.append('status', renderGoal('Goal paused', ctx.goals.pause(agent, goalRef(current))), true)
-            return
-          }
-          case 'resume': {
-            const current = ctx.goals.get(agent)
-            if (current === undefined) {
-              store.append('status', `No goal is currently set; /goal resume requires one. ${USAGE}`, true)
-              return
-            }
-            store.append('status', renderGoal('Goal resumed', ctx.goals.resume(agent, goalRef(current))), true)
-            return
-          }
-          case 'clear': {
-            const current = ctx.goals.get(agent)
-            if (current === undefined) {
-              store.append('status', 'No goal to clear.', true)
-              return
-            }
-            ctx.goals.clear(agent, goalRef(current))
-            store.append('status', 'Goal cleared.', true)
-            return
-          }
-        }
-      } catch (error) {
-        if (error instanceof GoalError) {
-          store.append('status', 'The goal command is not valid for the current state. Run /goal to view available commands.', true)
-          return
-        }
-        store.append('status', `goal: ${error instanceof Error ? error.message : String(error)}`, true)
-      }
-    },
+    run: (arg) => { void runGoal(ctx, arg) },
   })
 }
