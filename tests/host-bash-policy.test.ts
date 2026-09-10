@@ -47,21 +47,37 @@ describe('bashMutates detects filesystem mutations', () => {
 })
 
 describe('readOnlyBashDecision fences bash only under read-only', () => {
-  test('denies a mutating bash command with the escalation marker', () => {
-    const decision = readOnlyBashDecision({ name: 'bash', args: { command: 'rm -rf /tmp/x' } }, 'read-only')
+  test('denies a mutating bash command with the marker AND the escalation hint', () => {
+    const decision = readOnlyBashDecision({ name: 'bash', arguments: { command: 'rm -rf /tmp/x' } }, 'read-only')
     expect(decision?.kind).toBe('deny')
+    // Verbatim the harness's own marker + hint (dsh-sandbox): a second dialect
+    // for the same refusal would leave the model without the sanctioned retry.
     expect(decision?.reason).toContain('[sandbox: file access denied under read-only mode]')
+    expect(decision?.reason).toContain('escalation available')
+    expect(decision?.reason).toContain('sandbox_permissions')
   })
 
-  test('read-only accepts an args STRING too (the harness also passes those)', () => {
-    expect(readOnlyBashDecision({ name: 'bash', args: 'touch x' }, 'read-only')?.kind).toBe('deny')
+  test('the payload field is `arguments` — reading `args` fails OPEN (shipped bug)', () => {
+    // The harness's ToolExecution carries parsed arguments on `arguments`. The
+    // fence once read `args`, saw '' every time and never denied anything.
+    expect(readOnlyBashDecision({ name: 'bash', arguments: { command: 'touch x' } }, 'read-only')?.kind).toBe('deny')
+    expect(readOnlyBashDecision({ name: 'bash', args: { command: 'touch x' } }, 'read-only')).toBeUndefined()
+  })
+
+  test('a string payload is accepted too (tools with a bare-string schema)', () => {
+    expect(readOnlyBashDecision({ name: 'bash', arguments: 'touch x' }, 'read-only')?.kind).toBe('deny')
   })
 
   test('a read-only command, another tool, and a wider mode all delegate', () => {
-    expect(readOnlyBashDecision({ name: 'bash', args: { command: 'ls' } }, 'read-only')).toBeUndefined()
-    expect(readOnlyBashDecision({ name: 'read', args: { command: 'rm x' } }, 'read-only')).toBeUndefined()
-    expect(readOnlyBashDecision({ name: 'bash', args: { command: 'rm x' } }, 'workspace-write')).toBeUndefined()
-    expect(readOnlyBashDecision({ name: 'bash', args: { command: 'rm x' } }, 'danger-full-access')).toBeUndefined()
+    expect(readOnlyBashDecision({ name: 'bash', arguments: { command: 'ls' } }, 'read-only')).toBeUndefined()
+    expect(readOnlyBashDecision({ name: 'read', arguments: { command: 'rm x' } }, 'read-only')).toBeUndefined()
+    expect(readOnlyBashDecision({ name: 'bash', arguments: { command: 'rm x' } }, 'workspace-write')).toBeUndefined()
+    expect(readOnlyBashDecision({ name: 'bash', arguments: { command: 'rm x' } }, 'danger-full-access')).toBeUndefined()
+  })
+
+  test('pwsh and bash-flavoured tool names are fenced as well', () => {
+    expect(readOnlyBashDecision({ name: 'pwsh', arguments: { command: 'mkdir x' } }, 'read-only')?.kind).toBe('deny')
+    expect(readOnlyBashDecision({ name: 'bash-bg', arguments: { command: 'mkdir x' } }, 'read-only')?.kind).toBe('deny')
   })
 })
 

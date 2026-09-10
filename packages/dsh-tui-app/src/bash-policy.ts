@@ -42,33 +42,55 @@ export function bashMutates(command: string): boolean {
   return false
 }
 
+/** The denial marker, verbatim as the harness's own sandbox emits it
+ *  (`dsh-sandbox` `sandboxDenialMarker`) — a UI must not invent a second
+ *  dialect for the same refusal. */
+const DENIAL_MARKER = '[sandbox: file access denied under read-only mode]'
+
+/** The same-turn escalation hint the harness appends to a denial
+ *  (`dsh-sandbox` `escalationHintMarker`, subject `command`): our refusal must
+ *  carry it too, or the model never learns the sanctioned retry exists and the
+ *  approval path becomes unreachable. */
+const ESCALATION_HINT = '[sandbox: escalation available — retry this exact command once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]'
+
+/**
+ * The command a tool execution is about to run.
+ *
+ * NOTE the field name: the harness's `tools/pre-execute` payload is a
+ * `ToolExecution`, whose parsed arguments live on **`arguments`**. Reading a
+ * (nonexistent) `args` silently yields `''` and makes every check fail OPEN —
+ * this fence shipped that way once and never denied anything.
+ * @param exec - the pending tool execution.
+ * @returns the command string (empty when this execution carries none).
+ */
+function commandOf(exec: { readonly arguments?: unknown }): string {
+  const args = exec.arguments
+  if (typeof args === 'string') return args
+  if (typeof args === 'object' && args !== null) {
+    const command = (args as Record<string, unknown>).command
+    return typeof command === 'string' ? command : ''
+  }
+  return ''
+}
+
 /**
  * Decide one tool execution under the `read-only` bash fence.
  *
  * `read-only` denies bash commands that would modify the filesystem; the fs
  * toolbox is fenced by the (pure-JS) fs-sandbox row instead. The denial carries
- * the `[sandbox: …]` marker the model surfaces for a `sandbox_permissions`
- * escalation, which then routes to the approval answerer.
- * @param exec - the tool execution under decision (`name` + `args`).
+ * the `[sandbox: …]` marker AND the escalation hint the model surfaces for a
+ * `sandbox_permissions` escalation, which then routes to the approval answerer.
+ * @param exec - the tool execution under decision (`name` + `arguments`).
  * @param permission - the effective sandbox mode (mirrored to the host in host mode).
  * @returns the deny decision, or `undefined` to delegate down the chain.
  */
 export function readOnlyBashDecision(
-  exec: { readonly name?: unknown; readonly args?: unknown },
+  exec: { readonly name?: unknown; readonly arguments?: unknown },
   permission: SandboxMode,
 ): PreToolDecision | undefined {
   if (permission !== 'read-only') return undefined
   const name = exec.name
-  const args = exec.args
-  const command = String(
-    typeof args === 'string'
-      ? args
-      : typeof args === 'object' && args !== null
-        ? (args as Record<string, unknown>).command ?? ''
-        : '',
-  )
-  if (typeof name === 'string' && (name === 'bash' || name === 'pwsh' || name.includes('bash')) && bashMutates(command)) {
-    return { kind: 'deny', reason: '[sandbox: file access denied under read-only mode]' }
-  }
-  return undefined
+  if (typeof name !== 'string' || !(name === 'bash' || name === 'pwsh' || name.includes('bash'))) return undefined
+  if (!bashMutates(commandOf(exec))) return undefined
+  return { kind: 'deny', reason: `${DENIAL_MARKER}\n${ESCALATION_HINT}` }
 }
