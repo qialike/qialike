@@ -61,6 +61,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
+import { createPromptQueue } from './host-prompt-queue.ts'
 import { HISTORY_FAST_EVENTS, HISTORY_SLICE_EVENTS, HISTORY_TAIL_EVENTS, describeResumeFailure, isCorruptLogMessage, localCut, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
@@ -3138,14 +3139,35 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   /** Set when the host could not be started and the launch fell back in-process
    *  (surfaced as a status line so the degradation is never silent). */
   let hostFallback: string | undefined
-  /** The host has resumed the session and can accept prompts (M6: the transcript
-   *  is readable from the log file long before this is true). */
-  let hostReady = false
+  /** May a prompt go to the host yet? The gate is CLOSED until the host reports
+   *  the session on screen attached, and is closed again when a switch starts —
+   *  in host mode the client is regularly ahead of the host (M6 renders from the
+   *  log file), and a prompt must never be delivered to the session the user just
+   *  left. Held prompts are sent in arrival order on release. */
+  const promptQueue = createPromptQueue()
   const BLANK_SESSION_EVENTS = 32
 /** How far past a slice start the file source looks for a safe boundary (M6.1b). */
   const SAFE_LOOKAHEAD = 512
-  /** Prompts typed in that window, flushed when the host is ready. */
-  const pendingPrompts: unknown[][] = []
+  /** Send one prompt to the host, reporting a failure instead of swallowing it. */
+  const sendHostPrompt = (client: HostClient, blocks: readonly unknown[]): void => {
+    void client.prompt(blocks).catch((error: unknown) => {
+      store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
+    })
+  }
+
+  /**
+   * The host has just confirmed the session now on screen is attached: open the
+   * gate and send whatever was typed while it was still opening.
+   *
+   * EVERY host-attach path must call this — the file-backed one and the one that
+   * renders from the host's pages. Opening it on only one of them left every
+   * prompt queued forever on a non-file launch (flat launch / `/new`, both of
+   * which ask the host for a session instead of reading a log file).
+   */
+  const releaseHostPrompts = (client: HostClient): void => {
+    promptQueue.release((blocks) => { sendHostPrompt(client, blocks) })
+  }
+
   /** Build the client-side stand-ins for a host-owned agent: the transcript
    *  fold, the store and the commands only need `id` / `snapshotEvents()` /
    *  `followup` / `cancel`, all of which are served over the protocol. */
@@ -3169,14 +3191,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // session (M6: the transcript is already readable by then) a prompt would
         // be rejected `not-attached`, so it is held and sent on readiness.
         const blocks = (message.content ?? []) as unknown[]
-        if (!hostReady) {
-          pendingPrompts.push(blocks)
+        if (promptQueue.enqueue(blocks)) {
           store.append('status', 'Queued — the session is still opening.', true)
           return
         }
-        void client.prompt(blocks).catch((error: unknown) => {
-          store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
-        })
+        sendHostPrompt(client, blocks)
       },
       cancel: () => { void client.cancel().catch(() => { /* best-effort */ }) },
       whenIdle: () => Promise.resolve(),
@@ -3430,6 +3449,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     }
     logErrorFileOnly('host',
       `client: served id=${attached.sessionId} events=${attached.eventCount} open=${attached.openMs}ms tail=${events.length}`)
+    // The host served THIS session, so it is attached to it: prompts may go out.
+    // (This is the path a flat launch and `/new` take — it must not depend on the
+    // file-backed warm-up below, which those paths never reach.)
+    releaseHostPrompts(client)
   }
   /** `/compact` in host mode: the harness's manual compaction runs where the
    *  live agent is, so this process only drives the UI — the status bar, the
@@ -3646,18 +3669,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         const target = wantedId ?? resumeId
         await paintBeforeBlock()
         const attached = await client.attach(target)
-        hostReady = true
-        for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
-          void client.prompt(blocks).catch((error: unknown) => {
-            store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
-          })
-        }
+        releaseHostPrompts(client)
         if (attached.title !== undefined) {
           rememberTitle(sessionId, attached.title)
           store.notifyTitles()
         }
         logErrorFileOnly('host', `client: opened from the log file; host ready after ${attached.openMs}ms`)
       } catch (error) {
+        // A failed warm-up must not leave prompts held forever: release them so
+        // the user gets the host's own error instead of an eternal "still opening".
+        releaseHostPrompts(client)
         logErrorFileOnly('host', `client: host warm-up failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     })()
@@ -4417,10 +4438,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       store.beginSessionLoading({ id: 'new', startedAt })
       const ticker = setInterval(() => store.tickSessionLoading(), 250)
       void (async (): Promise<void> => {
+        promptQueue.hold() // prompts typed during /new belong to the NEW session
         try {
           await paintBeforeBlock()
           const answer = await client.newSession()
           if (answer.type === 'new-session') {
+            // Same session, host already attached: nothing was switched.
+            releaseHostPrompts(client)
             store.append('status', 'already on a new (unused) session', true)
             return
           }
@@ -4429,6 +4453,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           const message = error instanceof Error ? error.message : String(error)
           logErrorFileOnly('host', `client: new failed: ${message}`)
           store.append('status', `new session failed: ${message}`, true)
+          releaseHostPrompts(client) // the old session is still attached; do not hold prompts
         } finally {
           clearInterval(ticker)
           store.endSessionLoading()
@@ -4539,6 +4564,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // the host's warm-up, which is what left "Load session:" ticking for ~12 s
         // after the transcript had visibly arrived.
         let servedFromFile = false
+        // A switch closes the gate: until the host confirms the NEW session, a
+        // prompt typed now would be delivered to the session being left.
+        promptQueue.hold()
         try {
           await paintBeforeBlock()
           // M6.1b: switch the same way the boot does — read the target's log file
@@ -4568,15 +4596,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // already on screen and a prompt typed now is queued, not lost.
         try {
           const attached = await client.attach(String(id))
-          hostReady = true
-          for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
-            void client.prompt(blocks).catch(() => { /* best-effort */ })
-          }
+          releaseHostPrompts(client)
           if (attached.title !== undefined) {
             rememberTitle(sessionId, attached.title)
             store.notifyTitles()
           }
         } catch (error) {
+          releaseHostPrompts(client)
           logErrorFileOnly('host', `client: switch warm-up failed: ${error instanceof Error ? error.message : String(error)}`)
         }
       })()
