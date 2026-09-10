@@ -343,6 +343,10 @@ export interface SessionLoadingState {
   readonly bytes?: number
   /** Epoch ms the switch started (drives the live elapsed seconds). */
   readonly startedAt: number
+  /** The load is expected to LAND ON the hero (a flat launch or `/new`): keep the
+   *  hero up while it runs instead of painting the docked chrome first. Absent for
+   *  a `/sessions` switch, which needs that chrome for its progress slot. */
+  readonly keepHero?: boolean
   /** Steps in display order; the last entry is the ACTIVE one. */
   readonly steps: readonly SessionLoadStep[]
 }
@@ -1231,8 +1235,14 @@ export class Store {
   }
 
   /** Enter the "opening a session" state (paints the dialog; suppresses keys).
-   *  A second Enter replaces the state instead of stacking dialogs. */
-  beginSessionLoading(state: { id: string; title?: string; bytes?: number; startedAt: number }): void {
+   *  A second Enter replaces the state instead of stacking dialogs.
+   *  @param state.keepHero - the load is expected to LAND ON the hero (a flat
+   *    launch or `/new`: the host creates or adopts an unused blank session), so
+   *    the hero stays up while it runs. Without it the docked chrome (status bar
+   *    + `Load session:`) is painted instead — right for a `/sessions` switch,
+   *    which needs that progress slot, but it made a plain `dsh-tui` start on the
+   *    conversation view for ~0.4 s before the hero replaced it. */
+  beginSessionLoading(state: { id: string; title?: string; bytes?: number; startedAt: number; keepHero?: boolean }): void {
     this._loadError = null
     this._sessionLoading = {
       ...state,
@@ -2010,8 +2020,10 @@ export class Store {
     // Picking a session in /sessions leaves the hero IMMEDIATELY (user call):
     // the docked chrome — status bar included — is up while the harness opens
     // the target, so the load has a visible progress slot from the first frame
-    // instead of a modal over the hero.
-    if (this._sessionLoading !== null) return false
+    // instead of a modal over the hero. A LAUNCH that can only land on a blank
+    // session (`keepHero`) is the exception: `dsh-tui` must START on the hero,
+    // not flash the conversation view for the ~0.4 s the host needs.
+    if (this._sessionLoading !== null && this._sessionLoading.keepHero !== true) return false
     // A FAILED load keeps the docked view up too: the hero has neither a status
     // bar nor transcript rows, so an error shown there would be invisible.
     if (this._loadError !== null) return false
@@ -3613,7 +3625,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   if (hostMode && hostClient !== undefined) {
     const client = hostClient
     const startedAt = Date.now()
-    store.beginSessionLoading({ id: 'host', startedAt })
+    // Decided BEFORE the loading state: a flat launch (no `--resume`, no
+    // auto-resume) can only land on an unused blank session — the host creates
+    // one or adopts one — so the hero must be the FIRST frame, not a late
+    // replacement for the docked chrome.
+    const wantsExistingSession = resumeId !== undefined
+      || config.resumeNewest === true
+      || resolveResumeLast()
+    store.beginSessionLoading({ id: 'host', startedAt, keepHero: !wantsExistingSession })
     const ticker = setInterval(() => store.tickSessionLoading(), 250)
     void (async (): Promise<void> => {
       // Which session? Resolved HERE, without the host, so the transcript does not
@@ -3630,9 +3649,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // Asking the host to `attach` without an id means "newest with content",
         // which is why a flat launch in a session-less workspace used to fail
         // with `no session to attach` instead of showing the hero.
-        const wantsExisting = resumeId !== undefined
-          || config.resumeNewest === true
-          || resolveResumeLast()
+        const wantsExisting = wantsExistingSession
         // ── M6: paint the transcript from the LOG FILE first ────────────────
         // A seekable frame read costs ~30 ms for a tail window where the harness
         // needs ~12 s to materialize every event, and the host is only needed for
@@ -4445,7 +4462,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (hostMode && hostClient !== undefined) {
       const client = hostClient
       const startedAt = Date.now()
-      store.beginSessionLoading({ id: 'new', startedAt })
+      // `/new` always lands on an unused blank session (created or adopted), so
+      // the hero is the right frame throughout — same rule as a flat launch.
+      store.beginSessionLoading({ id: 'new', startedAt, keepHero: true })
       const ticker = setInterval(() => store.tickSessionLoading(), 250)
       void (async (): Promise<void> => {
         promptQueue.hold() // prompts typed during /new belong to the NEW session

@@ -53,6 +53,34 @@ describe('resume mode parsing', () => {
   })
 })
 
+describe('store hero predicate while a launch is opening', () => {
+  test('a blank-landing launch keeps the hero; a /sessions switch does not', () => {
+    // `dsh-tui` with no args can only land on an unused blank session, so the
+    // hero must be the FIRST frame — before this it painted the docked chrome
+    // (status bar + `Load session:`) for the ~0.4 s the host needed, then
+    // replaced it (measured on a real terminal: DOCK at t=0.68 s, HERO at 1.04 s).
+    const launching = new Store()
+    launching.beginSessionLoading({ id: 'host', startedAt: Date.now(), keepHero: true })
+    expect(launching.hero).toBe(true)
+
+    // A switch to an existing session is a user call: docked chrome from frame 1,
+    // because that is where the load progress lives.
+    const switching = new Store()
+    switching.beginSessionLoading({ id: 'sess-1', startedAt: Date.now() })
+    expect(switching.hero).toBe(false)
+
+    // `/new` lands on a blank session too, so it keeps the hero as well.
+    const fresh = new Store()
+    fresh.beginSessionLoading({ id: 'new', startedAt: Date.now(), keepHero: true })
+    expect(fresh.hero).toBe(true)
+
+    // A FAILED load must win over keepHero: the hero has no status bar, so an
+    // error there would be invisible.
+    launching.failSessionLoad('host attach failed')
+    expect(launching.hero).toBe(false)
+  })
+})
+
 describe('store hero predicate', () => {
   test('an unused blank session shows the hero; content/running/attempted do not', () => {
     const store = new Store()
