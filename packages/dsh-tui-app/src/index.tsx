@@ -3071,7 +3071,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   const sessions = ctx.get('sessions')
   if (agents === undefined || defaultModel === undefined || sessions === undefined) return
 
-  const selection = defaultModel.currentSelection()
+  /** The model this session runs under. In-process that is the persisted default;
+   *  in host mode the CHILD decides (it assembles every request) and reports it in
+   *  `ready`, which `establishFromHost` copies here — so the composer label can
+   *  never disagree with the model actually requested. */
+  let selection = defaultModel.currentSelection()
   const agentOptions = config.model === undefined
     ? { provider: selection.provider, model: selection.model }
     : { provider: selection.provider, model: config.model }
@@ -3178,6 +3182,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.hostCommand = (command) => client.command(command)
     const info = await client.ready
     logErrorFileOnly('host', `client: host ready pid=${String(info.pid)} model=${String(info.model)}`)
+    // Adopt the host's route as this client's selection: `provider/model`, exactly
+    // as `agentDefaultModel` spells it. A host that reports nothing (or a form we
+    // cannot parse) leaves the persisted default in place.
+    const reported = /^([^/]+)\/(.+)$/.exec(info.model ?? '')
+    if (reported !== null) selection = { provider: reported[1]!, model: reported[2]! }
     // No session yet: empty shim ⇒ the app mounts on the hero screen.
     const placeholder = hostAgentShim(client, { sessionId: 'host-pending', eventCount: 0 }, [])
     return { handle: placeholder.handle, resumed: false }

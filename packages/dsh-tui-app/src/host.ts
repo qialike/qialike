@@ -361,6 +361,13 @@ export async function startHost(
       return
     }
     selected.current = selection as ModelSelection
+    // Persist the default HERE as well: in host mode the client's profile may not
+    // mount `agentDefaultModel` at all (M4.4), so the child that owns the harness
+    // is the one that can write the settings section future launches read.
+    try {
+      void (ctx.get('agentDefaultModel') as unknown as { saveSelection?(next: ModelSelection): Promise<void> } | undefined)
+        ?.saveSelection?.(selection as ModelSelection)
+    } catch (error) { logErrorFileOnly('host', error) }
     logErrorFileOnly('host',
       `model: ${selection.provider}/${selection.model}${selection.reasoningEffort === undefined ? '' : ` (${selection.reasoningEffort})`}`)
     send({ id: requestId, type: 'accepted' })

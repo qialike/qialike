@@ -164,8 +164,29 @@ async function bootSea(
     return ctx
   } catch (cause) {
     await ctx.fiber.dispose()
-    throw new Error(`${binName}: plugin tree failed to load: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+    throw new Error(`${binName}: plugin tree failed to load: ${mountDetail(cause)}`, { cause })
   }
+}
+
+/**
+ * Reportable text of a mount failure, with the failed ROWS named.
+ *
+ * The loader reports several failed rows as ONE `AggregateError` whose own
+ * message ("loader entries failed to apply") names none of them, and the rows
+ * sit behind it (directly or as `cause`) — so a composition that fails on two
+ * rows printed nothing an operator could act on. The harness's own preset mount
+ * flattens this shape (`agent-presets` `mountDetail`); the launcher has to do the
+ * same, or a profile mistake costs a bisect instead of a message.
+ * @param error - the value the boot rejected with.
+ * @returns one line per cause.
+ */
+function mountDetail(error: unknown): string {
+  if (!(error instanceof Error)) return String(error)
+  const branches = error instanceof AggregateError
+    ? error.errors
+    : error.cause instanceof AggregateError ? error.cause.errors : []
+  if (branches.length === 0) return error.message
+  return [error.message, ...branches.map((branch) => `- ${mountDetail(branch).replaceAll('\n', '\n  ')}`)].join('\n')
 }
 
 /** Materialize the embedded profile files in a fresh temp dir and return their paths. */
