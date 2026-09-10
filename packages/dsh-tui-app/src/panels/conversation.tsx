@@ -16,6 +16,7 @@ import {
   APP_VERSION,
   sessionLoadBar,
   sessionLoadPercent,
+  compactionRowHeader,
   compactionStatusText,
   sessionLoadingStatusText,
   sessionLoadingText,
@@ -503,7 +504,7 @@ type Row =
   | { type: 'item'; item: TranscriptItem; top: number; bottom: number }
   | { type: 'steps'; top: number; bottom: number }
 
-function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpanded: boolean, hovered: boolean, usable: number, toolLive: boolean, reasoningLive: boolean): React.ReactNode {
+function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpanded: boolean, compactionExpanded: boolean, hovered: boolean, usable: number, toolLive: boolean, reasoningLive: boolean): React.ReactNode {
   // Terminal-injection guard: strip control bytes from every untrusted text
   // surface before it enters the render tree (dsh-tui-security.md). The store
   // keeps the original text; only the display is sanitized.
@@ -540,6 +541,26 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
         {expandReasoning
           ? <Text color={mutedReadable()} wrap="wrap">{text}</Text>
           : <Text color={mutedReadable()} wrap="wrap">{thinkPreviewLine(text, reasoningLive, usable)}</Text>}
+      </Box>
+    )
+  }
+  if (item.kind === 'compaction') {
+    // Compaction-checkpoint row (web parity: `CompactionItem`): ONE line naming
+    // the compaction and how much history it replaced, expandable (click /
+    // /think) to the summary the model wrote. The header text comes from the
+    // shared `compactionRowHeader`, i.e. exactly what the scroll/selection
+    // mirror in `buildTranscriptRows` emits — the two can never disagree.
+    const facts = item.compaction ?? {}
+    const summary = facts.summary === undefined ? undefined : stripTerminalControls(facts.summary)
+    const expanded = summary !== undefined && compactionExpanded
+    return (
+      <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS} flexDirection="column">
+        <Text inverse={hovered || undefined} color={mutedReadable()} wrap="truncate">
+          {compactionRowHeader(facts, expanded)}
+        </Text>
+        {expanded
+          ? <MarkdownText text={summary} usable={MESSAGE_TEXT_WIDTH(usable)} />
+          : null}
       </Box>
     )
   }
@@ -655,6 +676,9 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
   item: TranscriptItem
   expandReasoning: boolean
   toolExpanded: boolean
+  /** Disclosure state of THIS row when it is a compaction checkpoint (same
+   *  per-row override map as tool rows: click toggles it, /think flips all). */
+  compactionExpanded: boolean
   hovered: boolean
   themeEpoch: number
   usable: number
@@ -697,10 +721,10 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
     // Re-measure when an expansion toggle changes this row's rendered height
     // (the item text itself is unchanged, so [props.item.text] alone would
     // skip it and leave the measured cache stale).
-  }, [props.item.text, props.expandReasoning, props.toolExpanded])
+  }, [props.item.text, props.expandReasoning, props.toolExpanded, props.compactionExpanded])
   return (
     <Box ref={ref} flexDirection="column">
-      {itemContent(props.item, props.expandReasoning, props.toolExpanded, props.hovered, props.usable, props.toolLive, props.reasoningLive)}
+      {itemContent(props.item, props.expandReasoning, props.toolExpanded, props.compactionExpanded, props.hovered, props.usable, props.toolLive, props.reasoningLive)}
     </Box>
   )
 })
@@ -1140,6 +1164,18 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
       : estimateMarkdownHeightDebounced(item.key, item.text, w, store.loadGeneration))
   } else if (item.kind === 'user') {
     lines = countWrappedLines(item.text, w)
+  } else if (item.kind === 'compaction') {
+    // Header line + the summary markdown ONLY while expanded: the same mirror
+    // rule the tool rows use, so a click never desyncs scroll/selection. The
+    // markdown estimate is the shared debounced one (assistant/plan rows).
+    const summary = item.compaction?.summary
+    const expanded = summary !== undefined && store.isToolExpanded(item.key)
+    lines = countWrappedLines(compactionRowHeader(item.compaction ?? {}, expanded), w)
+      + (expanded
+        ? (legacyEstimate
+          ? estimateMarkdownHeight(summary, w)
+          : estimateMarkdownHeightDebounced(item.key, summary, w, store.loadGeneration))
+        : 0)
   } else if (item.kind === 'tool') {
     // Header (summary) lines + the result/error body ONLY while expanded —
     // mirror of the rendered row, so scroll stays aligned on toggle.
@@ -1205,6 +1241,19 @@ function buildTranscriptRows(items: readonly TranscriptItem[], usable: number): 
     const itemT0 = debugLayout ? Date.now() : 0
     if (i > 0) rows.push({ text: '', itemIndex: i - 1 })
     const w = MESSAGE_TEXT_WIDTH(usable)
+    if (item.kind === 'compaction') {
+      // Compaction row mirror: the shared header line, plus the summary body
+      // (as plain markdown text) ONLY while expanded — selection/copy offsets
+      // and hit-testing stay aligned with the painted row.
+      const summary = item.compaction?.summary
+      const expanded = summary !== undefined && store.isToolExpanded(item.key)
+      for (const line of wrapRows(compactionRowHeader(item.compaction ?? {}, expanded), w)) rows.push({ text: line, itemIndex: i })
+      if (expanded) {
+        const plain = summary.length <= 8000 ? markdownPlain(summary) : summary
+        for (const line of wrapRows(plain, w)) rows.push({ text: line, itemIndex: i })
+      }
+      return
+    }
     if (item.kind === 'tool') {
       // Tool rows mirror the rendered summary header (+ result/error body only
       // while expanded), so selection/copy offsets stay aligned.
@@ -1726,12 +1775,18 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     const hoverable = hit !== null && (
       (hit.kind === 'tool' && hit.tool !== undefined && hit.tool.state !== 'running')
       || hit.kind === 'reasoning'
+      || (hit.kind === 'compaction' && hit.compaction?.summary !== undefined)
     )
     store.setHoverTool(hoverable ? hit.key : null)
     return
   }
   if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return }
   if (k.mouseRelease) {
+    // The anchoring region has to be read BEFORE `mouseRelease`: a click CLEARS
+    // the selection, and `anchorSurfaceRegion()` reads the selection's anchor —
+    // so reading it afterwards always returned null and every disclosure click
+    // (tool rows, Think rows, compaction rows) fell through to caret placement.
+    const anchorRegion = anchorSurfaceRegion()
     const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
     if (paletteOpen) {
       // Left-click on a palette row = Enter (run that command). A click on a row
@@ -1748,8 +1803,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
       // sidebar / composer / status only clears its selection and, on the
       // composer, places the caret. Everything else falls through to the
       // composer caret placement.
-      const a = anchorSurfaceRegion()
-      if (a === 'message') {
+      if (anchorRegion === 'message') {
         const hit = store.resolveRow(k.mouseRelease.row)
         if (hit !== null && hit.kind === 'tool' && hit.tool !== undefined && hit.tool.state !== 'running') {
           store.toggleToolExpanded(hit.key)
@@ -1757,6 +1811,11 @@ function conversationKey(k: RawKey, tui: TuiService): void {
         }
         if (hit !== null && hit.kind === 'reasoning') {
           store.toggleReasoningRow(hit.key)
+          return
+        }
+        if (hit !== null && hit.kind === 'compaction' && hit.compaction?.summary !== undefined) {
+          // Same per-row override map the tool rows use (and /think flips it).
+          store.toggleToolExpanded(hit.key)
           return
         }
       }
@@ -2045,7 +2104,8 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const toggleHeaders: { item: TranscriptItem; header: number }[] = []
   for (let j = 0; j < rows.length; j++) {
     const r = rows[j]!
-    if (r.type === 'item' && (r.item.kind === 'tool' || r.item.kind === 'reasoning')) {
+    if (r.type === 'item' && (r.item.kind === 'tool' || r.item.kind === 'reasoning'
+      || (r.item.kind === 'compaction' && r.item.compaction?.summary !== undefined))) {
       toggleHeaders.push({ item: r.item, header: layout.starts[j]! + r.top })
     }
   }
@@ -2079,8 +2139,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               item={r.item}
               expandReasoning={reasoningExpandedFor(r.item)}
               toolExpanded={r.item.kind === 'tool' && r.item.tool?.body !== undefined && store.isToolExpanded(r.item.key)}
+              compactionExpanded={r.item.kind === 'compaction' && store.isToolExpanded(r.item.key)}
               hovered={store.hoveredToolKey === r.item.key
                 && (r.item.kind === 'reasoning'
+                  || r.item.kind === 'compaction'
                   || (r.item.kind === 'tool' && r.item.tool !== undefined && r.item.tool.state !== 'running'))}
               themeEpoch={themeEpoch}
               usable={usable}

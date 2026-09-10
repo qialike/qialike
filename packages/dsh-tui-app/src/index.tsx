@@ -122,7 +122,7 @@ export const Config: z<Config> = z.object({
 /** One rendered transcript line. */
 export interface TranscriptItem {
   readonly key: number
-  readonly kind: 'user' | 'assistant' | 'reasoning' | 'status' | 'tool' | 'error' | 'plan'
+  readonly kind: 'user' | 'assistant' | 'reasoning' | 'status' | 'tool' | 'error' | 'plan' | 'compaction'
   readonly text: string
   readonly dim?: boolean
   /** Tool-row payload: `running` rows carry the (capped) raw arguments for the
@@ -136,6 +136,11 @@ export interface TranscriptItem {
      *  elapsed-seconds tail while the tool is in flight. */
     readonly startedAt?: number
   }
+  /** Compaction-checkpoint payload: one DISCLOSURE row standing for the span of
+   *  older history the harness replaced with a summary. `summary` is the
+   *  markdown the summarizer wrote (embedded in the checkpoint message itself),
+   *  and the counts come from the paired `compaction/summary` event. */
+  readonly compaction?: CompactionRowFacts
 }
 
 /** A step in the model's plan (mirrors the harness `TodoItem`). */
@@ -815,6 +820,21 @@ export class Store {
     this.notify()
   }
 
+  /** Append a compaction-checkpoint DISCLOSURE row (one collapsed line standing
+   *  for the history the harness replaced, expandable to the summary). Replaces
+   *  the generic `Context injection · compact` status row that used to hide both
+   *  the counts and the summary — and it is the same row for a live compaction
+   *  and for a resumed log, because the facts come from the durable events. */
+  appendCompaction(facts: CompactionRowFacts): void {
+    this.items = [...this.items, {
+      key: this.key += 1,
+      kind: 'compaction',
+      text: facts.summary ?? '',
+      compaction: facts,
+    }]
+    this.notify()
+  }
+
   /** Append a RUN-FAILURE row (provider/billing/quota error, transport after
    *  retries, credential problems…). Harness-web turn-error parity: a visible
    *  error row, not a silent stop — the user can send another message to
@@ -922,7 +942,9 @@ export class Store {
   toggleAllDetail(): void {
     const show = !this._toolBodiesDefault
     const detailRows = this.items.reduce(
-      (n, it) => n + (it.kind === 'reasoning' ? 1 : 0) + (it.kind === 'tool' && it.tool?.body !== undefined ? 1 : 0),
+      (n, it) => n + (it.kind === 'reasoning' ? 1 : 0)
+        + (it.kind === 'tool' && it.tool?.body !== undefined ? 1 : 0)
+        + (it.kind === 'compaction' && it.compaction?.summary !== undefined ? 1 : 0),
       0,
     )
     this._toolBodiesDefault = show
@@ -3380,6 +3402,22 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       }
       case 'compaction/summary': {
         store.noteCompactionPhase('committing')
+        // Facts for the CHECKPOINT row that lands in the very next event (the
+        // harness appends `compaction/summary` and the replacement
+        // `user/message` back to back). The summary TEXT itself is taken from
+        // that message, so only the counts/model need carrying over.
+        const data = event.data as {
+          shadowedSeqs?: readonly unknown[]
+          shadowedTokenCount?: number
+          provider?: string
+          model?: string
+        }
+        pendingCompactionFacts = {
+          ...data.shadowedSeqs === undefined ? {} : { items: data.shadowedSeqs.length },
+          ...data.shadowedTokenCount === undefined ? {} : { tokens: data.shadowedTokenCount },
+          ...data.provider === undefined ? {} : { provider: data.provider },
+          ...data.model === undefined ? {} : { model: data.model },
+        }
         break
       }
       case 'compaction/end': {
@@ -3389,14 +3427,27 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // the two never disagree.
         const failure = (event.data as { error?: unknown }).error
         if (failure !== undefined) logErrorFileOnly('compact', `compaction/end error: ${String(failure)}`)
+        pendingCompactionFacts = undefined
         break
       }
       // Non-user user/message = injected context (e.g. the system prompt),
-      // rendered as a "Context injection" notice like dsh web.
+      // rendered as a "Context injection" notice like dsh web — EXCEPT a
+      // compaction checkpoint, which gets its own disclosure row (web parity:
+      // the summary is readable, and the row states what it replaced).
       case 'user/message': {
-        const source = event.data.source as { kind?: string; plugin?: string }
-        if (source.kind === 'user') break
-        const label = source.kind === 'plugin' && source.plugin ? source.plugin : (source.kind ?? 'context')
+        const source = event.data.source as { kind?: string; plugin?: string } | undefined
+        if (source?.kind === 'user') break
+        if (isCompactionCheckpoint(source)) {
+          const summary = compactionCheckpointSummary(flattenContentText(event.data.content))
+          const facts: CompactionRowFacts = {
+            ...pendingCompactionFacts ?? {},
+            ...summary === undefined ? {} : { summary },
+          }
+          pendingCompactionFacts = undefined
+          store.appendCompaction(facts)
+          break
+        }
+        const label = source?.kind === 'plugin' && source.plugin ? source.plugin : (source?.kind ?? 'context')
         store.append('status', `Context injection · ${label}`)
         break
       }
@@ -4225,17 +4276,52 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
   const items: TranscriptItem[] = []
   let key = 0
   let steps: StepItem[] = []
+  // Counts/model of the last `compaction/summary` seen while walking the log,
+  // consumed by the checkpoint message that immediately follows it (mirrors the
+  // live listener's `pendingCompactionFacts`).
+  let foldCompactionFacts: CompactionRowFacts | undefined
   for (const event of events) {
     stats?.observe(event)
     switch (event.type) {
       case 'user/message': {
-        const source = event.data.source as { kind?: string; plugin?: string }
-        if (source.kind === 'user') {
+        const source = event.data.source as { kind?: string; plugin?: string } | undefined
+        if (source?.kind === 'user') {
           const text = flattenContentText(event.data.content)
           if (text !== '') items.push({ key: key += 1, kind: 'user', text })
+        } else if (isCompactionCheckpoint(source)) {
+          // Web parity: a checkpoint becomes an expandable disclosure row (with
+          // the summary the model wrote) instead of a generic context notice —
+          // same row as the live path, because it is built from the same durable
+          // events.
+          const summary = compactionCheckpointSummary(flattenContentText(event.data.content))
+          items.push({
+            key: key += 1,
+            kind: 'compaction',
+            text: summary ?? '',
+            compaction: {
+              ...foldCompactionFacts ?? {},
+              ...summary === undefined ? {} : { summary },
+            },
+          })
+          foldCompactionFacts = undefined
         } else {
-          const label = source.kind === 'plugin' && source.plugin ? source.plugin : (source.kind ?? 'context')
+          const label = source?.kind === 'plugin' && source.plugin ? source.plugin : (source?.kind ?? 'context')
           items.push({ key: key += 1, kind: 'status', text: `Context injection · ${label}`, dim: true })
+        }
+        break
+      }
+      case 'compaction/summary': {
+        const data = event.data as {
+          shadowedSeqs?: readonly unknown[]
+          shadowedTokenCount?: number
+          provider?: string
+          model?: string
+        }
+        foldCompactionFacts = {
+          ...data.shadowedSeqs === undefined ? {} : { items: data.shadowedSeqs.length },
+          ...data.shadowedTokenCount === undefined ? {} : { tokens: data.shadowedTokenCount },
+          ...data.provider === undefined ? {} : { provider: data.provider },
+          ...data.model === undefined ? {} : { model: data.model },
         }
         break
       }
@@ -4482,6 +4568,71 @@ function announceOversizedResume(cwd: string, id: SessionId | string): void {
   } catch { /* best-effort: a closed stdout must not break the launch */ }
 }
 
+/** Facts behind one compaction-checkpoint DISCLOSURE row.
+ *
+ *  Web parity (`client/ui-chat` `CompactionItem`): the row names the compaction
+ *  and states how much history it replaced, and expanding it shows the summary
+ *  the model wrote. The TUI gets the summary from the checkpoint message itself
+ *  (the harness frames it between the `<compacted-summary>` tags) and the counts
+ *  from the paired `compaction/summary` event. */
+export interface CompactionRowFacts {
+  /** Summary markdown (undefined when the checkpoint message carried none). */
+  readonly summary?: string
+  /** Shadowed history items (`shadowedSeqs.length`). */
+  readonly items?: number
+  /** Shadowed tokens (`shadowedTokenCount`). */
+  readonly tokens?: number
+  /** Provider route that wrote the summary. */
+  readonly provider?: string
+  /** Model that wrote the summary. */
+  readonly model?: string
+}
+
+/** Marker the harness's `compactCheckpointSource()` writes: a compaction
+ *  checkpoint is a `user/message` whose source is this plugin provenance. */
+export function isCompactionCheckpoint(source: { kind?: unknown; plugin?: unknown } | undefined): boolean {
+  return source?.kind === 'plugin' && source.plugin === 'compact'
+}
+
+/** The summary markdown embedded in a compaction checkpoint message.
+ *
+ *  The harness frames the checkpoint as `preamble + <compacted-summary>…`, so
+ *  the reader-facing summary is recoverable from the durable message alone —
+ *  no correlation with the `compaction/summary` event is required (which is why
+ *  a resumed log shows the same row as the live stream).
+ *  @param text - the checkpoint message's flattened text.
+ *  @returns the summary markdown, or undefined when the message carried none. */
+export function compactionCheckpointSummary(text: string): string | undefined {
+  const open = '<compacted-summary>'
+  const close = '</compacted-summary>'
+  const from = text.indexOf(open)
+  if (from < 0) return undefined
+  const body = text.slice(from + open.length)
+  const to = body.indexOf(close)
+  const summary = (to < 0 ? body : body.slice(0, to)).trim()
+  return summary === '' ? undefined : summary
+}
+
+/** One-line collapsed/expanded header for a compaction row.
+ *
+ *  Shared by the renderer AND the text-row mirror used for scroll/selection
+ *  geometry, so the two can never disagree on the row's content (the same rule
+ *  the tool rows follow). Wording mirrors the harness command result
+ *  (`Compacted N history items (~X tokens).`) with the token count shortened the
+ *  way the footer does, because a transcript row is one line.
+ *  @param facts - the checkpoint's facts.
+ *  @param expanded - disclosure state (drives the leading `-`/`+`).
+ *  @returns the header line. */
+export function compactionRowHeader(facts: CompactionRowFacts, expanded: boolean): string {
+  const mark = expanded ? '-' : '+'
+  if (facts.items !== undefined && facts.tokens !== undefined) {
+    return `${mark} Compaction · Compacted ${facts.items} history items (~${formatCompactTokens(facts.tokens)} tokens)`
+  }
+  if (facts.items !== undefined) return `${mark} Compaction · Compacted ${facts.items} history items`
+  if (facts.summary !== undefined) return `${mark} Compaction · older history folded into a summary`
+  return `${mark} Compaction · older history folded (summary not in this log)`
+}
+
 /** One-line suggestion shown for an oversized session (transcript + status
  *  bar). Pure so it is unit-tested. */
 export function compactHintText(events: number): string {
@@ -4499,6 +4650,12 @@ interface SubmitProbe {
   noteFirstEvent: () => void
 }
 let pendingSubmitProbe: SubmitProbe | null = null
+
+/** Counts/model of the `compaction/summary` event whose replacement
+ *  `user/message` (the checkpoint) has not arrived yet — the harness appends
+ *  the two back to back, so the disclosure row can carry real numbers instead
+ *  of guessing them from `sourceEventSeqs`. */
+let pendingCompactionFacts: CompactionRowFacts | undefined
 
 /** Live count of the CURRENT session's events (P2②): reading it must never
  *  call `snapshotEvents()` — on a 1.4M-event session that materializes/copies a
@@ -4883,6 +5040,7 @@ async function compact(ctx: Context, agent: unknown): Promise<void> {
     return
   }
   const controller = new AbortController()
+  const rowsBefore = store.getItems().length
   store.beginCompaction(Date.now())
   store.setCompactionCancel(() => controller.abort())
   const ticker = setInterval(() => store.tickCompaction(), 250)
@@ -4900,9 +5058,20 @@ async function compact(ctx: Context, agent: unknown): Promise<void> {
       controller.signal,
       `tui-${randomUUID()}`,
     )
-    store.append('status', result === null
-      ? 'No compactable history yet.'
-      : `Compacted ${result.shadowedSeqs.length} history items (~${result.shadowedTokenCount} tokens).`, true)
+    // A successful run already landed a checkpoint DISCLOSURE row (same counts,
+    // plus the summary) — repeating it as a status line would say the same thing
+    // twice. The status line stays for the outcomes that have no checkpoint
+    // (nothing to compact, failure) and as a fallback if the live event never
+    // reached this session's listener.
+    const landed = store.getItems().slice(rowsBefore).some((item) => item.kind === 'compaction')
+    if (result === null) store.append('status', 'No compactable history yet.', true)
+    else if (!landed) {
+      store.append('status',
+        `Compacted ${result.shadowedSeqs.length} history items (~${result.shadowedTokenCount} tokens).`, true)
+    }
+    logErrorFileOnly('compact', result === null
+      ? 'compact: no compactable history'
+      : `compact: compacted items=${result.shadowedSeqs.length} tokens=${result.shadowedTokenCount} row=${landed}`)
   } catch (error) {
     logErrorFileOnly('compact', error)
     store.append('status', compactionFailureText(error, controller.signal.aborted), true)
