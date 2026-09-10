@@ -2,7 +2,7 @@
  * Plan-review flow tests (harness `exit_plan_mode`):
  *   - a plan tool call becomes a labelled transcript block ABOVE its tool row
  *     (Store.toolCall, same source the resume fold replays from);
- *   - the dock presents the review as a bare 确认执行 / 继续规划 confirm/decline:
+ *   - the dock presents the review as a bare Approve / Keep planning confirm/decline:
  *     Chinese display labels only — the committed answers keep the ORIGINAL
  *     harness English option labels ('Approve' / 'Keep planning') because the
  *     harness compares `selected[0] === approve` on those labels;
@@ -120,10 +120,10 @@ describe('questionPresentation', () => {
     const pres = questionPresentation(item)
     expect(pres.question).toBe(PLAN_REVIEW_QUESTION)
     expect(pres.detail).toBeUndefined() // plan already reads as the transcript block
-    expect(pres.options.map((o) => o.label)).toEqual(['确认执行', '继续规划'])
+    expect(pres.options.map((o) => o.label)).toEqual(['Approve', 'Keep planning'])
     expect(pres.showOther).toBe(false)
-    expect(planReviewOptionLabel(item, 0)).toBe('确认执行')
-    expect(planReviewOptionLabel(item, 1)).toBe('继续规划')
+    expect(planReviewOptionLabel(item, 0)).toBe('Approve')
+    expect(planReviewOptionLabel(item, 1)).toBe('Keep planning')
   })
   test('a generic question passes through verbatim (with Other)', () => {
     const item: AskUserQuestionItem = {
@@ -140,7 +140,7 @@ describe('questionPresentation', () => {
 
 describe('dock body excludes Other for plan-review (question-layout includeOther)', () => {
   test('questionBody with includeOther=false has no other row', () => {
-    const body = questionBody(undefined, [{ label: '确认执行' }, { label: '继续规划' }], 80, false)
+    const body = questionBody(undefined, [{ label: 'Approve' }, { label: 'Keep planning' }], 80, false)
     expect(body.some((r) => r.kind === 'other')).toBe(false)
     expect(body.filter((r) => r.kind === 'option').length).toBeGreaterThan(0)
     expect(body.map((r) => r.option).every((o) => o === 0 || o === 1)).toBe(true)
@@ -162,7 +162,7 @@ describe('plan-review store behavior', () => {
     const item = planReviewItem()
     let answered: AskUserQuestionAnswerItem[] | null = null
     ask(store, [item], (a) => { answered = a }, () => {})
-    // Default highlight = option 0 (Approve → displayed 确认执行).
+    // Default highlight = option 0 (Approve → displayed Approve).
     store.questionEnter()
     expect(store.question).toBeNull()
     expect(answered?.[0]?.selected).toEqual(['Approve'])

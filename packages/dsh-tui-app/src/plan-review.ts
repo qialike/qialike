@@ -31,25 +31,29 @@ export function isPlanReview(item: { readonly intent?: AskUserQuestionItem['inte
   return item?.intent?.kind === 'plan-review'
 }
 
-/** Chinese wording of the plan-review pinned question. */
-export const PLAN_REVIEW_QUESTION = '确认执行该计划，并退出计划模式？'
+/** Wording of the plan-review pinned question (the harness plan-mode's own EN
+ *  copy, verbatim — the TUI shows the English UI). */
+export const PLAN_REVIEW_QUESTION = 'Approve this plan and leave plan mode?'
 
-/** Display label of one plan-review option: the approve option reads
- *  `确认执行`, every other option `继续规划` (a plan-review declines with
- *  anything that is not the approve label). The stored labels stay the
- *  harness English ones — nothing here touches the answer encoding. */
+/** Display labels of the plan-review options (the harness plan-mode's own EN
+ *  labels, verbatim): the approve option reads {@link PLAN_REVIEW_APPROVE_LABEL},
+ *  every other option {@link PLAN_REVIEW_KEEP_LABEL} (a plan-review declines
+ *  with anything that is not the approve label). The STORED labels stay the
+ *  harness ones — nothing here touches the answer encoding. */
+export const PLAN_REVIEW_APPROVE_LABEL = 'Approve'
+export const PLAN_REVIEW_KEEP_LABEL = 'Keep planning'
 export function planReviewOptionLabel(item: AskUserQuestionItem, index: number): string {
   const approve = item.intent?.kind === 'plan-review' ? item.intent.approve : undefined
   const opt = item.options?.[index]
   if (approve === undefined || opt === undefined) return opt?.label ?? ''
-  return opt.label === approve ? '确认执行' : '继续规划'
+  return opt.label === approve ? PLAN_REVIEW_APPROVE_LABEL : PLAN_REVIEW_KEEP_LABEL
 }
 
 /** The dock display shape of one question. A plan-review question is shown
- *  with its own Chinese wording, WITHOUT the plan body (the plan lives as the
+ *  with its own wording, WITHOUT the plan body (the plan lives as the
  *  message block in the transcript above — the dock must stay a bare
  *  confirm/decline) and WITHOUT the "Other…" row (declining means pressing
- *  `继续规划`; a typed opinion goes into the input as a normal message).
+ *  `Keep planning`; a typed opinion goes into the input as a normal message).
  *  Generic questions keep their verbatim question/detail/options/Other. */
 export interface QuestionPresentation {
   /** Pinned question line(s) source (translated for plan-review). */

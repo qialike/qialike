@@ -88,24 +88,25 @@ describe('questionPointerRegion (dock / composer / message / none)', () => {
 })
 
 describe('composerStripRows (mirror of conversation composer math)', () => {
-  test('24-row terminal: a one-line draft gives a 5-row box above the status bar', () => {
-    // ROWS=24: composer bottom border at rows−STATUS_BAR_HEIGHT = 21; a 5-row
-    // box therefore spans 17..21 (matches the conversation probe layout).
+  test('24-row terminal: a one-line draft gives a 5-row card above the status bar', () => {
+    // ROWS=24: the card's bottom sits at rows−STATUS_BAR_HEIGHT = 21. The
+    // borderless card's height counts its two half-row fill edges (▄/▀) plus a
+    // 1-row text area, gap and status row → 5 rows, spanning 17..21.
     expect(composerStripRows(80, 24, 'hi', false, 80)).toEqual({ top: 17, height: 5 })
   })
 
-  test('an attached image chip adds one box row (growing upward)', () => {
+  test('an attached image chip adds one row (growing upward)', () => {
     expect(composerStripRows(80, 24, 'hi', true, 80)).toEqual({ top: 16, height: 6 })
   })
 
-  test('a multi-line draft grows the box until the rows−8 cap', () => {
-    // usable = 80−4 = 76; 4 wrapped rows → composerH = 5+4−1 = 8 → box 14..21.
+  test('a multi-line draft grows the card until the rows−8 cap', () => {
+    // usable = 80−4 = 76; 4 wrapped rows → min(5+4−1, 16) = 8 → card 14..21.
     expect(composerStripRows(80, 24, 'a\nb\nc\nd', false, 80)).toEqual({ top: 14, height: 8 })
     // Long single line that wraps several times also grows the box.
     const long = 'word '.repeat(200)
     const span = composerStripRows(80, 24, long, false, 80)!
     expect(span.height).toBeGreaterThan(5)
-    expect(span.top + span.height - 1).toBe(21) // bottom border stays put
+    expect(span.top + span.height - 1).toBe(21) // card bottom stays put
   })
 
   test('degenerate sizes return null', () => {

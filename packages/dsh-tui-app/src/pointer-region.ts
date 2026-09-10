@@ -92,20 +92,22 @@ export function composerStripRows(
   // Mirrors conversation.tsx composerUsable/composerOuterWidth (the composer
   // spans the whole message column).
   const usable = Math.max(10, messageRight - 4)
-  const min = 5 // COMPOSER_MIN_HEIGHT
+  const min = 5 // COMPOSER_MIN_HEIGHT (chrome-inclusive minimum)
   const statusH = 3 // STATUS_BAR_HEIGHT (composer bottom sits above the status bar)
   // Mirrors conversation.tsx composerHeight: rows of the wrapped draft at the
-  // usable width, then min(min + wrapped − 1, cap). The height cap is tied to
-  // the TERMINAL HEIGHT — cap = max(min, rows − 8); the box's text window is
-  // composerH − 4, so the max VISIBLE text rows scale with the screen
-  // (rows − 12 on normal terminals). Beyond it the draft scrolls inside a
-  // caret-following window — exactly the formula the conversation render uses.
+  // usable width, then min(min + wrapped − 1, cap). The card is BORDERLESS but
+  // paints two half-row fill edges (▄ above, ▀ below), so this height counts
+  // them just like the framed card counted its two border rows. The height cap
+  // is tied to the TERMINAL HEIGHT — cap = max(min, rows − 8); the text window
+  // is height − 4, so the max VISIBLE text rows scale with the screen. Beyond it
+  // the draft scrolls inside a caret-following window — exactly the conversation
+  // render's formula.
   const wrapped = input.split('\n').reduce(
     (sum, seg) => sum + (seg === '' ? 1 : wrapAnsi(seg, usable, { trim: false, hard: true }).split('\n').length),
     0,
   )
   const cap = Math.max(min, rows - 8)
-  const composerH = Math.min(min + wrapped - 1, cap)
+  const composerH = Math.min(min + wrapped - 1, cap) // includes the 2 half-row fill edges
   // The image chip adds one rendered row to the composer box (conversation
   // renders height = composerHeight + (image ? 1 : 0)).
   const height = composerH + (hasImage ? 1 : 0)
@@ -139,13 +141,20 @@ export function messageRightFor(width: number, mode: SidebarModeForPointer): num
  *  Pure; unit-tested. Geometry is passed in (mirrors the conversation render):
  *  `messageRight` = messageRightFor(width, mode), `composerTop/`composerBottom`
  *  = the 1-based first/last row of the composer box, `statusTop` = the 1-based
- *  first row of the status bar (rows − STATUS_BAR_HEIGHT + 1). */
+ *  first row of the status bar (rows − STATUS_BAR_HEIGHT + 1), and the optional
+ *  `composerLeft/`composerRight` = the 1-based first/last COLUMN of that box
+ *  (the hero centers a NARROWER card, so its column band matters there; both
+ *  default to the whole message column, i.e. 1 … `messageRight`). */
 export type SurfaceRegion = 'message' | 'composer' | 'sidebar' | 'status'
 export interface SurfaceGeometry {
   readonly messageRight: number
   readonly composerTop: number
   readonly composerBottom: number
   readonly statusTop: number
+  /** 1-based first column of the composer box (default 1). */
+  readonly composerLeft?: number
+  /** 1-based last column of the composer box (default `messageRight`). */
+  readonly composerRight?: number
 }
 export function surfaceRegion(row: number, col: number, g: SurfaceGeometry): SurfaceRegion {
   // The status bar spans the FULL width at the bottom, under the sidebar.
@@ -153,8 +162,12 @@ export function surfaceRegion(row: number, col: number, g: SurfaceGeometry): Sur
   // The sidebar column (only present when messageRight < width); its rows span
   // the whole middle row, so any col beyond the message column is the sidebar.
   if (col > g.messageRight) return 'sidebar'
-  // The composer box occupies the bottom rows of the message column.
-  if (row >= g.composerTop && row <= g.composerBottom) return 'composer'
+  // The composer box occupies the bottom rows of the message column — and,
+  // while the hero is up, only its CENTERED columns: a click beside the narrow
+  // card belongs to the hero background, not to the draft.
+  const left = g.composerLeft ?? 1
+  const right = g.composerRight ?? g.messageRight
+  if (row >= g.composerTop && row <= g.composerBottom && col >= left && col <= right) return 'composer'
   return 'message'
 }
 

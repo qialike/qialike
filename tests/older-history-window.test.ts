@@ -22,7 +22,7 @@ describe('Store older-history window primitives', () => {
     store.beginHistory([item('user', 'tail')], [], 900)
     expect(store.olderLoading).toBe(true)
     expect(store.loadedOlder).toBe(0)
-    expect(texts(store)).toEqual(['⋯ 更早历史载入中：0/900 事件', 'tail'])
+    expect(texts(store)).toEqual(['Load session:  ················   0%  0/900 events', 'tail'])
   })
 
   test('prependHistory counts every prepended older slice', () => {
@@ -34,7 +34,7 @@ describe('Store older-history window primitives', () => {
     expect(store.loadedOlder).toBe(3)
     // Prepend order = chronological oldest first under the marker (c, b, a),
     // then the tail.
-    expect(texts(store)).toEqual(['⋯ 更早历史载入中：0/900 事件', 'c', 'b', 'a', 'tail'])
+    expect(texts(store)).toEqual(['Load session:  ················   0%  0/900 events', 'c', 'b', 'a', 'tail'])
   })
 
   test('trimOlderFront drops the OLDEST loaded slices and keeps the marker', () => {
@@ -47,7 +47,7 @@ describe('Store older-history window primitives', () => {
     expect(dropped).toBe(2)
     expect(store.loadedOlder).toBe(1)
     expect(store.olderLoading).toBe(true) // more history still available
-    expect(texts(store)).toEqual(['⋯ 更早历史载入中：0/900 事件', 'a', 'tail'])
+    expect(texts(store)).toEqual(['Load session:  ················   0%  0/900 events', 'a', 'tail'])
   })
 
   test('trimOlderFront is a no-op without a marker or below the keep count', () => {
@@ -60,7 +60,7 @@ describe('Store older-history window primitives', () => {
     store.beginHistory([item('user', 'tail')], [], 10)
     store.prependHistory([item('user', 'a')])
     expect(store.trimOlderFront(5)).toBe(0) // loadedOlder(1) ≤ keep
-    expect(texts(store)).toEqual(['⋯ 更早历史载入中：0/10 事件', 'a', 'tail'])
+    expect(texts(store)).toEqual(['Load session:  ················   0%  0/10 events', 'a', 'tail'])
   })
 
   test('finishHistory removes the marker; olderLoading flips false', () => {

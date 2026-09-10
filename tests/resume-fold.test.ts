@@ -185,8 +185,8 @@ describe('describeResumeFailure (corrupt-log class gets an actionable hint)', ()
     expect(text).toContain('resume:')
     // Both possible causes are stated — transient concurrent-write reads (already
     // retried) and real mid-log seq damage — with actionable next steps.
-    expect(text).toContain('另一进程正实时追加同一会话')
-    expect(text).toContain('真实 seq 损坏')
-    expect(text).toContain('删除重建')
+    expect(text).toContain('another process is appending to the same session')
+    expect(text).toContain('real seq damage')
+    expect(text).toContain('delete and rebuild')
   })
 })

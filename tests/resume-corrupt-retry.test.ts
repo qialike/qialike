@@ -32,12 +32,12 @@ describe('isCorruptLogMessage', () => {
 describe('describeResumeFailure', () => {
   test('corrupt-class errors explain BOTH possible causes (transient vs real)', () => {
     const text = describeResumeFailure(new Error('corrupt Zstandard session log: complete frame contains a torn JSONL record'))
-    expect(text).toContain('resume: 会话日志')
+    expect(text).toContain('resume: the session log was rejected as corrupt')
     // Concurrent-write transient reads are retried; do not claim it is the only cause.
-    expect(text).toContain('另一进程正实时追加同一会话')
+    expect(text).toContain('another process is appending to the same session')
     // Real mid-log seq damage (interrupted resume leftovers) is called out too.
-    expect(text).toContain('真实 seq 损坏')
-    expect(text).toContain('残骸')
+    expect(text).toContain('real seq damage')
+    expect(text).toContain('leftover lines')
   })
 
   test('non-corrupt errors pass through with the resume: prefix', () => {

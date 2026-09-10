@@ -46,7 +46,11 @@ export function dockInnerWidth(width: number, mode: SidebarMode = 'auto'): numbe
 }
 
 /** Default for auto-resuming the newest same-directory session at launch. */
-export const DEFAULT_RESUME_LAST = true
+/** Auto-resume on launch is now OPT-IN: a bare `dsh-tui` opens an unused New
+ *  Session placeholder (hero screen, web parity); `dsh-tui resume` continues
+ *  the newest content session instead. Set `resume_last: true` (or
+ *  DSH_TUI_RESUME_LAST=1) to restore the old always-continue behavior. */
+export const DEFAULT_RESUME_LAST = false
 
 /** Environment variable that overrides the auto-resume default and is persisted. */
 export const RESUME_LAST_ENV = 'DSH_TUI_RESUME_LAST'

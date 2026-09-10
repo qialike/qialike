@@ -112,7 +112,12 @@ export function isCorruptLogMessage(message: string): boolean {
 export function describeResumeFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
   if (isCorruptLogMessage(message)) {
-    return 'resume: 会话日志被判定损坏（乱序/被截断）。两种可能：① 另一进程正实时追加同一会话（web 或另一个 dsh-tui），读取瞬间恰落在帧缝/记录缝——此类为瞬时误报，已自动重试数次，关闭其它持有者后重试通常即成功；② 真实 seq 损坏——常见于某次工具调用被中断后写方从 checkpoint 重续却未截断残骸行，日志中段出现重复/回退 seq，重放会确定性失败、无法自动修复（可删除重建，或人工删除残骸行修复）'
+    return 'resume: the session log was rejected as corrupt (out of order / truncated). Two possible causes: '
+      + '(1) another process is appending to the same session right now (the web UI or another dsh-tui) and this read '
+      + 'landed on a frame/record seam — a transient false positive, already retried several times; close the other '
+      + 'holder and retry. (2) real seq damage — typically a tool call was interrupted and the writer resumed from a '
+      + 'checkpoint without truncating the leftover lines, leaving duplicate/rewound seq numbers mid-log: replay fails '
+      + 'deterministically and cannot self-heal (delete and rebuild, or remove the leftover lines by hand).'
   }
   return `resume: ${message}`
 }

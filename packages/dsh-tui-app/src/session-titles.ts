@@ -69,6 +69,10 @@ interface TitleState {
   /** In-memory pinned id set; disk loaded lazily. */
   pinSet: Set<string>
   pinLoaded: boolean
+  /** In-memory blank-session bits (web parity, NOT persisted): true = the
+   *  session has no `turn/start` yet, so it is an unused "New Session"
+   *  placeholder. Absent = unknown (callers treat it as non-blank). */
+  blank: Map<string, boolean>
 }
 
 const STATE_KEY = Symbol.for('dsh-tui.session-titles.state')
@@ -81,6 +85,7 @@ const shared: TitleState = (() => {
       diskLoaded: false,
       pinSet: new Set<string>(),
       pinLoaded: false,
+      blank: new Map<string, boolean>(),
     }
     holder[STATE_KEY] = state
   }
@@ -200,7 +205,94 @@ export function renameTitle(id: SessionId, title: string): void {
  */
 export function forgetTitle(id: SessionId): void {
   ensureDiskLoaded()
+  shared.blank.delete(String(id))
   if (shared.map.delete(String(id))) persistDiskCache()
+}
+
+// ── blank ("New Session") sessions — web parity ──────────────────────────────
+
+/** Fold whether a session log is still BLANK: no `turn/start` has been
+ *  committed yet (mirrors the harness list projection: blank stays true until
+ *  the first turn/start, so a created-but-unused session is an unused
+ *  placeholder rather than history).
+ *  @param events - the session's durable events.
+ *  @returns true when the session has never started a turn. */
+export function foldSessionBlank(events: readonly unknown[]): boolean {
+  for (const event of events) {
+    if ((event as { type?: unknown }).type === 'turn/start') return false
+  }
+  return true
+}
+
+/** Record one session's blank bit (live `turn/start` flips it false forever). */
+export function rememberBlank(id: SessionId, blank: boolean): void {
+  shared.blank.set(String(id), blank)
+}
+
+/** The known blank bit: an explicit record, else `false` once a title exists
+ *  (a title implies content), else `undefined` (unknown — callers treat an
+ *  unknown row as ordinary history, never hiding it). */
+export function sessionBlank(id: SessionId): boolean | undefined {
+  ensureDiskLoaded()
+  const known = shared.blank.get(String(id))
+  if (known !== undefined) return known
+  return titleOf(id) === undefined ? undefined : false
+}
+
+/** Hide every UNUSED "New Session" placeholder except the selected one — the
+ *  web Workspace-browser rule ("shows only the selected blank entry"). Keeps
+ *  ordinary history untouched and is a no-op while the current session is the
+ *  blank itself.
+ *  @param rows - summaries newest-first.
+ *  @param currentId - the selected session, or undefined.
+ *  @returns the rows to display. */
+export function hideUnselectedBlanks(
+  rows: readonly SessionSummary[],
+  currentId: SessionId | undefined,
+): SessionSummary[] {
+  return rows.filter((row) => row.blank !== true || currentId === undefined || String(row.id) === String(currentId))
+}
+
+/**
+ * Find a reusable blank session for `cwd` (web parity: "New Session reuses a
+ * blank one targeting the same workspace"), newest activity first. Titled
+ * sessions are skipped (content); untitled candidates are inspected and their
+ * blank bit recorded. Bounded to the newest `limit` candidates.
+ * @param persistence - sessionPersistence service (inspect).
+ * @param headers - rows from `persistence.list()`.
+ * @param cwd - the workspace directory the blank must belong to.
+ * @param excludeId - a session id never to reuse (the current one).
+ * @param limit - maximum candidate logs to inspect (default 20).
+ * @returns the reusable blank id, or undefined when none exists.
+ */
+export async function findReusableBlank(
+  persistence: SessionTitlesPersistence,
+  headers: readonly SessionHeaderLike[],
+  cwd: string,
+  excludeId: SessionId | undefined,
+  limit = 20,
+): Promise<SessionId | undefined> {
+  ensureDiskLoaded()
+  const candidates = headers
+    .filter((h) => h.cwd === cwd && (excludeId === undefined || String(h.id) !== String(excludeId)))
+    .sort((a, b) => (lastActivity(b.id) ?? b.createdAt ?? 0) - (lastActivity(a.id) ?? a.createdAt ?? 0))
+    .slice(0, limit)
+  for (const header of candidates) {
+    if (sessionBlank(header.id) === false) continue
+    if (titleOf(header.id) !== undefined) {
+      rememberBlank(header.id, false)
+      continue
+    }
+    try {
+      const inspection = await persistence.inspect(header.id)
+      const blank = foldSessionBlank(inspection.events)
+      rememberBlank(header.id, blank)
+      if (blank) return header.id
+    } catch {
+      // Unreadable candidate: leave unknown and try the next one.
+    }
+  }
+  return undefined
 }
 
 /**
@@ -237,6 +329,7 @@ function buildRows(
       label: labelOf(header, titleOf(header.id)),
       cwd: header.cwd,
       createdAt: header.createdAt,
+      blank: sessionBlank(header.id) === true,
     },
     createdAt: header.createdAt,
   }))
@@ -268,6 +361,8 @@ async function foldMissingTitles(
   await Promise.all(toInspect.map(async (header): Promise<void> => {
     try {
       const inspection = await persistence.inspect(header.id)
+      // Same pass learns the blank bit (one inspect serves both facts).
+      rememberBlank(header.id, foldSessionBlank(inspection.events))
       const title = foldSessionTitle(inspection.events as readonly SessionEvent[])?.title
       if (title !== undefined) rememberTitle(header.id, title)
     } catch {

@@ -18,7 +18,8 @@ import { surfaceRegion, composerStripRows, sidebarContentBand } from '../package
 import { composerCaretMoveVisual } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
 
 /** 24-row / 80-col terminal, sidebar visible → message column ends at col 56.
- *  Composer: 5-row box 17..21, status bar rows 22..24. */
+ *  Composer: borderless card 17..21 (2 half-row fill edges + 3 content rows),
+ *  status bar rows 22..24. */
 function geometry(): { messageRight: number; composerTop: number; composerBottom: number; statusTop: number } {
   const strip = composerStripRows(80, 24, 'hi', false, 56)!
   return {
@@ -62,6 +63,33 @@ describe('surfaceRegion (message / composer / sidebar / status)', () => {
     const noSide = { ...g, messageRight: 80 }
     expect(surfaceRegion(5, 80, noSide)).toBe('message')
   })
+
+  test('a NARROWER centered card (hero) only claims its own columns', () => {
+    // Hero: no sidebar; card rows 17..21, card columns 21..60 of 80.
+    const hero = { messageRight: 80, composerTop: 17, composerBottom: 21, statusTop: 22, composerLeft: 21, composerRight: 60 }
+    expect(surfaceRegion(19, 21, hero)).toBe('composer')
+    expect(surfaceRegion(19, 60, hero)).toBe('composer')
+    // Beside the card sits the hero background — NOT the draft.
+    expect(surfaceRegion(19, 20, hero)).toBe('message')
+    expect(surfaceRegion(19, 61, hero)).toBe('message')
+    // Rows are unchanged: above the card is still the message area.
+    expect(surfaceRegion(16, 40, hero)).toBe('message')
+  })
+
+  test('the hero has NO status region: the bottom rows stay hero background', () => {
+    // mainSurfaceGeometry() reports statusTop = rows + 1 while the hero is up,
+    // because no status bar is drawn there.
+    const rows = 30
+    const hero = { messageRight: 80, composerTop: 17, composerBottom: 22, statusTop: rows + 1, composerLeft: 21, composerRight: 60 }
+    expect(surfaceRegion(30, 1, hero)).toBe('message')
+    expect(surfaceRegion(30, 80, hero)).toBe('message')
+    expect(surfaceRegion(23, 40, hero)).toBe('message')
+  })
+
+  test('without composerLeft/Right the card spans the whole message column', () => {
+    expect(surfaceRegion(20, 1, g)).toBe('composer')
+    expect(surfaceRegion(20, 56, g)).toBe('composer')
+  })
 })
 
 describe('composerCaretMoveVisual (wheel scrolls the draft, not the transcript)', () => {  test('stays put on a single-line draft (nothing to scroll)', () => {
@@ -94,32 +122,33 @@ describe('composerCaretMoveVisual (wheel scrolls the draft, not the transcript)'
 })
 
 describe('composerStripRows mirrors the terminal-height-linked cap', () => {
-  test('24-row terminal: ≤12 wrapped rows grow the box; more rows cap at the height-linked max (box rows−8)', () => {
-    // rows=24 → cap = max(5, 16) = 16; 12 wrapped rows → composerH = 5+12−1 =
-    // 16 (box 6..21) — all 12 visible. 40 rows cap at the same 16 (→ 12
-    // visible = rows−12).
+  test('24-row terminal: ≤12 wrapped rows grow the card; more rows cap at the height-linked max', () => {
+    // The card's height counts its two half-row fill edges, exactly like the
+    // framed card counted its border rows. rows=24 → cap = max(5, 16) = 16; 12
+    // wrapped rows → min(5+12−1, 16) = 16 (card 6..21) — all 12 visible. 40 rows
+    // cap at the same 16 (→ 12 visible).
     const twelve = composerStripRows(80, 24, Array.from({ length: 12 }, (_, i) => `line${i}`).join('\n'), false, 80)!
     expect(twelve.height).toBe(16)
-    expect(twelve.top + twelve.height - 1).toBe(21) // bottom border stays put
+    expect(twelve.top + twelve.height - 1).toBe(21) // card bottom stays put
     const forty = composerStripRows(80, 24, Array.from({ length: 40 }, (_, i) => `line${i}`).join('\n'), false, 80)!
     expect(forty.height).toBe(16)
     expect(forty.top + forty.height - 1).toBe(21)
   })
 
-  test('tall terminals grow the cap WITH the terminal (rows−8 box, rows−12 visible)', () => {
-    // rows=60 → cap = max(5, 52) = 52; 30 wrapped rows fully fit (composerH =
-    // 5+30−1 = 34 ≤ 52, no internal scroll).
+  test('tall terminals grow the cap WITH the terminal', () => {
+    // rows=60 → cap = max(5, 52) = 52; 30 wrapped rows fully fit
+    // (min(5+30−1, 52) = 34, no internal scroll).
     const thirty = composerStripRows(120, 60, Array.from({ length: 30 }, (_, i) => `line${i}`).join('\n'), false, 120)!
     expect(thirty.height).toBe(34)
     expect(thirty.top + thirty.height - 1).toBe(57) // 60 − STATUS_BAR_HEIGHT
-    // 70 rows cap at 52 (box) → 48 visible text rows (rows−12); internal scroll.
+    // 70 rows cap at 52 rows; internal scroll.
     const seventy = composerStripRows(120, 60, Array.from({ length: 70 }, (_, i) => `line${i}`).join('\n'), false, 120)!
     expect(seventy.height).toBe(52)
     expect(seventy.top + seventy.height - 1).toBe(57)
   })
 
   test('small terminals tighten the cap via the rows−8 viewport guard', () => {
-    // rows=14 → cap = max(5, 14−8) = 6 → only 2 visible text rows (box height 6).
+    // rows=14 → cap = max(5, 14−8) = 6 → only 2 visible text rows (height 6).
     const small = composerStripRows(80, 14, Array.from({ length: 20 }, (_, i) => `line${i}`).join('\n'), false, 80)!
     expect(small.height).toBe(6)
     expect(small.top + small.height - 1).toBe(11) // 14 − STATUS_BAR_HEIGHT

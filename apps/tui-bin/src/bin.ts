@@ -439,7 +439,8 @@ async function main(): Promise<void> {
   const wantsHelp = args.some((arg) => arg === '--help' || arg === '-h')
   if (!wantsHelp && process.stdout.isTTY === true) {
     process.stdout.write('\x1b[2J\x1b[H')
-    process.stdout.write(`\x1b[90m${NAME} v${readVersion()} — starting…\x1b[0m`)
+    // Version verbatim (no `v` prefix) — same shape as the hero headline.
+    process.stdout.write(`\x1b[90m${NAME} ${readVersion()} — starting…\x1b[0m`)
   }
   let appMounted = false
   process.on('exit', () => { if (!appMounted) leaveAlt() })

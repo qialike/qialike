@@ -14,6 +14,8 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { statSync } from 'node:fs'
+import { join } from 'node:path'
 import { render, Box, Text } from 'ink'
 import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
@@ -25,6 +27,7 @@ import { ManualCompactionError, type CompactionResult, type ManualCompactAgentCo
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { sessionDir } from './session-files.ts'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -43,13 +46,13 @@ import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
-import { isPinned, prewarmTitles, rememberFoldedTitle, rememberTitle, sessionDisplayTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { findReusableBlank, foldSessionBlank, isPinned, prewarmTitles, rememberBlank, rememberFoldedTitle, rememberTitle, sessionBlank, sessionDisplayTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { describeResumeFailure, planResumeFold, withResumeCorruptRetry } from './resume-fold.ts'
+import { describeResumeFailure, isCorruptLogMessage, planResumeFold, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -101,12 +104,17 @@ async function attachSessionToWorkspace(ctx: unknown, workspace: string, session
 export interface Config {
   workspace: string
   resume: string | undefined
+  /** Positional `resume`: continue the newest session WITH CONTENT in this
+   *  directory and open the conversation view directly. A bare launch never
+   *  auto-resumes (it opens/reuses the New Session placeholder + hero). */
+  resumeNewest: boolean | undefined
   model: string | undefined
 }
 
 export const Config: z<Config> = z.object({
   workspace: z.string().required(),
   resume: z.string(),
+  resumeNewest: z.boolean(),
   model: z.string(),
 })
 
@@ -201,6 +209,10 @@ export interface SessionSummary {
   readonly cwd?: string
   /** Creation timestamp (local epoch ms), used for time-grouped display. */
   readonly createdAt?: number
+  /** Unused "New Session" placeholder (no turn/start yet) — web parity: the
+   *  workspace browser shows only the SELECTED blank entry and New Session
+   *  reuses an existing blank instead of minting a new id. */
+  readonly blank?: boolean
   /** /sessions dialog extras (harness list projection). */
   readonly running?: boolean
   readonly completed?: boolean
@@ -264,6 +276,119 @@ export interface CommandItem {
  *  `tool` (a tool call row is open). */
 export type RunPhase = 'working' | 'thinking' | 'answering' | 'tool'
 
+/** Phases of one session switch, in display order. */
+export type SessionLoadPhase = 'opening' | 'attaching' | 'tail' | 'index' | 'ready'
+
+/** One row of the switch dialog. A step is either DONE (`ms` set), ACTIVE (last
+ *  step without `ms`) or PENDING. `progress` exists only where the phase has a
+ *  real denominator — the harness session-open exposes none, so showing a bar
+ *  there would be a lie. */
+export interface SessionLoadStep {
+  readonly phase: SessionLoadPhase
+  /** Row label (English). */
+  readonly label: string
+  /** Wall time the finished step took (ms); undefined while running/pending. */
+  readonly ms?: number
+  /** Real counts for this step (events), when the phase has them. */
+  readonly progress?: { readonly done: number; readonly total: number }
+}
+
+/** In-flight session SWITCH (the `/sessions` picker's Enter): non-null from the
+ *  moment the target is picked until the new transcript is on screen.
+ *
+ *  Why the UI needs a state at all: opening a durable session
+ *  (`agents.resume`) decodes its whole log inside the harness (no progress
+ *  API, and it BLOCKS the single JS thread — measured `openTicks=0`), and the
+ *  /sessions panel is already closed by then, so without a dialog the screen
+ *  simply looks frozen. */
+export interface SessionLoadingState {
+  /** Target session id. */
+  readonly id: string
+  /** Display title, when the picker row had one. */
+  readonly title?: string
+  /** Durable log size in bytes (`session.jsonl.zstd`), when stat-able. */
+  readonly bytes?: number
+  /** Epoch ms the switch started (drives the live elapsed seconds). */
+  readonly startedAt: number
+  /** Steps in display order; the last entry is the ACTIVE one. */
+  readonly steps: readonly SessionLoadStep[]
+}
+
+/** Fixed label per phase (the dialog's rows). */
+const SESSION_LOAD_LABELS: Record<SessionLoadPhase, string> = {
+  opening: 'Opening session log',
+  attaching: 'Attaching session',
+  tail: 'Folding recent tail',
+  index: 'Scanning index',
+  ready: 'Ready',
+}
+
+/** Percent (0–100, clamped) of a step's real counts. */
+export function sessionLoadPercent(progress: { done: number; total: number }): number {
+  if (!Number.isFinite(progress.done) || !Number.isFinite(progress.total) || progress.total <= 0) return 0
+  const pct = (progress.done / progress.total) * 100
+  return Math.max(0, Math.min(100, Math.round(pct)))
+}
+
+/** ASCII-safe progress bar (`█` when the terminal advances it one column, else
+ *  `#`) with `·` cells — width-exact, never wraps the dialog. */
+export function sessionLoadBar(progress: { done: number; total: number }, width: number, blockGlyph = true): string {
+  const w = Math.max(4, Math.floor(width))
+  const filled = Math.round((sessionLoadPercent(progress) / 100) * w)
+  const full = blockGlyph ? '█' : '#'
+  return full.repeat(filled) + '·'.repeat(Math.max(0, w - filled))
+}
+
+/** Human byte size for the banner (`18.4 MB`). */
+export function formatByteSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '?'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+/** One-line, English, honest banner text for the in-flight switch.
+ *
+ *  There is deliberately NO percentage (the harness session-open exposes no
+ *  progress) and — measured on a 1.43 M-event session, `openTicks=0` — the
+ *  open BLOCKS the one JS thread, so a live seconds counter would freeze at
+ *  `0.0s` and read like a hang. The elapsed tail is therefore shown only once
+ *  the ticker has actually fired (proof the loop is alive); otherwise the line
+ *  states what is happening, without a lying clock. */
+/** One-line STATUS-BAR text for the in-flight switch: the ACTIVE phase plus
+ *  the target session (and the log size). Same honesty rule as
+ *  {@link sessionLoadingText}: the elapsed tail appears only once the ticker
+ *  proved the event loop is alive. */
+export function sessionLoadingStatusText(state: SessionLoadingState, now: number, showElapsed = true): string {
+  const active = state.steps[state.steps.length - 1]
+  const label = active === undefined ? 'opening session log' : active.label.toLowerCase()
+  return `Load session:  ${label} · ${sessionLoadingText(state, now, showElapsed)}`
+}
+
+/** Dialog HEADER: the target session, its log size and (only when the event
+ *  loop proved alive) the elapsed seconds. */
+export function sessionLoadingText(state: SessionLoadingState, now: number, showElapsed = true): string {
+  const rawTitle = state.title !== undefined && state.title.trim() !== '' ? state.title.trim() : ''
+  const id = String(state.id)
+  const label = rawTitle !== '' ? rawTitle : `${id.slice(0, 8)}…${id.slice(-4)}`
+  const size = state.bytes === undefined ? '' : ` — ${formatByteSize(state.bytes)} log`
+  if (!showElapsed) return `${label}${size}`
+  const secs = Math.max(0, (now - state.startedAt) / 1000).toFixed(1)
+  return `${label}${size} · ${secs}s`
+}
+
+/** Short, status-bar-sized wording for a FAILED session load. The full
+ *  explanation (both possible causes for a corrupt log, the raw harness error
+ *  otherwise) stays in the transcript row — a status bar cannot wrap. */
+export function sessionLoadErrorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error)
+  if (isCorruptLogMessage(message)) return 'Load session failed: corrupt session log — see transcript'
+  const first = (message.split('\n')[0] ?? '').trim()
+  const clip = first.length > 78 ? `${first.slice(0, 77)}…` : first
+  return `Load session failed: ${clip === '' ? 'unknown error' : clip}`
+}
+
 /** Mutable UI store the Ink app subscribes to. */
 export class Store {
   private items: TranscriptItem[] = []
@@ -276,6 +401,16 @@ export class Store {
    *  inserted by {@link prependHistory}); lets the resume driver bound memory
    *  and trim the oldest loaded slices while the user reads the live tail. */
   private _loadedOlder = 0
+  /** Highest older-event count reported so far (the marker's bar is monotonic). */
+  private _historyProgressMax = 0
+  /** Total older events the driver will report against (bar denominator). */
+  private _historyTotal = 0
+  /** True while the driver WAITS instead of folding (at the tail budget, or
+   *  because the reader sits mid-transcript): a resting state, not a stall. */
+  private _historyHolding = false
+  /** True once the load reached its resting state for the CURRENT view: the
+   *  status bar then shows ONE completion message and hides the progress. */
+  private _historySettled = false
   private version = 0
   private listeners = new Set<() => void>()
   private _input = ''
@@ -285,6 +420,15 @@ export class Store {
   private _commandFilter = ''
   private _commandIndex = 0
   private _approval: PendingApproval | null = null
+  /** In-flight session switch (banner + key suppression); null when idle. */
+  private _sessionLoading: SessionLoadingState | null = null
+  /** Last FAILED session load (short wording) — shown in the status bar until
+   *  the next load attempt or an explicit dismiss, because the user has to be
+   *  able to read WHY the session did not open. */
+  private _loadError: string | null = null
+  /** True once the loading ticker fired at least once — i.e. the event loop was
+   *  free during the open (see {@link sessionLoadingText}). */
+  private _sessionLoadingTicked = false
   /** /sessions dialog state: full list, highlight, live filter, content-search hits. */
   private _sessionsDialog: readonly SessionSummary[] = []
   private _sessionsDialogIndex = 0
@@ -354,6 +498,10 @@ export class Store {
   /** Row → transcript item resolver installed by the conversation panel each
    *  render (mouse clicks on a tool row toggle its expansion). */
   private _rowResolver: ((row: number) => TranscriptItem | null) | null = null
+  /** Whether the user submitted anything in the CURRENT session yet (web
+   *  parity: the blank→engaging flip happens locally, on the submit's own
+   *  frame, so the hero screen leaves immediately). */
+  private _promptAttempted = false
   private _followTail = true
   private _scroll = 0
   private _layoutContent = 0
@@ -863,6 +1011,11 @@ export class Store {
     this.items = []
     this._historyMarkerKey = -1
     this._loadedOlder = 0
+    this._historyProgressMax = 0
+    this._historyTotal = 0
+    this._historyHolding = false
+    this._historySettled = false
+    this._loadError = null
     this._steps = []
     this._toolBodiesOverride.clear()
     this._toolBodiesDefault = false
@@ -893,8 +1046,16 @@ export class Store {
   }
 
   /** Label of the leading "older history still loading" marker row. */
-  private static historyMarkerText(done: number, total: number): string {
-    return `⋯ 更早历史载入中：${done}/${total} 事件`
+  private static historyMarkerText(done: number, total: number, holding: boolean): string {
+    // HOLDING is a RESTING state, not a stalled bar: while the reader stays at
+    // the live tail the driver deliberately keeps only a bounded window of
+    // older history (RESUME_OLDER_ITEM_CAP) and waits — so the counter stops a
+    // percent or two short of the total and a percentage would look stuck
+    // forever. The text then says what is true and what to do about it.
+    if (holding) return `Load session:  ${done}/${total} events loaded · scroll to top to load more`
+    const pct = sessionLoadPercent({ done, total })
+    const bar = sessionLoadBar({ done, total }, 16, true)
+    return `Load session:  ${bar} ${String(pct).padStart(3)}%  ${done}/${total} events`
   }
 
   /** Begin a TAIL-FIRST chunked history load (giant-session resume): paint the
@@ -906,9 +1067,13 @@ export class Store {
     const tailMax = items.reduce((max, item) => Math.max(max, item.key), 0)
     const markerKey = Math.max(this.key, tailMax) + 1
     this._historyMarkerKey = markerKey
+    this._historyProgressMax = 0
+    this._historyTotal = olderEvents
+    this._historyHolding = false
+    this._historySettled = false
     this.key = markerKey
     this.items = [
-      { key: markerKey, kind: 'status', text: Store.historyMarkerText(0, olderEvents), dim: true },
+      { key: markerKey, kind: 'status', text: Store.historyMarkerText(0, olderEvents, false), dim: true },
       ...items,
     ]
     this._steps = [...steps]
@@ -940,6 +1105,116 @@ export class Store {
     if (marker) this._loadedOlder += keyed.length
     this._measureEpoch += 1
     this.notify()
+  }
+
+  /** The in-flight session switch, or null when nothing is being opened. */
+  get sessionLoading(): SessionLoadingState | null { return this._sessionLoading }
+
+  /** Whether the loading ticker ever fired (loop was alive → show elapsed). */
+  get sessionLoadingTicked(): boolean { return this._sessionLoadingTicked }
+
+  /** Short wording of the last failed session load (null when none). */
+  get loadError(): string | null { return this._loadError }
+
+  /** Record a failed session load: the status bar keeps this line visible until
+   *  the next attempt (a new load clears it) or `/clear`. */
+  failSessionLoad(text: string): void {
+    this._sessionLoading = null
+    this._sessionLoadingTicked = false
+    this._loadError = text
+    this.notify()
+  }
+
+  /** Drop the recorded load failure (new attempt, `/clear`, explicit dismiss). */
+  clearLoadError(): void {
+    if (this._loadError === null) return
+    this._loadError = null
+    this.notify()
+  }
+
+  /** Enter the "opening a session" state (paints the dialog; suppresses keys).
+   *  A second Enter replaces the state instead of stacking dialogs. */
+  beginSessionLoading(state: { id: string; title?: string; bytes?: number; startedAt: number }): void {
+    this._loadError = null
+    this._sessionLoading = {
+      ...state,
+      steps: [{ phase: 'opening', label: SESSION_LOAD_LABELS.opening }],
+    }
+    this._sessionLoadingTicked = false
+    this.notify()
+  }
+
+  /** Start the next phase: the previous ACTIVE step is closed with `ms` and the
+   *  new one becomes active. No-op without an in-flight switch. */
+  beginSessionLoadStep(phase: SessionLoadPhase, ms?: number, progress?: { done: number; total: number }): void {
+    const state = this._sessionLoading
+    if (state === null) return
+    const steps: SessionLoadStep[] = state.steps.map((step, i) =>
+      i === state.steps.length - 1 && step.ms === undefined ? { ...step, ms: ms ?? 0 } : step)
+    const existing = steps.findIndex((step) => step.phase === phase)
+    const next: SessionLoadStep = { phase, label: SESSION_LOAD_LABELS[phase], ...(progress === undefined ? {} : { progress }) }
+    if (existing >= 0) steps[existing] = { ...steps[existing]!, ...next }
+    else steps.push(next)
+    this._sessionLoading = { ...state, steps }
+    this.notify()
+  }
+
+  /** Refresh the ACTIVE step's real counts (events folded so far). */
+  setSessionLoadProgress(done: number, total: number): void {
+    const state = this._sessionLoading
+    if (state === null || state.steps.length === 0) return
+    const last = state.steps[state.steps.length - 1]!
+    if (last.ms !== undefined) return
+    const steps = [...state.steps.slice(0, -1), { ...last, progress: { done, total } }]
+    this._sessionLoading = { ...state, steps }
+    this.notify()
+  }
+
+  /** Re-render the banner so its elapsed seconds advance. Firing at all proves
+   *  the event loop is free (a blocking session-open fires no timer), which is
+   *  what unlocks the elapsed tail in the banner text. */
+  tickSessionLoading(): void {
+    if (this._sessionLoading === null) return
+    this._sessionLoadingTicked = true
+    this.notify()
+  }
+
+  /** Leave the "opening a session" state (success OR failure). */
+  endSessionLoading(): void {
+    if (this._sessionLoading === null) return
+    this._sessionLoading = null
+    this._sessionLoadingTicked = false
+    this.notify()
+  }
+
+  /** Whether a load progress indicator should occupy the status bar: a load is
+   *  running and it has not settled yet (settled → one completion flash, then
+   *  the slot returns to the normal busy indicator). */
+  get historyLoadingVisible(): boolean {
+    return this._historyMarkerKey >= 0 && !this._historySettled
+  }
+
+  /** The leading marker's text (progress bar + counts) — reused by the status
+   *  bar so the long older-history fold is visible without scrolling up. */
+  get historyProgressText(): string {
+    const marker = this.items[0]
+    if (this._historyMarkerKey < 0 || marker === undefined) return ''
+    return marker.text
+  }
+
+  /** Mark the load as settled for the current view: flash ONE completion line
+   *  and let the status bar drop the progress (folding resumes → unsettle). */
+  settleHistoryLoad(total: number): void {
+    if (this._historySettled) return
+    this._historySettled = true
+    // "loaded" (not "of N"): what is loaded is what this view needs — the rest
+    // stays on disk and comes back on scroll-up, so a fraction would mislead.
+    this.flashStatus(`Load session:  done · ${total} events loaded`, 4000)
+  }
+
+  /** A settle is reversed as soon as folding starts again (reader scrolled up). */
+  unsettleHistoryLoad(): void {
+    this._historySettled = false
   }
 
   /** Number of older-history items currently loaded behind the marker row. */
@@ -976,7 +1251,28 @@ export class Store {
     if (this._historyMarkerKey < 0 || this.items.length === 0) return
     const marker = this.items[0]!
     if (marker.key !== this._historyMarkerKey) return
-    this.items = [{ ...marker, text: Store.historyMarkerText(done, total) }, ...this.items.slice(1)]
+    // Monotonic: at the live tail the driver evicts the oldest loaded slices
+    // and re-folds them on demand, which makes the raw accounting wobble by a
+    // percent or two. A progress readout must never go backwards.
+    const shown = Math.max(this._historyProgressMax, done)
+    this._historyProgressMax = shown
+    this._historyTotal = total
+    this.items = [{ ...marker, text: Store.historyMarkerText(shown, total, this._historyHolding) }, ...this.items.slice(1)]
+    this.notify()
+  }
+
+  /** Switch the marker between "folding" and "holding" (see
+   *  {@link Store.historyMarkerText}). No-op when unchanged. */
+  setHistoryHolding(holding: boolean): void {
+    if (this._historyHolding === holding) return
+    this._historyHolding = holding
+    if (this._historyMarkerKey < 0 || this.items.length === 0) return
+    const marker = this.items[0]!
+    if (marker.key !== this._historyMarkerKey) return
+    this.items = [{
+      ...marker,
+      text: Store.historyMarkerText(this._historyProgressMax, this._historyTotal, holding),
+    }, ...this.items.slice(1)]
     this.notify()
   }
 
@@ -1475,7 +1771,36 @@ export class Store {
   get modelEffortName(): string { return this._modelEffortName }
   setModelLabel(label: string, effortName = ''): void { this._modelLabel = label; this._modelEffortName = effortName; this.notify() }
   get session(): Session | undefined { return this._session }
-  setSession(session: Session): void { this._session = session }
+  setSession(session: Session): void {
+    this._session = session
+    // A session switch (launch / /new / /sessions) starts a fresh hero state.
+    this._promptAttempted = false
+  }
+
+  /** Whether this session has had a submission attempt (see the field). */
+  get promptAttempted(): boolean { return this._promptAttempted }
+  /** First-submit flip: leaves the hero on the submit's own frame. */
+  markPromptAttempted(): void {
+    if (this._promptAttempted) return
+    this._promptAttempted = true
+    this.notify()
+  }
+  /** Hero (web parity): the blank New Session screen — an unused session with
+   *  no submission attempt and nothing running yet. A resumed session with
+   *  content (or a running turn) can never be the hero. */
+  get hero(): boolean {
+    // Picking a session in /sessions leaves the hero IMMEDIATELY (user call):
+    // the docked chrome — status bar included — is up while the harness opens
+    // the target, so the load has a visible progress slot from the first frame
+    // instead of a modal over the hero.
+    if (this._sessionLoading !== null) return false
+    // A FAILED load keeps the docked view up too: the hero has neither a status
+    // bar nor transcript rows, so an error shown there would be invisible.
+    if (this._loadError !== null) return false
+    const session = this._session
+    if (session === undefined) return true
+    return sessionBlank(session.id) === true && !this._promptAttempted && !this._running
+  }
   private _models: readonly ModelsOption[] = []
   private _modelIndex = 0
   private _providers: readonly ProviderModelsEntry[] = []
@@ -2318,6 +2643,13 @@ function handleKey(k: RawKey): void {
   // click. Right-click = Esc means press-only; drop the paired release here,
   // once, for every panel (overlays included).
   if (k.mouseRightRelease !== undefined) return
+  // An in-flight session switch OWNS the input: the target session is being
+  // opened and is about to replace everything on screen, so keys are ignored
+  // (no half-applied draft/command in the session that is being replaced).
+  // Ctrl+C stays available as the single escape hatch — it exits the process,
+  // and in raw mode the key path IS the exit path, so swallowing it would make
+  // a long harness open look like a hard hang with no way out.
+  if (store.sessionLoading !== null && !(k.ctrl === true && (k.char ?? '') === 'c')) return
   const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
   def?.handleKey?.(k, store)
 }
@@ -2579,12 +2911,48 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // record why and continue to a fresh session below.
         resumeFailure = error instanceof Error ? error.message : String(error)
       }
-    } else if (resolveResumeLast()) {
+    } else if (config.resumeNewest === true || resolveResumeLast()) {
+      // `dsh-tui resume` (or the resume_last opt-in): continue the newest
+      // session WITH CONTENT → the launch lands directly in the conversation
+      // view (docked), never on the hero.
       try {
         nextHandle = await autoResumeNewest(ctx, agents, config.workspace, agentOptions, setup)
         nextResumed = nextHandle !== undefined
       } catch (error) {
         resumeFailure = error instanceof Error ? error.message : String(error)
+      }
+    }
+    // A requested resume that FAILED must fall back to a genuinely fresh
+    // session (and stay visibly `resumed: false` so the failure is surfaced) —
+    // never silently land the user on some other blank session.
+    const resumeAttempted = resumeId !== undefined || config.resumeNewest === true || resolveResumeLast()
+    if (nextHandle === undefined && !resumeAttempted) {
+      // Flat launch (the default): REUSE this workspace's unused New Session
+      // placeholder when one exists (web parity — no empty-session pile-up),
+      // otherwise create one. Either way the launch shows the hero screen.
+      const persistence = ctx.get('sessionPersistence') as {
+        list?: (signal?: AbortSignal) => Promise<Array<{ id: SessionId; cwd?: string; createdAt?: number }>>
+        inspect?: (id: SessionId) => Promise<{ events: readonly unknown[] }>
+      } | undefined
+      if (persistence?.list !== undefined && persistence.inspect !== undefined) {
+        try {
+          const headers = await persistence.list()
+          const reused = await findReusableBlank(
+            { inspect: (id) => persistence.inspect!(id) },
+            headers,
+            config.workspace,
+            undefined,
+          )
+          if (reused !== undefined) {
+            nextHandle = await withResumeCorruptRetry(
+              () => agents.resume({ resumeSessionId: reused, agentOptions, setup }),
+              { retries: 2, waitMs: 250 },
+            )
+            nextResumed = true
+          }
+        } catch {
+          // Listing/inspection/open failure falls back to a fresh session.
+        }
       }
     }
     if (nextHandle === undefined) {
@@ -2661,8 +3029,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     resumeHistoryIntoStore(store, agent.session)
     // Backfill the sidebar title from the in-memory log: the launch session
     // may predate this process (its session/title event never reached a live
-    // listener here) and the disk-cache prewarm runs on a delay.
-    rememberFoldedTitle(sessionId, agent.session.snapshotEvents())
+    // listener here) and the disk-cache prewarm runs on a delay. The SAME
+    // snapshot tells whether the session is an unused blank (web parity: the
+    // launch reuses the workspace's blank session rather than creating one).
+    const snapshot = agent.session.snapshotEvents()
+    rememberFoldedTitle(sessionId, snapshot)
+    rememberBlank(sessionId, foldSessionBlank(snapshot))
+  } else {
+    rememberBlank(sessionId, true) // freshly created: unused New Session
   }
   // The merged template directory (core + plugin-registered), read live so a
   // sibling plugin's additions apply without a restart.
@@ -2718,7 +3092,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // the transcript AND in the log, after the fresh-session line above.
   if (!resumed && resumeFailure !== null) {
     logErrorFileOnly('resume', `launch resume failed; started a fresh session instead: ${resumeFailure}`)
-    store.append('status', `${describeResumeFailure(resumeFailure)}；已改为新建会话继续。`, true)
+    store.append('status', `${describeResumeFailure(resumeFailure)} — started a fresh session instead.`, true)
   }
 
   // Warm the title cache shortly after launch so the first /sessions open
@@ -2799,6 +3173,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // text-produced flag on a fresh turn; explain a silent ceiling hit.
       case 'turn/start': {
         textSinceThisTurn = false
+        // First turn: this session stops being an unused "New Session"
+        // placeholder (web parity: blank flips false at turn/start).
+        rememberBlank(sessionId, false)
         break
       }
       case 'turn/end': {
@@ -2807,13 +3184,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           if (!textSinceThisTurn) {
             // The whole output budget went to reasoning (no body text yet).
             store.append('status',
-              '⚠ 上一轮输出达到长度上限（多为推理消耗）且未产出正文 — 发送任意消息即可继续；长任务可用 Ctrl+T 调低推理档。',
+              '⚠ Previous turn hit the output length cap (usually spent on reasoning) and produced no text — send any message to continue; for long tasks lower the reasoning effort with Ctrl+T.',
               true)
           } else {
             // Harness-web parity: output was truncated but kept — tell the
             // user to send "continue" so the model resumes from it.
             store.append('status',
-              '⚠ 回答被截断：达到输出 token 上限，已输出的内容已保留 — 发送「继续」即可让模型接着输出。',
+              '⚠ Response truncated: the output token cap was reached; everything generated so far is kept — send "continue" to let the model carry on.',
               true)
           }
         }
@@ -2907,6 +3284,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
 
   store.submitMessage = (text) => {
+    // Local first-submit flip (web parity): the hero leaves on this frame,
+    // ahead of the harness round-trip that records the real turn/start.
+    store.markPromptAttempted()
     if (store.inputHistory.at(-1) !== text) {
       store.inputHistory.push(text)
       if (store.inputHistory.length > 100) store.inputHistory.shift()
@@ -3134,14 +3514,40 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     }
     void (async (): Promise<void> => {
       try {
-        // Create the next agent BEFORE tearing the old one down: a failed
-        // create leaves the current session untouched.
-        const next = await agents.create({
-          sessionId: SessionId(`session-${randomUUID()}`),
-          meta: { cwd: config.workspace },
-          agentOptions,
-          setup,
-        })
+        // Web parity: an unused blank session is REUSED instead of minting a
+        // new id, so "new session, never used" cannot pile up empty files.
+        if (sessionBlank(sessionId) === true) {
+          store.append('status', 'already on a new (unused) session', true)
+          return
+        }
+        const persistence = ctx.get('sessionPersistence') as {
+          list?: (signal?: AbortSignal) => Promise<Array<{ id: SessionId; cwd?: string; createdAt?: number }>>
+          inspect?: (id: SessionId) => Promise<{ events: readonly unknown[] }>
+        } | undefined
+        let reused: SessionId | undefined
+        if (persistence?.list !== undefined && persistence.inspect !== undefined) {
+          try {
+            const headers = await persistence.list()
+            reused = await findReusableBlank(
+              { inspect: (id) => persistence.inspect!(id) },
+              headers,
+              config.workspace,
+              sessionId,
+            )
+          } catch {
+            // Listing/inspection failure falls back to creating a fresh id.
+          }
+        }
+        // Open the next agent BEFORE tearing the old one down: a failed
+        // open leaves the current session untouched.
+        const next = reused !== undefined
+          ? await agents.resume({ resumeSessionId: reused, agentOptions, setup })
+          : await agents.create({
+            sessionId: SessionId(`session-${randomUUID()}`),
+            meta: { cwd: config.workspace },
+            agentOptions,
+            setup,
+          })
         // The runtime owns exactly one live handle by the time a user can run
         // `/new`, so it is always set here.
         const old = handle
@@ -3160,8 +3566,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         store.setPaused(false)
         // A fresh session has no events yet, so this is a no-op today; it
         // covers a future where /new switches onto an already-titled session.
-        rememberFoldedTitle(sessionId, agent.session.snapshotEvents())
-        store.append('status', `New session ${sessionId} in ${config.workspace}`, true)
+        const snapshot = agent.session.snapshotEvents()
+        rememberFoldedTitle(sessionId, snapshot)
+        // Still blank: nothing has run in it yet (rememberBlank keeps the new
+        // row showing as the reuse-able "New Session" placeholder).
+        rememberBlank(sessionId, foldSessionBlank(snapshot))
+        store.append('status', reused !== undefined
+          ? `New session ${sessionId} in ${config.workspace} (reused empty session)`
+          : `New session ${sessionId} in ${config.workspace}`, true)
       } catch (error) {
         store.append('status', `new: ${error instanceof Error ? error.message : String(error)}`, true)
       }
@@ -3180,15 +3592,45 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (store.running) {
       try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
     }
+    // ── Loading state (P1) ─────────────────────────────────────────────────
+    // Paint a banner BEFORE touching the harness: opening a session decodes its
+    // whole log inside `agents.resume` (no progress API, and on giant logs it
+    // can block the one JS thread — measured `session open … ms=8907`), while
+    // the /sessions panel is already closed and the old transcript is on
+    // screen. The banner + a live elapsed counter is the honest feedback; the
+    // frame is flushed before the blocking call (see paintBeforeBlock).
+    const startedAt = Date.now()
+    const picked = store.sessionsDialog.find((row) => String(row.id) === String(id))
+    store.beginSessionLoading({
+      id: String(id),
+      title: picked?.title,
+      bytes: sessionLogBytes(picked?.cwd ?? config.workspace, String(id)),
+      startedAt,
+    })
+    const ticker = setInterval(() => store.tickSessionLoading(), 250)
     void (async (): Promise<void> => {
+      const tOpen = Date.now()
+      // P0 probe: 100 ms ticks during the harness open tell us whether it
+      // yields to the event loop (the banner's seconds would then tick) or
+      // blocks it outright (the banner simply holds).
+      let ticks = 0
+      const probe = setInterval(() => { ticks += 1 }, 100)
       try {
+        await paintBeforeBlock()
         const next = await withResumeCorruptRetry(
           () => agents.resume({ resumeSessionId: SessionId(id), agentOptions, setup }),
           { retries: 3, waitMs: 400 },
         )
+        const openMs = Date.now() - tOpen
+        clearInterval(probe)
+        // Phase ① done — the elapsed is known only NOW (the open blocks the
+        // loop, so the dialog cannot show a live clock for it).
+        store.beginSessionLoadStep('attaching', openMs)
+        const tDispose = Date.now()
         const old = handle
         if (old === undefined) return
         try { await old.dispose() } catch (error) { logError('resume: disposing the old session failed', error) }
+        const disposeMs = Date.now() - tDispose
         handle = next
         agent = next.agent
         sessionId = agent.session.id
@@ -3197,16 +3639,48 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         void attachSessionToWorkspace(ctx, config.workspace, agent.session.id)
         touchSession(sessionId)
         resetSessionStats()
+        const tFold = Date.now()
+        store.beginSessionLoadStep('tail', disposeMs)
         resumeHistoryIntoStore(store, agent.session)
+        const foldMs = Date.now() - tFold
+        store.beginSessionLoadStep('index', foldMs)
+        // P0 (extended): the post-switch steps are split out — a giant log's
+        // remaining cost sits somewhere in here, and guessing is not allowed.
+        const tSnap = Date.now()
+        const snapshot = agent.session.snapshotEvents()
+        const snapMs = Date.now() - tSnap
+        const tTitle = Date.now()
+        rememberFoldedTitle(sessionId, snapshot)
+        const titleMs = Date.now() - tTitle
+        const tBlank = Date.now()
+        rememberBlank(sessionId, foldSessionBlank(snapshot))
+        const blankMs = Date.now() - tBlank
+        store.beginSessionLoadStep('ready', snapMs + titleMs + blankMs)
+        logErrorFileOnly('resume',
+          `switch session=${sessionId} open=${openMs}ms openTicks=${ticks} dispose=${disposeMs}ms `
+          + `foldSync=${foldMs}ms snapshot=${snapMs}ms title=${titleMs}ms blank=${blankMs}ms `
+          + `events=${snapshot.length} total=${Date.now() - startedAt}ms`)
         store.setRunning(false)
         store.setPaused(false)
         // The title cache may not have seen this session (its session/title
-        // event can have landed while the user was elsewhere): fold the
-        // in-memory log now so the sidebar shows the title immediately.
-        rememberFoldedTitle(sessionId, agent.session.snapshotEvents())
-        store.append('status', `Session ${sessionId} in ${config.workspace} (resumed)`, true)
+        // event can have landed while the user was elsewhere): the fold above
+        // refreshed it from the SAME snapshot (one materialization, one blank
+        // scan), so the sidebar shows the title immediately (web parity).
+        store.append('status',
+          `Session ${sessionId} in ${config.workspace} (resumed · ${snapshot.length} events in ${((Date.now() - startedAt) / 1000).toFixed(1)}s)`, true)
       } catch (error) {
+        clearInterval(probe)
+        logErrorFileOnly('resume',
+          `switch session=${id} FAILED open=${Date.now() - tOpen}ms openTicks=${ticks} total=${Date.now() - startedAt}ms`)
+        // Fail loud in BOTH places: a one-line reason in the status bar (what
+        // the user is looking at while the dialog/progress was up) and the full
+        // explanation as a transcript row (the status bar cannot wrap).
+        store.failSessionLoad(sessionLoadErrorText(error))
         store.append('status', describeResumeFailure(error), true)
+      } finally {
+        clearInterval(probe)
+        clearInterval(ticker)
+        store.endSessionLoading()
       }
     })()
   }
@@ -3440,6 +3914,10 @@ async function autoResumeNewest(
       if (activityA !== activityB) return activityB - activityA
       return (b.createdAt ?? 0) - (a.createdAt ?? 0)
     })
+  // Web parity: when no session has content, REUSE the newest unused blank
+  // instead of creating yet another empty session (bounded to one blank per
+  // workspace); older empties are disposed as before.
+  let blankHandle: AgentHandle | undefined
   for (const header of candidates) {
     try {
       // Retry a concurrent-write false "corrupt" read before skipping to the
@@ -3453,13 +3931,17 @@ async function autoResumeNewest(
         (event) => event.type === 'user/message'
           && (event.data as { source?: { kind?: string } }).source?.kind === 'user',
       )
-      if (hasUserContent) return handle
-      await handle.dispose() // Empty session: skip to the next newest.
+      if (hasUserContent) {
+        if (blankHandle !== undefined) await blankHandle.dispose()
+        return handle
+      }
+      if (blankHandle === undefined) blankHandle = handle // newest empty: reusable blank
+      else await handle.dispose() // older empty: skip to the next newest
     } catch {
       // Unresumable session (corrupt/unreadable): skip it.
     }
   }
-  return undefined
+  return blankHandle
 }
 
 /** Flatten text blocks from a harness message content (mirrors export.tsx). */
@@ -3653,6 +4135,11 @@ let resumeFoldAbort: AbortController | null = null
  *  only continues during quiet gaps, so a folding slice never starves the
  *  live turn's layout/render (the "main loop blocked" stalls on giant
  *  sessions). */
+/** Extra, state-change-only diagnostics for the older-history driver
+ *  (`DSH_TUI_DEBUG_RESUME=1`) — off by default so a long resume cannot flood
+ *  `dsh-tui.log` with one line per slice. */
+const debugResumeFold = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_RESUME ?? '')
+
 const RESUME_FOLD_YIELD_MS = 16
 const RESUME_FOLD_HOLD_MS = 200
 const RESUME_FOLD_QUIET_GAP_MS = 150
@@ -3664,6 +4151,40 @@ const RESUME_FOLD_QUIET_GAP_MS = 150
  *  history in the transcript. Sessions whose older history fits under the cap
  *  load exactly as before (marker removed once event 0 is reached). */
 const RESUME_OLDER_ITEM_CAP = 4000
+
+/** Bytes of one persisted session's durable log (`session.jsonl.zstd`, or the
+ *  plain `session.jsonl`), best-effort — the banner shows it so the user can
+ *  tell "big log" from "small log" BEFORE the wait. */
+function sessionLogBytes(cwd: string, id: string): number | undefined {
+  try {
+    const dir = sessionDir(cwd, SessionId(id))
+    for (const name of ['session.jsonl.zstd', 'session.jsonl']) {
+      try {
+        return statSync(join(dir, name)).size
+      } catch { /* try the next candidate */ }
+    }
+  } catch { /* unreadable -> no size in the banner */ }
+  return undefined
+}
+
+/** Wait until the frame carrying the loading banner has actually reached the
+ *  terminal.
+ *
+ *  A blocking harness session-open would otherwise swallow the banner: Ink
+ *  renders on a later tick, so the store update alone paints nothing before
+ *  the thread is taken. The patched frame writer stamps
+ *  `globalThis.__dshTuiLastFlushAt` on every flush, so we can wait for the
+ *  NEXT flush (bounded — never stall the switch itself). */
+async function paintBeforeBlock(timeoutMs = 150): Promise<void> {
+  const host = globalThis as { __dshTuiLastFlushAt?: number }
+  const before = host.__dshTuiLastFlushAt ?? 0
+  const t0 = Date.now()
+  for (;;) {
+    if ((host.__dshTuiLastFlushAt ?? 0) > before) return
+    if (Date.now() - t0 >= timeoutMs) return
+    await sleepFor(8)
+  }
+}
 
 function sleepFor(ms: number): Promise<void> {
   return new Promise<void>((resolve) => { setTimeout(resolve, ms) })
@@ -3684,6 +4205,8 @@ function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEve
   const events = session.snapshotEvents()
   const t0 = Date.now()
   const plan = planResumeFold(events)
+  logErrorFileOnly('resume',
+    `fold mode=${plan.mode} events=${events.length}${plan.mode === 'chunked' ? ` tail=${events.length - plan.tailStart} olderRanges=${plan.olderRanges.length}` : ''}`)
   if (plan.mode === 'fast') {
     // Small history: the original one-pass fold + full stats, exactly as
     // before this change.
@@ -3797,7 +4320,22 @@ function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEve
           for (let i = popped.length - 1; i >= 0; i--) foldedNewestFirst.push(popped[i]!)
         }
       }
+      let lastLoopState = ''
       for (;;) {
+        // Diagnostic (gated: `DSH_TUI_DEBUG_RESUME=1`), logged only when the
+        // driver's STATE changes — never 1 Hz spam while resting. It exists
+        // because the "bar stuck at 98%" report had to be measured, not guessed.
+        if (debugResumeFold) {
+          const state = `cursor=${cursor} evicted=${evictedOldestFirst.length} `
+            + `loadedOlder=${store.loadedOlder >= RESUME_OLDER_ITEM_CAP ? 'cap' : store.loadedOlder} `
+            + `followTail=${store.followTail} nearTop=${nearTop()} running=${store.running}`
+          if (state !== lastLoopState) {
+            lastLoopState = state
+            logErrorFileOnly('resume',
+              `older loop ${state} unfolded=${unfoldedEv} evictedEv=${evictedEv} `
+              + `done=${Math.max(0, plan.tailStart - unfoldedEv - evictedEv)}`)
+          }
+        }
         if (abort.signal.aborted) return
         // Idle scheduling (优化3): while the live turn is running with events
         // still arriving, hold — the fold must never compete with live
@@ -3808,6 +4346,7 @@ function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEve
         }
         // Trim over-cap older while the user stays at the live tail.
         if (store.followTail && store.loadedOlder > RESUME_OLDER_ITEM_CAP) {
+          store.setHistoryHolding(true)
           evictOverCap()
           continue
         }
@@ -3818,20 +4357,40 @@ function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEve
         // content ABOVE the viewport (inserting it would shift what the user
         // is reading) — older loads happen near the top and at the tail.
         if (store.followTail) {
-          if (store.loadedOlder >= RESUME_OLDER_ITEM_CAP) {
+          // At the live tail we keep a BOUNDED window (RESUME_OLDER_ITEM_CAP)
+          // and REST. Two cases must both rest, or the loop churns:
+          //   · the window is full (loadedOlder ≥ cap), or
+          //   · every original slice is folded and the only work left is what
+          //     was EVICTED to keep the window bounded — re-folding that here
+          //     pushes straight back over the cap, so the driver would cycle
+          //     fold → evict → fold … forever (measured: `done` oscillating
+          //     ±500 events around 98.4% with `evicted=5`, CPU spinning, and
+          //     the readout looking permanently stuck).
+          // Resting shows an honest readout; folding resumes when the reader
+          // scrolls back up (nearTop → followTail false).
+          if (store.loadedOlder >= RESUME_OLDER_ITEM_CAP
+            || (cursor < 0 && evictedOldestFirst.length > 0)) {
+            store.setHistoryHolding(true)
+            // Loaded as much as this view needs: report it ONCE and drop the
+            // progress indicator (it comes back if the reader scrolls up).
+            store.settleHistoryLoad(Math.max(0, plan.tailStart - unfoldedEv - evictedEv))
             await sleepFor(RESUME_FOLD_HOLD_MS)
             continue
           }
         } else if (!nearTop()) {
+          store.setHistoryHolding(true)
           await sleepFor(RESUME_FOLD_HOLD_MS)
           continue
         }
         // Fold one slice, then always breathe between slices (even an 8 ms
         // slice back-to-back with the live stream can starve a frame).
+        store.setHistoryHolding(false)
+        store.unsettleHistoryLoad()
         if (!stepFold()) break
         await sleepFor(RESUME_FOLD_YIELD_MS)
       }
       if (abort.signal.aborted) return
+      store.settleHistoryLoad(events.length)
       store.finishHistory()
       store.setSteps(bestSteps)
       store.setStats(stats.snapshot())

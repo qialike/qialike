@@ -14,6 +14,10 @@ import type { Context } from '@deepseek-ai/cordis'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import {
   APP_VERSION,
+  sessionLoadBar,
+  sessionLoadPercent,
+  sessionLoadingStatusText,
+  sessionLoadingText,
   BETA_FOOTER_SUFFIX,
   type Store,
   type TranscriptItem,
@@ -27,6 +31,23 @@ import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import { questionDockRows } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
+import {
+  HERO_ART_CELL_GLYPH,
+  HERO_COMPOSER_EXTRA_ROWS,
+  HERO_PLACEHOLDER,
+  HERO_TITLE_CARD_GAP,
+  HERO_TITLE,
+  HERO_WORDMARK,
+  heroArtCells,
+  heroArtInkColors,
+  heroArtMarkKind,
+  heroArtMode,
+  heroComposerLeft,
+  heroComposerWidth,
+  heroLayout,
+  heroMarkRows,
+  type HeroMarkKind,
+} from '../hero-layout.ts'
 import { surfaceRegion, sidebarContentBand, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
 import { formatSessionStatsParts } from '../session-stats.ts'
 import { sessionDisplayTitle } from '../session-titles.ts'
@@ -43,10 +64,25 @@ export const name = 'tui-panel-conversation'
  *  a second store instance, so the store is fetched through the service seam. */
 let store!: Store
 
+/** Whether the COMMAND PALETTE is painted this frame (`/` + at least one
+ *  match). Set by the render, read by {@link installFrameSuffix}: while the
+ *  popup covers the composer card (hero — the card sits mid-screen and the
+ *  popup is lifted onto it) the hardware caret must NOT blink through it. */
+let commandPaletteOpen = false
+
 /** The `tui` service must be available to register panels and commands. */
 export const inject = ['tui']
 
 const COMPOSER_MIN_HEIGHT = 5
+
+/** Minimum composer BOX height: the hero card is a two-row input box
+ *  (`HERO_COMPOSER_INPUT_ROWS`), the docked card keeps a single row so the
+ *  transcript viewport is not eaten by chrome. Every width/height/row
+ *  computation funnels through this, so caret, mouse mapping and the painted
+ *  card can never disagree. */
+function composerMinHeight(): number {
+  return COMPOSER_MIN_HEIGHT + (store.hero ? HERO_COMPOSER_EXTRA_ROWS : 0)
+}
 
 /** Theme-aware muted text: bright on DARK backgrounds (the terminal's own
  *  colors, status bar, hints, empty-state, composer footer) and a dark gray on
@@ -403,12 +439,12 @@ function commandPaletteIndexFromRow(row: number, tui: TuiService): number {
   if (n === 0) return -1
   const width = process.stdout.columns ?? 80
   const height = process.stdout.rows ?? 24
-  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
-  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
-  // Palette box: bottom-anchored, bordered (2 rows) + n content rows, sitting
-  // just above the composer. Observed layout: the box bottom is ~composerTop-3
-  // (message-column paddingY + gap), so the first content row is composerTop-n-3.
-  const contentFirst = composerTop - n - 3
+  const band = composerBand(width, height)
+  // Palette box: bordered (2 rows) + n content rows, sitting just above the
+  // composer card. Docked: the box bottom is ~cardTop−3 (message-column
+  // paddingY + gap). Hero: the popup is centered on the card and lifted by
+  // `paletteBottomMargin`, so it rests DIRECTLY on the card's top border.
+  const contentFirst = store.hero ? band.top - n - 1 : band.top - n - 3
   const idx = row - contentFirst
   return (idx >= 0 && idx < n) ? idx : -1
 }
@@ -828,11 +864,37 @@ function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
 
 // ── layout helpers ──────────────────────────────────────────────────────────
 
+/** `DSH_TUI_HERO_ART` override, read once at module load (auto by default). */
+const HERO_ART_MODE = heroArtMode(process.env.DSH_TUI_HERO_ART)
+
+/** The generated brand art, packed into colored half-block cells once. */
+const HERO_ART_ROWS_CELLS = heroArtCells()
+
+/**
+ * Brand mark the hero draws at this size: the generated pixel-art wordmark when
+ * it fits AND the terminal really advances `▀` one column (it is
+ * East-Asian-Ambiguous — see the charwidth calibration), else the plain-`#`
+ * ASCII fallback, else nothing. The renderer and every geometry mirror call
+ * this, so routing cannot disagree with what is painted.
+ */
+function heroMarkFor(rows: number, width: number): HeroMarkKind {
+  return heroArtMarkKind({
+    rows,
+    width,
+    blockWidth: visualWidth(HERO_ART_CELL_GLYPH),
+    mode: HERO_ART_MODE,
+  })
+}
+
 /** Whether the Steps sidebar is drawn at `width`: the manual store override
  *  (`on`/`off`) wins; `auto` follows the width threshold. Every geometry helper
  *  consults this so the transcript/composer widths always match the sidebar
  *  that is actually drawn (including after a user hide/show). */
 function sidebarVisibleFor(width: number): boolean {
+  // The blank-session HERO is chrome-free (web parity): no Steps sidebar and a
+  // full-width composer while the hero is up. Every consumer of this helper
+  // (composer width, regions, painting) follows the same switch.
+  if (store.hero) return false
   const mode = store.sidebarMode ?? 'auto'
   if (mode === 'off') return false
   if (mode === 'on') return true
@@ -849,8 +911,12 @@ function sidebarWidthFor(width: number): number {
 /** The composer's outer width: the full terminal width, or — when the Steps
  *  sidebar is visible — exactly the message column width, so the composer's
  *  right border sits flush against the sidebar's left edge and input text
- *  never extends beneath/right of the sidebar. */
+ *  never extends beneath/right of the sidebar. While the HERO is up the card is
+ *  the narrower CENTERED web-like column instead (`heroComposerWidth`), so
+ *  every width-dependent composer computation (wrap, height, caret rows) uses
+ *  the same number the render centers on. */
 function composerOuterWidth(width: number): number {
+  if (store.hero) return heroComposerWidth(width)
   return Math.max(1, width - sidebarWidthFor(width))
 }
 
@@ -915,6 +981,34 @@ function composerHeight(width: number, input: string, min: number): number {
   // message viewport on small terminals.
   const cap = Math.max(min, store.rows - 8)
   return Math.min(min + wrapped - 1, cap)
+}
+
+/** Where the composer card actually sits: its FIRST painted row, its leftmost
+ *  column and its full box height (image chip included). Docked = bottom of the
+ *  message column; HERO = centered inside the hero stack, and narrower
+ *  (`heroComposerWidth`). The card is BORDERLESS: `top` is its first painted row
+ *  — the ▄ half-row edge — so the first CONTENT row is `top + 1` (then the image
+ *  row, when an image is attached, then the draft rows).
+ *  ONE source for the hardware caret cell, the mouse→input-index mapping, the
+ *  selection bounds and the command-palette rows — so none of them can drift
+ *  from what the render paints (the hero caret used to be placed with the
+ *  docked bottom-anchored formula, which parked the terminal cursor at the
+ *  bottom of the screen instead of in the card). */
+function composerBand(width: number, rows: number): { top: number; left: number; height: number } {
+  const height = composerHeight(width, store.input, composerMinHeight())
+    + (store.composerImage !== null ? 1 : 0)
+  if (store.hero) {
+    const hero = heroLayout({
+      rows,
+      boxH: height,
+      brandLines: heroMarkRows(heroMarkFor(rows, width)) + 1,
+      // No hint line (removed on user call); the row is reused by the
+      // older-history progress line while a resumed session folds.
+      hintLines: store.olderLoading ? 1 : 0,
+    })
+    return { top: hero.composerTopRow, left: heroComposerLeft(width), height }
+  }
+  return { top: rows - STATUS_BAR_HEIGHT - height + 1, left: 1, height }
 }
 
 /** Plan-B A/B switch (diagnosis only): `DSH_TUI_LEGACY_EST=1` re-parses the
@@ -1173,8 +1267,30 @@ function mainSurfaceGeometry(): SurfaceGeometry {
   const rows = store.rows
   const showSidebar = sidebarVisibleFor(width)
   const messageRight = showSidebar ? width - sidebarWidthFor(width) : width
-  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
+  const composerH = composerHeight(width, store.input, composerMinHeight())
   const boxH = composerH + (store.composerImage !== null ? 1 : 0)
+  // Hero phase: the SAME composer card is CENTERED inside the padded hero area
+  // (web parity) and is NARROWER than the window, so routing must take both its
+  // row band (shared hero layout) and its column band (heroComposerWidth) from
+  // the same numbers the render uses — never from the bottom-docked formula.
+  if (store.hero) {
+    const hero = heroLayout({
+      rows,
+      boxH,
+      brandLines: heroMarkRows(heroMarkFor(rows, width)) + 1,
+      hintLines: 0, // the hero draws no hint line (removed on user call)
+    })
+    return {
+      messageRight,
+      composerTop: hero.composerTopRow,
+      composerBottom: hero.composerBottomRow,
+      composerLeft: heroComposerLeft(width),
+      composerRight: heroComposerLeft(width) + heroComposerWidth(width) - 1,
+      // No status bar in hero → no status region at all (rows + 1 is off-screen,
+      // so `surfaceRegion` can never classify a hero row as `status`).
+      statusTop: rows + 1,
+    }
+  }
   return {
     messageRight,
     composerTop: rows - STATUS_BAR_HEIGHT - boxH + 1,
@@ -1186,7 +1302,8 @@ function mainSurfaceGeometry(): SurfaceGeometry {
 /** The composer draft's visible text area (rows) — the caret-following window
  *  height the render uses. Mirrors `Math.max(1, composerH − 4)` at render. */
 function composerTextArea(): number {
-  return Math.max(1, composerHeight(store.width, store.input, COMPOSER_MIN_HEIGHT) - 4)
+  // Painted card = 2 half-row edges + text area + 1 gap row + 1 status row.
+  return Math.max(1, composerHeight(store.width, store.input, composerMinHeight()) - 4)
 }
 
 /** New caret index after moving the composer caret by `dirRows` VISUAL lines
@@ -1220,17 +1337,17 @@ export function composerCaretMoveVisual(input: string, caret: number, usable: nu
 function composerInputIndex(row: number, col: number): number | null {
   const width = process.stdout.columns ?? 80
   const height = process.stdout.rows ?? 24
-  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
-  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
+  const band = composerBand(width, height)
   const usable = composerUsable(width)
   const lead = store.composerImage !== null ? 1 : 0
-  const textArea = Math.max(1, composerH - 4)
+  const textArea = Math.max(1, band.height - 4)
   const caretRow = composerCaretGlobalRow(store.input, store.cursor, usable)
   const win = composerWindow(store.input, usable, caretRow, textArea)
-  const clickRow = win.first + (row - (composerTop + 1 + lead))
+  const clickRow = win.first + (row - (band.top + 1 + lead))
   if (clickRow < 0 || clickRow >= win.rows.length) return null
   const target = win.rows[clickRow]!
-  return target.start + colToChar(target.text, Math.max(0, col - 3))
+  // Card content starts after the round border + paddingX (2 cells) of `left`.
+  return target.start + colToChar(target.text, Math.max(0, col - (band.left + 2)))
 }
 
 function positionCursorByMouse(row: number, col: number): void {
@@ -1241,8 +1358,10 @@ function positionCursorByMouse(row: number, col: number): void {
 function composerCaretCell(): { row: number; col: number } | null {
   const width = process.stdout.columns ?? 80
   const height = process.stdout.rows ?? 24
-  const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
-  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
+  // Hero-aware placement (docked: bottom of the message column; hero: the
+  // centered narrow card) — without this the hardware cursor was parked at the
+  // docked position while the card sat mid-screen.
+  const band = composerBand(width, height)
   const usable = composerUsable(width)
   const lead = store.composerImage !== null ? 1 : 0
   const caret = Math.max(0, Math.min(store.cursor, store.input.length))
@@ -1252,10 +1371,12 @@ function composerCaretCell(): { row: number; col: number } | null {
   const lines = composerWrap(store.input.slice(0, caret), usable)
   const lastLine = lines[lines.length - 1] ?? ''
   const caretRow = Math.max(0, lines.length - 1)
-  const textArea = Math.max(1, composerH - 4)
+  const textArea = Math.max(1, band.height - 4)
   const win = composerWindow(store.input, usable, caretRow, textArea)
   const visRow = Math.max(0, caretRow - win.first)
-  return { row: composerTop + 1 + lead + visRow, col: 3 + visualWidth(lastLine) }
+  // band.top is the card's ▄ edge row; the content starts one row below it,
+  // two columns in (the two pad columns this borderless card paints itself).
+  return { row: band.top + 1 + lead + visRow, col: band.left + 2 + visualWidth(lastLine) }
 }
 
 function composerSelectionRange(sel: { aRow: number; aCol: number; cRow: number; cCol: number }): { start: number; end: number } | null {
@@ -1272,8 +1393,7 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   const width = process.stdout.columns ?? 80
   const height = process.stdout.rows ?? 24
   const input = store.input
-  const composerH = composerHeight(width, input, COMPOSER_MIN_HEIGHT)
-  const composerTop = height - composerH - STATUS_BAR_HEIGHT + 1
+  const band = composerBand(width, height)
   const usable = convUsableWidth(width, sidebarVisibleFor(width))
   const flatItems = store.getItems()
   const rows = buildTranscriptRows(flatItems, usable)
@@ -1284,9 +1404,9 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
     let acc = 0
     for (const r of rows) { rowPrefix.push(acc); acc += r.text.length + 1 }
   }
-  const composerLastContent = composerTop + composerH - 2
+  const composerLastContent = band.top + band.height - 2
   const cellIndex = (row: number, col: number): number | null => {
-    if (row > composerTop && row <= composerLastContent) {
+    if (row > band.top && row <= composerLastContent) {
       const ci = composerInputIndex(row, col)
       return ci === null ? null : inputStart + ci
     }
@@ -1725,25 +1845,68 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     : modelLabel.slice(0, Math.max(0, modelLabel.length - effortName.length - 3))
   const showSidebar = sidebarVisibleFor(width)
 
+  const heroActive = store.hero
+  // Hero content box: the padded hero area starts at column 1 (0-based) and
+  // keeps one column on the right, so the usable width is `width − 2` — using
+  // `width − 4` made every centered line (art, title, hints, card, palette)
+  // sit one column left of the true center on even widths.
+  const heroUsable = Math.max(20, width - 2)
+  const heroBoxH = composerHeight(width, input, composerMinHeight()) + (store.composerImage !== null ? 1 : 0)
+  const heroMark = heroActive ? heroMarkFor(store.rows, width) : 'none'
+  const heroBrandLines = heroMarkRows(heroMark) + 1
+  // Brand art colors follow the theme (theme.text blended toward theme.bg), so
+  // a colorscheme switch restyles the mark with the rest of the chrome.
+  const heroArtInk = heroMark === 'blocks' ? heroArtInkColors(theme.text, theme.bg) : []
+  const hero = heroActive
+    ? heroLayout({ rows: store.rows, boxH: heroBoxH, brandLines: heroBrandLines, hintLines: store.olderLoading ? 1 : 0 })
+    : null
+  // Static web-parity placeholder while the hero composer is empty (no
+  // rotation: web's `placeholder.hero` is one fixed sentence).
+  const heroPlaceholderShown = heroActive && input === '' && store.composerImage === null
+  const heroPlaceholderText = HERO_PLACEHOLDER
+  /** Clip one dialog row to `w` VISUAL columns (never let a row wrap the box). */
+  const clipTo = (text: string, w: number): string => {
+    if (visualWidth(text) <= w) return text
+    let out = ''
+    let used = 0
+    for (const ch of text) {
+      const cw = visualWidth(ch)
+      if (used + cw > w) break
+      out += ch
+      used += cw
+    }
+    return out
+  }
+
+  /** Center one hero line by VISUAL width (CJK counts 2 columns). */
+  const centerInHero = (text: string): string =>
+    ' '.repeat(Math.max(0, Math.floor((heroUsable - visualWidth(text)) / 2))) + text
+  // The hero headline is the dsh-tui VERSION, verbatim (e.g. `0.3.1-beta`); the
+  // "-beta" prerelease segment already marks a preview build, so no extra badge.
+  const heroTitleLine = `${APP_VERSION}`
+
   const filtered = useMemo(
     () => filteredCommands(props.tui),
     [commands, filter, version],
   )
 
   const isSlash = input.startsWith('/')
+  // Mirrors the palette's painted state for the frame suffix (caret hiding).
+  commandPaletteOpen = isSlash && filtered.length > 0
   const [hoverIndex, setHoverIndex] = useState(commandIndex)
   React.useEffect(() => setHoverIndex(commandIndex), [commandIndex])
   const effectiveIndex = filtered.length === 0 ? -1 : (hoverIndex % filtered.length)
 
   const status = isRawModeSupported ? '' : '(raw input unsupported) '
 
-  const composerH = composerHeight(width, input, COMPOSER_MIN_HEIGHT)
+  const composerH = composerHeight(width, input, composerMinHeight())
   // Scroll window: when the input's wrapped rows exceed the visible text area,
   // render only the caret-following window (keeps the caret row visible;
   // nothing overflows over the composer footer).
   const cUsable = composerUsable(width)
   const caretGlobalRow = Math.max(0, composerWrap(input.slice(0, store.cursor), cUsable).length - 1)
-  const cWin = composerWindow(input, cUsable, caretGlobalRow, Math.max(1, composerH - 4))
+  const cTextArea = Math.max(1, composerH - 4)
+  const cWin = composerWindow(input, cUsable, caretGlobalRow, cTextArea)
   // Approval dock height: fixed — border 2 + padding 2 + header 1 + gap 1 +
   // one truncated reason line 1 + gap 1 + choice row 1 + gap 1 + hint 1.
   const approvalH = store.approval === null ? 0 : 11
@@ -1905,19 +2068,50 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         </RowErrorBoundary>
       )
 
-  // Composer input render: display exactly `input.slice(start, end)` — the
-  // visible scroll window (tail-follow when the input is taller than the text
-  // area). Rendering only the window keeps the box height exact (nothing
-  // overflows over the footer row) while the single Ink <Text wrap> paints
-  // reliably (row/overflow-clip variants did not). The window keeps the caret
-  // row visible, so typing at the end shows the newest lines.
-  const renderComposerText = (start: number, end: number): React.ReactNode => {
-    const text = input.slice(start, end)
+  /* Composer card chrome (web parity — `InputBar.module.css` `.card`):
+   *  - FILL: web `--dsw-specific-input-major` = `--dsw-static-neutral-bluish-850`
+   *    in the dark theme = #2c2c2e, which IS this palette's `element` (the
+   *    nested-surface step; the light skin maps it to its own raised surface).
+   *  - STROKE: web's `--dsw-alias-border-l2` hairline (rgba(255,255,255,.12))
+   *    resolved over that fill ≈ #454547 → this palette's `borderActive`.
+   *  The card is BORDERLESS (user call): a plain filled rectangle. Ink's Box
+   *  border only carries a color and its cells keep the page background (Ink
+   *  has no per-Box background), so a framed card either leaves the ring
+   *  unfilled or squares off the fill at the corners — a borderless solid
+   *  block sidesteps both. Every row is one bg-colored <Text> spanning the full
+   *  card width, so the fill is edge-to-edge. */
+  const cardFill = theme.element
+
+  /** One full-width composer row of the BORDERLESS card: two pad columns, the
+   *  body, the fill, two pad columns — the fill covers the entire rectangle, so
+   *  the card reads as one solid block (the pad columns keep the text/caret
+   *  exactly where the bordered variant had them: content starts 2 columns in
+   *  from the card's left edge, so no geometry moved). */
+  const composerRow = (
+    key: string,
+    text: string,
+    body?: React.ReactNode,
+  ): React.ReactNode => {
+    const pad = Math.max(0, cUsable - visualWidth(text))
+    return (
+      <Text key={key} backgroundColor={cardFill} wrap="truncate">
+        {'  '}
+        {body ?? text}
+        {' '.repeat(pad)}
+        {'  '}
+      </Text>
+    )
+  }
+
+  /** Body of one text row, with the selection painted as an inverse span (the
+   *  caret itself is the hardware cursor, positioned by composerCaretCell). */
+  const composerRowBody = (text: string, startOffset: number): React.ReactNode => {
     const seg = (a: number, b: number, inv: boolean, k: string): React.ReactNode =>
-      a < b ? <Text key={k} inverse={inv}>{text.slice(a, b)}</Text> : null
-    if (selRange === null || selRange.end <= start || selRange.start >= end) return <>{text}</>
-    const s = Math.max(0, selRange.start - start)
-    const e = Math.min(text.length, Math.max(0, selRange.end - start))
+      a < b ? <Text key={k} inverse={inv} backgroundColor={cardFill}>{text.slice(a, b)}</Text> : null
+    if (selRange === null) return text
+    const s = Math.max(0, selRange.start - startOffset)
+    const e = Math.min(text.length, Math.max(0, selRange.end - startOffset))
+    if (e <= s) return text
     return (
       <>
         {seg(0, s, false, 's0')}
@@ -1926,6 +2120,143 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       </>
     )
   }
+
+  /** The text-area rows of the caret-following window: exactly the visible
+   *  `textArea` rows (short drafts pad with empty filled rows, so the card's
+   *  fill and height are identical on every frame). */
+  const composerTextRows = (): React.ReactNode[] => {
+    const visible = cWin.rows.slice(cWin.first, cWin.first + cTextArea)
+    const out: React.ReactNode[] = []
+    for (let i = 0; i < cTextArea; i++) {
+      const row = visible[i]
+      if (row === undefined) {
+        out.push(composerRow(`cm-${i}`, ''))
+        continue
+      }
+      if (i === 0 && heroPlaceholderShown) {
+        out.push(composerRow(
+          `cm-${i}`,
+          status + heroPlaceholderText,
+          <>
+            {status}
+            <Text color={mutedReadable()} backgroundColor={cardFill}>{heroPlaceholderText}</Text>
+          </>,
+        ))
+        continue
+      }
+      // The raw-mode warning prefix rides the FIRST row (as it always did);
+      // its length shifts the row's local indices, so the selection offset is
+      // passed as `row.start - status.length` (local index of the prefix's
+      // first cell) and the per-character mapping stays exact.
+      const prefix = i === 0 ? status : ''
+      const text = prefix + row.text
+      const rowStart = i === 0 ? row.start - prefix.length : row.start
+      out.push(composerRow(`cm-${i}`, text, composerRowBody(text, rowStart)))
+    }
+    return out
+  }
+
+  /** Status row of the card (permission chip + model), painted edge to edge
+   *  with the same fill. */
+  const composerStatusRow = (): React.ReactNode => {
+    const chipIcon = store.permission === 'danger-full-access' ? '🔓' : '🔒'
+    const left = `${chipIcon} ${permissionLabel} `
+    const leftTab = '(Tab)'
+    const modelText = modelLabel === '' ? '' : `Model: ${modelBaseLabel}`
+    const effortText = effortName === '' ? '' : ` · ${effortName}`
+    const used = visualWidth(left) + visualWidth(leftTab) + visualWidth(modelText) + visualWidth(effortText)
+    const fill = Math.max(1, cUsable - used)
+    return composerRow(
+      'cm-status',
+      left + leftTab + ' '.repeat(fill) + modelText + effortText,
+      <>
+        <Text color={theme.text} backgroundColor={cardFill}>{left}</Text>
+        <Text color={permissionColor} backgroundColor={cardFill}>{leftTab}</Text>
+        {' '.repeat(fill)}
+        {modelText !== '' ? <Text color={theme.text} backgroundColor={cardFill}>{modelText}</Text> : null}
+        {effortText !== '' ? <Text color={mutedReadable()} backgroundColor={cardFill}>{effortText}</Text> : null}
+      </>,
+    )
+  }
+
+  /** The composer card — ONE element shared by both phases: docked at the
+   *  bottom of the message column, or centered inside the hero stack (web
+   *  parity). Only its container changes, so caret/height/mouse math is
+   *  identical in both. */
+  const composerNode = (
+    <Box flexShrink={0} flexDirection="column"
+        height={composerHeight(width, input, composerMinHeight()) + (store.composerImage !== null ? 1 : 0)}>
+        {/* Half-row edge: `▄` paints the card color in the LOWER half of the
+            cell (page color above), `▀` the UPPER half at the bottom — the fill
+            block therefore grows HALF A ROW on each side, which is the closest a
+            terminal gets to "½ extra padding row above and below". */}
+        <Text color={cardFill} backgroundColor={theme.bg} wrap="truncate">{'▄'.repeat(Math.max(1, cUsable + 4))}</Text>
+        {/* Image chip row (fills the card). */}
+        {store.composerImage !== null && composerRow(
+          'cm-image',
+          `[Image: ${store.composerImage.name}] · Esc to remove`,
+          <>
+            <Text color={theme.primary} backgroundColor={cardFill}>[Image: {store.composerImage.name}]</Text>
+            <Text color={mutedReadable()} backgroundColor={cardFill}> · Esc to remove</Text>
+          </>,
+        )}
+        {composerTextRows()}
+        {/* One blank filled row between the draft and the status row (the same
+            breathing space the docked card always had). */}
+        {composerRow('cm-blank', '')}
+        {composerStatusRow()}
+        <Text color={cardFill} backgroundColor={theme.bg} wrap="truncate">{'▀'.repeat(Math.max(1, cUsable + 4))}</Text>
+      </Box>
+  )
+
+  /** The command palette floats just ABOVE the composer card; `lift` is the
+   *  number of hero rows below the card (0 when the composer is docked). While
+   *  the hero is up the popup is centered at the CARD's width (the card is a
+   *  narrow centered column there), so the two always share one column band. */
+  // The hero card and its command palette must occupy the SAME column band.
+  // Ink centers an absolute child in its own coordinate space (the popup is
+  // positioned from the terminal's left edge), while the card is centered
+  // in-flow inside the padded hero area — two rounding paths that disagreed by
+  // 1–2 columns depending on the width. Both now use ONE explicit pad:
+  // `heroCardPad` columns inside the hero content box (origin = the hero Box's
+  // own paddingX, measured as column 2) for the card, and the same pad shifted
+  // by that origin for the absolutely positioned popup.
+  const heroCardPad = Math.max(0, Math.floor((heroUsable - heroComposerWidth(store.width)) / 2))
+  const HERO_CONTENT_ORIGIN = 1
+  const heroPaletteLeft = store.hero ? heroCardPad + HERO_CONTENT_ORIGIN : undefined
+
+  const renderPalette = (lift: number): React.ReactNode =>
+    isSlash && filtered.length > 0 ? (
+    <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end" alignItems={store.hero ? 'flex-start' : undefined} paddingLeft={heroPaletteLeft} paddingBottom={lift}>
+      <Box borderStyle="round" borderColor={theme.border} flexDirection="column" width={store.hero ? heroComposerWidth(store.width) : undefined}>
+        {filtered.map((c, i) => {
+          const line = `/${c.name} — ${c.hint}`
+          // Ink Box has NO background, so a Box paddingX would leave the
+          // transcript visible through the 2-char left/right margin. The
+          // whole row is instead ONE bg-colored Text that paints its own
+          // opaque 2-char margin on each side and fills the rest — the
+          // popup completely hides what is behind it. The row spans exactly
+          // the popup's INNER width (its own width minus the round border's 2
+          // cols; it has no paddingX), so short rows never truncate to "…":
+          //  - docked: the popup stretches inside the message column's padded
+          //    overlay → inner = usable − 2;
+          //  - HERO: the popup is the narrow centered CARD width (the overlay
+          //    is the hero area), so its inner width follows heroComposerWidth
+          //    — sizing rows by the message-column width there made every row
+          //    overflow and Ink appended "…" to all of them.
+          const contentW = Math.max(20, store.hero ? heroComposerWidth(store.width) - 2 : usable - 2)
+          const lead = '  '
+          const trail = '  '
+          const fill = Math.max(1, contentW - visualWidth(line) - visualWidth(lead) - visualWidth(trail))
+          return (
+            <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex} backgroundColor={theme.bg} wrap="truncate">
+              {lead}{line}{' '.repeat(fill)}{trail}
+            </Text>
+          )
+        })}
+      </Box>
+    </Box>
+  ) : null
 
   const overlay = (id: string): React.ReactNode | undefined =>
     store.panel === id ? props.tui.panels.byId(id)?.render(store) : undefined
@@ -1945,7 +2276,61 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           as the composer's bottom border. */}
       <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="row" width="100%">
         <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column">
-          <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
+          {
+        heroActive ? (
+        <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1}>
+          <Box flexShrink={0} height={hero?.topSpacer ?? 0} />
+          {heroMark === 'blocks' ? (
+            <Box flexDirection="column" flexShrink={0}>
+              {HERO_ART_ROWS_CELLS.map((line, i) => {
+                // Center by MEASURED width: the art glyphs are
+                // East-Asian-Ambiguous, so their column count comes from the
+                // charwidth calibration rather than from a static table.
+                const artWidth = line.reduce((sum, cell) => sum + visualWidth(cell.ch), 0)
+                const pad = ' '.repeat(Math.max(0, Math.floor((heroUsable - artWidth) / 2)))
+                return (
+                  <Text key={`art-${i}`} wrap="truncate">
+                    {pad}
+                    {line.map((cell, c) => (
+                      <Text
+                        key={`art-${i}-${c}`}
+                        color={cell.fg >= 0 ? heroArtInk[cell.fg] : undefined}
+                        backgroundColor={cell.bg >= 0 ? heroArtInk[cell.bg] : undefined}
+                      >{cell.ch}</Text>
+                    ))}
+                  </Text>
+                )
+              })}
+            </Box>
+          ) : null}
+          {heroMark === 'ascii' ? (
+            <Box flexDirection="column" flexShrink={0}>
+              {HERO_WORDMARK.map((line, i) => (
+                <Text key={`wm-${i}`} color={theme.accent} bold wrap="truncate">{centerInHero(line)}</Text>
+              ))}
+            </Box>
+          ) : null}
+          {/* Version caption: PLAIN (no accent color / no emphasis) — it reads as
+              a neutral label under the brand art instead of competing with it. */}
+          <Text wrap="truncate">{centerInHero(heroTitleLine)}</Text>
+          <Box flexShrink={0} height={HERO_TITLE_CARD_GAP} />
+          {/* The hero card is a CENTERED, NARROW column (web parity), not the
+              full window: the wrapper centers it and pins the exact width the
+              composer's own wrap/height/caret math already assumed
+              (composerOuterWidth → heroComposerWidth while the hero is up). */}
+          <Box flexDirection="row" flexShrink={0} width="100%" paddingLeft={heroCardPad}>
+            <Box flexDirection="column" width={heroComposerWidth(width)}>{composerNode}</Box>
+          </Box>
+          {store.olderLoading ? <Box flexShrink={0} height={1} /> : null}
+          {store.olderLoading
+            ? <Text color={theme.accent} wrap="truncate">{centerInHero(store.historyProgressText)}</Text>
+            : null}
+          <Box flexShrink={0} height={hero?.bottomSpacer ?? 0} />
+          {renderPalette(hero?.paletteBottomMargin ?? 0)}
+        </Box>
+        ) : (
+          <>
+<Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
           {items.length === 0
             ? <Text color={mutedReadable()}>Start typing to begin a session. Type <Text color={theme.primary}>/</Text> for commands.</Text>
             : (
@@ -1974,62 +2359,16 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               its full viewport (no compression) and the palette floats just
               above the composer. Each row is opaque (theme.bg) so the
               underlying transcript text never shows through between rows. */}
-          {isSlash && filtered.length > 0 && (
-            <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end">
-              <Box borderStyle="round" borderColor={theme.border} flexDirection="column">
-                {filtered.map((c, i) => {
-                  const line = `/${c.name} — ${c.hint}`
-                  // Ink Box has NO background, so a Box paddingX would leave the
-                  // transcript visible through the 2-char left/right margin. The
-                  // whole row is instead ONE bg-colored Text that paints its own
-                  // opaque 2-char margin on each side and fills the rest — the
-                  // popup completely hides what is behind it. The row spans exactly
-                  // the box's content width (usable minus the round border's 2
-                  // cols), so it does NOT overflow and never truncates to "...".
-                  const contentW = Math.max(20, usable - 2)
-                  const lead = '  '
-                  const trail = '  '
-                  const fill = Math.max(1, contentW - visualWidth(line) - visualWidth(lead) - visualWidth(trail))
-                  return (
-                    <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex} backgroundColor={theme.bg} wrap="truncate">
-                      {lead}{line}{' '.repeat(fill)}{trail}
-                    </Text>
-                  )
-                })}
-              </Box>
-            </Box>
-          )}
+          {renderPalette(0)}
         </Box>
         {/* The composer is pinned to the bottom of the message column and spans
             its full width: with the Steps sidebar visible its right border sits
             flush against the sidebar's left edge and input wraps before it. */}
-        <Box flexShrink={0} borderStyle="round" borderColor={theme.border} paddingX={1} flexDirection="column" justifyContent="space-between"
-          height={composerHeight(width, input, COMPOSER_MIN_HEIGHT) + (store.composerImage !== null ? 1 : 0)}>
-          <Box flexDirection="column">
-            {store.composerImage !== null && (
-              <Text color={theme.primary}>
-                [Image: {store.composerImage.name}] <Text dimColor>· Esc to remove</Text>
-              </Text>
-            )}
-            <Text color={theme.text} wrap="wrap">{status}{renderComposerText(cWin.start, cWin.end)}</Text>
-          </Box>
-          <Box flexDirection="row" gap={2} paddingY={1} marginTop={1}>
-            {/* Permission chip: only the "(Tab)" toggle hint carries the
-                permission color; the 🔒/label keep the regular text color. */}
-            <Text color={theme.text}>{store.permission === 'danger-full-access' ? '🔓' : '🔒'} {permissionLabel} <Text color={permissionColor}>(Tab)</Text></Text>
-            <Box flexGrow={1} />
-            {modelLabel !== '' && (
-              // Model info: the "Model:" label and the model name (provider ·
-              // model) both use the regular font; the reasoning-effort chip
-              // renders EXACTLY like the message-box Think row (same
-              // mutedReadable color, no bold), so the chip never reads
-              // brighter than a Think row.
-              <Text color={theme.text}>Model: {modelBaseLabel}
-                {effortName !== '' && <Text color={mutedReadable()}> · {effortName}</Text>}
-              </Text>
-            )}
-          </Box>
-        </Box>
+        
+        {composerNode}
+        
+          </>
+        )}
         </Box>
         {showSidebar && (
         <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingTop={1} gap={1}>
@@ -2075,15 +2414,33 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         )}
       </Box>
 
+      {/* Hero (blank session) is CHROME-FREE: the status bar is not drawn at
+          all, so the centered hero stack owns the whole window height (the
+          layout mirror below reserves no status rows either). */}
+      {!heroActive && (
       <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} height={STATUS_BAR_HEIGHT}>
         {/* The busy indicator (Working/Paused/Idle + icon) is REPLACED on the
             left while a transient status message (e.g. "copied: …") flashes —
             so the confirmation takes the Idle slot for ~2.5s, then Idle returns.
             NOT a transcript row, so it cannot re-layout the transcript or slide
             the selection highlight. */}
-        {store.statusFlash
-          ? <Text color={theme.success} wrap="truncate">{store.statusFlash.text}</Text>
-          : <BusyIndicator animate={store.running} paused={store.paused} />}
+        {/* While the resumed session's OLDER history is still folding, the
+            left slot carries its real progress bar + counts: that fold is the
+            one long phase of a switch whose numbers exist, and it runs while
+            the transcript is already usable — so it belongs here (always
+            visible, never blocks input) rather than in a modal. The transcript
+            marker keeps the same text for anyone scrolled to the top. */}
+        {store.sessionLoading !== null
+          ? <Text color={theme.accent} wrap="truncate">{sessionLoadingStatusText(store.sessionLoading, Date.now(), store.sessionLoadingTicked)}</Text>
+          : store.historyLoadingVisible
+            ? <Text color={theme.accent} wrap="truncate">{store.historyProgressText}</Text>
+            : store.statusFlash
+              ? <Text color={theme.success} wrap="truncate">{store.statusFlash.text}</Text>
+              : store.loadError !== null
+                // A failed load stays visible until the next attempt / `/clear`:
+                // the user must be able to read why the session did not open.
+                ? <Text color={theme.error} wrap="truncate">{store.loadError}</Text>
+                : <BusyIndicator animate={store.running} paused={store.paused} />}
         {/* The steps/turns · tokens stats are pinned to the RIGHT edge of the
             status bar regardless of the busy indicator's width: an explicit
             flex spacer pushes the stats group flush right, and the group
@@ -2104,6 +2461,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           </Box>
         )}
       </Box>
+      )}
     </Box>
   )
 }
@@ -2149,6 +2507,18 @@ export function installFrameSuffix(): void {
       return '\x1b[?25l'
     }
     const cell = composerCaretCell()
+    // The hero's command palette is lifted ONTO the card, so it covers the
+    // input row: keep the cursor parked at the caret cell (IME anchoring) but
+    // HIDDEN, otherwise the block caret blinks through the popup's text. In
+    // the docked phase the palette floats ABOVE the card and the caret stays
+    // visible in the draft, so nothing changes there.
+    if (commandPaletteOpen && store.hero) {
+      return `\x1b[?25l${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
+    }
+    // A session switch paints a centered banner over everything: the composer
+    // caret belongs to the session being replaced, so keep the cursor hidden
+    // until the new session owns the screen.
+    if (store.sessionLoading !== null) return '\x1b[?25l'
     return `\x1b[?25h\x1b[2 q${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
   }
   ;(globalThis as unknown as { __dshTuiFrameSuffix?: () => string }).__dshTuiFrameSuffix = frameSuffix
@@ -2169,10 +2539,11 @@ export function apply(ctx: Context): void {
     const rows = store.rows
     const showSidebar = sidebarVisibleFor(width)
     const usable = convUsableWidth(width, showSidebar)
-    const composerH = composerHeight(width, store.input, COMPOSER_MIN_HEIGHT)
-    const composerTop = rows - composerH - STATUS_BAR_HEIGHT + 1
+    const composerTop = composerBand(width, rows).top
     const y1 = Math.max(0, Math.min(sel.aRow, sel.cRow) - 1)
-    const statusTopGrid = rows - STATUS_BAR_HEIGHT - 1 // grid row of the status bar's first border row
+    // grid row of the status bar's first border row (hero draws none → the area
+    // runs to the bottom of the window).
+    const statusTopGrid = store.hero ? rows - 1 : rows - STATUS_BAR_HEIGHT - 1
     // A drag that ANCHORED on the Steps SIDEBAR selects sidebar text only: bound
     // the LINE/FLOW copy to the sidebar's own content band (grid columns), never
     // the message column text beside it. The sidebar is a bordered column whose

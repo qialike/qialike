@@ -411,7 +411,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   // only the two options (see questionPresentation) — the plan itself lives as
   // the labelled message block in the transcript above.
   const review = isPlanReview(item)
-  const title = review ? '请确认计划' : total > 1 ? `Ask question ${position}/${total}` : 'Ask question'
+  const title = review ? 'Confirm the plan' : total > 1 ? `Ask question ${position}/${total}` : 'Ask question'
   const dockInner = dockInnerWidth(store.width, store.sidebarMode ?? 'auto')
   const tw = questionTabWindow(q, dockInner, store.questionTabFrom)
   const tabsRef = React.useRef<DOMElement>(null)
@@ -559,7 +559,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   // Plan-review dock = bare confirm/decline; keep its keys hint in Chinese to
   // match the 确认执行/继续规划 options.
   const hint = review
-    ? `${msgScrollable ? '滚轮/PgUp/PgDn 滚动消息 · ' : ''}↑/↓ 选择 · 回车确认执行 · 按 Esc 取消（意见可直接在输入框发送）`
+    ? `${msgScrollable ? 'wheel/PgUp/PgDn scroll · ' : ''}↑/↓ select · Enter confirm & run · Esc cancel (type an opinion in the input instead)`
     : customMode
       ? `${overflow ? 'PgUp/PgDn scroll · ' : ''}type your answer · Enter = answer & next · Esc close`
       : `${overflow ? 'PgUp/PgDn scroll · ' : ''}${

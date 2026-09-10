@@ -19,10 +19,10 @@ import React, { useRef } from 'react'
 import type { DOMElement } from 'ink'
 import { useListGeometry, dialogListIndexFromRow } from './list-geometry.ts'
 import type { Context } from '@deepseek-ai/cordis'
-import type { TuiService, Store } from './index.tsx'
+import type { TuiService, Store, SessionSummary } from './index.tsx'
 import { truncateWide } from './markdown.tsx'
 import { deleteSession } from './session-files.ts'
-import { forgetTitle, isPinned, listWithTitles, renameTitle, togglePin, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { forgetTitle, hideUnselectedBlanks, isPinned, listWithTitles, renameTitle, togglePin, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { forgetActivity } from './session-activity.ts'
 import { theme } from './theme.ts'
 import { stripTerminalControls } from './terminal-safe.ts'
@@ -87,7 +87,13 @@ function SessionsDialog(): React.JSX.Element {
       </Box>
       <Box width={72} borderStyle="round" borderColor={theme.border} flexDirection="column" paddingX={1} paddingY={1}>
         <Text color={theme.accent} bold>Sessions</Text>
-        <Text dimColor>current: {stripTerminalControls(truncateWide(store.sessionsFiltered[store.sessionsDialogIndex]?.title ?? store.sessionsFiltered[store.sessionsDialogIndex]?.label ?? '', 60))}</Text>
+        <Text dimColor>current: {(() => {
+          const row = store.sessionsFiltered[store.sessionsDialogIndex]
+          const text = row === undefined
+            ? ''
+            : row.blank === true ? 'New Session' : (row.title ?? row.label)
+          return stripTerminalControls(truncateWide(text, 60))
+        })()}</Text>
         <Box borderStyle="round" borderColor={theme.accent} paddingX={1} marginY={1}>
           <Text color={theme.accent} bold>
             {store.sessionsRenaming !== null
@@ -118,13 +124,18 @@ function SessionsDialog(): React.JSX.Element {
               // TIME (HH:MM, the day lives in the group header above); a long
               // title is truncated so it cannot wrap and inflate the dialog
               // past the terminal height.
-              const raw = s.title !== undefined && s.title.trim() !== '' ? s.title.trim() : '(untitled)'
+              // Untasked placeholder rows read "New Session" (web parity) and
+              // carry no clock: nothing has happened in them yet.
+              const isBlank = s.blank === true
+              const raw = isBlank
+                ? 'New Session'
+                : (s.title !== undefined && s.title.trim() !== '' ? s.title.trim() : '(untitled)')
               const display = stripTerminalControls(raw)
               const title = truncateWide(display, 50)
               // 24-hour local clock (deterministic — not toLocaleTimeString,
               // whose AM/PM or locale wording would widen the row).
               const createdAt = s.createdAt
-              const time = createdAt === undefined ? '' : (() => {
+              const time = isBlank || createdAt === undefined ? '' : (() => {
                 const d = new Date(createdAt)
                 const hh = String(d.getHours()).padStart(2, '0')
                 const mm = String(d.getMinutes()).padStart(2, '0')
@@ -304,12 +315,16 @@ export function apply(ctx: Context): void {
       // Only sessions created in the current workspace (same-directory
       // semantics as the auto-resume default).
       const sameDir = list.filter((h) => h.cwd === store.workspace)
+      // Web parity: only the SELECTED untasked "New Session" placeholder stays
+      // in the list; other blanks are hidden (the durable file is untouched).
+      const visible = (rows: SessionSummary[]): SessionSummary[] =>
+        hideUnselectedBlanks(rows, store.session?.id)
       // Render from the title cache immediately; fold missing titles in the
       // background and refresh the dialog in place (keeps filter/highlight).
       void listWithTitles(persistence, sameDir, (rows) => {
-        store.refreshSessionsDialog(rows as never)
+        store.refreshSessionsDialog(visible(rows))
       }).then((rows) => {
-        store.refreshSessionsDialog(rows as never)
+        store.refreshSessionsDialog(visible(rows))
       })
     })
   }

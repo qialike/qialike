@@ -107,10 +107,11 @@ describe('messageRightFor (message column right edge)', () => {
 })
 
 describe('composerStripRows mirrors the conversation composer (approval open)', () => {
-  test('24-row terminal: one-line draft → 5-row box above the status bar', () => {
+  test('24-row terminal: one-line draft → 5-row borderless card above the status bar', () => {
+    // Height counts the two half-row fill edges (▄/▀) + text area + gap + status.
     expect(composerStripRows(80, 24, 'hi', false, 80)).toEqual({ top: 17, height: 5 })
   })
-  test('image chip adds one box row (growing upward)', () => {
+  test('image chip adds one row (growing upward)', () => {
     expect(composerStripRows(80, 24, 'hi', true, 80)).toEqual({ top: 16, height: 6 })
   })
 })
