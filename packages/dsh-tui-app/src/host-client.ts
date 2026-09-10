@@ -47,6 +47,10 @@ export interface HostAttached {
   /** The session's durable `sandbox/mode` (what the harness enforces), so the
    *  chip shows reality instead of a fresh default. */
   sandboxMode?: string
+  /** Whether the session never ran a turn — the hero/"New Session" rule. The host
+   *  answers it because only the host holds the whole log (the client holds a
+   *  window of a giant session). */
+  blank?: boolean
   eventCount: number
   openMs: number
   /** The host's OWN chunked fold plan (portable: mode/tailStart/olderRanges). */

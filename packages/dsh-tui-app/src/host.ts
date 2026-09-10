@@ -632,6 +632,7 @@ export async function startHost(
       sessionId: wanted,
       title: sessionTitle(),
       sandboxMode: sessionSandboxMode(),
+      blank: sessionBlank(),
       plan,
       eventCount: snapshot().length,
       openMs: Date.now() - t0,
@@ -675,6 +676,12 @@ export async function startHost(
   /** The session's DURABLE sandbox mode, so the client's chip shows what the
    *  session actually enforces instead of resetting to the default on every
    *  launch (the shared rule that also fences bash). */
+  /** Whether this session never ran a turn (the client's hero/"New Session"
+   *  rule). The host owns the whole log, so it is the authoritative source: the
+   *  client only ever holds a WINDOW of a giant session, where "no turn/start in
+   *  what I have" would be a wrong answer. */
+  const sessionBlank = (): boolean => foldSessionBlank(snapshot())
+
   const sessionSandboxMode = (): SandboxMode | undefined => lastSandboxMode(snapshot())
 
   const page = (requestId: number | undefined, from: number, to: number): void => {

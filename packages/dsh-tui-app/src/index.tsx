@@ -3447,6 +3447,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       rememberTitle(sessionId, attached.title)
       store.notifyTitles()
     }
+    // Blank ("New Session" / hero) state comes from the HOST: it holds the whole
+    // log, while this client may hold only a window of it. Without this the hero
+    // never appeared in host mode at all — `sessionBlank()` stayed `undefined`,
+    // so `Store.hero` was always false (the default mode since M5).
+    if (attached.blank !== undefined) rememberBlank(SessionId(attached.sessionId), attached.blank)
     logErrorFileOnly('host',
       `client: served id=${attached.sessionId} events=${attached.eventCount} open=${attached.openMs}ms tail=${events.length}`)
     // The host served THIS session, so it is attached to it: prompts may go out.
@@ -3593,6 +3598,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     } else {
       resumeHistoryIntoStore(store, agent.session, tailEvents)
     }
+    // Best-effort blank state before the host answers (phase 2 corrects it with
+    // the authoritative value): a small log read whole is the session, while a
+    // window with `tail.startSeq > 0` proves the session is older than the hero.
+    rememberBlank(SessionId(sessionId_), tail.startSeq === 0 ? foldSessionBlank(events) : false)
     logErrorFileOnly('host',
       `client: opened from the log file id=${sessionId_} rows=${events.length} total=${tail.total} start=${tail.startSeq} ms=${Date.now() - t0}`)
     return true
@@ -3674,6 +3683,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           rememberTitle(sessionId, attached.title)
           store.notifyTitles()
         }
+        if (attached.blank !== undefined) rememberBlank(SessionId(attached.sessionId), attached.blank)
         logErrorFileOnly('host', `client: opened from the log file; host ready after ${attached.openMs}ms`)
       } catch (error) {
         // A failed warm-up must not leave prompts held forever: release them so
@@ -4443,7 +4453,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           await paintBeforeBlock()
           const answer = await client.newSession()
           if (answer.type === 'new-session') {
-            // Same session, host already attached: nothing was switched.
+            // Same session, host already attached: nothing was switched — and the
+            // host just said it is still an unused blank, so the hero stays.
+            rememberBlank(SessionId(answer.sessionId), true)
             releaseHostPrompts(client)
             store.append('status', 'already on a new (unused) session', true)
             return
@@ -4601,6 +4613,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
             rememberTitle(sessionId, attached.title)
             store.notifyTitles()
           }
+          if (attached.blank !== undefined) rememberBlank(SessionId(attached.sessionId), attached.blank)
         } catch (error) {
           releaseHostPrompts(client)
           logErrorFileOnly('host', `client: switch warm-up failed: ${error instanceof Error ? error.message : String(error)}`)
