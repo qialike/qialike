@@ -1134,10 +1134,15 @@ export class Store {
     // older history (RESUME_OLDER_ITEM_CAP) and waits — so the counter stops a
     // percent or two short of the total and a percentage would look stuck
     // forever. The text then says what is true and what to do about it.
-    if (holding) return `Load session:  ${done}/${total} events loaded · scroll to top to load more`
+    // NOT "Load session:" — that phrase belongs to the STATUS-BAR banner, which is
+    // about opening the session and must disappear the moment the transcript is on
+    // screen. This row is about OLDER HISTORY being folded in the background, and
+    // it stays for as long as the driver works (by design), so sharing the wording
+    // made a working background fold read as a stuck session load.
+    if (holding) return `Older history:  ${done}/${total} events loaded · scroll to top to load more`
     const pct = sessionLoadPercent({ done, total })
     const bar = sessionLoadBar({ done, total }, 16, true)
-    return `Load session:  ${bar} ${String(pct).padStart(3)}%  ${done}/${total} events`
+    return `Older history:  ${bar} ${String(pct).padStart(3)}%  ${done}/${total} events`
   }
 
   /** Begin a TAIL-FIRST chunked history load (giant-session resume): paint the
@@ -1393,7 +1398,7 @@ export class Store {
     this._historySettled = true
     // "loaded" (not "of N"): what is loaded is what this view needs — the rest
     // stays on disk and comes back on scroll-up, so a fraction would mislead.
-    this.flashStatus(`Load session:  done · ${total} events loaded`, 4000)
+    this.flashStatus(`Older history loaded · ${total} events in view`, 4000)
   }
 
   /** A settle is reversed as soon as folding starts again (reader scrolled up). */
@@ -3576,8 +3581,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.beginSessionLoading({ id: 'host', startedAt })
     const ticker = setInterval(() => store.tickSessionLoading(), 250)
     void (async (): Promise<void> => {
+      // Which session? Resolved HERE, without the host, so the transcript does not
+      // wait for the child's boot: an explicit `--resume` names it, the positional
+      // `resume` means "newest WITH CONTENT in this directory" (computed from the
+      // session files themselves), and the id we pick is then handed to the host,
+      // so client and host can never serve different sessions.
+      let servedFromFile = false
+      let wantedId = resumeId
       try {
-        // Which session? The same question the in-process path answers: an
+        // The same question the in-process path answers: an
         // explicit `--resume`, or the auto-resume opt-in, attaches to an EXISTING
         // session; a flat launch must reuse-or-create an unused one (the hero).
         // Asking the host to `attach` without an id means "newest with content",
@@ -3590,13 +3602,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // A seekable frame read costs ~30 ms for a tail window where the harness
         // needs ~12 s to materialize every event, and the host is only needed for
         // what happens NEXT (a turn), so it resumes in the background meanwhile.
-        let servedFromFile = false
-        // Which session? Resolved HERE, without the host, so the transcript does
-        // not wait for the child's boot: an explicit `--resume` names it, the
-        // positional `resume` means "newest WITH CONTENT in this directory"
-        // (computed from the session files themselves), and the id we pick is then
-        // handed to the host, so client and host can never serve different ones.
-        let wantedId = resumeId
         if (wantsExisting && wantedId === undefined) {
           wantedId = await newestSessionWithContent(config.workspace)
         }
@@ -3607,31 +3612,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
             logErrorFileOnly('host', `client: file-backed open unavailable: ${error instanceof Error ? error.message : String(error)}`)
           }
         }
-        // Give the first paint the machine to itself: the child's boot and its
-        // ~12 s resume are CPU-heavy, and measured, they stretched the file read
-        // from 128 ms to 452 ms when they overlapped it. The host is only needed
-        // for a TURN, so it starts right after the transcript is up.
-        if (servedFromFile) await paintBeforeBlock()
-        const answer = wantsExisting
-          ? await client.attach(wantedId)
-          : await client.newSession()
-        hostReady = true
-        for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
-          void client.prompt(blocks).catch((error: unknown) => {
-            store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
-          })
-        }
+        // The loading banner covers getting the SESSION on screen — nothing else.
         if (servedFromFile) {
-          // The transcript is already on screen: adopt the host's title (the file
-          // may carry none) and let the live event stream take over.
-          const attached = answer.type === 'new-session' ? await client.attach(answer.sessionId) : answer
-          if (attached.title !== undefined) {
-            rememberTitle(sessionId, attached.title)
-            store.notifyTitles()
-          }
           store.beginSessionLoadStep('ready', 0)
-          logErrorFileOnly('host', `client: opened from the log file; host ready after ${attached.openMs}ms`)
         } else {
+          const answer = wantsExisting
+            ? await client.attach(wantedId)
+            : await client.newSession()
           await serveHostSession(
             client,
             answer.type === 'new-session' ? await client.attach(answer.sessionId) : answer,
@@ -3645,6 +3632,30 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       } finally {
         clearInterval(ticker)
         store.endSessionLoading()
+      }
+      if (!servedFromFile) return
+      // The host warms up for TURNS after the transcript is up: its ~12 s resume
+      // must not keep a "Load session:" banner on screen, and a prompt typed in
+      // the window is queued rather than rejected. The child is also CPU-heavy, so
+      // it starts only once the first paint is out (measured: overlapping it
+      // stretched the file read from 128 ms to 452 ms).
+      try {
+        const target = wantedId ?? resumeId
+        await paintBeforeBlock()
+        const attached = await client.attach(target)
+        hostReady = true
+        for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
+          void client.prompt(blocks).catch((error: unknown) => {
+            store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
+          })
+        }
+        if (attached.title !== undefined) {
+          rememberTitle(sessionId, attached.title)
+          store.notifyTitles()
+        }
+        logErrorFileOnly('host', `client: opened from the log file; host ready after ${attached.openMs}ms`)
+      } catch (error) {
+        logErrorFileOnly('host', `client: host warm-up failed: ${error instanceof Error ? error.message : String(error)}`)
       }
     })()
   }
@@ -4521,12 +4532,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       })
       const ticker = setInterval(() => store.tickSessionLoading(), 250)
       void (async (): Promise<void> => {
+        // PHASE 1: get the session on screen. The banner covers exactly this — not
+        // the host's warm-up, which is what left "Load session:" ticking for ~12 s
+        // after the transcript had visibly arrived.
+        let servedFromFile = false
         try {
           await paintBeforeBlock()
           // M6.1b: switch the same way the boot does — read the target's log file
-          // (≈100 ms) and let the host catch up in the background for turns. A
-          // switch to a giant session no longer waits ~12 s for its materialization.
-          let servedFromFile = false
+          // (≈100 ms) and let the host catch up in the background for turns.
           try {
             servedFromFile = await serveFromLog(
               client, String(id), picked?.cwd ?? config.workspace, undefined, true,
@@ -4534,15 +4547,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           } catch (error) {
             logErrorFileOnly('host', `client: file-backed switch unavailable: ${error instanceof Error ? error.message : String(error)}`)
           }
-          const attached = await client.attach(String(id))
-          hostReady = true
-          for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
-            void client.prompt(blocks).catch(() => { /* best-effort */ })
-          }
-          if (!servedFromFile) await serveHostSession(client, attached, true)
-          else if (attached.title !== undefined) {
-            rememberTitle(sessionId, attached.title)
-            store.notifyTitles()
+          if (!servedFromFile) {
+            // No readable log: only the host can render it, so the banner must
+            // stay up until its page lands.
+            await serveHostSession(client, await client.attach(String(id)), true)
           }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
@@ -4551,6 +4559,22 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         } finally {
           clearInterval(ticker)
           store.endSessionLoading()
+        }
+        if (!servedFromFile) return
+        // PHASE 2: the host catches up for TURNS, with no banner — the session is
+        // already on screen and a prompt typed now is queued, not lost.
+        try {
+          const attached = await client.attach(String(id))
+          hostReady = true
+          for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
+            void client.prompt(blocks).catch(() => { /* best-effort */ })
+          }
+          if (attached.title !== undefined) {
+            rememberTitle(sessionId, attached.title)
+            store.notifyTitles()
+          }
+        } catch (error) {
+          logErrorFileOnly('host', `client: switch warm-up failed: ${error instanceof Error ? error.message : String(error)}`)
         }
       })()
       return

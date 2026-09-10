@@ -137,7 +137,10 @@ describe('older-history progress in the status bar', () => {
     const store = new Store()
     store.beginHistory([], [], 9_000)
     expect(store.olderLoading).toBe(true)
-    expect(store.historyProgressText).toContain('Load session:')
+    // The marker row must NOT reuse the status-bar banner's phrase: one is about
+    // opening the session, the other about older history folding in the background.
+    expect(store.historyProgressText).toContain('Older history:')
+    expect(store.historyProgressText).not.toContain('Load session:')
     expect(store.historyProgressText).toContain('0/9000 events')
     store.setHistoryProgress(3_000, 9_000)
     expect(store.historyProgressText).toContain(' 33%')
@@ -157,7 +160,7 @@ describe('older-history readout: folding vs resting', () => {
     store.settleHistoryLoad(1_000)
     // the bar is gone; the completion message rides the transient flash slot
     expect(store.historyLoadingVisible).toBe(false)
-    expect(store.statusFlash?.text).toBe('Load session:  done · 1000 events loaded')
+    expect(store.statusFlash?.text).toBe('Older history loaded · 1000 events in view')
     // folding again (reader scrolled up) brings the indicator back
     store.unsettleHistoryLoad()
     expect(store.historyLoadingVisible).toBe(true)
@@ -172,7 +175,10 @@ describe('older-history readout: folding vs resting', () => {
     // Reaching the tail budget parks the driver: the readout must stop
     // pretending a bar is still moving (the "stuck at 98%" report).
     store.setHistoryHolding(true)
-    expect(store.historyProgressText).toBe('Load session:  9800/10000 events loaded · scroll to top to load more')
+    // The older-history marker is NOT the status-bar banner: the banner says
+    // "Load session:" and is about opening the session, this row is about older
+    // history being folded in the background (they must never be confusable).
+    expect(store.historyProgressText).toBe('Older history:  9800/10000 events loaded · scroll to top to load more')
     // Scrolling back up resumes folding → the bar returns.
     store.setHistoryHolding(false)
     expect(store.historyProgressText).toContain('98%')
