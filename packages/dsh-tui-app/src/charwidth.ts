@@ -29,6 +29,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
+import { logErrorFileOnly } from './log.ts'
 
 /** Code-point ranges worth measuring: everything the font may render either
  *  narrow or wide depending on coverage/emoji fallback. EAW-W/F glyphs and
@@ -278,7 +279,11 @@ export function initCharWidthCalibration(opts: CharWidthHooks): void {
     try { ok = await fingerprint() } catch { /* keep pure EAW on any probe failure */ }
     if (!ok) {
       supported = false
-      try { process.stderr.write('[charwidth] terminal does not answer CPR — keeping East-Asian-width semantics\n') } catch { /* ignore */ }
+      // FILE ONLY: stderr is the tty the alternate screen lives on, so this
+      // diagnostic used to be printed over the first frame and then wiped by it
+      // — a flash of raw text on every start of a terminal that does not answer
+      // CPR. It is a diagnostic for the log, not a message for the user.
+      logErrorFileOnly('charwidth', 'terminal does not answer CPR — keeping East-Asian-width semantics')
       return
     }
     kick()

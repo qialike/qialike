@@ -43,7 +43,11 @@ export function sanitizeStderrChunk(chunk: string): string | null {
 export function initErrorLog(): void {
   try {
     mkdirSync(dirname(LOG_PATH), { recursive: true })
-    writeLine('dsh-tui started')
+    // FILE ONLY: this breadcrumb used to mirror to stderr, which is the same tty
+    // the alternate screen is on — so every launch printed a bare
+    // `[<iso>] dsh-tui started` line over the splash and had it wiped by Ink's
+    // first frame, i.e. a visible flash of raw log text before the hero.
+    writeLine('dsh-tui started', false)
   } catch {
     // Logging is best-effort; never throw from here.
   }
@@ -64,7 +68,10 @@ export function initErrorLog(): void {
         if (s && !s.startsWith('[20') && !s.includes('[dsh-tui]')) {
           const clean = sanitizeStderrChunk(s)
           if (clean !== null) {
-            writeLine(`[stderr] ${clean}`)
+            // FILE ONLY: the point of this wrapper is to CAPTURE stderr into the
+            // log; writing it back to stderr echoes it onto the TUI (the
+            // `[charwidth] …` warning landed on the screen at every startup).
+            writeLine(`[stderr] ${clean}`, false)
           }
         } else {
         }

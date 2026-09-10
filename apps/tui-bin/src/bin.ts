@@ -41,6 +41,14 @@ import pkg from '../../../package.json' with { type: 'json' }
 
 const NAME = 'dsh-tui'
 
+/** How long a launch may stay silent before the splash line is worth showing.
+ *  Measured: a normal start paints its first frame at ~0.6 s (hero or the
+ *  file-backed transcript), so 1.2 s keeps the splash out of the way of every
+ *  normal launch and still covers a genuinely slow machine or cold cache.
+ *  `DSH_TUI_SPLASH_MS` overrides the delay; a NEGATIVE value forces the line out
+ *  (the positive control — see `drawSplash`). */
+const SPLASH_DELAY_MS = Number(process.env.DSH_TUI_SPLASH_MS ?? 1200)
+
 // ── `web` subcommand preflight ───────────────────────────────────────────────
 // The harness CLI the `dsh-tui web` forwarder spawns shares `~/.dsh` session
 // logs with this TUI, so a missing CLI or a version older than the embedded
@@ -466,8 +474,29 @@ async function main(): Promise<void> {
   const wantsHelp = args.some((arg) => arg === '--help' || arg === '-h')
   if (!hostMode && !wantsHelp && process.stdout.isTTY === true) {
     process.stdout.write('\x1b[2J\x1b[H')
+    // DEFERRED splash: `dsh-tui <version> — starting…` used to be written
+    // immediately, so a normal launch showed a grey status line and then
+    // replaced it with the hero ~0.6 s later — a flash where the user asked for
+    // the hero. It is a slow-boot indicator now: drawn only if the app has not
+    // flushed a frame by then (the first frame erases and repaints this line in
+    // place, so a slow boot still gets a message instead of an empty screen).
     // Version verbatim (no `v` prefix) — same shape as the hero headline.
-    process.stdout.write(`\x1b[90m${NAME} ${readVersion()} — starting…\x1b[0m`)
+    const drawSplash = (): void => {
+      process.stdout.write(`\x1b[90m${NAME} ${readVersion()} — starting…\x1b[0m`)
+    }
+    if (SPLASH_DELAY_MS < 0) {
+      // Diagnostic value: draw it unconditionally. A 0 ms delay is NOT a usable
+      // positive control — the timer still waits for the thread to yield, and by
+      // then Ink has usually flushed its first frame, so the guard suppresses it.
+      drawSplash()
+    } else {
+      const splash = setTimeout(() => {
+        const flushed = (globalThis as { __dshTuiLastFlushAt?: number }).__dshTuiLastFlushAt
+        if (flushed !== undefined) return
+        drawSplash()
+      }, SPLASH_DELAY_MS)
+      splash.unref?.()
+    }
   }
   let appMounted = false
   process.on('exit', () => { if (!appMounted) leaveAlt() })
