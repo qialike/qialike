@@ -2454,6 +2454,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
                 the composer's reasoning-effort chip — so the figures read as
                 plain data next to the busy indicator. */}
             <Text wrap="truncate">
+              {/* Oversized session: the numbers cover the LOADED window only
+                  (the full pass is skipped on purpose) — the marker leads the
+                  group, so right-edge truncation drops digits, never the caveat. */}
+              {store.statsWindowOnly
+                ? <Text color={mutedReadable()}>{statsParts.length > 0 ? 'window · ' : 'stats: window-only'}</Text>
+                : null}
               {statsParts.map((part, i) => (
                 <Text key={i} color={part.kind === 'value' ? theme.text : mutedReadable()}>{part.text}</Text>
               ))}

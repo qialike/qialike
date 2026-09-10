@@ -360,6 +360,15 @@ async function foldMissingTitles(
     .filter((h) => !hasTitle(h.id))
   await Promise.all(toInspect.map(async (header): Promise<void> => {
     try {
+      // Cheap path first: the head probe answers BOTH title and blank for the
+      // sessions whose facts land early (a 26 MB log costs one bounded read
+      // instead of a whole-log decode).
+      const head = headTitleProbe?.(header)
+      if (head !== undefined && head.confident) {
+        if (head.title !== undefined) rememberTitle(header.id, head.title)
+        rememberBlank(header.id, head.blank)
+        return
+      }
       const inspection = await persistence.inspect(header.id)
       // Same pass learns the blank bit (one inspect serves both facts).
       rememberBlank(header.id, foldSessionBlank(inspection.events))
@@ -406,6 +415,18 @@ export async function listWithTitles(
  * @param persistence - sessionPersistence service (inspect).
  * @param headers - rows from `persistence.list()`.
  */
+/** Per-session HEAD probes resolved by the caller (see `session-head.ts`): a
+ *  title usually lands EARLY, so a bounded head read replaces a full-log decode
+ *  for the common case (web parity: summaries come from bounded probes). */
+export type HeadTitleProbe = (header: SessionHeaderLike) => { title?: string; blank: boolean; confident: boolean } | undefined
+
+let headTitleProbe: HeadTitleProbe | null = null
+
+/** Install the head-probe hook (the runtime sets it at boot). */
+export function setHeadTitleProbe(probe: HeadTitleProbe | null): void {
+  headTitleProbe = probe
+}
+
 export async function prewarmTitles(
   persistence: SessionTitlesPersistence,
   headers: readonly SessionHeaderLike[],

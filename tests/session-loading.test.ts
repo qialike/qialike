@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { Store, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
+import { COMPACT_HINT_EVENTS, STATS_FULL_SCAN_MAX, Store, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
 import type { SessionLoadingState } from '../packages/dsh-tui-app/src/index.tsx'
 
 const BASE: SessionLoadingState = { id: 'session-3c1c6602-1ddc-40ee-a295-f34348c87153', title: 'fix the tests', bytes: 19_300_000, startedAt: 1_000 }
@@ -207,5 +207,29 @@ describe('status-bar phase line + immediate docked view', () => {
     expect(store.hero).toBe(false)      // status bar exists from the first frame
     store.endSessionLoading()
     expect(store.hero).toBe(true)       // back to the unchanged predicate
+  })
+})
+
+describe('oversized-session compaction hint (suggestion only)', () => {
+  test('wording scales with the event count and names the cure', () => {
+    expect(compactHintText(1_431_912)).toBe('Large session (1.4M events) — /compact is recommended to keep resume and turns fast')
+    expect(compactHintText(250_000)).toBe('Large session (250k events) — /compact is recommended to keep resume and turns fast')
+    expect(COMPACT_HINT_EVENTS).toBe(200_000)
+  })
+})
+
+describe('P2: window-only stats for oversized sessions', () => {
+  test('the flag is off by default, settable, and resets with the session', () => {
+    const store = new Store()
+    expect(store.statsWindowOnly).toBe(false)
+    store.setStatsWindowOnly(true)
+    expect(store.statsWindowOnly).toBe(true)
+    // A new session starts from scratch (setSession → clear()).
+    store.setSession({ id: 'session-y' } as never)
+    expect(store.statsWindowOnly).toBe(false)
+  })
+
+  test('the threshold keeps small sessions exact', () => {
+    expect(STATS_FULL_SCAN_MAX).toBe(200_000)
   })
 })

@@ -28,6 +28,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { sessionDir } from './session-files.ts'
+import { probeSessionHead } from './session-head.ts'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -46,7 +47,7 @@ import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
-import { findReusableBlank, foldSessionBlank, isPinned, prewarmTitles, rememberBlank, rememberFoldedTitle, rememberTitle, sessionBlank, sessionDisplayTitle, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { findReusableBlank, foldSessionBlank, isPinned, prewarmTitles, rememberBlank, rememberFoldedTitle, rememberTitle, sessionBlank, sessionDisplayTitle, setHeadTitleProbe, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
@@ -422,6 +423,9 @@ export class Store {
   private _approval: PendingApproval | null = null
   /** In-flight session switch (banner + key suppression); null when idle. */
   private _sessionLoading: SessionLoadingState | null = null
+  /** True when the session was too large for the full stats pass (P2① mode A):
+   *  the numbers cover the LOADED window and the status bar says so. */
+  private _statsWindowOnly = false
   /** Last FAILED session load (short wording) — shown in the status bar until
    *  the next load attempt or an explicit dismiss, because the user has to be
    *  able to read WHY the session did not open. */
@@ -1016,6 +1020,7 @@ export class Store {
     this._historyHolding = false
     this._historySettled = false
     this._loadError = null
+    this._statsWindowOnly = false
     this._steps = []
     this._toolBodiesOverride.clear()
     this._toolBodiesDefault = false
@@ -1115,6 +1120,16 @@ export class Store {
 
   /** Short wording of the last failed session load (null when none). */
   get loadError(): string | null { return this._loadError }
+
+  /** Whether the session stats cover only the loaded window (oversized log). */
+  get statsWindowOnly(): boolean { return this._statsWindowOnly }
+
+  /** Mark the stats as window-only (see {@link STATS_FULL_SCAN_MAX}). */
+  setStatsWindowOnly(windowOnly: boolean): void {
+    if (this._statsWindowOnly === windowOnly) return
+    this._statsWindowOnly = windowOnly
+    this.notify()
+  }
 
   /** Record a failed session load: the status bar keeps this line visible until
    *  the next attempt (a new load clears it) or `/clear`. */
@@ -1775,6 +1790,9 @@ export class Store {
     this._session = session
     // A session switch (launch / /new / /sessions) starts a fresh hero state.
     this._promptAttempted = false
+    // Stats belong to the session that produced them: a new session is not
+    // window-only until ITS resume says so.
+    this._statsWindowOnly = false
   }
 
   /** Whether this session has had a submission attempt (see the field). */
@@ -3026,15 +3044,24 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // giant logs paint the recent tail first and fold the older ranges in the
     // background (see resumeHistoryIntoStore) — the launch must never block
     // its first frame on a very long durable log.
-    resumeHistoryIntoStore(store, agent.session)
+    const launchSnapshot = agent.session.snapshotEvents()
+    resumeHistoryIntoStore(store, agent.session, launchSnapshot)
     // Backfill the sidebar title from the in-memory log: the launch session
     // may predate this process (its session/title event never reached a live
     // listener here) and the disk-cache prewarm runs on a delay. The SAME
     // snapshot tells whether the session is an unused blank (web parity: the
     // launch reuses the workspace's blank session rather than creating one).
-    const snapshot = agent.session.snapshotEvents()
+    const snapshot = launchSnapshot
     rememberFoldedTitle(sessionId, snapshot)
     rememberBlank(sessionId, foldSessionBlank(snapshot))
+    // Oversized session: recommend the harness's OWN compaction (suggestion
+    // only — the TUI never compacts behind the user's back). Appended AFTER
+    // the fold, because `beginHistory` replaces the item list wholesale.
+    if (snapshot.length >= COMPACT_HINT_EVENTS) {
+      const hint = compactHintText(snapshot.length)
+      store.append('status', hint, true)
+      store.flashStatus(hint, 10_000)
+    }
   } else {
     rememberBlank(sessionId, true) // freshly created: unused New Session
   }
@@ -3102,6 +3129,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       const persistence = ctx.get('sessionPersistence') as (SessionTitlesPersistence & { list?: (signal?: AbortSignal) => Promise<SessionHeaderLike[]> }) | undefined
       if (persistence?.list === undefined) return
       try {
+        // Bounded HEAD probes answer title+blank for the common case (see
+        // session-head.ts); `inspect()` remains the fallback for the rest.
+        setHeadTitleProbe((header) => {
+          const facts = probeSessionHead(header.cwd ?? config.workspace, String(header.id))
+          return facts === undefined ? undefined : { ...facts }
+        })
         await prewarmTitles(persistence, await persistence.list())
       } catch {
         // Prewarm is best-effort; a failing list must not disturb the session.
@@ -3115,6 +3148,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   let textSinceThisTurn = false
 
   ctx.on('session/event', (session, event: SessionEvent) => {
+    if (session.id === sessionId) sessionEventCount += 1
+    // P0 probe: the gap submit → first live event is where a giant session's
+    // context assembly (harness side, same thread) shows up.
+    if (pendingSubmitProbe !== null && session.id === sessionId) {
+      pendingSubmitProbe.noteFirstEvent()
+      if (event.type === 'turn/end') {
+        logErrorFileOnly('submit', pendingSubmitProbe.logLabel())
+        pendingSubmitProbe = null
+      }
+    }
     if (session.id !== sessionId) return
     // Liveness beat: any live event means the run is active, so the status bar
     // can show "Ns since last event" even across silent model stretches.
@@ -3284,6 +3327,29 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
 
   store.submitMessage = (text) => {
+    // P0 instrumentation (submit-path stall): the harness's prompt assembly and
+    // the TUI's own layout both run on this ONE thread, so "提交后停滞明显" has
+    // to be attributed with numbers, not guesses. Marks: submit → followup
+    // returned → first live event → turn end (the followup call itself may
+    // block inside the harness).
+    const submitT0 = Date.now()
+    let markFollowup = 0
+    let markFirstEvent = 0
+    const memory = process.memoryUsage()
+    const eventCount = (): number => sessionEventCount
+    pendingSubmitProbe = {
+      startedAt: submitT0,
+      events: eventCount(),
+      heapMb: Math.round(memory.heapUsed / 1024 / 1024),
+      logLabel: (): string => {
+        const first = markFirstEvent === 0 ? -1 : markFirstEvent - submitT0
+        const follow = markFollowup === 0 ? -1 : markFollowup - submitT0
+        return `submit chars=${text.length} events=${eventCount()} heap=${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB `
+          + `followup=${follow}ms firstEvent=${first}ms`
+      },
+      noteFollowup: () => { if (markFollowup === 0) markFollowup = Date.now() },
+      noteFirstEvent: () => { if (markFirstEvent === 0) markFirstEvent = Date.now() },
+    }
     // Local first-submit flip (web parity): the hero leaves on this frame,
     // ahead of the harness round-trip that records the real turn/start.
     store.markPromptAttempted()
@@ -3299,6 +3365,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const content: ContentBlock[] = [{ type: 'text', text }]
     if (image !== null) content.push({ type: 'image', attachment: image.ref })
     agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
+    pendingSubmitProbe?.noteFollowup()
     store.clearComposerImage()
   }
   store.cancelAction = () => { /* nothing: keep the session open */ }
@@ -3641,13 +3708,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         resetSessionStats()
         const tFold = Date.now()
         store.beginSessionLoadStep('tail', disposeMs)
-        resumeHistoryIntoStore(store, agent.session)
+        // P2①: the snapshot below is also what the title/blank fold uses, so it
+        // is taken once here and handed to the fold instead of twice.
+        const switchSnapshot = agent.session.snapshotEvents()
+        resumeHistoryIntoStore(store, agent.session, switchSnapshot)
         const foldMs = Date.now() - tFold
         store.beginSessionLoadStep('index', foldMs)
         // P0 (extended): the post-switch steps are split out — a giant log's
         // remaining cost sits somewhere in here, and guessing is not allowed.
         const tSnap = Date.now()
-        const snapshot = agent.session.snapshotEvents()
+        const snapshot = switchSnapshot
         const snapMs = Date.now() - tSnap
         const tTitle = Date.now()
         rememberFoldedTitle(sessionId, snapshot)
@@ -3656,6 +3726,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         rememberBlank(sessionId, foldSessionBlank(snapshot))
         const blankMs = Date.now() - tBlank
         store.beginSessionLoadStep('ready', snapMs + titleMs + blankMs)
+        if (snapshot.length >= COMPACT_HINT_EVENTS) {
+          store.append('status', compactHintText(snapshot.length), true)
+          store.flashStatus(compactHintText(snapshot.length), 10_000)
+        }
         logErrorFileOnly('resume',
           `switch session=${sessionId} open=${openMs}ms openTicks=${ticks} dispose=${disposeMs}ms `
           + `foldSync=${foldMs}ms snapshot=${snapMs}ms title=${titleMs}ms blank=${blankMs}ms `
@@ -3914,11 +3988,37 @@ async function autoResumeNewest(
       if (activityA !== activityB) return activityB - activityA
       return (b.createdAt ?? 0) - (a.createdAt ?? 0)
     })
+  // Cheap HEAD probe first (web parity: the host decides `blank` from ~1 KB and
+  // never opens a log to ask whether it has content). Resuming every candidate
+  // to test it — the old behavior — decoded the WHOLE log per candidate, which
+  // on a 1.4M-event session is seconds per attempt.
+  const heads = candidates.map((h) => {
+    const facts = probeSessionHead(cwd, String(h.id))
+    return { header: h, facts }
+  })
+  const firstWithContent = heads.find((entry) => entry.facts !== undefined && entry.facts.confident && !entry.facts.blank)
+  if (firstWithContent !== undefined) {
+    const handle = await withResumeCorruptRetry(
+      () => agents.resume({ resumeSessionId: firstWithContent.header.id, agentOptions, setup }),
+      { retries: 2, waitMs: 250 },
+    )
+    const hasUserContent = handle.agent.session.snapshotEvents().some(
+      (event) => event.type === 'user/message'
+        && (event.data as { source?: { kind?: string } }).source?.kind === 'user',
+    )
+    if (hasUserContent) return handle
+    await handle.dispose() // probe said content, the log disagrees → fall through
+  }
   // Web parity: when no session has content, REUSE the newest unused blank
   // instead of creating yet another empty session (bounded to one blank per
   // workspace); older empties are disposed as before.
   let blankHandle: AgentHandle | undefined
-  for (const header of candidates) {
+  // Only blanks (and logs the probe could not classify) reach this loop; the
+  // newest blank is kept as the reusable placeholder (web parity).
+  const leftover = heads
+    .filter((entry) => entry.facts?.confident !== true || entry.facts.blank)
+    .map((entry) => entry.header)
+  for (const header of leftover) {
     try {
       // Retry a concurrent-write false "corrupt" read before skipping to the
       // next candidate (the newest session is often the one still being
@@ -4186,6 +4286,36 @@ async function paintBeforeBlock(timeoutMs = 150): Promise<void> {
   }
 }
 
+/** Largest session size (events) for which the TUI still recommends running
+ *  `/compact`: a 1.4M-event log makes every resume open decode tens of MB and
+ *  every full pass expensive, and the harness's own compaction is the intended
+ *  cure (the TUI only SUGGESTS it — never runs it behind the user's back). */
+export const COMPACT_HINT_EVENTS = 200_000
+
+/** One-line suggestion shown for an oversized session (transcript + status
+ *  bar). Pure so it is unit-tested. */
+export function compactHintText(events: number): string {
+  const millions = events >= 1_000_000 ? `${(events / 1_000_000).toFixed(1)}M` : `${Math.round(events / 1000)}k`
+  return `Large session (${millions} events) — /compact is recommended to keep resume and turns fast`
+}
+
+/** In-flight submit probe (P0 diagnostics). */
+interface SubmitProbe {
+  startedAt: number
+  events: number
+  heapMb: number
+  logLabel: () => string
+  noteFollowup: () => void
+  noteFirstEvent: () => void
+}
+let pendingSubmitProbe: SubmitProbe | null = null
+
+/** Live count of the CURRENT session's events (P2②): reading it must never
+ *  call `snapshotEvents()` — on a 1.4M-event session that materializes/copies a
+ *  huge array, and the submit probe used to do it twice per submit. Seeded from
+ *  the snapshot the resume path already holds, then incremented per live event. */
+let sessionEventCount = 0
+
 function sleepFor(ms: number): Promise<void> {
   return new Promise<void>((resolve) => { setTimeout(resolve, ms) })
 }
@@ -4201,8 +4331,21 @@ function abortResumeFold(): void {
  *  (fast), then continue folding older ranges in the background.
  *  @param store - the transcript store.
  *  @param session - the resumed agent session (durable log snapshot source). */
-function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEvents(): readonly SessionEvent[] }): void {
-  const events = session.snapshotEvents()
+/** Event count above which the FULL stats pass is skipped (P2①, user call A):
+ *  a 1.4M-event session would spend seconds scanning every event for numbers the
+ *  status bar shows in one line — the loaded window answers well enough, and the
+ *  status bar marks the difference instead of pretending it is exact. */
+export const STATS_FULL_SCAN_MAX = 200_000
+
+function resumeHistoryIntoStore(
+  store: Store,
+  session: { id: string; snapshotEvents(): readonly SessionEvent[] },
+  preloaded?: readonly SessionEvent[],
+): void {
+  // P2①: the caller usually already holds the snapshot (it folds title/blank
+  // from it); taking it again would materialize a second 1.4M-event array.
+  const events = preloaded ?? session.snapshotEvents()
+  sessionEventCount = events.length
   const t0 = Date.now()
   const plan = planResumeFold(events)
   logErrorFileOnly('resume',
@@ -4235,12 +4378,16 @@ function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEve
       // of across the out-of-order display slices; bounded into slices so the
       // pass never blocks the thread for a whole giant log at once.
       const stats = createSessionStatsFolding()
-      const statsSlice = 50_000
-      for (let i = 0; i < events.length; i += statsSlice) {
-        if (abort.signal.aborted) return
-        const end = Math.min(i + statsSlice, events.length)
-        for (let j = i; j < end; j++) stats.observe(events[j]!)
-        if (end < events.length) await sleepFor(RESUME_FOLD_YIELD_MS)
+      const statsFullScan = events.length <= STATS_FULL_SCAN_MAX
+      store.setStatsWindowOnly(!statsFullScan)
+      if (statsFullScan) {
+        const statsSlice = 50_000
+        for (let i = 0; i < events.length; i += statsSlice) {
+          if (abort.signal.aborted) return
+          const end = Math.min(i + statsSlice, events.length)
+          for (let j = i; j < end; j++) stats.observe(events[j]!)
+          if (end < events.length) await sleepFor(RESUME_FOLD_YIELD_MS)
+        }
       }
       // ── Windowed older-history driver (优化3 idle scheduling + 优化4 on-demand) ──
       // `plan.olderRanges` is chronological (oldest → newest). Slices are
@@ -4262,6 +4409,10 @@ function resumeHistoryIntoStore(store: Store, session: { id: string; snapshotEve
         store.setHistoryProgress(Math.max(0, plan.tailStart - unfoldedEv - evictedEv), plan.tailStart)
       }
       const foldRange = (from: number, to: number): void => {
+        // Window stats (P2①, mode A): the slices we fold anyway are observed
+        // here, so an oversized session pays ONE bounded pass per slice instead
+        // of a full 1.4M-event scan up front.
+        if (!statsFullScan) for (let j = from; j < to; j++) stats.observe(events[j]!)
         const chunk = foldHistoryEvents(events.slice(from, to))
         if (chunk.items.length > 0) {
           store.prependHistory(chunk.items)
