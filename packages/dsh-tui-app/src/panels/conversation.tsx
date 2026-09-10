@@ -1136,7 +1136,12 @@ export function resolveRowHeight(est: number, measured: number | undefined): num
 
 function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
   const toolExpanded = item.kind === 'tool' && item.tool?.body !== undefined && store.isToolExpanded(item.key)
-  const cacheKey = `${usable}|${expandReasoning ? 1 : 0}|${toolExpanded ? 1 : 0}`
+  // The disclosure state has to be part of the cache key: the estimate for an
+  // EXPANDED compaction row is the header plus the whole summary markdown, so
+  // serving the collapsed entry (1 line) would clip the body away after a click.
+  const compactionExpanded = item.kind === 'compaction' && item.compaction?.summary !== undefined
+    && store.isToolExpanded(item.key)
+  const cacheKey = `${usable}|${expandReasoning ? 1 : 0}|${toolExpanded ? 1 : 0}|${compactionExpanded ? 1 : 0}`
   let byItem = estCache.get(item)
   if (byItem === undefined) {
     byItem = new Map()
@@ -1169,7 +1174,7 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
     // rule the tool rows use, so a click never desyncs scroll/selection. The
     // markdown estimate is the shared debounced one (assistant/plan rows).
     const summary = item.compaction?.summary
-    const expanded = summary !== undefined && store.isToolExpanded(item.key)
+    const expanded = summary !== undefined && compactionExpanded
     lines = countWrappedLines(compactionRowHeader(item.compaction ?? {}, expanded), w)
       + (expanded
         ? (legacyEstimate
