@@ -89,9 +89,35 @@ interface SessionEventLike {
 }
 interface PersistenceLike extends PersistenceListLike {}
 
-/** One line writer: the protocol owns stdout, so nothing else may print there. */
+/** Set once the client is gone: writes are pointless and stdout's error event
+ *  must not turn a normal exit into a crash. */
+let clientGone = false
+
+/**
+ * One line writer: the protocol owns stdout, so nothing else may print there.
+ *
+ * A client that exits (or is killed) leaves us with a broken pipe, and a write to
+ * it surfaces asynchronously as an `error` event on stdout — with no listener that
+ * becomes an `uncaughtException`, so EVERY client exit used to dump an EPIPE stack
+ * into the shared log and exit the child with code 1. Losing the client means there
+ * is nobody left to serve: note it once and stop.
+ * @param message - the protocol message to write.
+ */
 function send(message: Record<string, unknown>): void {
-  process.stdout.write(`${JSON.stringify(message)}\n`)
+  if (clientGone) return
+  try {
+    process.stdout.write(`${JSON.stringify(message)}\n`)
+  } catch (error) {
+    noteClientGone(error)
+  }
+}
+
+/** The client's pipe is broken: nothing left to serve, so exit quietly. */
+function noteClientGone(error: unknown): void {
+  if (clientGone) return
+  clientGone = true
+  logErrorFileOnly('host', `client gone (${error instanceof Error ? error.message : String(error)}) — exiting`)
+  setTimeout(() => process.exit(0), 10)
 }
 
 /** Clamp a sandbox-mode string from the wire. An unrecognized mode fails CLOSED
@@ -714,6 +740,9 @@ export async function startHost(
     })()
   }
 
+  // Listen for a broken stdout BEFORE the first write: the failure arrives as an
+  // event, not as a throw (see `send`).
+  process.stdout.on('error', noteClientGone)
   send({
     type: 'ready',
     profile: 'tui-host',
