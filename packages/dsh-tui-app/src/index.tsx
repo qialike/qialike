@@ -33,7 +33,9 @@ import { ManualCompactionError, type CompactionResult, type ManualCompactAgentCo
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { sessionDir } from './session-files.ts'
+import { projectKey, sessionDir } from './session-files.ts'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
+import { existsSync, readdirSync } from 'node:fs'
 import { probeSessionHead } from './session-head.ts'
 import type { Session, SessionEvent } from '@deepseek-ai/dsh-session'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
@@ -3131,7 +3133,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   /** The host has resumed the session and can accept prompts (M6: the transcript
    *  is readable from the log file long before this is true). */
   let hostReady = false
-  /** How far past a slice start the file source looks for a safe boundary (M6.1b). */
+  const BLANK_SESSION_EVENTS = 32
+/** How far past a slice start the file source looks for a safe boundary (M6.1b). */
   const SAFE_LOOKAHEAD = 512
   /** Prompts typed in that window, flushed when the host is ready. */
   const pendingPrompts: unknown[][] = []
@@ -3196,13 +3199,22 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // `/goal` and `/plan` need the live agent: in host mode that is the child's,
     // so the command plugins go through this seam instead of the local services.
     store.hostCommand = (command) => client.command(command)
-    const info = await client.ready
-    logErrorFileOnly('host', `client: host ready pid=${String(info.pid)} model=${String(info.model)}`)
-    // Adopt the host's route as this client's selection: `provider/model`, exactly
-    // as `agentDefaultModel` spells it. A host that reports nothing (or a form we
-    // cannot parse) leaves the persisted default in place.
-    const reported = /^([^/]+)\/(.+)$/.exec(info.model ?? '')
-    if (reported !== null) selection = { provider: reported[1]!, model: reported[2]! }
+    // The handshake continues in the BACKGROUND: the surface must not wait for the
+    // child to boot (~0.6 s measured) before it can paint — nothing on screen needs
+    // the host, and the reading path (M6) does not need it at all.
+    void (async (): Promise<void> => {
+      try {
+        const info = await client.ready
+        logErrorFileOnly('host', `client: host ready pid=${String(info.pid)} model=${String(info.model)}`)
+        // Adopt the host's route as this client's selection: `provider/model`,
+        // exactly as `agentDefaultModel` spells it. A host that reports nothing
+        // (or a form we cannot parse) leaves the persisted default in place.
+        const reported = /^([^/]+)\/(.+)$/.exec(info.model ?? '')
+        if (reported !== null) selection = { provider: reported[1]!, model: reported[2]! }
+      } catch (error) {
+        logErrorFileOnly('host', `client: host handshake failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
     // No session yet: empty shim ⇒ the app mounts on the hero screen.
     const placeholder = hostAgentShim(client, { sessionId: 'host-pending', eventCount: 0 }, [])
     return { handle: placeholder.handle, resumed: false }
@@ -3579,16 +3591,29 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // needs ~12 s to materialize every event, and the host is only needed for
         // what happens NEXT (a turn), so it resumes in the background meanwhile.
         let servedFromFile = false
-        if (wantsExisting) {
+        // Which session? Resolved HERE, without the host, so the transcript does
+        // not wait for the child's boot: an explicit `--resume` names it, the
+        // positional `resume` means "newest WITH CONTENT in this directory"
+        // (computed from the session files themselves), and the id we pick is then
+        // handed to the host, so client and host can never serve different ones.
+        let wantedId = resumeId
+        if (wantsExisting && wantedId === undefined) {
+          wantedId = await newestSessionWithContent(config.workspace)
+        }
+        if (wantedId !== undefined) {
           try {
-            const target = await client.target()
-            servedFromFile = await serveFromLog(client, target.sessionId, target.cwd, target.logPath, false)
+            servedFromFile = await serveFromLog(client, wantedId, config.workspace, undefined, false)
           } catch (error) {
             logErrorFileOnly('host', `client: file-backed open unavailable: ${error instanceof Error ? error.message : String(error)}`)
           }
         }
+        // Give the first paint the machine to itself: the child's boot and its
+        // ~12 s resume are CPU-heavy, and measured, they stretched the file read
+        // from 128 ms to 452 ms when they overlapped it. The host is only needed
+        // for a TURN, so it starts right after the transcript is up.
+        if (servedFromFile) await paintBeforeBlock()
         const answer = wantsExisting
-          ? await client.attach(resumeId)
+          ? await client.attach(wantedId)
           : await client.newSession()
         hostReady = true
         for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
@@ -4761,6 +4786,51 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     try { process.stdout.write('\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
   })
   await agent.whenIdle()
+}
+
+/** A session with no turn yet holds only its seed rows; above this it has content
+ *  (used to resolve the positional `resume` from the files, without the host). */
+const BLANK_SESSION_EVENTS = 32
+
+/**
+ * The newest session WITH CONTENT in one workspace, read from the session files
+ * themselves (P4c M6.2).
+ *
+ * The positional `resume` means exactly this, and resolving it here (instead of
+ * asking the host) keeps the child's ~0.6 s boot OFF the critical path: the caller
+ * then hands the id to the host, so the two can never serve different sessions.
+ * "With content" is decided cheaply — a session that never ran a turn has a
+ * handful of events, so the durable log's event count separates the two without
+ * decoding anything (the log is opened by frame table only).
+ * @param workspace - the directory whose sessions are candidates.
+ * @returns the session id, or undefined when the workspace holds none.
+ */
+async function newestSessionWithContent(workspace: string): Promise<string | undefined> {
+  try {
+    const dir = join(dshHomePath('sessions'), projectKey(workspace))
+    const entries = readdirSync(dir, { withFileTypes: true })
+    const candidates: { id: string; createdAt: number }[] = []
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const logPath = join(dir, entry.name, 'session.jsonl.zstd')
+      if (!existsSync(logPath)) continue
+      const header = await new SessionLogReader(logPath).header()
+      // The directory name is the encoded id; the header carries the timing.
+      const createdAt = typeof header?.createdAt === 'number' ? header.createdAt : 0
+      candidates.push({ id: entry.name, createdAt })
+    }
+    candidates.sort((a, b) => b.createdAt - a.createdAt)
+    for (const candidate of candidates) {
+      const reader = new SessionLogReader(join(dir, candidate.id, 'session.jsonl.zstd'))
+      // A blank placeholder session holds only its seed rows; anything that ran a
+      // turn is far past this bound (and reading the count costs a frame probe).
+      if (await reader.totalEvents() > BLANK_SESSION_EVENTS) return candidate.id
+    }
+    return undefined
+  } catch (error) {
+    logErrorFileOnly('resume', `newest session lookup failed: ${error instanceof Error ? error.message : String(error)}`)
+    return undefined
+  }
 }
 
 /**
