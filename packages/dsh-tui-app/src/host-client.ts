@@ -37,27 +37,47 @@ export interface HostEvent {
   data?: unknown
 }
 
+/** The host's answer to `attach`/`new`: the session it now serves plus the fold
+ *  plan the client should render. */
+export interface HostAttached {
+  type: 'attached'
+  sessionId: string
+  title?: string
+  /** The session's durable `sandbox/mode` (what the harness enforces), so the
+   *  chip shows reality instead of a fresh default. */
+  sandboxMode?: string
+  eventCount: number
+  openMs: number
+  /** The host's OWN chunked fold plan (portable: mode/tailStart/olderRanges). */
+  plan?: { mode: 'fast' } | { mode: 'chunked'; tailStart: number; olderRanges: ReadonlyArray<readonly [number, number]> }
+}
+
+/** The host's answer to `new` when the current session is already unused. */
+export interface HostAlreadyBlank {
+  type: 'new-session'
+  sessionId: string
+  alreadyBlank: true
+}
+
 /** What the client needs from a host handle. */
 export interface HostClient {
   /** Resolves once the host reports `ready`. */
   ready: Promise<{ model?: string; pid?: number }>
-  /** Attach a session (explicit id, else the host picks the newest here). */
-  attach(sessionId?: string): Promise<{
-    sessionId: string
-    title?: string
-    eventCount: number
-    openMs: number
-    /** The host's OWN chunked fold plan (portable: mode/tailStart/olderRanges). */
-    plan?: { mode: 'fast' } | { mode: 'chunked'; tailStart: number; olderRanges: ReadonlyArray<readonly [number, number]> }
-  }>
+  /** Serve a session: the first attach, or a SWITCH when an id is given (the
+   *  host disposes the session it was serving). Absent id = the newest with
+   *  content in the workspace. */
+  attach(sessionId?: string): Promise<HostAttached>
+  /** `/new`: the host creates (or adopts an unused blank) session and serves it. */
+  newSession(): Promise<HostAttached | HostAlreadyBlank>
   /** Fetch `[from, to)` of the durable event log. */
   page(from: number, to: number): Promise<HostEvent[]>
   /** Submit a user message (the host's `agent.followup`). */
   prompt(blocks: readonly unknown[]): Promise<void>
   /** Cancel the running turn (the host's `agent.cancel`). */
   cancel(): Promise<void>
-  /** Subscribe to the host's live `session/event` batches. */
-  onEvents(handler: (batch: HostEvent[]) => void): void
+  /** Subscribe to the host's live `session/event` batches. `sessionId` lets the
+   *  client drop a straggler from a session it just switched away from. */
+  onEvents(handler: (batch: HostEvent[], sessionId?: string) => void): void
   /** Subscribe to the host's turn-status beats (`agent/status`). */
   onStatus(handler: (status: 'idle' | 'running') => void): void
   /** Subscribe to host-side asks (approvals, user questions) this process must
@@ -108,7 +128,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
   let buffer = ''
   let nextId = 1
   const pending = new Map<number, Pending>()
-  const eventHandlers = new Set<(batch: HostEvent[]) => void>()
+  const eventHandlers = new Set<(batch: HostEvent[], sessionId?: string) => void>()
   const statusHandlers = new Set<(status: 'idle' | 'running') => void>()
   const askHandlers = new Set<(ask: HostAsk) => void>()
   const askCancelledHandlers = new Set<(requestId: number) => void>()
@@ -144,13 +164,16 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
         logErrorFileOnly('host', `ready pid=${String(message.pid)} model=${String(message.model)}`)
         return
       case 'attached':
+      case 'new-session':
         settle(message.id, message)
         return
       case 'page':
         settle(message.id, message.events)
         return
       case 'events':
-        for (const handler of eventHandlers) handler((message.batch ?? []) as HostEvent[])
+        for (const handler of eventHandlers) {
+          handler((message.batch ?? []) as HostEvent[], message.sessionId as string | undefined)
+        }
         return
       case 'agent-status': {
         const status = message.status as 'idle' | 'running' | undefined
@@ -277,19 +300,14 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
 
   return {
     ready,
-    attach: (sessionId?: string) => request<{
-      sessionId: string
-      title?: string
-      eventCount: number
-      openMs: number
-      plan?: { mode: 'fast' } | { mode: 'chunked'; tailStart: number; olderRanges: ReadonlyArray<readonly [number, number]> }
-    }>(
+    attach: (sessionId?: string) => request<HostAttached>(
       sessionId === undefined ? { type: 'attach' } : { type: 'attach', sessionId },
-    ),
+    ) as Promise<HostAttached>,
+    newSession: () => request<HostAttached | HostAlreadyBlank>({ type: 'new' }),
     page: (from: number, to: number) => request<HostEvent[]>({ type: 'page', from, to }),
     prompt: (blocks: readonly unknown[]) => request<void>({ type: 'prompt', blocks }),
     cancel: () => request<void>({ type: 'cancel' }),
-    onEvents: (handler: (batch: HostEvent[]) => void) => { eventHandlers.add(handler) },
+      onEvents: (handler: (batch: HostEvent[], sessionId?: string) => void) => { eventHandlers.add(handler) },
     onStatus: (handler: (status: 'idle' | 'running') => void) => { statusHandlers.add(handler) },
     onAsk: (handler: (ask: HostAsk) => void) => { askHandlers.add(handler) },
     onAskCancelled: (handler: (requestId: number) => void) => { askCancelledHandlers.add(handler) },

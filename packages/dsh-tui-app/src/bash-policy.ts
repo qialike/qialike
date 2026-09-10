@@ -74,6 +74,27 @@ function commandOf(exec: { readonly arguments?: unknown }): string {
 }
 
 /**
+ * The session's DURABLE sandbox mode: its LAST `sandbox/mode` event.
+ *
+ * The durable mode is what the harness's own filesystem/bash backends enforce,
+ * so the chip the user sees must show THIS (not a fresh default) — otherwise the
+ * UI and the real boundary disagree after a resume. Shared: the host reads it
+ * from the materialized log it already holds and ships it with `attached`; the
+ * in-process client scans the snapshot it folded.
+ * @param events - durable session events (oldest first).
+ * @returns the mode, or `undefined` when the session never recorded one.
+ */
+export function lastSandboxMode(events: readonly { type?: string; data?: unknown }[]): SandboxMode | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (event.type !== 'sandbox/mode') continue
+    const mode = (event.data as { mode?: unknown } | undefined)?.mode
+    if (mode === 'read-only' || mode === 'workspace-write' || mode === 'danger-full-access') return mode
+  }
+  return undefined
+}
+
+/**
  * Decide one tool execution under the `read-only` bash fence.
  *
  * `read-only` denies bash commands that would modify the filesystem; the fs

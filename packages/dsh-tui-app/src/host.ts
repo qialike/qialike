@@ -22,9 +22,11 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { planResumeFold } from './resume-fold.ts'
-import { readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
+import { findReusableBlank, foldSessionBlank, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
-import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+import { SessionId } from '@deepseek-ai/dsh-session'
+import type { Session } from '@deepseek-ai/dsh-session'
 import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
@@ -33,7 +35,7 @@ import { logErrorFileOnly } from './log.ts'
 /** Messages the client sends. */
 interface HostRequest {
   id?: number
-  type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy'
+  type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy' | 'new'
   /** `prompt`: the user message's content blocks, sent as plain JSON. */
   blocks?: unknown[]
   /** `attach`: explicit session id (absent = newest with content in the cwd). */
@@ -57,6 +59,10 @@ interface AgentsLike {
   create(options: unknown): Promise<AgentHandleLike>
   resume(options: unknown): Promise<AgentHandleLike>
 }
+interface PersistenceListLike {
+  list?(signal?: AbortSignal): Promise<Array<{ id: string; cwd?: string; createdAt?: number }>>
+  inspect?(id: string, signal?: AbortSignal): Promise<{ events: readonly unknown[] }>
+}
 interface AgentHandleLike {
   agent: {
     session: {
@@ -73,9 +79,7 @@ interface SessionEventLike {
   time?: number
   data?: unknown
 }
-interface PersistenceLike {
-  list?(signal?: AbortSignal): Promise<Array<{ id: string; cwd?: string; createdAt?: number }>>
-}
+interface PersistenceLike extends PersistenceListLike {}
 
 /** One line writer: the protocol owns stdout, so nothing else may print there. */
 function send(message: Record<string, unknown>): void {
@@ -104,6 +108,9 @@ export async function startHost(
 ): Promise<void> {
   const agents = ctx.get('agents') as unknown as AgentsLike | undefined
   const persistence = ctx.get('sessionPersistence') as unknown as PersistenceLike | undefined
+  const sessions = ctx.get('sessions') as unknown as
+    | { flush?(session: Session): Promise<void> }
+    | undefined
   const defaultModel = ctx.get('agentDefaultModel') as unknown as
     | { currentSelection(): ModelSelection | undefined }
     | undefined
@@ -123,11 +130,26 @@ export async function startHost(
     : { provider: selection.provider, model: config.model }
 
   let handle: AgentHandleLike | undefined
-  let forwarding = false
+  /** The ONE session this host serves right now — mutable: `attach` with
+   *  another id (or `new`) switches sessions in place, which is what keeps the
+   *  client's `/sessions` and `/new` working once the session lives here. */
+  let current: string | undefined
+  let listenersReady = false
   const eventQueue: Record<string, unknown>[] = []
   let eventTimer: ReturnType<typeof setTimeout> | undefined
   /** The client's page cache is the handle's snapshot; fetched per `page`. */
   const snapshot = (): readonly SessionEventLike[] => handle?.agent.session.snapshotEvents() ?? []
+
+  /** Drop the pending event batch: it belongs to the session being replaced, and
+   *  the client would attribute it to the NEW one (the batches carry no id of
+   *  their own — `send` adds it). */
+  const dropPendingEvents = (): void => {
+    eventQueue.length = 0
+    if (eventTimer !== undefined) {
+      clearTimeout(eventTimer)
+      eventTimer = undefined
+    }
+  }
 
   // ── The three waterfalls (P4c M3) ────────────────────────────────────────
   // The harness calls these on the thread that owns the session — this one. The
@@ -180,16 +202,22 @@ export async function startHost(
     })
   }
 
-  /** Claim this session's approvals and user questions for the client. */
-  const registerWaterfalls = (wanted: string): void => {
+  /** Claim this session's approvals and user questions for the client.
+   *
+   *  Registered ONCE per process: every handler reads the mutable `current`
+   *  session id, so switching sessions (`attach` with another id, or `new`) only
+   *  has to re-point that variable — a late event from the session we left is
+   *  dropped by the id check, and its pending approval can never be answered on
+   *  the wrong session. */
+  const registerWaterfalls = (): void => {
     ctx.on('approval/request', async (req, next): Promise<ApprovalOutcome> => {
-      if (req.agent?.session.id !== wanted) return next()
+      if (req.agent?.session.id !== current) return next()
       const answer = await ask('approval', { toolName: req.toolName, reason: req.reason })
       const outcome = answer?.outcome
       return outcome === 'allowed-once' || outcome === 'rejected' ? outcome : 'cancelled'
     })
     ctx.on('user-questions/request', async (request, next) => {
-      if (request.agent !== undefined && request.agent.session.id !== wanted) return next()
+      if (request.agent !== undefined && request.agent.session.id !== current) return next()
       const answer = await ask('question', { questions: request.questions })
       // Parity with the in-process answerer: an unanswered (withdrawn) ask is a
       // rejection, which the tool surfaces as a cancelled `ask_user_question`.
@@ -199,6 +227,40 @@ export async function startHost(
     ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
       return readOnlyBashDecision(exec, permission) ?? next()
     })
+  }
+
+  /** Register everything session-scoped ONCE (handlers read `current`). */
+  const registerListeners = (): void => {
+    if (listenersReady) return
+    listenersReady = true
+    registerForwarding()
+    registerWaterfalls()
+  }
+
+  /**
+   * Release the session we serve, before acquiring the next one: the harness
+   * runtime owns exactly one live agent per id and refuses a second resume of it,
+   * so acquire must follow release.
+   *
+   * The order is the harness's own teardown recipe (cancel → whenIdle → flush →
+   * dispose) and it matters: the durable log is written WRITE-BEHIND, and once
+   * `dispose()` has run the session is no longer live in the store, so a flush
+   * would throw `session "<id>" is not live in this store` and the tail of the
+   * log could be lost. Flushing first is what makes switching safe.
+   */
+  const disposeCurrent = async (): Promise<void> => {
+    const previous = handle
+    handle = undefined
+    if (previous === undefined) return
+    const agent = previous.agent as unknown as {
+      session: Session
+      cancel?(reason: unknown, options: unknown): void
+      whenIdle?(): Promise<void>
+    }
+    try { agent.cancel?.({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
+    try { await agent.whenIdle?.() } catch { /* best-effort */ }
+    try { await sessions?.flush?.(agent.session) } catch (error) { logErrorFileOnly('host', error) }
+    try { await previous.dispose() } catch (error) { logErrorFileOnly('host', error) }
   }
 
   /** Apply the client's mirrored sandbox mode to the session this host owns.
@@ -225,46 +287,125 @@ export async function startHost(
     }
   }
 
+  /** Register the stream forwarding ONCE (the handlers read `current`). Events
+   *  are batched (~50 ms) so a streaming turn does not become one message per
+   *  delta; the client feeds them into the same listener the in-process path
+   *  uses. Each batch carries the session id so a switch can never make the
+   *  client mis-attribute a straggler. */
+  const registerForwarding = (): void => {
+    // `agent/status` is a SERVICE event, not a session event: without it the
+    // client never learns the turn is running (so Esc-to-cancel and the busy
+    // indicator would stay dead). Forward it verbatim.
+    // NOTE: forward only the STATUS. `payload.agent` is the live Agent object
+    // (circular, huge) — JSON.stringify on it throws, which silently killed
+    // this handler before (the client never learned the turn was running, so
+    // Esc-to-cancel stayed dead).
+    ctx.on('agent/status', (payload: { agent: { id: string }; status: 'idle' | 'running' }) => {
+      if (payload.agent.id !== current) return
+      send({ type: 'agent-status', status: payload.status })
+    })
+    ctx.on('session/event', (session, event) => {
+      if (session.id !== current) return
+      eventQueue.push(event as unknown as Record<string, unknown>)
+      if (eventTimer === undefined) {
+        eventTimer = setTimeout(() => {
+          eventTimer = undefined
+          if (eventQueue.length === 0) return
+          const sessionId = current
+          const batch = eventQueue.splice(0, eventQueue.length)
+          send({ type: 'events', sessionId, batch })
+        }, 50)
+      }
+    })
+  }
+
+  /**
+   * Serve one session: resume it here, re-point every listener, and hand the
+   * client the fold plan it should render.
+   *
+   * Called for the first attach AND for every switch (`/sessions`, `/new`): the
+   * handle we already hold is disposed first, so the client's `/sessions` no
+   * longer tears the host down (that was the pre-M4 behaviour, where the client
+   * resumed the session locally and dropped this process).
+   * @param requestId - protocol id to answer, when the client is waiting.
+   * @param explicit - the session to serve; absent = the newest with content in
+   *   this workspace (or `--resume`).
+   */
   const attach = async (requestId: number | undefined, explicit?: string): Promise<void> => {
     const wanted = explicit ?? await pickSessionId()
     if (wanted === undefined) {
       send({ type: 'error', code: 'no-session', message: 'no session to attach in this workspace' })
       return
     }
-    // Forward this session's live events to the client, batched (~50 ms) so a
-    // streaming turn does not become one message per delta. The client feeds
-    // them into the same listener the in-process path uses.
-    if (!forwarding) {
-      forwarding = true
-      registerWaterfalls(wanted)
-      // `agent/status` is a SERVICE event, not a session event: without it the
-      // client never learns the turn is running (so Esc-to-cancel and the busy
-      // indicator would stay dead). Forward it verbatim.
-      // NOTE: forward only the STATUS. `payload.agent` is the live Agent object
-      // (circular, huge) — JSON.stringify on it throws, which silently killed
-      // this handler before (the client never learned the turn was running, so
-      // Esc-to-cancel stayed dead).
-      ctx.on('agent/status', (payload: { agent: { id: string }; status: 'idle' | 'running' }) => {
-        if (payload.agent.id !== wanted) return
-        send({ type: 'agent-status', status: payload.status })
-      })
-      ctx.on('session/event', (session, event) => {
-        if (session.id !== wanted) return
-        eventQueue.push(event as unknown as Record<string, unknown>)
-        if (eventTimer === undefined) {
-          eventTimer = setTimeout(() => {
-            eventTimer = undefined
-            if (eventQueue.length === 0) return
-            const batch = eventQueue.splice(0, eventQueue.length)
-            send({ type: 'events', batch })
-          }, 50)
-        }
-      })
-    }
+    registerListeners()
+    dropPendingEvents()
+    await disposeCurrent()
     const t0 = Date.now()
     logErrorFileOnly('host', `attach: resuming ${wanted}`)
-    handle = await agents.resume({ resumeSessionId: wanted as SessionId, agentOptions, setup })
-    logErrorFileOnly('host', `attach: resumed in ${Date.now() - t0}ms events=${snapshot().length}`)
+    const next = await agents.resume({ resumeSessionId: wanted as SessionId, agentOptions, setup })
+    logErrorFileOnly('host', `attach: resumed in ${Date.now() - t0}ms events=${next.agent.session.snapshotEvents().length}`)
+    finishAttach(next, wanted, requestId, t0)
+  }
+
+  /**
+   * `/new`: start a brand-new session in place (or adopt an unused blank one, so
+   * empty sessions cannot pile up — the same rule the client applies in-process).
+   *
+   * Doing this HERE is what keeps `/new` working in host mode: the client used to
+   * create the session in its own (local) harness and hand the shim to the UI,
+   * which silently cut the host loose from the session on screen.
+   * @param requestId - protocol id to answer.
+   */
+  const startNew = async (requestId: number | undefined): Promise<void> => {
+    if (handle !== undefined && foldSessionBlank(snapshot())) {
+      // Already on an unused session: say so instead of minting another blank
+      // (the client prints its own "already on a new session" notice).
+      send({ id: requestId, type: 'new-session', sessionId: current, alreadyBlank: true })
+      return
+    }
+    registerListeners()
+    dropPendingEvents()
+    await disposeCurrent()
+    const t0 = Date.now()
+    let wanted: string | undefined
+    try {
+      const headers = await persistence?.list?.() ?? []
+      const reused = await findReusableBlank(
+        persistence as unknown as SessionTitlesPersistence,
+        headers as unknown as readonly SessionHeaderLike[],
+        config.workspace,
+        current as SessionId | undefined,
+      )
+      wanted = reused === undefined ? undefined : String(reused)
+    } catch (error) {
+      logErrorFileOnly('host', error)
+    }
+    const next = wanted === undefined
+      ? await agents.create({
+        sessionId: SessionId(`session-${crypto.randomUUID()}`),
+        meta: { cwd: config.workspace },
+        agentOptions,
+        setup,
+      })
+      : await agents.resume({ resumeSessionId: wanted as SessionId, agentOptions, setup })
+    // A brand-new log carries no `sandbox/mode` of its own; without this stamp
+    // the client's chip (the mirrored mode) and the harness's own file boundary
+    // would disagree until the next Tab — the chip would claim `read-only` while
+    // writes still went through.
+    try { setSandboxMode(next.agent.session as unknown as Session, permission) } catch (error) { logErrorFileOnly('host', error) }
+    logErrorFileOnly('host', `new: serving ${next.agent.session.id} (${wanted === undefined ? 'created' : 'reused blank'})`)
+    finishAttach(next, next.agent.session.id, requestId, t0)
+  }
+
+  /** Answer an attach/new with the fold plan the client should render. */
+  const finishAttach = (
+    next: AgentHandleLike,
+    wanted: string,
+    requestId: number | undefined,
+    t0: number,
+  ): void => {
+    handle = next
+    current = wanted
     // A mode the client already chose (Tab pressed while this session was still
     // decoding) belongs to the session, so replay/consumers see it too.
     if (permissionFromClient) applyPermission(permission)
@@ -279,6 +420,7 @@ export async function startHost(
       type: 'attached',
       sessionId: wanted,
       title: sessionTitle(),
+      sandboxMode: sessionSandboxMode(),
       plan,
       eventCount: snapshot().length,
       openMs: Date.now() - t0,
@@ -300,6 +442,11 @@ export async function startHost(
     }
     return undefined
   }
+
+  /** The session's DURABLE sandbox mode, so the client's chip shows what the
+   *  session actually enforces instead of resetting to the default on every
+   *  launch (the shared rule that also fences bash). */
+  const sessionSandboxMode = (): SandboxMode | undefined => lastSandboxMode(snapshot())
 
   const page = (requestId: number | undefined, from: number, to: number): void => {
     const events = snapshot()
@@ -369,6 +516,7 @@ export async function startHost(
       try {
         switch (request.type) {
           case 'attach': await attach(request.id, request.sessionId); break
+          case 'new': await startNew(request.id); break
           case 'page': page(request.id, request.from ?? 0, request.to ?? Number.MAX_SAFE_INTEGER); break
           case 'prompt': prompt(request.id, request.blocks); break
           case 'cancel': cancel(request.id); break

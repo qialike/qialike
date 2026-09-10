@@ -21,9 +21,10 @@ import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { startHost } from './host.ts'
-import { readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
-import { spawnHostClient, type HostClient, type HostEvent } from './host-client.ts'
+import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
+import { spawnHostClient, type HostAttached, type HostClient, type HostEvent } from './host-client.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
@@ -1945,6 +1946,15 @@ export class Store {
     this.notify()
     return this._permission
   }
+  /** Adopt the SESSION's durable mode (its last `sandbox/mode`) when a session is
+   *  opened or switched to. No `onPermissionChange`: the session is the source of
+   *  this value, so pushing it back would be a no-op write (in host mode it would
+   *  append a duplicate event to the durable log). */
+  adoptPermission(mode: SandboxMode | undefined): void {
+    if (mode === undefined || mode === this._permission) return
+    this._permission = mode
+    this.notify()
+  }
   get modelLabel(): string { return this._modelLabel }
   /** The reasoning-effort display name shown in the composer label ('' when
    *  the current model has no effort chosen or supports none). The full
@@ -3262,6 +3272,69 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.resetStats()
   }
   // ── P4c host attach (client side) ────────────────────────────────────────
+  /** Serve a session the host just attached or switched to: pull the tail page,
+   *  install the agent shim, and fold it into the transcript.
+   *
+   *  Shared by the boot attach, `/sessions` switches and `/new` — in host mode
+   *  the session belongs to the child process, so all three are one operation:
+   *  ask the host, then render what it hands back.
+   *  @param client - the host transport.
+   *  @param attached - the host's `attached` answer (session id, plan, counts).
+   *  @param replace - true when this REPLACES the session on screen (switch/new):
+   *    the transcript is cleared first and the next idle frame paints the new one.
+   */
+  const serveHostSession = async (
+    client: HostClient,
+    attached: HostAttached,
+    replace: boolean,
+  ): Promise<void> => {
+    if (replace) {
+      abortResumeFold() // a chunked resume of the OLD session must not feed the new one
+      store.clear()
+    }
+    store.beginSessionLoadStep('attaching', attached.openMs)
+    // Giant log: keep only the tail page locally and let the fold driver pull
+    // older slices from the host on demand (M2). Small logs are cheap enough to
+    // hold whole (the footer stays exact, no `window ·` marker).
+    const paged = attached.plan?.mode === 'chunked' && attached.eventCount > STATS_FULL_SCAN_MAX
+    const tailStart = paged && attached.plan?.mode === 'chunked'
+      ? attached.plan.tailStart
+      : Math.max(0, attached.eventCount - HISTORY_FAST_EVENTS)
+    const events = await client.page(tailStart, attached.eventCount) as unknown as SessionEvent[]
+    const shim = hostAgentShim(client, attached, events)
+    handle = shim.handle
+    agent = shim.agent as typeof agent
+    sessionId = SessionId(attached.sessionId)
+    sessionRef.current = sessionId
+    // Group the host-owned session under this workspace for the web listing
+    // (the boot-time attach is skipped in host mode: no real session there).
+    void attachSessionToWorkspace(ctx, config.workspace, attached.sessionId)
+    store.setSession(agent.session)
+    // The chip must show what the SESSION enforces, not a fresh default: the
+    // durable mode is the boundary the harness's own backends apply.
+    store.adoptPermission(attached.sandboxMode as SandboxMode | undefined)
+    touchSession(sessionId)
+    resetSessionStats()
+    store.beginSessionLoadStep('tail', 0)
+    if (paged && attached.plan?.mode === 'chunked') {
+      const plan = attached.plan
+      resumeHistoryIntoStore(store, agent.session, events, {
+        plan,
+        total: attached.eventCount,
+        readRange: async (from: number, to: number) => await client.page(from, to) as unknown as readonly SessionEvent[],
+      })
+    } else {
+      resumeHistoryIntoStore(store, agent.session, events)
+    }
+    // Window-only numbers apply exactly when the log was NOT held whole.
+    store.setStatsWindowOnly(paged)
+    if (attached.title !== undefined) {
+      rememberTitle(sessionId, attached.title)
+      store.notifyTitles()
+    }
+    logErrorFileOnly('host',
+      `client: served id=${attached.sessionId} events=${attached.eventCount} open=${attached.openMs}ms tail=${events.length}`)
+  }
   // The surface is already mounted, so everything below runs with frames
   // flowing: the host decodes the giant log on ITS thread while this window
   // shows the hero plus a `Load session:` banner.
@@ -3272,46 +3345,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const ticker = setInterval(() => store.tickSessionLoading(), 250)
     void (async (): Promise<void> => {
       try {
-        const attached = await client.attach(resumeId)
-        store.beginSessionLoadStep('attaching', attached.openMs)
-        // Giant log: keep only the tail page locally and let the fold driver
-        // pull older slices from the host on demand (M2). Small logs are cheap
-        // enough to hold whole (the footer stays exact, no `window ·` marker).
-        const paged = attached.plan?.mode === 'chunked' && attached.eventCount > STATS_FULL_SCAN_MAX
-        const tailStart = paged && attached.plan?.mode === 'chunked'
-          ? attached.plan.tailStart
-          : Math.max(0, attached.eventCount - HISTORY_FAST_EVENTS)
-        const events = await client.page(tailStart, attached.eventCount) as unknown as SessionEvent[]
-        const shim = hostAgentShim(client, attached, events)
-        handle = shim.handle
-        agent = shim.agent as typeof agent
-        sessionId = SessionId(attached.sessionId)
-        sessionRef.current = sessionId
-        // Group the host-owned session under this workspace for the web listing
-        // (the boot-time attach above is skipped in host mode: no real session).
-        void attachSessionToWorkspace(ctx, config.workspace, attached.sessionId)
-        store.setSession(agent.session)
-        touchSession(sessionId)
-        resetSessionStats()
-        store.beginSessionLoadStep('tail', 0)
-        if (paged && attached.plan?.mode === 'chunked') {
-          const plan = attached.plan
-          resumeHistoryIntoStore(store, agent.session, events, {
-            plan,
-            total: attached.eventCount,
-            readRange: async (from: number, to: number) => await client.page(from, to) as unknown as readonly SessionEvent[],
-          })
-        } else {
-          resumeHistoryIntoStore(store, agent.session, events)
-        }
-        // Window-only numbers apply exactly when the log was NOT held whole.
-        store.setStatsWindowOnly(paged)
-        if (attached.title !== undefined) {
-          rememberTitle(sessionId, attached.title)
-          store.notifyTitles()
-        }
-        logErrorFileOnly('host',
-          `client: attached id=${attached.sessionId} events=${attached.eventCount} open=${attached.openMs}ms tail=${events.length}`)
+        await serveHostSession(client, await client.attach(resumeId), false)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         logErrorFileOnly('host', `client: attach failed: ${message}`)
@@ -3336,6 +3370,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // background (see resumeHistoryIntoStore) — the launch must never block
     // its first frame on a very long durable log.
     const launchSnapshot = agent.session.snapshotEvents()
+    // The chip shows the session's DURABLE mode (what the harness's own backends
+    // enforce), not a fresh default: otherwise a resumed read-only session would
+    // claim "Workspace Write" while every write is refused. Host mode adopts the
+    // same value from the host's `attached`.
+    store.adoptPermission(lastSandboxMode(launchSnapshot))
     resumeHistoryIntoStore(store, agent.session, launchSnapshot)
     // The host page covers only the newest window, so the footer numbers must
     // say so (the same `window ·` marker an oversized session already uses).
@@ -3665,9 +3704,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // P4c: a host process streams its session's events; they render through the
   // very same listener (the batches arrive already coalesced by the host).
   if (hostMode && hostClient !== undefined) {
-    hostClient.onEvents((batch) => {
+    hostClient.onEvents((batch, sessionId) => {
       const id = sessionRef.current
       if (id === undefined) return
+      // A batch from the session we just switched AWAY from (it was in flight
+      // when the host switched) must not be rendered as the new session's.
+      if (sessionId !== undefined && sessionId !== String(id)) return
       for (const event of batch) handleLiveEvent({ id: String(id) }, event as unknown as SessionEvent)
     })
     // The host forwards the turn-status beat as well, so the busy indicator and
@@ -4030,6 +4072,34 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (store.running) {
       try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
     }
+    // Host mode: creating a session is the host's job (it owns the runtime and
+    // the durable log). It applies the same blank-reuse rule and answers with
+    // the session it now serves.
+    if (hostMode && hostClient !== undefined) {
+      const client = hostClient
+      const startedAt = Date.now()
+      store.beginSessionLoading({ id: 'new', startedAt })
+      const ticker = setInterval(() => store.tickSessionLoading(), 250)
+      void (async (): Promise<void> => {
+        try {
+          await paintBeforeBlock()
+          const answer = await client.newSession()
+          if (answer.type === 'new-session') {
+            store.append('status', 'already on a new (unused) session', true)
+            return
+          }
+          await serveHostSession(client, answer, true)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          logErrorFileOnly('host', `client: new failed: ${message}`)
+          store.append('status', `new session failed: ${message}`, true)
+        } finally {
+          clearInterval(ticker)
+          store.endSessionLoading()
+        }
+      })()
+      return
+    }
     void (async (): Promise<void> => {
       try {
         // Web parity: an unused blank session is REUSED instead of minting a
@@ -4066,6 +4136,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
             agentOptions,
             setup,
           })
+        // The new session starts from the mode the user has chosen (the chip):
+        // a fresh log has no `sandbox/mode` of its own, and without this stamp a
+        // chip reading "Read Only" would not fence filesystem writes at all.
+        try { setSandboxMode(next.agent.session, store.permission) } catch { /* best-effort */ }
         // The runtime owns exactly one live handle by the time a user can run
         // `/new`, so it is always set here.
         const old = handle
@@ -4104,6 +4178,39 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // failed load leaves the current session untouched.
     if (String(id) === String(sessionId)) {
       store.append('status', `already on session ${sessionId}`, true)
+      return
+    }
+    // Host mode: the session lives in the child process, so switching is a
+    // protocol round trip — the host disposes the session it was serving and
+    // resumes this one. (Before M4 the client resumed locally and dropped the
+    // shim, which closed the host and left the UI on a session nobody owned.)
+    if (hostMode && hostClient !== undefined) {
+      const client = hostClient
+      if (store.running) {
+        try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
+      }
+      const startedAt = Date.now()
+      const picked = store.sessionsDialog.find((row) => String(row.id) === String(id))
+      store.beginSessionLoading({
+        id: String(id),
+        title: picked?.title,
+        bytes: sessionLogBytes(picked?.cwd ?? config.workspace, String(id)),
+        startedAt,
+      })
+      const ticker = setInterval(() => store.tickSessionLoading(), 250)
+      void (async (): Promise<void> => {
+        try {
+          await paintBeforeBlock()
+          await serveHostSession(client, await client.attach(String(id)), true)
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          logErrorFileOnly('host', `client: switch failed: ${message}`)
+          store.append('status', `switch failed: ${message}`, true)
+        } finally {
+          clearInterval(ticker)
+          store.endSessionLoading()
+        }
+      })()
       return
     }
     abortResumeFold() // a previous chunked resume must not feed the next session
@@ -4162,6 +4269,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // P2①: the snapshot below is also what the title/blank fold uses, so it
         // is taken once here and handed to the fold instead of twice.
         const switchSnapshot = agent.session.snapshotEvents()
+        store.adoptPermission(lastSandboxMode(switchSnapshot))
         resumeHistoryIntoStore(store, agent.session, switchSnapshot)
         const foldMs = Date.now() - tFold
         store.beginSessionLoadStep('index', foldMs)
