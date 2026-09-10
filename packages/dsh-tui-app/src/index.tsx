@@ -55,7 +55,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { HISTORY_FAST_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, withResumeCorruptRetry } from './resume-fold.ts'
+import { HISTORY_FAST_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -3262,7 +3262,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       try {
         const attached = await client.attach(resumeId)
         store.beginSessionLoadStep('attaching', attached.openMs)
-        const tailStart = Math.max(0, attached.eventCount - HISTORY_FAST_EVENTS)
+        // Giant log: keep only the tail page locally and let the fold driver
+        // pull older slices from the host on demand (M2). Small logs are cheap
+        // enough to hold whole (the footer stays exact, no `window ·` marker).
+        const paged = attached.plan?.mode === 'chunked' && attached.eventCount > STATS_FULL_SCAN_MAX
+        const tailStart = paged && attached.plan?.mode === 'chunked'
+          ? attached.plan.tailStart
+          : Math.max(0, attached.eventCount - HISTORY_FAST_EVENTS)
         const events = await client.page(tailStart, attached.eventCount) as unknown as SessionEvent[]
         const shim = hostAgentShim(client, attached, events)
         handle = shim.handle
@@ -3273,9 +3279,18 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         touchSession(sessionId)
         resetSessionStats()
         store.beginSessionLoadStep('tail', 0)
-        resumeHistoryIntoStore(store, agent.session, events)
-        // Only the newest page is loaded, so the footer numbers must say so.
-        store.setStatsWindowOnly(true)
+        if (paged && attached.plan?.mode === 'chunked') {
+          const plan = attached.plan
+          resumeHistoryIntoStore(store, agent.session, events, {
+            plan,
+            total: attached.eventCount,
+            readRange: async (from: number, to: number) => await client.page(from, to) as unknown as readonly SessionEvent[],
+          })
+        } else {
+          resumeHistoryIntoStore(store, agent.session, events)
+        }
+        // Window-only numbers apply exactly when the log was NOT held whole.
+        store.setStatsWindowOnly(paged)
         if (attached.title !== undefined) {
           rememberTitle(sessionId, attached.title)
           store.notifyTitles()
@@ -4939,16 +4954,26 @@ function resumeHistoryIntoStore(
   store: Store,
   session: { id: string; snapshotEvents(): readonly SessionEvent[] },
   preloaded?: readonly SessionEvent[],
+  /** P4c host mode: when the log is too big to hold locally, the client folds
+   *  the tail page and then walks the host's OWN fold plan slice by slice
+   *  (`readRange`), so nothing here ever materializes the whole session. */
+  source?: { plan: ResumeFoldPlan; total: number; readRange(from: number, to: number): Promise<readonly SessionEvent[]> },
 ): void {
   // P2①: the caller usually already holds the snapshot (it folds title/blank
   // from it); taking it again would materialize a second 1.4M-event array.
-  const events = preloaded ?? session.snapshotEvents()
-  sessionEventCount = events.length
+  const events = source === undefined ? (preloaded ?? session.snapshotEvents()) : (preloaded ?? [])
+  // Paged mode: the count that matters (stats hint, `/compact` suggestion) is
+  // the session's TOTAL, not the page we happen to hold.
+  sessionEventCount = source === undefined ? events.length : source.total
   const t0 = Date.now()
-  const plan = planResumeFold(events)
+  const plan = source === undefined ? planResumeFold(events) : source.plan
+  const planTotal = source === undefined ? events.length : source.total
+  const planTail = plan.mode === 'chunked' && source === undefined
+    ? events.length - plan.tailStart
+    : events.length // paged mode: `events` IS the tail page
   logErrorFileOnly('resume',
-    `fold mode=${plan.mode} events=${events.length}${plan.mode === 'chunked' ? ` tail=${events.length - plan.tailStart} olderRanges=${plan.olderRanges.length}` : ''}`)
-  if (plan.mode === 'fast') {
+    `fold mode=${plan.mode} events=${planTotal}${plan.mode === 'chunked' ? ` tail=${planTail} olderRanges=${plan.olderRanges.length}${source === undefined ? '' : ' paged=host'}` : ''}`)
+  if (source === undefined && plan.mode === 'fast') {
     // Small history: the original one-pass fold + full stats, exactly as
     // before this change.
     const replay = foldSessionReplay(events)
@@ -4957,6 +4982,9 @@ function resumeHistoryIntoStore(
     logErrorFileOnly('resume', `fast session=${session.id} events=${events.length} items=${replay.items.length} ms=${Date.now() - t0}`)
     return
   }
+  // The host hands us a chunked plan by construction; a fast plan with a paged
+  // source would mean nothing to page, so treat it as "nothing older".
+  if (plan.mode !== 'chunked') return
   abortResumeFold()
   const abort = new AbortController()
   resumeFoldAbort = abort
@@ -5006,7 +5034,7 @@ function resumeHistoryIntoStore(
       const progress = (): void => {
         store.setHistoryProgress(Math.max(0, plan.tailStart - unfoldedEv - evictedEv), plan.tailStart)
       }
-      const foldRange = (from: number, to: number): void => {
+      const foldRange = async (from: number, to: number): Promise<void> => {
         // P2③ part 2: attribute a wedge to the SLICE that caused it (a slice can
         // hide one enormous tool body), with the heap before/after so a major GC
         // pause is distinguishable from real packing work.
@@ -5015,9 +5043,12 @@ function resumeHistoryIntoStore(
         // Window stats (P2①, mode A): the slices we fold anyway are observed
         // here, so an oversized session pays ONE bounded pass per slice instead
         // of a full 1.4M-event scan up front.
-        if (!statsFullScan) for (let j = from; j < to; j++) stats.observe(events[j]!)
+        // Paged (host) mode: the slice arrives over the wire, so it may need an
+        // await — the driver yields between slices anyway.
+        const slice = source === undefined ? events.slice(from, to) : await source.readRange(from, to)
+        if (!statsFullScan) for (const event of slice) stats.observe(event)
         noteActivity(`fold slice ${from}-${to} events=${to - from}`)
-        const chunk = foldHistoryEvents(events.slice(from, to))
+        const chunk = foldHistoryEvents(slice)
         if (chunk.items.length > 0) {
           noteActivity(`prepend ${chunk.items.length} items`)
           store.prependHistory(chunk.items)
@@ -5038,7 +5069,7 @@ function resumeHistoryIntoStore(
       /** Fold one slice — an original range first (they are chronologically
        *  OLDER than anything evicted), then an evicted slice nearest to the
        *  still-loaded content. Returns false when there is nothing left. */
-      const stepFold = (): boolean => {
+      const stepFold = (): Promise<boolean> | boolean => {
         let from = 0
         let to = 0
         if (cursor >= 0) {
@@ -5055,8 +5086,9 @@ function resumeHistoryIntoStore(
         } else {
           return false
         }
-        foldRange(from, to)
+        const done = foldRange(from, to)
         progress()
+        if (done instanceof Promise) return done.then(() => true)
         return true
       }
       const nearTop = (): boolean => !store.followTail && store.layoutScroll <= Math.max(1, store.layoutViewport)
@@ -5193,7 +5225,7 @@ function resumeHistoryIntoStore(
           await sleepFor(RESUME_FOLD_HOLD_MS)
           continue
         }
-        if (!stepFold()) break
+        if (!(await stepFold())) break
         await sleepFor(RESUME_FOLD_YIELD_MS)
       }
       if (abort.signal.aborted) return

@@ -20,6 +20,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { planResumeFold } from './resume-fold.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
@@ -158,11 +159,16 @@ export async function startHost(
     logErrorFileOnly('host', `attach: resumed in ${Date.now() - t0}ms events=${snapshot().length}`)
     // The decode+attach happened HERE — on the host's thread, which is the
     // whole point: the client was free to keep painting while this ran.
+    // The fold PLAN is computed here, where the whole log already lives: the
+    // client then folds exactly these ranges (safe turn boundaries included) and
+    // never needs the events it is not showing.
+    const plan = planResumeFold(snapshot())
     send({
       id: requestId,
       type: 'attached',
       sessionId: wanted,
       title: sessionTitle(),
+      plan,
       eventCount: snapshot().length,
       openMs: Date.now() - t0,
       workspace: config.workspace,

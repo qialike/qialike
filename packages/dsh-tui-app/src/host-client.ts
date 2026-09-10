@@ -42,7 +42,14 @@ export interface HostClient {
   /** Resolves once the host reports `ready`. */
   ready: Promise<{ model?: string; pid?: number }>
   /** Attach a session (explicit id, else the host picks the newest here). */
-  attach(sessionId?: string): Promise<{ sessionId: string; title?: string; eventCount: number; openMs: number }>
+  attach(sessionId?: string): Promise<{
+    sessionId: string
+    title?: string
+    eventCount: number
+    openMs: number
+    /** The host's OWN chunked fold plan (portable: mode/tailStart/olderRanges). */
+    plan?: { mode: 'fast' } | { mode: 'chunked'; tailStart: number; olderRanges: ReadonlyArray<readonly [number, number]> }
+  }>
   /** Fetch `[from, to)` of the durable event log. */
   page(from: number, to: number): Promise<HostEvent[]>
   /** Submit a user message (the host's `agent.followup`). */
@@ -218,7 +225,13 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
 
   return {
     ready,
-    attach: (sessionId?: string) => request<{ sessionId: string; title?: string; eventCount: number; openMs: number }>(
+    attach: (sessionId?: string) => request<{
+      sessionId: string
+      title?: string
+      eventCount: number
+      openMs: number
+      plan?: { mode: 'fast' } | { mode: 'chunked'; tailStart: number; olderRanges: ReadonlyArray<readonly [number, number]> }
+    }>(
       sessionId === undefined ? { type: 'attach' } : { type: 'attach', sessionId },
     ),
     page: (from: number, to: number) => request<HostEvent[]>({ type: 'page', from, to }),
