@@ -21,6 +21,7 @@ import {
   isCorruptLogMessage,
   planResumeFold,
   safeBoundaries,
+  tailSlice,
 } from '../packages/dsh-tui-app/src/resume-fold.ts'
 
 /** Build one planner event. */
@@ -188,5 +189,28 @@ describe('describeResumeFailure (corrupt-log class gets an actionable hint)', ()
     expect(text).toContain('another process is appending to the same session')
     expect(text).toContain('real seq damage')
     expect(text).toContain('delete and rebuild')
+  })
+})
+
+describe('tailSlice: which events form the first painted frame', () => {
+  const log = Array.from({ length: 100 }, (_, i) => ({ type: 'assistant/chunk', seq: i }))
+  const plan = { mode: 'chunked', tailStart: 70, olderRanges: [[0, 70]] } as const
+
+  test('in-process the whole log is cut at the plan tailStart', () => {
+    expect(tailSlice(plan, log, false).map((e) => (e as { seq: number }).seq)).toEqual(
+      Array.from({ length: 30 }, (_, i) => 70 + i),
+    )
+  })
+
+  test('with a paged source the PAGE is the tail — never an empty slice', () => {
+    // Regression: the page is already the tail, and slicing it with the plan's
+    // ABSOLUTE tailStart hid the newest ~20k events on a 1.48M-event session.
+    const page = log.slice(90)
+    expect(tailSlice(plan, page, true)).toHaveLength(10)
+    expect((tailSlice(plan, page, true)[0] as { seq: number }).seq).toBe(90)
+  })
+
+  test('a fast plan has no tail cut at all', () => {
+    expect(tailSlice({ mode: 'fast' }, log, false)).toHaveLength(100)
   })
 })

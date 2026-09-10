@@ -89,6 +89,28 @@ export function safeBoundaries(events: readonly PlanEvent[]): readonly number[] 
   return out
 }
 
+/**
+ * The events folded SYNCHRONOUSLY as the tail (the first painted frame).
+ *
+ * In-process, `events` is the whole log and the plan's `tailStart` is an absolute
+ * index into it. With a paged source the caller holds ONLY the tail page, so the
+ * page itself is the tail — slicing it with the absolute index yields [] and the
+ * transcript silently ends `tailStart` events in the past (measured on a
+ * 1.48 M-event session: the newest ~20 k events never appeared).
+ * @param plan - the fold plan.
+ * @param events - the whole log, or the tail page when `paged`.
+ * @param paged - true when `events` is only the tail page.
+ * @returns the events to fold into the first frame.
+ */
+export function tailSlice<T extends PlanEvent>(
+  plan: ResumeFoldPlan,
+  events: readonly T[],
+  paged: boolean,
+): readonly T[] {
+  if (plan.mode !== 'chunked') return events
+  return paged ? events : events.slice(plan.tailStart)
+}
+
 export interface ResumeFoldOptions {
   fastEvents?: number
   tailEvents?: number

@@ -58,7 +58,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { HISTORY_FAST_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
+import { HISTORY_FAST_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -5318,7 +5318,7 @@ function resumeHistoryIntoStore(
   resumeFoldAbort = abort
   // The synchronous first frame: fold only the newest tail (already cut at a
   // safe boundary), show it with a leading "loading older history" marker.
-  const tail = foldHistoryEvents(events.slice(plan.tailStart))
+  const tail = foldHistoryEvents(tailSlice(plan, events, source !== undefined))
   store.beginHistory(tail.items, tail.steps, plan.tailStart)
   // Steps: the tail usually carries the newest todo/write, but a recent tail
   // may contain none — then the latest step list lives in the newest OLDER
