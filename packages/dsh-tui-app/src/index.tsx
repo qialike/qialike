@@ -24,6 +24,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { startHost } from './host.ts'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
+import { SessionLogReader } from './log-frames.ts'
 import { spawnHostClient, type HostAttached, type HostClient, type HostEvent } from './host-client.ts'
 import type { HostCommand, HostCommandResult } from './host-command.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
@@ -58,7 +59,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { HISTORY_FAST_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
+import { HISTORY_FAST_EVENTS, HISTORY_SLICE_EVENTS, HISTORY_TAIL_EVENTS, describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -3127,6 +3128,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   /** Set when the host could not be started and the launch fell back in-process
    *  (surfaced as a status line so the degradation is never silent). */
   let hostFallback: string | undefined
+  /** The host has resumed the session and can accept prompts (M6: the transcript
+   *  is readable from the log file long before this is true). */
+  let hostReady = false
+  /** Prompts typed in that window, flushed when the host is ready. */
+  const pendingPrompts: unknown[][] = []
   /** Build the client-side stand-ins for a host-owned agent: the transcript
    *  fold, the store and the commands only need `id` / `snapshotEvents()` /
    *  `followup` / `cancel`, all of which are served over the protocol. */
@@ -3146,8 +3152,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       options: { provider: selection.provider, model: config.model ?? selection.model },
       followup: (message: { content?: readonly unknown[] }) => {
         // The harness's own user message → plain blocks over the wire; the host
-        // rebuilds it with `createUserMessage`.
-        void client.prompt(message.content ?? []).catch((error: unknown) => {
+        // rebuilds it with `createUserMessage`. Before the host has resumed the
+        // session (M6: the transcript is already readable by then) a prompt would
+        // be rejected `not-attached`, so it is held and sent on readiness.
+        const blocks = (message.content ?? []) as unknown[]
+        if (!hostReady) {
+          pendingPrompts.push(blocks)
+          store.append('status', 'Queued — the session is still opening.', true)
+          return
+        }
+        void client.prompt(blocks).catch((error: unknown) => {
           store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
         })
       },
@@ -3445,6 +3459,73 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     }
   }
 
+  /**
+   * Render a session straight from its durable log file (P4c M6) — the
+   * less/vim-style open.
+   *
+   * The log is a sequence of independent zstd frames, so a tail window costs a
+   * frame-table scan plus a few frames (~30 ms measured on a 1.49 M-event
+   * session) instead of the harness's ~12 s full materialization; older history is
+   * read on demand by seq range, exactly like the host's paged path but from disk.
+   * The host is still brought up for TURNS (see the boot block) — this only takes
+   * the reading off its critical path.
+   * @param client - the host transport (kept for the shim's prompt/cancel).
+   * @param sessionId - the session the host will serve.
+   * @param cwd - the session's working directory (its log lives under that key).
+   * @param logPath - the log path the host reported, when it could resolve one.
+   * @param replace - true when this REPLACES the session on screen (switch/new).
+   * @returns true when the transcript was served from the file.
+   */
+  const serveFromLog = async (
+    client: HostClient,
+    sessionId_: string,
+    cwd: string,
+    logPath: string | undefined,
+    replace: boolean,
+  ): Promise<boolean> => {
+    // The host reports the path when it can resolve one; otherwise build it the
+    // same way the /sessions list does (the log lives under its cwd's project key).
+    const path = logPath ?? join(sessionDir(cwd, SessionId(sessionId_)), 'session.jsonl.zstd')
+    const reader = new SessionLogReader(path)
+    const t0 = Date.now()
+    const tail = await reader.readTail(HISTORY_TAIL_EVENTS)
+    if (tail.events.length === 0) return false       // empty/foreign/unreadable: use the host
+    if (replace) {
+      abortResumeFold()
+      store.clear()
+    }
+    const events = tail.events as unknown as SessionEvent[]
+    const info = { sessionId: sessionId_, eventCount: tail.total }
+    const shim = hostAgentShim(client, info, events)
+    handle = shim.handle
+    agent = shim.agent as typeof agent
+    sessionId = SessionId(sessionId_)
+    sessionRef.current = sessionId
+    store.setSession(agent.session)
+    // The chip follows the session's own durable mode, read from the same events.
+    store.adoptPermission(lastSandboxMode(events))
+    touchSession(sessionId)
+    resetSessionStats()
+    // Chunked when there is older history to fetch lazily; a small log folds whole.
+    if (tail.startSeq > 0) {
+      const olderRanges: Array<readonly [number, number]> = []
+      for (let cursor = 0; cursor < tail.startSeq; cursor += HISTORY_SLICE_EVENTS) {
+        olderRanges.push([cursor, Math.min(cursor + HISTORY_SLICE_EVENTS, tail.startSeq)])
+      }
+      resumeHistoryIntoStore(store, agent.session, events, {
+        plan: { mode: 'chunked', tailStart: tail.startSeq, olderRanges },
+        total: tail.total,
+        readRange: async (from, to) => await reader.read(from, to) as unknown as readonly SessionEvent[],
+      })
+      store.setStatsWindowOnly(true)
+    } else {
+      resumeHistoryIntoStore(store, agent.session, events)
+    }
+    logErrorFileOnly('host',
+      `client: opened from the log file id=${sessionId_} rows=${events.length} total=${tail.total} start=${tail.startSeq} ms=${Date.now() - t0}`)
+    return true
+  }
+
   // The surface is already mounted, so everything below runs with frames
   // flowing: the host decodes the giant log on ITS thread while this window
   // shows the hero plus a `Load session:` banner.
@@ -3464,14 +3545,45 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         const wantsExisting = resumeId !== undefined
           || config.resumeNewest === true
           || resolveResumeLast()
+        // ── M6: paint the transcript from the LOG FILE first ────────────────
+        // A seekable frame read costs ~30 ms for a tail window where the harness
+        // needs ~12 s to materialize every event, and the host is only needed for
+        // what happens NEXT (a turn), so it resumes in the background meanwhile.
+        let servedFromFile = false
+        if (wantsExisting) {
+          try {
+            const target = await client.target()
+            servedFromFile = await serveFromLog(client, target.sessionId, target.cwd, target.logPath, false)
+          } catch (error) {
+            logErrorFileOnly('host', `client: file-backed open unavailable: ${error instanceof Error ? error.message : String(error)}`)
+          }
+        }
         const answer = wantsExisting
           ? await client.attach(resumeId)
           : await client.newSession()
-        await serveHostSession(
-          client,
-          answer.type === 'new-session' ? await client.attach(answer.sessionId) : answer,
-          false,
-        )
+        hostReady = true
+        for (const blocks of pendingPrompts.splice(0, pendingPrompts.length)) {
+          void client.prompt(blocks).catch((error: unknown) => {
+            store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
+          })
+        }
+        if (servedFromFile) {
+          // The transcript is already on screen: adopt the host's title (the file
+          // may carry none) and let the live event stream take over.
+          const attached = answer.type === 'new-session' ? await client.attach(answer.sessionId) : answer
+          if (attached.title !== undefined) {
+            rememberTitle(sessionId, attached.title)
+            store.notifyTitles()
+          }
+          store.beginSessionLoadStep('ready', 0)
+          logErrorFileOnly('host', `client: opened from the log file; host ready after ${attached.openMs}ms`)
+        } else {
+          await serveHostSession(
+            client,
+            answer.type === 'new-session' ? await client.attach(answer.sessionId) : answer,
+            false,
+          )
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         logErrorFileOnly('host', `client: attach failed: ${message}`)

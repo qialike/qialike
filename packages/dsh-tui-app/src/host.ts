@@ -34,12 +34,14 @@ import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { logErrorFileOnly } from './log.ts'
+import { join } from 'node:path'
+import { sessionDir } from './session-files.ts'
 
 /** Messages the client sends. */
 interface HostRequest {
   id?: number
   type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy' | 'new'
-    | 'model' | 'compact' | 'abort-compact' | 'command'
+    | 'model' | 'compact' | 'abort-compact' | 'command' | 'target'
   /** `prompt`: the user message's content blocks, sent as plain JSON. */
   blocks?: unknown[]
   /** `attach`: explicit session id (absent = newest with content in the cwd). */
@@ -88,6 +90,15 @@ interface SessionEventLike {
   data?: unknown
 }
 interface PersistenceLike extends PersistenceListLike {}
+
+/** The durable log path for a session under THIS host's harness home. */
+function logPathFor(sessionId: string): string | undefined {
+  try {
+    return join(sessionDir(process.cwd(), sessionId as SessionId), 'session.jsonl.zstd')
+  } catch {
+    return undefined
+  }
+}
 
 /** Set once the client is gone: writes are pointless and stdout's error event
  *  must not turn a normal exit into a crash. */
@@ -628,6 +639,24 @@ export async function startHost(
     })
   }
 
+  /**
+   * Which session will this host serve, and where is its log?
+   *
+   * Answered BEFORE any resume, so a client can render that session from the log
+   * file itself (P4c M6: a seekable frame read costs ~30 ms for a tail window
+   * instead of the ~12 s a full materialization takes). The path comes from the
+   * host because the host owns the harness-home resolution.
+   * @param requestId - protocol id to answer.
+   */
+  const target = async (requestId: number | undefined): Promise<void> => {
+    const wanted = current ?? config.resume ?? await pickSessionId()
+    if (wanted === undefined) {
+      send({ id: requestId, type: 'error', code: 'no-session', message: 'no session to attach in this workspace' })
+      return
+    }
+    send({ id: requestId, type: 'target', sessionId: wanted, cwd: config.workspace, logPath: logPathFor(wanted) })
+  }
+
   /** The session's last `session/title` value, straight from the materialized
    *  log (the host already holds it, so this is a cheap backward scan — and it
    *  keeps the client from having to decode the log for a title). */
@@ -721,6 +750,7 @@ export async function startHost(
           case 'compact': await startCompact(request.id); break
           case 'abort-compact': abortCompact(); break
           case 'command': runCommand(request.id, request.command); break
+          case 'target': await target(request.id); break
           case 'page': page(request.id, request.from ?? 0, request.to ?? Number.MAX_SAFE_INTEGER); break
           case 'prompt': prompt(request.id, request.blocks); break
           case 'cancel': cancel(request.id); break

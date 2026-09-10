@@ -84,6 +84,9 @@ export interface HostClient {
   compact(): Promise<CompactionOutcome>
   /** Esc during `/compact`: abort it through the harness's own signal. */
   abortCompact(): void
+  /** Which session will the host serve, and where is its log? Answered before
+   *  any resume, so the client can render it from the file itself (M6). */
+  target(): Promise<{ sessionId: string; cwd: string; logPath?: string }>
   /** One `/goal` or `/plan` seam call on the agent the host owns. */
   command(command: HostCommand): Promise<HostCommandResult>
   /** Fetch `[from, to)` of the durable event log. */
@@ -227,6 +230,9 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
       case 'compacted':
         settle(message.id, message as CompactionOutcome)
         return
+      case 'target':
+        settle(message.id, message)
+        return
       case 'command-result':
         settle(message.id, message.result as HostCommandResult)
         return
@@ -339,6 +345,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
     compact: () => request<CompactionOutcome>({ type: 'compact' }, 10 * 60_000),
     abortCompact: () => { write({ type: 'abort-compact' }) },
     command: (command) => request<HostCommandResult>({ type: 'command', command }, 30_000),
+    target: () => request<{ sessionId: string; cwd: string; logPath?: string }>({ type: 'target' }, 30_000),
     page: (from: number, to: number) => request<HostEvent[]>({ type: 'page', from, to }),
     prompt: (blocks: readonly unknown[]) => request<void>({ type: 'prompt', blocks }),
     cancel: () => request<void>({ type: 'cancel' }),
