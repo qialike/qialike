@@ -24,6 +24,7 @@ import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { planResumeFold } from './resume-fold.ts'
 import { findReusableBlank, foldSessionBlank, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
+import { buildForkSeed, describeForkSeed, type ForkSeedSourceEvent } from './fork-seed.ts'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext } from '@deepseek-ai/dsh-compaction'
 import { GoalError } from '@deepseek-ai/dsh-goal'
 import type { HostCommand, HostCommandResult } from './host-command.ts'
@@ -40,7 +41,7 @@ import { sessionDir } from './session-files.ts'
 /** Messages the client sends. */
 interface HostRequest {
   id?: number
-  type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy' | 'new'
+  type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy' | 'new' | 'fork'
     | 'model' | 'compact' | 'abort-compact' | 'command' | 'target'
   /** `prompt`: the user message's content blocks, sent as plain JSON. */
   blocks?: unknown[]
@@ -539,7 +540,24 @@ export async function startHost(
    * @param explicit - the session to serve; absent = the newest with content in
    *   this workspace (or `--resume`).
    */
-  const attach = async (requestId: number | undefined, explicit?: string): Promise<void> => {
+  /** The session acquisition currently in flight, if any. The client renders
+   *  from the LOG FILE within ~1 s (M6) while this process is still resuming the
+   *  same session (up to ~20 s for a 1.5 M-event log), so `fork` — which needs
+   *  the materialized log — must WAIT for it instead of answering
+   *  `no session to fork` to a user who can already see the transcript. */
+  let acquiring: Promise<void> | undefined
+  /** Run one acquisition and publish it as {@link acquiring} for the duration. */
+  const trackAcquisition = (work: Promise<void>): Promise<void> => {
+    const settled = work.catch(() => { /* the caller reports its own error */ })
+    acquiring = settled
+    void settled.then(() => { if (acquiring === settled) acquiring = undefined })
+    return work
+  }
+
+  const attach = (requestId: number | undefined, explicit?: string): Promise<void> =>
+    trackAcquisition(attachNow(requestId, explicit))
+
+  const attachNow = async (requestId: number | undefined, explicit?: string): Promise<void> => {
     const wanted = explicit ?? await pickSessionId()
     if (wanted === undefined) {
       // MUST carry the request id: an id-less error settles nothing, so the
@@ -567,7 +585,10 @@ export async function startHost(
    * which silently cut the host loose from the session on screen.
    * @param requestId - protocol id to answer.
    */
-  const startNew = async (requestId: number | undefined): Promise<void> => {
+  const startNew = (requestId: number | undefined): Promise<void> =>
+    trackAcquisition(startNewNow(requestId))
+
+  const startNewNow = async (requestId: number | undefined): Promise<void> => {
     if (handle !== undefined && foldSessionBlank(snapshot())) {
       // Already on an unused session: say so instead of minting another blank
       // (the client prints its own "already on a new session" notice).
@@ -608,12 +629,82 @@ export async function startHost(
     finishAttach(next, next.agent.session.id, requestId, t0)
   }
 
-  /** Answer an attach/new with the fold plan the client should render. */
+  /**
+   * `/fork`: continue THIS conversation in a NEW session, without inheriting the
+   * parent's bytes.
+   *
+   * The harness's own fork copies the parent's whole event prefix into the child
+   * (`isSeeded: true`), so a fork of the 1.49 M-event session is as large and as
+   * slow to resume as its parent — the opposite of what a user reaching for
+   * `/fork` wants. `buildForkSeed` instead rebuilds the parent's MODEL-VISIBLE
+   * surface (181 messages measured on that log, 557 KiB as a seed) and the child
+   * starts from it as an ordinary session: same context for the model, a fresh
+   * and tiny log, and the parent is left untouched — it stays durable and
+   * resumable from `/sessions`.
+   *
+   * The child is created BEFORE the parent is released, so a failed fork leaves
+   * the session on screen intact; it is flushed before the answer so a reported
+   * success is durable, not merely in-memory.
+   * @param requestId - protocol id to answer.
+   */
+  const startFork = async (requestId: number | undefined): Promise<void> => {
+    if (handle === undefined && acquiring !== undefined) {
+      logErrorFileOnly('host', 'fork: waiting for the session acquisition in flight')
+      await acquiring
+    }
+    const parent = handle
+    if (parent === undefined) {
+      send({
+        id: requestId,
+        type: 'error',
+        code: 'no-session',
+        message: 'this session is not open yet — try /fork again in a moment',
+      })
+      return
+    }
+    const parentId = current ?? String(parent.agent.session.id)
+    const t0 = Date.now()
+    // The whole log is already here (this process owns the live agent), so the
+    // seed costs a single pass over it — no disk, no re-materialization.
+    const { seed, stats } = buildForkSeed(snapshot() as unknown as ForkSeedSourceEvent[])
+    logErrorFileOnly('host', `fork: ${describeForkSeed(stats)} from ${parentId}`)
+    const childId = SessionId(`session-${crypto.randomUUID()}`)
+    const next = await agents.create({
+      sessionId: childId,
+      seed,
+      meta: { cwd: config.workspace, parentSession: parentId as SessionId },
+      agentOptions,
+      setup,
+    })
+    // Durability barrier: `agents.create` resolving does NOT mean the seed
+    // reached disk (the persistence write is fire-and-forget off
+    // `session/created`), and a fork the user is told about must survive a
+    // restart. The persistence services are optional in this profile.
+    try { await sessions?.flush?.(next.agent.session as unknown as Session) } catch (error) { logErrorFileOnly('host', error) }
+    registerListeners()
+    dropPendingEvents()
+    await disposeCurrent()
+    logErrorFileOnly('host', `fork: serving ${childId} (from ${parentId})`)
+    finishAttach(next, String(childId), requestId, t0, {
+      forkedFrom: parentId,
+      fork: {
+        messages: stats.messages,
+        stateEvents: stats.stateEvents,
+        parentEvents: stats.parentEvents,
+        ...(stats.checkpointSeq === undefined ? {} : { checkpointSeq: stats.checkpointSeq }),
+        ...(stats.pendingPromptSeq === undefined ? {} : { pendingPromptSeq: stats.pendingPromptSeq }),
+      },
+    })
+  }
+
+  /** Answer an attach/new/fork with the fold plan the client should render.
+   *  @param extra - protocol fields only a fork sends (what it carried over). */
   const finishAttach = (
     next: AgentHandleLike,
     wanted: string,
     requestId: number | undefined,
     t0: number,
+    extra: Record<string, unknown> = {},
   ): void => {
     handle = next
     current = wanted
@@ -636,6 +727,7 @@ export async function startHost(
       eventCount: snapshot().length,
       openMs: Date.now() - t0,
       workspace: config.workspace,
+      ...extra,
     })
   }
 
@@ -746,6 +838,7 @@ export async function startHost(
         switch (request.type) {
           case 'attach': await attach(request.id, request.sessionId); break
           case 'new': await startNew(request.id); break
+          case 'fork': await startFork(request.id); break
           case 'model': setModel(request.id, request.selection); break
           case 'compact': await startCompact(request.id); break
           case 'abort-compact': abortCompact(); break

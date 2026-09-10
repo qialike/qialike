@@ -17,7 +17,7 @@ function fakeDeps(overrides?: {
   commands?: string[]
   panels?: string[]
 }): { commands: { list(): { name: string }[] }; panels: { byId(id: string): unknown } } {
-  const commands = overrides?.commands ?? ['help', 'think', 'compact', 'clear', 'exit', 'models', 'sessions', 'export', 'new', 'goal', 'plan', 'theme', 'selftest']
+  const commands = overrides?.commands ?? ['help', 'think', 'compact', 'clear', 'exit', 'models', 'sessions', 'export', 'new', 'fork', 'goal', 'plan', 'theme', 'selftest']
   const panels = overrides?.panels ?? ['conversation', 'approval', 'question', 'connect', 'sessions', 'export', 'help', 'themes']
   return {
     commands: { list: () => commands.map((name) => ({ name })) },
