@@ -43,6 +43,34 @@ function sid(text: string): SessionId {
 
 const preset = (type: string): { type: string } => ({ type })
 
+describe('a conversation without turn markers is NOT blank', () => {
+  test('messages alone rule out the blank/"unused session" state', () => {
+    // A `/fork` child's seed drops turn/start|end while keeping the whole
+    // transcript. Before this, `dsh-tui resume` on such a session rendered the
+    // hero over a real conversation, and the same bit let `/new` adopt it as the
+    // blank placeholder and `/sessions` hide it.
+    expect(foldSessionBlank([
+      { type: 'session/end-seed' },
+      { type: 'permission/preset' },
+      { type: 'user/message' },
+    ])).toBe(false)
+    expect(foldSessionBlank([
+      { type: 'tool/result' },
+    ])).toBe(false)
+    expect(foldSessionBlank([
+      { type: 'assistant/message' },
+    ])).toBe(false)
+    // Still blank: setup events only, no conversation and no turn.
+    expect(foldSessionBlank([
+      { type: 'permission/preset' },
+      { type: 'sandbox/mode' },
+      { type: 'session/end-seed' },
+    ])).toBe(true)
+    // A turn without messages is not blank either (it started something).
+    expect(foldSessionBlank([{ type: 'turn/start' }])).toBe(false)
+  })
+})
+
 describe('foldSessionBlank', () => {
   test('a fresh log (header + presets only) is blank', () => {
     expect(foldSessionBlank([preset('session'), preset('permission/preset'), preset('sandbox/mode')])).toBe(true)

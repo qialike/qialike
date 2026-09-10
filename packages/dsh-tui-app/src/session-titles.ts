@@ -211,15 +211,28 @@ export function forgetTitle(id: SessionId): void {
 
 // ── blank ("New Session") sessions — web parity ──────────────────────────────
 
-/** Fold whether a session log is still BLANK: no `turn/start` has been
- *  committed yet (mirrors the harness list projection: blank stays true until
- *  the first turn/start, so a created-but-unused session is an unused
- *  placeholder rather than history).
+/** The message-producing event types: the conversation itself. */
+const CONVERSATION_TYPES = new Set<string>(['user/message', 'assistant/message', 'tool/result'])
+
+/** Fold whether a session log is still BLANK — an unused "New Session"
+ *  placeholder rather than history.
+ *
+ *  The harness list projection flips blank on the first `turn/start`, and that is
+ *  right for the harness's own sessions … but a log can carry a REAL conversation
+ *  with no turn markers: a `/fork` child's seed deliberately drops them (see
+ *  `fork-seed.ts`), and any future seed-based flow can too. Judging such a
+ *  session "blank" was not cosmetic — it showed the hero over a full transcript on
+ *  `dsh-tui resume`, and the SAME bit drives `/new`'s blank adoption
+ *  (`findReusableBlank`) and `/sessions`' blank hiding, so a real conversation
+ *  could be adopted as the new placeholder and hidden from the list.
  *  @param events - the session's durable events.
- *  @returns true when the session has never started a turn. */
+ *  @returns true when the session has neither started a turn nor produced any
+ *    message. */
 export function foldSessionBlank(events: readonly unknown[]): boolean {
   for (const event of events) {
-    if ((event as { type?: unknown }).type === 'turn/start') return false
+    const type = (event as { type?: unknown }).type
+    if (type === 'turn/start') return false
+    if (typeof type === 'string' && CONVERSATION_TYPES.has(type)) return false
   }
   return true
 }
