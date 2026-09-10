@@ -1396,6 +1396,9 @@ export class Store {
   settleHistoryLoad(total: number): void {
     if (this._historySettled) return
     this._historySettled = true
+    // Nothing older was folded (the tail already filled the view): a completion
+    // flash would be a lie ("… · 0 events in view") and pure noise.
+    if (total <= 0) return
     // "loaded" (not "of N"): what is loaded is what this view needs — the rest
     // stays on disk and comes back on scroll-up, so a fraction would mislead.
     this.flashStatus(`Older history loaded · ${total} events in view`, 4000)
@@ -5776,13 +5779,29 @@ function resumeHistoryIntoStore(
           //     the readout looking permanently stuck).
           // Resting shows an honest readout; folding resumes when the reader
           // scrolls back up (nearTop → followTail false).
+          // The viewport rule (M6.3): once the painted transcript already fills
+          // the terminal, the reader needs NOTHING older for what is on screen —
+          // and the tail is painted before this loop starts, so a giant session
+          // rests here on the first iteration instead of folding ~900k events
+          // over ~22 s (measured, with a progress bar parked in the status row and
+          // those events held in memory). Scrolling up clears `followTail` and
+          // folding resumes, which is the on-demand behaviour M2 intended.
+          const viewportFilled = store.getItems().length >= store.rows
           if (tailWindowFilled
+            || viewportFilled
             || store.loadedOlder >= olderItemCap(store.rows)
             || (cursor < 0 && evictedOldestFirst.length > 0)) {
             store.setHistoryHolding(true)
             // Loaded as much as this view needs: report it ONCE and drop the
             // progress indicator (it comes back if the reader scrolls up).
             store.settleHistoryLoad(Math.max(0, plan.tailStart - unfoldedEv - evictedEv))
+            // The tail already fills the viewport, so nothing older is needed for
+            // what the reader is looking at: remove the marker ROW too, or a
+            // finished background fold keeps a "Older history: …% events" line on
+            // screen that reads as "still loading" (reported twice from the real
+            // terminal). Scrolling up clears `followTail` and folding resumes with
+            // the marker re-inserted by the driver.
+            if (viewportFilled && store.olderLoading) store.finishHistory()
             await sleepFor(RESUME_FOLD_HOLD_MS)
             continue
           }
