@@ -4469,6 +4469,12 @@ export const RESUME_OLDER_ITEM_CAP = 4000
  *  @param rows - terminal rows (terminal height).
  *  @returns the item cap for that height. */
 export function olderItemCap(rows: number): number {
+  // Diagnostic override for the retention A/B (`DSH_TUI_OLDER_CAP=2000|4000|8000`):
+  // it changes only HOW MANY older items stay loaded, never the layout or
+  // scroll semantics, so an A/B can measure whether the window size is what
+  // makes frames expensive. Unset (the default) keeps the viewport formula.
+  const override = Number(process.env.DSH_TUI_OLDER_CAP ?? '')
+  if (Number.isFinite(override) && override >= 200) return Math.min(20000, Math.round(override))
   if (!Number.isFinite(rows) || rows <= 0) return RESUME_OLDER_ITEM_CAP
   // Measured regression report: a 400-item floor made the fold driver
   // fold-and-evict in bulk (820k events evicted across 147 slices in one run)

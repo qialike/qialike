@@ -1238,6 +1238,28 @@ function wrapRows(text: string, usable: number): string[] {
  *  default: the per-item `Date.now()` pairs are only paid when debugging. */
 const debugLayout = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_LAYOUT ?? '')
 
+/** Aggregate frame-cost meter (gated by the same switch): the per-item probe
+ *  only fires on a >200 ms wedge, which never happens on a big session — so a
+ *  window-size A/B needs totals. Reports frames, both row builders and heap
+ *  every 2 s. No behaviour change; off unless `DSH_TUI_DEBUG_LAYOUT=1`. */
+const perf = { frames: 0, rowsMs: 0, rowsMax: 0, itemsMs: 0, itemsMax: 0, at: 0, items: 0, heapMb: 0 }
+function perfTick(which: 'rows' | 'items', ms: number, items: number, heapMb: number): void {
+  if (!debugLayout) return
+  perf.frames += 1
+  if (which === 'items') { perf.itemsMs += ms; perf.itemsMax = Math.max(perf.itemsMax, ms) } else { perf.rowsMs += ms; perf.rowsMax = Math.max(perf.rowsMax, ms) }
+  perf.items = items
+  perf.heapMb = heapMb
+  const now = Date.now()
+  if (perf.at === 0) { perf.at = now; return }
+  if (now - perf.at < 2000) return
+  logErrorFileOnly('perf',
+    `window=${Math.round((now - perf.at) / 1000)}s frames=${perf.frames} `
+    + `tuiRows avg=${(perf.rowsMs / Math.max(1, perf.frames)).toFixed(1)}ms max=${perf.rowsMax}ms `
+    + `itemRows avg=${(perf.itemsMs / Math.max(1, perf.frames)).toFixed(1)}ms max=${perf.itemsMax}ms `
+    + `items=${items} heap=${heapMb}MB`)
+  perf.frames = 0; perf.rowsMs = 0; perf.rowsMax = 0; perf.itemsMs = 0; perf.itemsMax = 0; perf.at = now
+}
+
 function buildTranscriptRows(items: readonly TranscriptItem[], usable: number): TranscriptRow[] {
   const rows: TranscriptRow[] = []
   const startedAt = debugLayout ? Date.now() : 0
@@ -1474,7 +1496,9 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   const band = composerBand(width, height)
   const usable = convUsableWidth(width, sidebarVisibleFor(width))
   const flatItems = store.getItems()
+  const tRows = debugLayout ? Date.now() : 0
   const rows = buildTranscriptRows(flatItems, usable)
+  if (debugLayout) perfTick('rows', Date.now() - tRows, flatItems.length, Math.round(process.memoryUsage().heapUsed / 1048576))
   const joined = rows.map((r) => r.text).join('\n')
   const inputStart = joined.length + 1
   const rowPrefix: number[] = []
@@ -2041,7 +2065,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // measured row heights (sidebar width jump / re-layout feedback).
   const sidebarWidth = showSidebar ? Math.max(20, Math.round(width * 0.3)) : 0
   const viewportLines = convViewportLines(composerH, 0, modalH)
-  const rows = useMemo(() => buildRows(items, steps), [items, steps])
+  const rows = useMemo(() => {
+    const t0 = debugLayout ? Date.now() : 0
+    const built = buildRows(items, steps)
+    if (debugLayout) perfTick('items', Date.now() - t0, items.length, Math.round(process.memoryUsage().heapUsed / 1048576))
+    return built
+  }, [items, steps])
   // The collapsed Think tool rows always follow the tail (see thinkLiveLine /
   // capTail), so the row heights are independent of whether the model is
   // actively streaming — the layout never jumps mid-think.
