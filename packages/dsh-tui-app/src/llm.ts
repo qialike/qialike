@@ -1631,15 +1631,20 @@ class TuiLlmAdapter extends LlmAdapter {
           )
         }
       }
-      if (wireProfile.api === 'anthropic-messages') {
-        yield* this.streamAnthropic(options, wireProfile, apiKey)
-      } else if (wireProfile.api === 'openai-responses') {
-        yield* this.streamResponses(options, wireProfile, apiKey)
-      } else if (wireProfile.api === 'google-generative') {
-        yield* this.streamGoogle(options, wireProfile, apiKey)
-      } else {
-        yield* this.streamOpenAI(options, wireProfile, apiKey)
-      }
+      const wire = wireProfile.api === 'anthropic-messages'
+        ? this.streamAnthropic(options, wireProfile, apiKey)
+        : wireProfile.api === 'openai-responses'
+          ? this.streamResponses(options, wireProfile, apiKey)
+          : wireProfile.api === 'google-generative'
+            ? this.streamGoogle(options, wireProfile, apiKey)
+            : this.streamOpenAI(options, wireProfile, apiKey)
+      // Manual `/compact` summaries are ordinary LLM requests on the session's
+      // own route, tagged `purpose: 'compaction'` by the harness. Counting
+      // their streamed output is what lets the TUI show real progress for the
+      // one long phase of a compaction; every other request passes through
+      // untouched (`tapCompaction` is not even constructed).
+      if (options.purpose === 'compaction') yield* this.tapCompaction(options, wire)
+      else yield* wire
     } catch (error) {
       // Agent loops treat a stream failure as a terminal outcome and can stay
       // silent about it; surface the failure in the log AND on the status line
@@ -1652,7 +1657,13 @@ class TuiLlmAdapter extends LlmAdapter {
           | { append?(kind: string, text: string, dim?: boolean): void; appendRunError?(text: string): void }
           | undefined
         const message = error instanceof Error ? error.message : String(error)
-        if (store?.appendRunError !== undefined) {
+        // A request the USER aborted (Esc on a compaction, Ctrl+C on a turn) is
+        // not a run failure: the raw fetch error ("The operation was aborted.")
+        // would land as a red turn-error row for something the reader just
+        // asked for. Keep it in the log, keep it off the transcript.
+        if (options.signal?.aborted === true) {
+          // logged above; nothing to show
+        } else if (store?.appendRunError !== undefined) {
           // Web turn-error parity: an error-colored run-failure row.
           store.appendRunError(message)
         } else {
@@ -1660,6 +1671,72 @@ class TuiLlmAdapter extends LlmAdapter {
         }
       } catch { /* best-effort */ }
       throw error
+    }
+  }
+
+  /** Forward one compaction-summary stream while reporting its growing output.
+   *
+   *  The status bar wants "how much summary has been written", not a fake
+   *  percentage: text deltas are accumulated and turned into an ESTIMATED token
+   *  count with the harness's own meter (throttled — the estimator is a
+   *  heuristic and re-running it per delta would be busywork), and a provider
+   *  `usage` chunk, when one arrives, replaces the estimate with the real
+   *  number. `options.maxTokens` (the harness's summarization budget) becomes
+   *  the honest denominator.
+   *  @param options - the summarization request (carries `purpose`/`maxTokens`).
+   *  @param wire - the underlying wire stream.
+   *  @returns the same chunks, unmodified. */
+  private async *tapCompaction(
+    options: GenerateOptions,
+    wire: AsyncIterable<StreamChunk>,
+  ): AsyncIterable<StreamChunk> {
+    let text = ''
+    let lastEstimateAt = 0
+    let reported = 0
+    const report = (tokens: number, estimated: boolean): void => {
+      try {
+        const store = this.ctx.get('tuiStore') as
+          | { noteCompactionTokens?(tokens: number, estimated: boolean, budget?: number): void }
+          | undefined
+        store?.noteCompactionTokens?.(tokens, estimated, options.maxTokens)
+      } catch { /* best-effort: progress is never worth failing a request */ }
+    }
+    for await (const chunk of wire) {
+      if (chunk.type === 'text-delta') {
+        text += chunk.text
+        const now = Date.now()
+        if (now - lastEstimateAt >= 400) {
+          lastEstimateAt = now
+          const estimated = this.estimateTokens(text)
+          if (estimated !== undefined && estimated > reported) {
+            reported = estimated
+            report(estimated, true)
+          }
+        }
+      } else if (chunk.type === 'usage') {
+        const out = chunk.usage.outputTokens
+        if (typeof out === 'number' && out > reported) {
+          reported = out
+          report(out, false)
+        }
+      }
+      yield chunk
+    }
+  }
+
+  /** Estimated output tokens for streamed text, via the harness's own meter
+   *  (undefined when the service is absent — a partially-booted context). */
+  private estimateTokens(text: string): number | undefined {
+    try {
+      const meter = this.ctx.get('tokenMeter') as
+        | { estimateMessage?(message: Message): number }
+        | undefined
+      return meter?.estimateMessage?.({
+        role: 'assistant',
+        content: [{ type: 'text', text }],
+      } as Message)
+    } catch {
+      return undefined
     }
   }
 

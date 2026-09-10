@@ -16,6 +16,7 @@ import {
   APP_VERSION,
   sessionLoadBar,
   sessionLoadPercent,
+  compactionStatusText,
   sessionLoadingStatusText,
   sessionLoadingText,
   BETA_FOOTER_SUFFIX,
@@ -2455,7 +2456,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             marker keeps the same text for anyone scrolled to the top. */}
         {store.sessionLoading !== null
           ? <Text color={theme.accent} wrap="truncate">{sessionLoadingStatusText(store.sessionLoading, Date.now(), store.sessionLoadingTicked)}</Text>
-          : store.historyLoadingVisible
+          : store.compaction !== null
+            // A manual `/compact` outranks the fold progress: it is the action
+            // the user just took, and it runs while the transcript is otherwise
+            // usable (Esc cancels it).
+            ? <Text color={theme.accent} wrap="truncate">{compactionStatusText(store.compaction, Date.now(), store.compactionTicked)}</Text>
+            : store.historyLoadingVisible
             ? <Text color={theme.accent} wrap="truncate">{store.historyProgressText}</Text>
             : store.statusFlash
               ? <Text color={theme.success} wrap="truncate">{store.statusFlash.text}</Text>

@@ -423,6 +423,12 @@ export class Store {
   private _approval: PendingApproval | null = null
   /** In-flight session switch (banner + key suppression); null when idle. */
   private _sessionLoading: SessionLoadingState | null = null
+  /** In-flight manual `/compact` (status bar + Esc cancel), or null. */
+  private _compaction: CompactionState | null = null
+  /** True once the compaction ticker fired (loop alive → show elapsed). */
+  private _compactionTicked = false
+  /** Abort seam installed by {@link compact} while a compaction runs. */
+  private _cancelCompaction: (() => void) | null = null
   /** True when the session was too large for the full stats pass (P2① mode A):
    *  the numbers cover the LOADED window and the status bar says so. */
   private _statsWindowOnly = false
@@ -1199,6 +1205,79 @@ export class Store {
     if (this._sessionLoading === null) return
     this._sessionLoading = null
     this._sessionLoadingTicked = false
+    this.notify()
+  }
+
+  /** The in-flight manual `/compact`, or null when none is running. */
+  get compaction(): CompactionState | null { return this._compaction }
+
+  /** Whether the compaction ticker ever fired (loop alive → show elapsed). */
+  get compactionTicked(): boolean { return this._compactionTicked }
+
+  /** Whether a manual compaction is running (Esc then cancels it). */
+  get compactionActive(): boolean { return this._compaction !== null }
+
+  /** Enter the compaction state (status bar takes over; Esc can abort). */
+  beginCompaction(startedAt: number): void {
+    this._compaction = { startedAt, phase: 'selecting', tokens: 0, estimated: true, queued: 0 }
+    this._compactionTicked = false
+    this.notify()
+  }
+
+  /** Install the abort seam for the running compaction (null clears it). */
+  setCompactionCancel(cancel: (() => void) | null): void {
+    this._cancelCompaction = cancel
+  }
+
+  /** Abort the running compaction through the harness's own cancellation
+   *  signal (the only way out of a summary that runs long). No-op when none
+   *  is running. */
+  cancelCompaction(): void {
+    this._cancelCompaction?.()
+  }
+
+  /** Move the compaction to its next phase (`compaction/start` → summarizing,
+   *  `compaction/summary` → committing). */
+  noteCompactionPhase(phase: CompactionPhase): void {
+    if (this._compaction === null || this._compaction.phase === phase) return
+    this._compaction = { ...this._compaction, phase }
+    this.notify()
+  }
+
+  /** Record streamed summary output (tokens + whether it is an estimate). */
+  noteCompactionTokens(tokens: number, estimated: boolean, budget?: number): void {
+    const state = this._compaction
+    if (state === null) return
+    const next = {
+      ...state,
+      tokens: Math.max(state.tokens, Math.round(tokens)),
+      estimated,
+      ...budget === undefined ? {} : { budget },
+    }
+    if (next.tokens === state.tokens && next.estimated === state.estimated && next.budget === state.budget) return
+    this._compaction = next
+    this.notify()
+  }
+
+  /** One user message the harness is holding until the compaction settles. */
+  noteCompactionQueued(): void {
+    if (this._compaction === null) return
+    this._compaction = { ...this._compaction, queued: this._compaction.queued + 1 }
+    this.notify()
+  }
+
+  /** Re-render so the elapsed seconds advance (firing proves the loop is free). */
+  tickCompaction(): void {
+    if (this._compaction === null) return
+    this._compactionTicked = true
+    this.notify()
+  }
+
+  /** Leave the compaction state (success, failure or cancellation). */
+  endCompaction(): void {
+    if (this._compaction === null) return
+    this._compaction = null
+    this._compactionTicked = false
     this.notify()
   }
 
@@ -2668,6 +2747,14 @@ function handleKey(k: RawKey): void {
   // and in raw mode the key path IS the exit path, so swallowing it would make
   // a long harness open look like a hard hang with no way out.
   if (store.sessionLoading !== null && !(k.ctrl === true && (k.char ?? '') === 'c')) return
+  // A running manual compaction owns Esc: the harness's cancellation signal is
+  // the only way out of a summary that keeps generating. Dialogs keep their own
+  // Esc (the panel is asked first) so an open /help still closes normally.
+  if (store.compactionActive && store.panel === 'conversation'
+    && (k.escape === true || k.mouseRightPress !== undefined)) {
+    store.cancelCompaction()
+    return
+  }
   const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
   def?.handleKey?.(k, store)
 }
@@ -3284,6 +3371,26 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         store.notifyTitles()
         break
       }
+      // Manual `/compact` lifecycle (the TUI's own status bar follows these).
+      // `compaction/start` lands AFTER the harness's synchronous range walk, so
+      // the status bar is already showing `selecting older history…` by then.
+      case 'compaction/start': {
+        store.noteCompactionPhase('summarizing')
+        break
+      }
+      case 'compaction/summary': {
+        store.noteCompactionPhase('committing')
+        break
+      }
+      case 'compaction/end': {
+        // The durable close carries the harness's own failure chain (e.g.
+        // "summary is not smaller than the shadowed content (…)"): keep it in
+        // the log, and let the human-facing row come from the thrown error so
+        // the two never disagree.
+        const failure = (event.data as { error?: unknown }).error
+        if (failure !== undefined) logErrorFileOnly('compact', `compaction/end error: ${String(failure)}`)
+        break
+      }
       // Non-user user/message = injected context (e.g. the system prompt),
       // rendered as a "Context injection" notice like dsh web.
       case 'user/message': {
@@ -3359,6 +3466,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       if (store.inputHistory.length > 100) store.inputHistory.shift()
     }
     store.setPaused(false) // any new message resumes; the model decides what to do
+    // A compaction holds waking input: the harness queues this message and
+    // starts it once the summary settles, so say that instead of looking stuck.
+    if (store.compactionActive) store.noteCompactionQueued()
     store.append('user', text)
     touchSession(sessionId)
     // A dragged/pasted image becomes an image content block beside the text.
@@ -4660,8 +4770,105 @@ const COMPACTION_FAILURE_TEXT: Record<ManualCompactionErrorCode, string> = {
   persistence: 'Compaction finished, but the session could not be saved.',
 }
 
+/** Phase of one in-flight manual `/compact`.
+ *
+ *  `selecting` is the phase BEFORE the harness writes `compaction/start`: the
+ *  engine walks the session surface to pick a compactable range, and on a
+ *  1.45 M-event session that walk held the only JS thread for **4.04 s**
+ *  (measured: `[stall] no timer callback for 4041ms`, with the durable
+ *  `compaction/start` record landing 49 ms before the stall line). It is a
+ *  phase, not a progress bar: nothing can be painted during it. */
+export type CompactionPhase = 'selecting' | 'summarizing' | 'committing'
+
+/** Live state of an in-flight manual `/compact`. */
+export interface CompactionState {
+  /** Epoch ms the command was accepted (drives the elapsed seconds). */
+  readonly startedAt: number
+  readonly phase: CompactionPhase
+  /** Summary output counted so far (tokens). */
+  readonly tokens: number
+  /** True while `tokens` is an estimate; false once the provider reported usage. */
+  readonly estimated: boolean
+  /** Output budget the harness sent for the summary (`GenerateOptions.maxTokens`,
+   *  from the compaction config — 8192 by default). */
+  readonly budget?: number
+  /** User messages the harness is holding until the compaction settles. */
+  readonly queued: number
+}
+
+/** Compact token counts for the status bar (`950`, `1.2k`, `8.2k`). */
+export function formatCompactTokens(tokens: number): string {
+  if (!Number.isFinite(tokens) || tokens <= 0) return '0'
+  if (tokens < 1000) return String(Math.round(tokens))
+  return `${(tokens / 1000).toFixed(1)}k`
+}
+
+/** One-line status-bar text for an in-flight `/compact`.
+ *
+ *  Honesty rules mirror `Load session:`: the elapsed seconds appear only once
+ *  the 250 ms ticker actually fired (proof the loop is alive), and the token
+ *  counter appears only once the summary stream has produced something. The
+ *  `selecting` phase — the harness's synchronous range walk — carries NO clock
+ *  at all, because that walk is exactly what freezes the loop.
+ *  @param state - the in-flight compaction.
+ *  @param now - current epoch ms (injectable for tests).
+ *  @param ticked - whether the ticker fired since the command started.
+ *  @returns the status-bar string. */
+export function compactionStatusText(state: CompactionState, now: number, ticked: boolean): string {
+  const queued = state.queued > 0 ? ` · ${state.queued} queued` : ''
+  if (state.phase === 'selecting') return `Compacting:  selecting older history…${queued}`
+  if (state.phase === 'committing') {
+    const secs = ticked ? ` · ${Math.max(0, (now - state.startedAt) / 1000).toFixed(1)}s` : ''
+    return `Compacting:  committing…${secs}${queued}`
+  }
+  const counted = state.tokens > 0
+    ? ` · ${state.estimated ? '~' : ''}${formatCompactTokens(state.tokens)}`
+      + `${state.budget === undefined ? '' : `/${formatCompactTokens(state.budget)}`} tokens`
+    : ''
+  const secs = ticked ? ` · ${Math.max(0, (now - state.startedAt) / 1000).toFixed(1)}s` : ''
+  return `Compacting:  summarizing${counted}${secs}${queued}`
+}
+
+/** One-line status text for a FAILED `/compact`.
+ *
+ *  The harness classifies the failure, but its per-code sentence (mirrored
+ *  verbatim from `dsh-command-compact`) is generic by design; the CONCRETE
+ *  reason lives in the error message — e.g. `summary is not smaller than the
+ *  shadowed content (8123 estimated framed tokens >= 5120)` for the shrink
+ *  refusal, or `no credential for provider route "…"` for a missing key.
+ *  Showing only the generic sentence hid that reason from the reader (a real
+ *  report: two `/compact` runs failed for 14 s and said nothing useful), so
+ *  both are shown, with the reason clipped to keep it a status line.
+ *  @param error - whatever `compactNow` threw.
+ *  @param cancelled - whether OUR abort signal was the cause (the harness
+ *    rethrows the raw abort reason verbatim instead of classifying it, so a
+ *    user-cancelled run arrives as e.g. `The operation was aborted.` and would
+ *    otherwise read as an unexplained failure — measured in a real terminal).
+ *  @returns the status text. */
+export function compactionFailureText(error: unknown, cancelled = false): string {
+  if (cancelled) return COMPACTION_FAILURE_TEXT.cancelled
+  const raw = error instanceof Error ? error.message : String(error)
+  const reason = (raw.split('\n')[0] ?? '').trim()
+  const clip = reason.length > 240 ? `${reason.slice(0, 239)}…` : reason
+  if (error instanceof ManualCompactionError) {
+    const base = COMPACTION_FAILURE_TEXT[error.code]
+    // A cancellation needs no reason: the only thing the abort produces here is
+    // the runtime's own artifact (`abort@[native code]` from the fetch seam),
+    // which would read as noise next to the harness's sentence.
+    if (error.code === 'cancelled') return base
+    return clip === '' || base.includes(clip) ? base : `${base} — ${clip}`
+  }
+  return `compaction: ${clip === '' ? 'unknown error' : clip}`
+}
+
 /** One manual `/compact` request: run the harness compaction seam on the live
- *  agent and report the outcome the way the harness `/compact` command does. */
+ *  agent and report the outcome the way the harness `/compact` command does.
+ *
+ *  The status bar follows the run: `selecting older history…` (pre-painted,
+ *  because the harness's range walk blocks the loop for seconds), then
+ *  `summarizing · ~N/8.2k tokens · Ns` driven by the compaction-tagged LLM
+ *  stream (see `TuiLlmAdapter.stream`), then `committing…`. Esc aborts through
+ *  the harness's own cancellation signal. */
 async function compact(ctx: Context, agent: unknown): Promise<void> {
   const compaction = ctx.get('compaction') as
     | { compactNow?: (agent: ManualCompactAgentContext, signal: AbortSignal, sourceCommandId: string) => Promise<CompactionResult | null> }
@@ -4670,21 +4877,38 @@ async function compact(ctx: Context, agent: unknown): Promise<void> {
     store.append('status', 'compaction service unavailable', true)
     return
   }
+  if (store.compactionActive) {
+    // One manual compaction at a time (the harness would answer `busy` anyway).
+    store.flashStatus('Compaction is already running', 4000)
+    return
+  }
+  const controller = new AbortController()
+  store.beginCompaction(Date.now())
+  store.setCompactionCancel(() => controller.abort())
+  const ticker = setInterval(() => store.tickCompaction(), 250)
   try {
+    // The harness selects the compactable range and assembles the summary
+    // request SYNCHRONOUSLY, and only then writes `compaction/start`. The
+    // pre-paint therefore has to happen here, before the call: waiting for the
+    // event would leave the seconds-long walk with nothing on screen.
+    await paintBeforeBlock()
     const result = await compaction.compactNow(
       // The live agent (agent-loop's Agent) implements the compaction contract
       // (runMaintenance + session + options) even though the public dsh-agent
       // type only exposes `id`, so the seam's own context type is asserted here.
       agent as ManualCompactAgentContext,
-      new AbortController().signal,
+      controller.signal,
       `tui-${randomUUID()}`,
     )
     store.append('status', result === null
       ? 'No compactable history yet.'
       : `Compacted ${result.shadowedSeqs.length} history items (~${result.shadowedTokenCount} tokens).`, true)
   } catch (error) {
-    store.append('status', error instanceof ManualCompactionError
-      ? COMPACTION_FAILURE_TEXT[error.code]
-      : `compaction: ${error instanceof Error ? error.message : String(error)}`, true)
+    logErrorFileOnly('compact', error)
+    store.append('status', compactionFailureText(error, controller.signal.aborted), true)
+  } finally {
+    clearInterval(ticker)
+    store.setCompactionCancel(null)
+    store.endCompaction()
   }
 }
