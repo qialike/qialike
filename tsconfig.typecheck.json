@@ -19,7 +19,6 @@
       "@deepseek-ai/dsh-sandbox-policy": ["../deepseek-harness/packages/sandbox/sandbox-policy/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-session": ["../deepseek-harness/packages/core/session/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-session/chunk-rows": ["../deepseek-harness/packages/core/session/lib/types/chunk-rows.d.ts"],
-      "@deepseek-ai/dsh-session/surface": ["../deepseek-harness/packages/core/session/lib/types/surface.d.ts"],
       "@deepseek-ai/dsh-session-title": ["../deepseek-harness/packages/session/session-title/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-settings": ["../deepseek-harness/packages/settings/settings/lib/types/index.d.ts"],
       "@deepseek-ai/dsh-tools": ["../deepseek-harness/packages/core/tools/lib/types/index.d.ts"],

@@ -58,10 +58,6 @@
       "types": "./lib/types/new.d.ts",
       "default": "./lib/new.js"
     },
-    "./fork": {
-      "types": "./lib/types/fork.d.ts",
-      "default": "./lib/fork.js"
-    },
     "./goal": {
       "types": "./lib/types/goal.d.ts",
       "default": "./lib/goal.js"

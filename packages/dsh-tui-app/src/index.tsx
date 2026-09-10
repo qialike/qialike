@@ -61,7 +61,6 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { buildForkSeed, describeForkSeed, type ForkSeedSourceEvent } from './fork-seed.ts'
 import { HISTORY_FAST_EVENTS, HISTORY_SLICE_EVENTS, HISTORY_TAIL_EVENTS, describeResumeFailure, isCorruptLogMessage, localCut, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
@@ -703,11 +702,6 @@ export class Store {
    *  durably persisted by the harness, so it stays reachable from
    *  `/sessions` / `--resume` afterward. */
   newSessionAction: () => void = () => {}
-  /** Continue THIS conversation in a new session (injected by start(); the
-   *  `/fork` command calls it). The child inherits the parent's model-visible
-   *  context as a small self-contained seed; the parent session is untouched and
-   *  stays reachable from `/sessions` / `--resume`. */
-  forkSessionAction: () => void = () => {}
 
   getItems(): readonly TranscriptItem[] { return this.items }
   get steps(): readonly StepItem[] { return this._steps }
@@ -4405,47 +4399,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // makes cancel a harmless no-op (the agent/status listener clears running).
     try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
   }
-  /**
-   * Adopt a freshly created/resumed agent as THE session on screen (in-process
-   * mode): dispose the old handle, repoint the mutable session bindings, reset
-   * the transcript and stats, and remember what the new session is. Shared by
-   * `/new` and `/fork`, which differ only in the agent they hand over and what
-   * they say about it — the switch itself is identical and must stay in one
-   * place, because the listeners below all read these `let` bindings.
-   * @param next - the agent to switch to (already created/resumed).
-   * @param status - the status line to print, from the new session id.
-   */
-  const adoptLocalAgent = async (next: AgentHandle, status: (id: string) => string): Promise<void> => {
-    // The session starts from the mode the user has chosen (the chip): a log
-    // with no `sandbox/mode` of its own would otherwise leave a chip reading
-    // "Read Only" while writes still went through.
-    try { setSandboxMode(next.agent.session, store.permission) } catch { /* best-effort */ }
-    // The runtime owns exactly one live handle by the time a user can run
-    // `/new` or `/fork`, so it is always set here.
-    const old = handle
-    if (old === undefined) return
-    try { await old.dispose() } catch (error) { logError('switching sessions: disposing the old session failed', error) }
-    handle = next
-    agent = next.agent
-    sessionId = agent.session.id
-    sessionRef.current = sessionId
-    store.setSession(agent.session)
-    void attachSessionToWorkspace(ctx, config.workspace, agent.session.id)
-    touchSession(sessionId)
-    resetSessionStats()
-    store.clear() // transcript + steps from the old session
-    store.setRunning(false)
-    store.setPaused(false)
-    // A forked child arrives WITH history, so this is how its title/blank state
-    // is folded from what it inherited (a `/new` session has no events yet).
-    const events = agent.session.snapshotEvents()
-    rememberFoldedTitle(sessionId, events)
-    // Still blank: nothing has run in it yet (rememberBlank keeps the new
-    // row showing as the reuse-able "New Session" placeholder).
-    rememberBlank(sessionId, foldSessionBlank(events))
-    store.append('status', status(sessionId), true)
-  }
-
   store.newSessionAction = () => {
     // The `/new` command: start a brand-new session in place. The harness
     // persists every session durably (write-behind on session/event), so the
@@ -4519,78 +4472,38 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
             agentOptions,
             setup,
           })
-        await adoptLocalAgent(next, (id) => reused !== undefined
-          ? `New session ${id} in ${config.workspace} (reused empty session)`
-          : `New session ${id} in ${config.workspace}`)
+        // The new session starts from the mode the user has chosen (the chip):
+        // a fresh log has no `sandbox/mode` of its own, and without this stamp a
+        // chip reading "Read Only" would not fence filesystem writes at all.
+        try { setSandboxMode(next.agent.session, store.permission) } catch { /* best-effort */ }
+        // The runtime owns exactly one live handle by the time a user can run
+        // `/new`, so it is always set here.
+        const old = handle
+        if (old === undefined) return
+        try { await old.dispose() } catch (error) { logError('new: disposing the old session failed', error) }
+        handle = next
+        agent = next.agent
+        sessionId = agent.session.id
+        sessionRef.current = sessionId
+        store.setSession(agent.session)
+        void attachSessionToWorkspace(ctx, config.workspace, agent.session.id)
+        touchSession(sessionId)
+        resetSessionStats()
+        store.clear() // transcript + steps from the old session
+        store.setRunning(false)
+        store.setPaused(false)
+        // A fresh session has no events yet, so this is a no-op today; it
+        // covers a future where /new switches onto an already-titled session.
+        const snapshot = agent.session.snapshotEvents()
+        rememberFoldedTitle(sessionId, snapshot)
+        // Still blank: nothing has run in it yet (rememberBlank keeps the new
+        // row showing as the reuse-able "New Session" placeholder).
+        rememberBlank(sessionId, foldSessionBlank(snapshot))
+        store.append('status', reused !== undefined
+          ? `New session ${sessionId} in ${config.workspace} (reused empty session)`
+          : `New session ${sessionId} in ${config.workspace}`, true)
       } catch (error) {
         store.append('status', `new: ${error instanceof Error ? error.message : String(error)}`, true)
-      }
-    })()
-  }
-  store.forkSessionAction = () => {
-    // The `/fork` command: continue THIS conversation in a NEW session. Unlike
-    // `/new` (which starts empty), the child inherits the parent's CONTEXT —
-    // rebuilt as a small self-contained seed from the parent's model-visible
-    // surface, so a 1.5 M-event session forks into one that opens instantly
-    // instead of one that copies every byte. The parent is untouched: it stays
-    // durable and switchable from `/sessions`.
-    abortResumeFold() // a chunked resume of the old transcript is moot now
-    if (store.running) {
-      try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
-    }
-    // Host mode: the session (and therefore its log) lives in the child process,
-    // which is also where the seed must be built — it owns the materialized log.
-    if (hostMode && hostClient !== undefined) {
-      const client = hostClient
-      const startedAt = Date.now()
-      store.beginSessionLoading({ id: 'fork', title: 'forking this session', startedAt })
-      const ticker = setInterval(() => store.tickSessionLoading(), 250)
-      void (async (): Promise<void> => {
-        try {
-          await paintBeforeBlock()
-          const answer = await client.fork()
-          await serveHostSession(client, answer, true)
-          const fork = answer.fork
-          if (fork !== undefined) {
-            const carried = fork.checkpointSeq === undefined
-              ? `${fork.messages} messages (full history, no compaction)`
-              : `${fork.messages} messages from compaction @${fork.checkpointSeq}`
-            store.append(
-              'status',
-              `Forked ${answer.forkedFrom ?? 'the previous session'} → ${answer.sessionId} · ${carried} · `
-              + `${fork.stateEvents} state events (route, permissions, plan, goal, todo)`
-              + (fork.pendingPromptSeq === undefined ? '' : ' · your in-flight prompt came along'),
-              true,
-            )
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          logErrorFileOnly('host', `client: fork failed: ${message}`)
-          store.append('status', `fork failed: ${message}`, true)
-        } finally {
-          clearInterval(ticker)
-          store.endSessionLoading()
-        }
-      })()
-      return
-    }
-    void (async (): Promise<void> => {
-      try {
-        // In-process mode: the same builder, over the local agent's own log.
-        const parentId = String(sessionId)
-        const { seed, stats } = buildForkSeed(
-          agent.session.snapshotEvents() as unknown as readonly ForkSeedSourceEvent[],
-        )
-        const next = await agents.create({
-          sessionId: SessionId(`session-${randomUUID()}`),
-          seed,
-          meta: { cwd: config.workspace, parentSession: sessionId },
-          agentOptions,
-          setup,
-        })
-        await adoptLocalAgent(next, (id) => `Forked ${parentId} → ${id} · ${describeForkSeed(stats)}`)
-      } catch (error) {
-        store.append('status', `fork: ${error instanceof Error ? error.message : String(error)}`, true)
       }
     })()
   }
@@ -5462,8 +5375,7 @@ export const OVERSIZED_LOG_BYTES = 5 * 1024 * 1024
 export function oversizedResumeNotice(bytes: number): string {
   const size = formatByteSize(bytes)
   return `dsh-tui: resuming a large session (${size} log) — opening it can take a while; `
-    + 'consider /compact (with a configured model), /fork to continue this conversation in a small new '
-    + 'session, or /new to start over'
+    + 'consider /compact (with a configured model) or /new to continue in a fresh session'
 }
 
 /** The warning to show for a durable log of `bytes` (undefined when the log is

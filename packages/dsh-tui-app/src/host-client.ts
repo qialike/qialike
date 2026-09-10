@@ -53,25 +53,6 @@ export interface HostAttached {
   plan?: { mode: 'fast' } | { mode: 'chunked'; tailStart: number; olderRanges: ReadonlyArray<readonly [number, number]> }
 }
 
-/** What a `/fork` carried over from the session it continues (the host's own
- *  numbers, so the status bar reports what was copied rather than a guess). */
-export interface HostForked {
-  /** The session this child continues. */
-  forkedFrom: string
-  fork: {
-    /** Surface messages copied — what the model will see. */
-    messages: number
-    /** Log-only state events carried (route, permissions, plan, goal, todo). */
-    stateEvents: number
-    /** Events the parent's log held. */
-    parentEvents: number
-    /** Seq of the compaction checkpoint the context starts from, when any. */
-    checkpointSeq?: number
-    /** Seq of an in-flight prompt that was carried over, when any. */
-    pendingPromptSeq?: number
-  }
-}
-
 /** The host's answer to `new` when the current session is already unused. */
 export interface HostAlreadyBlank {
   type: 'new-session'
@@ -97,8 +78,6 @@ export interface HostClient {
   attach(sessionId?: string): Promise<HostAttached>
   /** `/new`: the host creates (or adopts an unused blank) session and serves it. */
   newSession(): Promise<HostAttached | HostAlreadyBlank>
-  /** `/fork`: the host continues this session in a NEW one and serves that. */
-  fork(): Promise<HostAttached & Partial<HostForked>>
   /** `/models`: switch the route of the agent the host owns (next request). */
   setModel(selection: { provider: string; model: string; reasoningEffort?: string }): Promise<void>
   /** `/compact`: run the harness's manual compaction where the live agent is. */
@@ -362,7 +341,6 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
       sessionId === undefined ? { type: 'attach' } : { type: 'attach', sessionId },
     ) as Promise<HostAttached>,
     newSession: () => request<HostAttached | HostAlreadyBlank>({ type: 'new' }),
-    fork: () => request<HostAttached & Partial<HostForked>>({ type: 'fork' }, 120_000),
     setModel: (selection) => request<void>({ type: 'model', selection }, 20_000),
     compact: () => request<CompactionOutcome>({ type: 'compact' }, 10 * 60_000),
     abortCompact: () => { write({ type: 'abort-compact' }) },

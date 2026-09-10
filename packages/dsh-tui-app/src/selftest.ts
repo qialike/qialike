@@ -46,7 +46,7 @@ export interface SyncCheckDeps {
 }
 
 const REQUIRED_PANELS = ['conversation', 'approval', 'question', 'connect', 'sessions', 'export', 'help', 'themes'] as const
-const REQUIRED_COMMANDS = ['help', 'think', 'compact', 'clear', 'exit', 'models', 'sessions', 'export', 'new', 'fork', 'goal', 'plan', 'theme'] as const
+const REQUIRED_COMMANDS = ['help', 'think', 'compact', 'clear', 'exit', 'models', 'sessions', 'export', 'new', 'goal', 'plan', 'theme'] as const
 
 /** Palette hex keys shared by every built-in scheme (must stay 17). */
 const HEX_ROLES = ['bg', 'panel', 'element', 'borderSubtle', 'border', 'borderActive', 'text', 'textMuted', 'primary', 'secondary', 'accent', 'success', 'warning', 'info', 'error', 'yellow'] as const

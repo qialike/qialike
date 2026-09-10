@@ -192,13 +192,6 @@
     - id: tui-new
       name: '@yourname/dsh-tui-app/new'
 
-    # /fork: continue this conversation in a NEW session. The host rebuilds the
-    # parent's model-visible surface (last compaction checkpoint + what follows
-    # it + session state) as a small seed, so the child inherits the CONTEXT
-    # without the parent's 1.5 M events; the parent stays resumable.
-    - id: tui-fork
-      name: '@yourname/dsh-tui-app/fork'
-
     # /goal: human command plane over the harness goal domain (the goal
     # service, model tools, and round driver are mounted by the base bundle;
     # only the command reachable from the TUI composer was missing).
