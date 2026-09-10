@@ -4250,7 +4250,24 @@ const RESUME_FOLD_QUIET_GAP_MS = 150
  *  user scrolls back to the top, so very long sessions never hold their whole
  *  history in the transcript. Sessions whose older history fits under the cap
  *  load exactly as before (marker removed once event 0 is reached). */
-const RESUME_OLDER_ITEM_CAP = 4000
+export const RESUME_OLDER_ITEM_CAP = 4000
+
+/** Older-history items kept loaded while the reader stays at the live tail.
+ *
+ *  P2③ (viewport-bounded retention): the transcript layout walks EVERY loaded
+ *  item on every frame, so a fixed 4000-item window makes each frame cost
+ *  O(4000 items) even on a 30-row terminal — one of the 4-6s wedges measured
+ *  around a submit. The cap therefore scales with the VIEWPORT (12 rows of
+ *  history per terminal row, floored at 400 so scrolling back stays smooth and
+ *  capped at the historical maximum). Everything evicted this way is
+ *  re-foldable on demand (see the fold driver's evicted stack), and the status
+ *  bar/transcript marker tells the reader how to bring it back.
+ *  @param rows - terminal rows (terminal height).
+ *  @returns the item cap for that height. */
+export function olderItemCap(rows: number): number {
+  if (!Number.isFinite(rows) || rows <= 0) return RESUME_OLDER_ITEM_CAP
+  return Math.max(400, Math.min(RESUME_OLDER_ITEM_CAP, Math.round(rows * 12)))
+}
 
 /** Bytes of one persisted session's durable log (`session.jsonl.zstd`, or the
  *  plain `session.jsonl`), best-effort — the banner shows it so the user can
@@ -4450,7 +4467,7 @@ function resumeHistoryIntoStore(
        *  bound for very long sessions); the dropped ranges land on the
        *  evicted stack and are re-folded near the top on demand. */
       const evictOverCap = (): void => {
-        let over = store.loadedOlder - RESUME_OLDER_ITEM_CAP
+        let over = store.loadedOlder - olderItemCap(store.rows)
         if (over <= 0 || foldedNewestFirst.length === 0) return
         const popped: { from: number; to: number; items: number }[] = []
         let droppedItems = 0
@@ -4496,7 +4513,7 @@ function resumeHistoryIntoStore(
           continue
         }
         // Trim over-cap older while the user stays at the live tail.
-        if (store.followTail && store.loadedOlder > RESUME_OLDER_ITEM_CAP) {
+        if (store.followTail && store.loadedOlder > olderItemCap(store.rows)) {
           store.setHistoryHolding(true)
           evictOverCap()
           continue
@@ -4519,7 +4536,7 @@ function resumeHistoryIntoStore(
           //     the readout looking permanently stuck).
           // Resting shows an honest readout; folding resumes when the reader
           // scrolls back up (nearTop → followTail false).
-          if (store.loadedOlder >= RESUME_OLDER_ITEM_CAP
+          if (store.loadedOlder >= olderItemCap(store.rows)
             || (cursor < 0 && evictedOldestFirst.length > 0)) {
             store.setHistoryHolding(true)
             // Loaded as much as this view needs: report it ONCE and drop the

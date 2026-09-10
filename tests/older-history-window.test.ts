@@ -11,7 +11,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '../packages/dsh-tui-app/src/index.tsx'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
+import { Store, olderItemCap, RESUME_OLDER_ITEM_CAP } from '../packages/dsh-tui-app/src/index.tsx'
 
 const item = (kind: TranscriptItem['kind'], text: string): TranscriptItem => ({ key: 0, kind, text })
 const texts = (store: Store): string[] => store.getItems().map((it) => it.text)
@@ -70,5 +70,15 @@ describe('Store older-history window primitives', () => {
     store.finishHistory()
     expect(store.olderLoading).toBe(false)
     expect(texts(store)).toEqual(['a', 'tail'])
+  })
+})
+
+describe('P2③ viewport-bounded retention', () => {
+  test('the older-history item cap scales with the terminal height', () => {
+    expect(olderItemCap(30)).toBe(400)    // floor: 30 × 12 = 360 → 400
+    expect(olderItemCap(60)).toBe(720)
+    expect(olderItemCap(100)).toBe(1200)
+    expect(olderItemCap(1000)).toBe(RESUME_OLDER_ITEM_CAP) // capped at the historical max
+    expect(olderItemCap(0)).toBe(RESUME_OLDER_ITEM_CAP)    // unknown height → old behavior
   })
 })
