@@ -4426,6 +4426,11 @@ function resumeHistoryIntoStore(
         store.setHistoryProgress(Math.max(0, plan.tailStart - unfoldedEv - evictedEv), plan.tailStart)
       }
       const foldRange = (from: number, to: number): void => {
+        // P2③ part 2: attribute a wedge to the SLICE that caused it (a slice can
+        // hide one enormous tool body), with the heap before/after so a major GC
+        // pause is distinguishable from real packing work.
+        const foldT0 = debugResumeFold ? Date.now() : 0
+        const heapBefore = debugResumeFold ? process.memoryUsage().heapUsed : 0
         // Window stats (P2①, mode A): the slices we fold anyway are observed
         // here, so an oversized session pays ONE bounded pass per slice instead
         // of a full 1.4M-event scan up front.
@@ -4436,6 +4441,16 @@ function resumeHistoryIntoStore(
           foldedNewestFirst.push({ from, to, items: chunk.items.length })
         }
         if (bestSteps.length === 0 && chunk.steps.length > 0) bestSteps = chunk.steps
+        if (debugResumeFold) {
+          const ms = Date.now() - foldT0
+          if (ms > 200) {
+            const heapAfter = process.memoryUsage().heapUsed
+            logErrorFileOnly('fold',
+              `slow slice=${from}-${to} events=${to - from} items=${chunk.items.length} ms=${ms} `
+              + `heapBefore=${Math.round(heapBefore / 1024 / 1024)}MB heapAfter=${Math.round(heapAfter / 1024 / 1024)}MB `
+              + `heapDelta=${Math.round((heapAfter - heapBefore) / 1024 / 1024)}MB`)
+          }
+        }
       }
       /** Fold one slice — an original range first (they are chronologically
        *  OLDER than anything evicted), then an evicted slice nearest to the

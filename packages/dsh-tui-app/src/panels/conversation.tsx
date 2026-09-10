@@ -51,7 +51,7 @@ import {
 import { surfaceRegion, sidebarContentBand, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
 import { formatSessionStatsParts } from '../session-stats.ts'
 import { sessionDisplayTitle } from '../session-titles.ts'
-import { logError } from '../log.ts'
+import { logError, logErrorFileOnly } from '../log.ts'
 import { HARNESS_VERSION } from '../harness-version.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
@@ -1190,9 +1190,18 @@ function wrapRows(text: string, usable: number): string[] {
   return out
 }
 
+/** Attribution mode for the layout pass (`DSH_TUI_DEBUG_LAYOUT=1`): times every
+ *  item and reports the slowest one, so a multi-second wedge can be blamed on a
+ *  specific pathological row (a giant tool body) instead of guessed at. Off by
+ *  default: the per-item `Date.now()` pairs are only paid when debugging. */
+const debugLayout = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_LAYOUT ?? '')
+
 function buildTranscriptRows(items: readonly TranscriptItem[], usable: number): TranscriptRow[] {
   const rows: TranscriptRow[] = []
+  const startedAt = debugLayout ? Date.now() : 0
+  let slowest = { kind: '', chars: 0, ms: 0, index: -1 }
   items.forEach((item, i) => {
+    const itemT0 = debugLayout ? Date.now() : 0
     if (i > 0) rows.push({ text: '', itemIndex: i - 1 })
     const w = MESSAGE_TEXT_WIDTH(usable)
     if (item.kind === 'tool') {
@@ -1234,7 +1243,21 @@ function buildTranscriptRows(items: readonly TranscriptItem[], usable: number): 
     const plain = item.kind === 'assistant' && item.text.length <= 8000 ? markdownPlain(item.text) : item.text
     // Wrap breadth mirrors the rendered layout (one shared content column).
     for (const line of wrapRows(plain, w)) rows.push({ text: line, itemIndex: i })
+    if (debugLayout) {
+      const ms = Date.now() - itemT0
+      if (ms > slowest.ms) slowest = { kind: item.kind, chars: item.text.length, ms, index: i }
+    }
   })
+  if (debugLayout) {
+    const total = Date.now() - startedAt
+    // Only ACTUAL wedges are reported: the pass runs every frame, so logging
+    // each one would drown the log (and cost more than the pass itself).
+    if (total > 200) {
+      logErrorFileOnly('layout',
+        `pass rows=${rows.length} items=${items.length} ms=${total} heap=${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB `
+        + `slowestItem=#${slowest.index} kind=${slowest.kind} chars=${slowest.chars} ms=${slowest.ms}`)
+    }
+  }
   return rows
 }
 
