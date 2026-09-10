@@ -32,6 +32,11 @@ export interface TuiStartupValues {
   resumeNewest: boolean
   /** P4c: boot as the headless HOST (`--dsh-host`) instead of the Ink client. */
   host: boolean
+  /** P4c M5: keep the harness in THIS process (`--in-process`). Host mode is
+   *  the default because the harness's synchronous work (a giant session's
+   *  10-12 s open, a 4-6 s request assembly) otherwise freezes the render
+   *  thread; this flag is the escape hatch (and what `DSH_TUI_HOST=0` means). */
+  inProcess: boolean
   /** Optional model override (e.g. `deepseek-v4-flash`). */
   model: string | undefined
 }
@@ -68,12 +73,14 @@ export function tuiCommand(): Command {
     // Ink surface and speaks JSONL over stdio, so the client's render thread is
     // never blocked by the harness (see dsh-tui-p4c-spike.md).
     .option('--dsh-host', 'run as the headless host (JSONL over stdio) instead of the TUI')
+    .option('--in-process', 'run the harness inside the TUI process (no host child; the session decode blocks the UI)')
     .addHelpText('after', `
 Examples:
   dsh-tui                     start a NEW session and show the hero screen (never auto-resumes)
   dsh-tui resume              continue the newest session with content here, straight into the conversation view
   dsh-tui --resume <id>       open one specific persisted session
   dsh-tui --workspace ~/proj  operate in ~/proj (its own sessions / New Session placeholder)
+  dsh-tui --in-process        run the harness in-process (older behaviour: opening a huge session freezes the UI)
   # opt back into auto-resume on every launch: resume_last: true in ~/.dsh/dsh-tui.json (or DSH_TUI_RESUME_LAST=1)
 `)
 }
@@ -89,12 +96,19 @@ export function apply(ctx: Context): void {
     // Fail loud on an unknown positional instead of silently starting fresh
     // (a typo like `dsh-tui resme` must not look like "no argument").
     const resumeNewest = parseResumeMode(mode)
-    const options = program.opts<{ workspace?: string; resume?: string; model?: string; dshHost?: boolean }>()
+    const options = program.opts<{
+      workspace?: string
+      resume?: string
+      model?: string
+      dshHost?: boolean
+      inProcess?: boolean
+    }>()
     ctx.provide(TUI_STARTUP_SERVICE, {
       workspace: options.workspace ?? process.cwd(),
       resume: options.resume,
       resumeNewest,
       host: options.dshHost === true,
+      inProcess: options.inProcess === true,
       model: options.model,
     } satisfies TuiStartupValues)
   })

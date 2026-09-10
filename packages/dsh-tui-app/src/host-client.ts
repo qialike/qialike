@@ -108,6 +108,9 @@ export interface HostClient {
   /** Mirror the sandbox mode this client shows: the host enforces the
    *  `read-only` bash fence with the SAME rule (`bash-policy.ts`). */
   setPolicy(permission: string): void
+  /** The host process ended (crash or shutdown): the session on screen is now
+   *  orphaned, which the client must say out loud. */
+  onExit(handler: (reason: string) => void): void
   /** Ask the host to dispose and exit. */
   close(): void
 }
@@ -152,6 +155,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
   const statusHandlers = new Set<(status: 'idle' | 'running') => void>()
   const askHandlers = new Set<(ask: HostAsk) => void>()
   const askCancelledHandlers = new Set<(requestId: number) => void>()
+  const exitHandlers = new Set<(reason: string) => void>()
   let readyResolve: ((value: { model?: string; pid?: number }) => void) | undefined
   let readyReject: ((error: Error) => void) | undefined
   const ready = new Promise<{ model?: string; pid?: number }>((resolve, reject) => {
@@ -263,6 +267,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
     for (const [, entry] of pending) entry.reject(error)
     pending.clear()
     readyReject?.(error)
+    for (const handler of exitHandlers) handler(error.message)
   })()
 
   // Host logs ride stderr and are ALREADY in the shared log file (the host
@@ -341,6 +346,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
     onStatus: (handler: (status: 'idle' | 'running') => void) => { statusHandlers.add(handler) },
     onAsk: (handler: (ask: HostAsk) => void) => { askHandlers.add(handler) },
     onAskCancelled: (handler: (requestId: number) => void) => { askCancelledHandlers.add(handler) },
+    onExit: (handler: (reason: string) => void) => { exitHandlers.add(handler) },
     answer: (requestId: number, payload: Record<string, unknown>) => {
       write({ type: 'answer', requestId, payload })
     },

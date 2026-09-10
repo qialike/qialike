@@ -161,6 +161,9 @@
         resumeNewest: !!js ctx.tuiStartup.resumeNewest
         # P4c host mode: the same binary as a headless JSONL host.
         host: !!js ctx.tuiStartup.host
+        # P4c M5: `--in-process` keeps the harness in the UI process (host mode
+        # is the default; see dsh-tui-p4c-spike.md).
+        inProcess: !!js ctx.tuiStartup.inProcess
         model: !!js ctx.tuiStartup.model
 
     # ── surface panels (plugins; register against the `tui` service) ────────

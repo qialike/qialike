@@ -116,6 +116,9 @@ export interface Config {
   resumeNewest: boolean | undefined
   /** P4c: run as the headless host (JSONL over stdio) instead of the Ink app. */
   host: boolean | undefined
+  /** P4c M5: keep the harness in this process (`--in-process`); host mode is
+   *  the default. `DSH_TUI_HOST=0` means the same thing. */
+  inProcess: boolean | undefined
   model: string | undefined
 }
 
@@ -124,6 +127,7 @@ export const Config: z<Config> = z.object({
   resume: z.string(),
   resumeNewest: z.boolean(),
   host: z.boolean(),
+  inProcess: z.boolean(),
   model: z.string(),
 })
 
@@ -2682,6 +2686,12 @@ export interface ImageAttachApi {
 /** The single UI store; settled plugins and the Ink app share it. */
 export const store = new Store()
 
+/** P4c M5: true when the harness runs in a CHILD process. Set by `start()` and
+ *  read by the module-level key router, whose policy differs between the modes:
+ *  an in-process session load blocks this thread (so keys must be swallowed to
+ *  avoid a burst landing afterwards), a host-mode load does not. */
+let hostModeActive = false
+
 /** The live session id, for claim-or-delegate on approval/question listeners. */
 const sessionRef: { current?: SessionId } = {}
 
@@ -2837,7 +2847,12 @@ function handleKey(k: RawKey): void {
   // Ctrl+C stays available as the single escape hatch — it exits the process,
   // and in raw mode the key path IS the exit path, so swallowing it would make
   // a long harness open look like a hard hang with no way out.
-  if (store.sessionLoading !== null && !(k.ctrl === true && (k.char ?? '') === 'c')) return
+  // While a session is being opened in-process, every key is swallowed: the
+  // harness blocks this thread, so keystrokes would only pile up and land later.
+  // In HOST mode the same load runs in the child and this thread stays live, so
+  // the guard would just make the UI look dead (no /exit, no scrolling) for the
+  // whole load — keep keys flowing there.
+  if (!hostModeActive && store.sessionLoading !== null && !(k.ctrl === true && (k.char ?? '') === 'c')) return
   // A running manual compaction owns Esc: the harness's cancellation signal is
   // the only way out of a summary that keeps generating. Dialogs keep their own
   // Esc (the panel is asked first) so an open /help still closes normally.
@@ -3097,7 +3112,17 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
    *  the approval/question waterfalls answered from this process's dialogs plus
    *  the mirrored sandbox mode (see dsh-tui-p4c-spike.md). */
   let hostClient: HostClient | undefined
-  const hostMode = process.env.DSH_TUI_HOST === '1'
+  /** P4c M5: HOST MODE IS THE DEFAULT. The harness's synchronous work (opening a
+   *  giant session, assembling a request) blocks whatever thread it runs on, and
+   *  that thread is the renderer in-process — measured 10-12 s of frozen UI on a
+   *  1.45 M-event session, 4-6 s per request assembly. The child costs ~0.6 s on
+   *  a small session (hero paints immediately either way), which is why
+   *  `--in-process` / `DSH_TUI_HOST=0` stay available as the escape hatch. */
+  const hostMode = config.inProcess !== true && process.env.DSH_TUI_HOST !== '0'
+  hostModeActive = hostMode
+  /** Set when the host could not be started and the launch fell back in-process
+   *  (surfaced as a status line so the degradation is never silent). */
+  let hostFallback: string | undefined
   /** Build the client-side stand-ins for a host-owned agent: the transcript
    *  fold, the store and the commands only need `id` / `snapshotEvents()` /
    *  `followup` / `cancel`, all of which are served over the protocol. */
@@ -3158,7 +3183,20 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     return { handle: placeholder.handle, resumed: false }
   }
   const establish = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
-    if (hostMode) return establishFromHost()
+    if (hostMode) {
+      try {
+        return await establishFromHost()
+      } catch (error) {
+        // Host mode is a DEFAULT, so it must never make the launch fail: if the
+        // child cannot start (or answers with a fatal error), fall back to the
+        // in-process path and SAY SO. Only possible while the local harness is
+        // still mounted, which is the case today.
+        hostFallback = error instanceof Error ? error.message : String(error)
+        logErrorFileOnly('host', `client: host unavailable, falling back in-process: ${hostFallback}`)
+        try { hostClient?.close() } catch { /* best-effort */ }
+        hostClient = undefined
+      }
+    }
     let nextHandle: AgentHandle | undefined
     let nextResumed = false
     if (resumeId !== undefined) {
@@ -3408,7 +3446,23 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const ticker = setInterval(() => store.tickSessionLoading(), 250)
     void (async (): Promise<void> => {
       try {
-        await serveHostSession(client, await client.attach(resumeId), false)
+        // Which session? The same question the in-process path answers: an
+        // explicit `--resume`, or the auto-resume opt-in, attaches to an EXISTING
+        // session; a flat launch must reuse-or-create an unused one (the hero).
+        // Asking the host to `attach` without an id means "newest with content",
+        // which is why a flat launch in a session-less workspace used to fail
+        // with `no session to attach` instead of showing the hero.
+        const wantsExisting = resumeId !== undefined
+          || config.resumeNewest === true
+          || resolveResumeLast()
+        const answer = wantsExisting
+          ? await client.attach(resumeId)
+          : await client.newSession()
+        await serveHostSession(
+          client,
+          answer.type === 'new-session' ? await client.attach(answer.sessionId) : answer,
+          false,
+        )
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
         logErrorFileOnly('host', `client: attach failed: ${message}`)
@@ -3824,6 +3878,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         }
       })()
     })
+    // The host is a separate process: if it dies, the session on screen is
+    // orphaned and the user must be told (and can relaunch with `--in-process`).
+    hostClient.onExit((reason) => {
+      if (hostFallback !== undefined) return   // already reported
+      hostFallback = reason
+      store.append('status', `Host process ended (${reason}) — this session is no longer attached; relaunch with --in-process if it keeps happening.`, true)
+      store.setRunning(false)
+    })
     hostClient.onAskCancelled((requestId) => {
       // The host withdrew the ask: close whatever dialog it opened, so the user
       // is never left staring at a dead dock.
@@ -3832,6 +3894,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     })
   }
 
+  if (hostFallback !== undefined) {
+    // Both a transcript row AND the status bar: on a fresh launch the hero owns
+    // the screen, and a degradation the user cannot see is a silent one.
+    // The raw reason is a full spawn/ENOENT sentence: clip it so the row and the
+    // status bar stay readable (the log keeps the whole thing).
+    const reason = hostFallback.length > 90 ? `${hostFallback.slice(0, 89)}…` : hostFallback
+    const note = `Host mode unavailable (${reason}) — running in-process this session.`
+    store.append('status', note, true)
+    store.flashStatus(note, 15_000)
+  }
   store.append('status', 'Ready. Enter to send · Ctrl+C clears the input · /exit quits.', true)
 
   // Wire the slash commands (built after the agent exists). Core commands

@@ -498,7 +498,10 @@ export async function startHost(
   const attach = async (requestId: number | undefined, explicit?: string): Promise<void> => {
     const wanted = explicit ?? await pickSessionId()
     if (wanted === undefined) {
-      send({ type: 'error', code: 'no-session', message: 'no session to attach in this workspace' })
+      // MUST carry the request id: an id-less error settles nothing, so the
+      // client's `attach` promise hangs and the caller stays in its loading state
+      // (which suppresses keys) until the process is killed.
+      send({ id: requestId, type: 'error', code: 'no-session', message: 'no session to attach in this workspace' })
       return
     }
     registerListeners()
