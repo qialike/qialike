@@ -149,7 +149,13 @@ export function measureOne(cp: number, timeoutMs = 300): Promise<number | null> 
       // query position. Without the concealment a `⚠` sat on screen for the whole
       // timeout (~200 ms on a terminal that does not answer CPR) and read as a
       // flash before the hero.
-      process.stdout.write(`\x1b7\x1b[${rows};1H\x1b[8m${glyph}\x1b[28m\x1b[6n`)
+      // …and blank the probe cell IMMEDIATELY after the query: the CPR reply is
+      // queued when the terminal parses `6n` (before it sees these bytes), so the
+      // measurement is unaffected while nothing is left on screen — no reliance on
+      // the terminal honouring SGR 8 concealment, and no glyph anywhere. Two
+      // spaces cover a 1- or 2-cell advance; the saved cursor is restored in
+      // `finish()`.
+      process.stdout.write(`\x1b7\x1b[${rows};1H\x1b[8m${glyph}\x1b[28m\x1b[6n\x1b[${rows};1H  `)
     } catch {
       finish()
       resolve(null)
