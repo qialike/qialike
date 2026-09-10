@@ -564,6 +564,11 @@ export class Store {
    *  parity: the blank→engaging flip happens locally, on the submit's own
    *  frame, so the hero screen leaves immediately). */
   private _promptAttempted = false
+  /** Whether the HERO may still show at all. The hero is the LAUNCH placeholder
+   *  (a bare `dsh-tui`): any explicit session action — `/new`, a `/sessions`
+   *  switch — means the user asked for a CONVERSATION view, so the hero is left
+   *  for good, blank session or not. */
+  private _heroAllowed = true
   private _followTail = true
   private _scroll = 0
   private _layoutContent = 0
@@ -2029,7 +2034,19 @@ export class Store {
     if (this._loadError !== null) return false
     const session = this._session
     if (session === undefined) return true
-    return sessionBlank(session.id) === true && !this._promptAttempted && !this._running
+    return this._heroAllowed
+      && sessionBlank(session.id) === true
+      && !this._promptAttempted
+      && !this._running
+  }
+
+  /** Leave the hero permanently: the user asked for a session explicitly
+   *  (`/new`, `/sessions`), so the docked conversation view is the right screen
+   *  even while the session it lands on is still blank. */
+  leaveHero(): void {
+    if (!this._heroAllowed) return
+    this._heroAllowed = false
+    this.notify()
   }
   private _models: readonly ModelsOption[] = []
   private _modelIndex = 0
@@ -4462,9 +4479,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (hostMode && hostClient !== undefined) {
       const client = hostClient
       const startedAt = Date.now()
-      // `/new` always lands on an unused blank session (created or adopted), so
-      // the hero is the right frame throughout — same rule as a flat launch.
-      store.beginSessionLoading({ id: 'new', startedAt, keepHero: true })
+      // `/new` asks for a session EXPLICITLY: the docked conversation view is the
+      // right screen while it opens — and stays the right screen afterwards, even
+      // though the new session is blank. The hero is a launch-only screen now.
+      store.leaveHero()
+      store.beginSessionLoading({ id: 'new', startedAt })
       const ticker = setInterval(() => store.tickSessionLoading(), 250)
       void (async (): Promise<void> => {
         promptQueue.hold() // prompts typed during /new belong to the NEW session
@@ -4564,6 +4583,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     })()
   }
   store.resumeSessionAction = (id) => {
+    store.leaveHero()
     // The /sessions dialog's Enter: switch to the selected persisted session
     // in place, exactly like the launch auto-resume (agents.resume + history
     // replay). The target is resumed BEFORE the old agent is disposed, so a
@@ -4890,22 +4910,39 @@ const BLANK_SESSION_EVENTS = 32
  * @param workspace - the directory whose sessions are candidates.
  * @returns the session id, or undefined when the workspace holds none.
  */
+/** Order `resume` candidates by ACTIVITY — the session's log mtime — falling
+ *  back to creation time when two logs share a timestamp. Pure so the rule is
+ *  testable: `resume` must continue the session the user was last WORKING in, not
+ *  the one most recently created (the two differ as soon as an older session is
+ *  still in use — a daily driver next to freshly made throwaways).
+ *  @param candidates - one entry per session, with both timestamps.
+ *  @returns the same entries, newest activity first. */
+export function orderResumeCandidates<T extends { readonly createdAt: number; readonly activeAt: number }>(
+  candidates: readonly T[],
+): T[] {
+  return [...candidates].sort((a, b) => (b.activeAt - a.activeAt) || (b.createdAt - a.createdAt))
+}
+
 async function newestSessionWithContent(workspace: string): Promise<string | undefined> {
   try {
     const dir = join(dshHomePath('sessions'), projectKey(workspace))
     const entries = readdirSync(dir, { withFileTypes: true })
-    const candidates: { id: string; createdAt: number }[] = []
+    const candidates: { id: string; createdAt: number; activeAt: number }[] = []
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       const logPath = join(dir, entry.name, 'session.jsonl.zstd')
       if (!existsSync(logPath)) continue
       const header = await new SessionLogReader(logPath).header()
-      // The directory name is the encoded id; the header carries the timing.
+      // The directory name is the encoded id; the header carries the CREATION
+      // time, the file's mtime the last ACTIVITY (any writer updates it: this
+      // process, another window, or `dsh web`). `resume` means "the session I was
+      // just working in", so activity wins.
       const createdAt = typeof header?.createdAt === 'number' ? header.createdAt : 0
-      candidates.push({ id: entry.name, createdAt })
+      let activeAt = createdAt
+      try { activeAt = statSync(logPath).mtimeMs } catch { /* keep createdAt */ }
+      candidates.push({ id: entry.name, createdAt, activeAt })
     }
-    candidates.sort((a, b) => b.createdAt - a.createdAt)
-    for (const candidate of candidates) {
+    for (const candidate of orderResumeCandidates(candidates)) {
       const reader = new SessionLogReader(join(dir, candidate.id, 'session.jsonl.zstd'))
       // A blank placeholder session holds only its seed rows; anything that ran a
       // turn is far past this bound (and reading the count costs a frame probe).

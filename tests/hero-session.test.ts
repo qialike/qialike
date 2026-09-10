@@ -20,7 +20,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { parseResumeMode, tuiCommand } from '../packages/dsh-tui-app/src/startup.ts'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
+import { Store,
+  orderResumeCandidates,
+} from '../packages/dsh-tui-app/src/index.tsx'
 import { rememberBlank } from '../packages/dsh-tui-app/src/session-titles.ts'
 
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-hero-test-'))
@@ -69,10 +71,17 @@ describe('store hero predicate while a launch is opening', () => {
     switching.beginSessionLoading({ id: 'sess-1', startedAt: Date.now() })
     expect(switching.hero).toBe(false)
 
-    // `/new` lands on a blank session too, so it keeps the hero as well.
+    // `/new` is an EXPLICIT session request: it lands on a blank session, but the
+    // docked conversation view is the right screen — the hero is launch-only.
     const fresh = new Store()
-    fresh.beginSessionLoading({ id: 'new', startedAt: Date.now(), keepHero: true })
-    expect(fresh.hero).toBe(true)
+    fresh.leaveHero()
+    fresh.beginSessionLoading({ id: 'new', startedAt: Date.now() })
+    expect(fresh.hero).toBe(false)
+    fresh.endSessionLoading()
+    const id3 = sid('new-blank-session')
+    fresh.setSession({ id: id3 } as never)
+    rememberBlank(id3, true)
+    expect(fresh.hero).toBe(false)
 
     // A FAILED load must win over keepHero: the hero has no status bar, so an
     // error there would be invisible.
@@ -117,5 +126,48 @@ describe('store hero predicate', () => {
     store.setSession({ id } as never)
     rememberBlank(id, false)
     expect(store.hero).toBe(false)
+  })
+})
+
+describe('leaveHero (explicit session actions)', () => {
+  test('a blank session shows the hero only until the user asks for one', () => {
+    const store = new Store()
+    const id = sid('leave-hero-session')
+    store.setSession({ id } as never)
+    rememberBlank(id, true)
+    // A bare launch: the hero is the launch placeholder.
+    expect(store.hero).toBe(true)
+    // `/new` or a `/sessions` switch: docked from now on, blank or not.
+    store.leaveHero()
+    expect(store.hero).toBe(false)
+    // …and it stays left across later sessions in the same process.
+    const id2 = sid('leave-hero-session-2')
+    store.setSession({ id: id2 } as never)
+    rememberBlank(id2, true)
+    expect(store.hero).toBe(false)
+    store.leaveHero() // idempotent
+    expect(store.hero).toBe(false)
+  })
+})
+
+describe('orderResumeCandidates (what `dsh-tui resume` continues)', () => {
+  test('activity (log mtime) wins over creation time', () => {
+    // The daily driver is OLD but still in use; freshly created throwaways are
+    // newer. Before this rule `resume` continued the throwaway.
+    const daily = { id: 'daily', createdAt: 1_000, activeAt: 9_000 }
+    const throwaway = { id: 'throwaway', createdAt: 5_000, activeAt: 6_000 }
+    expect(orderResumeCandidates([throwaway, daily]).map((c) => c.id)).toEqual(['daily', 'throwaway'])
+  })
+
+  test('equal activity falls back to the newer creation time', () => {
+    const older = { id: 'older', createdAt: 1_000, activeAt: 7_000 }
+    const newer = { id: 'newer', createdAt: 2_000, activeAt: 7_000 }
+    expect(orderResumeCandidates([older, newer]).map((c) => c.id)).toEqual(['newer', 'older'])
+  })
+
+  test('does not mutate the caller array', () => {
+    const input = [{ id: 'a', createdAt: 1, activeAt: 1 }, { id: 'b', createdAt: 2, activeAt: 2 }]
+    orderResumeCandidates(input)
+    expect(input.map((c) => c.id)).toEqual(['a', 'b'])
   })
 })
