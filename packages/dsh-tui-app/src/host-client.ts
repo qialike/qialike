@@ -59,6 +59,14 @@ export interface HostAlreadyBlank {
   alreadyBlank: true
 }
 
+/** The host's answer to `compact`. */
+export interface CompactionOutcome {
+  /** `null` = nothing compactable; absent when the run failed. */
+  result?: { items: number; tokens: number; summarySeq?: number } | null
+  /** A classified failure (`ManualCompactionError` code, or our own). */
+  failed?: { code: string; message: string; cancelled?: boolean }
+}
+
 /** What the client needs from a host handle. */
 export interface HostClient {
   /** Resolves once the host reports `ready`. */
@@ -69,6 +77,12 @@ export interface HostClient {
   attach(sessionId?: string): Promise<HostAttached>
   /** `/new`: the host creates (or adopts an unused blank) session and serves it. */
   newSession(): Promise<HostAttached | HostAlreadyBlank>
+  /** `/models`: switch the route of the agent the host owns (next request). */
+  setModel(selection: { provider: string; model: string; reasoningEffort?: string }): Promise<void>
+  /** `/compact`: run the harness's manual compaction where the live agent is. */
+  compact(): Promise<CompactionOutcome>
+  /** Esc during `/compact`: abort it through the harness's own signal. */
+  abortCompact(): void
   /** Fetch `[from, to)` of the durable event log. */
   page(from: number, to: number): Promise<HostEvent[]>
   /** Submit a user message (the host's `agent.followup`). */
@@ -114,9 +128,12 @@ interface Pending {
  *  @param options - workspace, optional explicit session id, and the tail size
  *    the caller will request afterwards.
  *  @returns the connected client (its `ready` promise settles first). */
-export function spawnHostClient(options: { workspace: string; resume?: string }): HostClient {
+export function spawnHostClient(options: { workspace: string; resume?: string; model?: string }): HostClient {
   const args = ['--dsh-host', '--workspace', options.workspace]
   if (options.resume !== undefined) args.push('--resume', options.resume)
+  // `--model` must reach the host too: it overrides the deployment default for
+  // the agent the HOST builds, which is the one that actually serves requests.
+  if (options.model !== undefined) args.push('--model', options.model)
   const child: SpawnedProcess = Bun.spawn([process.execPath, ...args], {
     cwd: options.workspace,
     stdin: 'pipe',
@@ -199,6 +216,9 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
       }
       case 'accepted':
         settle(message.id, undefined)
+        return
+      case 'compacted':
+        settle(message.id, message as CompactionOutcome)
         return
       case 'bye':
         settle(message.id, undefined)
@@ -304,6 +324,9 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
       sessionId === undefined ? { type: 'attach' } : { type: 'attach', sessionId },
     ) as Promise<HostAttached>,
     newSession: () => request<HostAttached | HostAlreadyBlank>({ type: 'new' }),
+    setModel: (selection) => request<void>({ type: 'model', selection }, 20_000),
+    compact: () => request<CompactionOutcome>({ type: 'compact' }, 10 * 60_000),
+    abortCompact: () => { write({ type: 'abort-compact' }) },
     page: (from: number, to: number) => request<HostEvent[]>({ type: 'page', from, to }),
     prompt: (blocks: readonly unknown[]) => request<void>({ type: 'prompt', blocks }),
     cancel: () => request<void>({ type: 'cancel' }),

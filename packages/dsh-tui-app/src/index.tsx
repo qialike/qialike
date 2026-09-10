@@ -3130,6 +3130,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const client = spawnHostClient({
       workspace: config.workspace,
       ...resumeId === undefined ? {} : { resume: resumeId },
+      // The host builds the agent that actually serves requests, so an explicit
+      // `--model` has to travel with it (it used to stay in this process only).
+      ...config.model === undefined ? {} : { model: config.model },
     })
     hostClient = client
     // The host enforces the sandbox mode (bash fence + the durable
@@ -3335,6 +3338,56 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     logErrorFileOnly('host',
       `client: served id=${attached.sessionId} events=${attached.eventCount} open=${attached.openMs}ms tail=${events.length}`)
   }
+  /** `/compact` in host mode: the harness's manual compaction runs where the
+   *  live agent is, so this process only drives the UI — the status bar, the
+   *  progress reads and Esc's abort — and renders the checkpoint row from the
+   *  session events the host already forwards. */
+  const compactInHost = async (client: HostClient): Promise<void> => {
+    if (store.compactionActive) {
+      store.flashStatus('Compaction is already running', 4000)
+      return
+    }
+    const rowsBefore = store.getItems().length
+    store.beginCompaction(Date.now())
+    store.setCompactionCancel(() => { client.abortCompact() })
+    const ticker = setInterval(() => store.tickCompaction(), 250)
+    try {
+      await paintBeforeBlock()
+      const outcome = await client.compact()
+      // The host batches session events (~50 ms), so the final `compaction/*`
+      // batch and the checkpoint row can still be in flight when the reply
+      // lands: settle briefly before deciding whether the row already reported
+      // this run, or the summary would be printed twice.
+      await new Promise<void>((resolve) => { setTimeout(resolve, 150) })
+      if (outcome.failed !== undefined) {
+        const { code, message, cancelled } = outcome.failed
+        // Rebuild the classified error so the human text stays in ONE place
+        // (`compactionFailureText`) instead of being duplicated host-side.
+        const error = code === 'failed' || code === 'unavailable'
+          ? new Error(message)
+          : new ManualCompactionError(code as ManualCompactionErrorCode, message)
+        store.append('status', compactionFailureText(error, cancelled === true), true)
+        return
+      }
+      const result = outcome.result ?? null
+      const landed = store.getItems().slice(rowsBefore).some((item) => item.kind === 'compaction')
+      if (result === null) store.append('status', 'No compactable history yet.', true)
+      else if (!landed) {
+        store.append('status', `Compacted ${result.items} history items (~${result.tokens} tokens).`, true)
+      }
+      logErrorFileOnly('compact', result === null
+        ? 'compact: no compactable history (host)'
+        : `compact: compacted items=${result.items} tokens=${result.tokens} row=${landed} (host)`)
+    } catch (error) {
+      logErrorFileOnly('compact', error)
+      store.append('status', compactionFailureText(error), true)
+    } finally {
+      clearInterval(ticker)
+      store.setCompactionCancel(null)
+      store.endCompaction()
+    }
+  }
+
   // The surface is already mounted, so everything below runs with frames
   // flowing: the host decodes the giant log on ITS thread while this window
   // shows the hero plus a `Load session:` banner.
@@ -3793,6 +3846,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         store.append('status', 'Usage: /compact (no arguments)', true)
         return
       }
+      if (hostMode && hostClient !== undefined) {
+        void compactInHost(hostClient)
+        return
+      }
       void compact(ctx, agent)
     },
   })
@@ -3882,6 +3939,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       : { provider, model, reasoningEffort: effort as ModelSelection['reasoningEffort'] }
     selected.current = next
     store.currentModel = { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
+    // Host mode: the request is assembled over there, so the switch must reach
+    // the host's own selection ref (its `setup` installed the same one this
+    // process uses in-process). Without this the dialog changed only the label.
+    if (hostMode && hostClient !== undefined) {
+      void hostClient.setModel(next).catch((error: unknown) => {
+        store.append('status', `models: host did not take the switch — ${error instanceof Error ? error.message : String(error)}`, true)
+      })
+    }
     void defaultModel.saveSelection(next).catch(() => { /* best-effort persist */ })
     // Label with the provider name too, so the same model id from different
     // gateways is distinguishable (OpenCode Zen · DeepSeek V4 Flash vs

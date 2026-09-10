@@ -24,6 +24,7 @@ import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { planResumeFold } from './resume-fold.ts'
 import { findReusableBlank, foldSessionBlank, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
+import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext } from '@deepseek-ai/dsh-compaction'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session } from '@deepseek-ai/dsh-session'
@@ -36,6 +37,7 @@ import { logErrorFileOnly } from './log.ts'
 interface HostRequest {
   id?: number
   type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown' | 'answer' | 'policy' | 'new'
+    | 'model' | 'compact' | 'abort-compact'
   /** `prompt`: the user message's content blocks, sent as plain JSON. */
   blocks?: unknown[]
   /** `attach`: explicit session id (absent = newest with content in the cwd). */
@@ -49,6 +51,8 @@ interface HostRequest {
   payload?: Record<string, unknown>
   /** `policy`: the sandbox mode the client's status bar shows. */
   permission?: string
+  /** `model`: the selection the client's `/models` dialog applied. */
+  selection?: { provider: string; model: string; reasoningEffort?: string }
 }
 
 /** The two host-side waterfalls that need the CLIENT's Ink dialogs. */
@@ -257,11 +261,97 @@ export async function startHost(
       cancel?(reason: unknown, options: unknown): void
       whenIdle?(): Promise<void>
     }
+    // A compaction belongs to the session we are leaving: abort it first (the
+    // harness's maintenance task holds the agent otherwise).
+    compactAbort?.abort()
     try { agent.cancel?.({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
     try { await agent.whenIdle?.() } catch { /* best-effort */ }
     try { await sessions?.flush?.(agent.session) } catch (error) { logErrorFileOnly('host', error) }
     try { await previous.dispose() } catch (error) { logErrorFileOnly('host', error) }
   }
+
+  /**
+   * `/models`: switch THIS agent's route for its next request.
+   *
+   * The harness has no `agent.setModel`; the supported in-memory path is the
+   * selection ref the per-agent `setup` installed (`installModelSelection`), read
+   * again by every prompt assembly — mutating it is exactly what the in-process
+   * client does. Before this, the client's dialog only changed its OWN copy, so
+   * the status bar and the model actually used could disagree.
+   * @param requestId - protocol id to answer.
+   * @param selection - the provider/model/effort triple the dialog applied.
+   */
+  const setModel = (requestId: number | undefined, selection: HostRequest['selection']): void => {
+    if (selection === undefined || typeof selection.provider !== 'string' || typeof selection.model !== 'string') {
+      send({ id: requestId, type: 'error', code: 'bad-model', message: 'model selection must be {provider, model}' })
+      return
+    }
+    selected.current = selection as ModelSelection
+    logErrorFileOnly('host',
+      `model: ${selection.provider}/${selection.model}${selection.reasoningEffort === undefined ? '' : ` (${selection.reasoningEffort})`}`)
+    send({ id: requestId, type: 'accepted' })
+  }
+
+  /** The in-flight manual compaction, so Esc can abort it and a session switch
+   *  can never leave one running against a session we no longer serve. */
+  let compactAbort: AbortController | undefined
+
+  /**
+   * `/compact`: run the harness's manual compaction on the LIVE agent here.
+   *
+   * It must be this process: `compactNow` needs `runMaintenance`, which only the
+   * owner of the live agent has (the client's agent shim has neither). Progress
+   * is durable session events (`compaction/start|summary|end`), which already
+   * stream to the client through the ordinary event forwarding — so the status
+   * bar and the checkpoint row light up exactly as in-process.
+   * @param requestId - protocol id to answer.
+   */
+  const startCompact = async (requestId: number | undefined): Promise<void> => {
+    if (handle === undefined) {
+      send({ id: requestId, type: 'error', code: 'not-attached', message: 'attach first' })
+      return
+    }
+    const engine = ctx.get('compaction') as unknown as
+      | { compactNow?(agent: ManualCompactAgentContext, signal: AbortSignal, sourceCommandId: string): Promise<CompactionResult | null> }
+      | undefined
+    if (engine?.compactNow === undefined) {
+      send({ id: requestId, type: 'compacted', failed: { code: 'unavailable', message: 'compaction service unavailable' } })
+      return
+    }
+    if (compactAbort !== undefined) {
+      send({ id: requestId, type: 'compacted', failed: { code: 'busy', message: 'a compaction is already running' } })
+      return
+    }
+    const controller = new AbortController()
+    compactAbort = controller
+    const agent = handle.agent as unknown as ManualCompactAgentContext
+    try {
+      const result = await engine.compactNow(agent, controller.signal, `tui-${crypto.randomUUID()}`)
+      send({
+        id: requestId,
+        type: 'compacted',
+        result: result === null
+          ? null
+          : { items: result.shadowedSeqs.length, tokens: result.shadowedTokenCount, summarySeq: result.summarySeq },
+      })
+    } catch (error) {
+      send({
+        id: requestId,
+        type: 'compacted',
+        failed: {
+          code: error instanceof ManualCompactionError ? error.code : 'failed',
+          message: error instanceof Error ? error.message : String(error),
+          cancelled: controller.signal.aborted,
+        },
+      })
+    } finally {
+      compactAbort = undefined
+    }
+  }
+
+  /** Esc during `/compact`: the harness's own cancellation signal is the only
+   *  way out of a long summary. */
+  const abortCompact = (): void => { compactAbort?.abort() }
 
   /** Apply the client's mirrored sandbox mode to the session this host owns.
    *  The write is a durable `sandbox/mode` event, so it only ever happens for a
@@ -517,6 +607,9 @@ export async function startHost(
         switch (request.type) {
           case 'attach': await attach(request.id, request.sessionId); break
           case 'new': await startNew(request.id); break
+          case 'model': setModel(request.id, request.selection); break
+          case 'compact': await startCompact(request.id); break
+          case 'abort-compact': abortCompact(); break
           case 'page': page(request.id, request.from ?? 0, request.to ?? Number.MAX_SAFE_INTEGER); break
           case 'prompt': prompt(request.id, request.blocks); break
           case 'cancel': cancel(request.id); break
