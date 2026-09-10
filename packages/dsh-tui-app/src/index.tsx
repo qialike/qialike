@@ -2918,6 +2918,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // A session that another process is appending to often false-positives
         // as "corrupt" (torn record on a zstd frame seam); retry briefly
         // before the launch falls back to a fresh session.
+        announceOversizedResume(config.workspace, resumeId)
         nextHandle = await withResumeCorruptRetry(
           () => agents.resume({ resumeSessionId: SessionId(resumeId), agentOptions, setup }),
           { retries: 3, waitMs: 400 },
@@ -3998,6 +3999,9 @@ async function autoResumeNewest(
   })
   const firstWithContent = heads.find((entry) => entry.facts !== undefined && entry.facts.confident && !entry.facts.blank)
   if (firstWithContent !== undefined) {
+    // Oversized target: say WHY the next seconds are quiet, BEFORE the blocking
+    // open.
+    announceOversizedResume(cwd, firstWithContent.header.id)
     const handle = await withResumeCorruptRetry(
       () => agents.resume({ resumeSessionId: firstWithContent.header.id, agentOptions, setup }),
       { retries: 2, waitMs: 250 },
@@ -4014,7 +4018,10 @@ async function autoResumeNewest(
   // workspace); older empties are disposed as before.
   let blankHandle: AgentHandle | undefined
   // Only blanks (and logs the probe could not classify) reach this loop; the
-  // newest blank is kept as the reusable placeholder (web parity).
+  // newest blank is kept as the reusable placeholder (web parity). A log the
+  // HEAD probe could not classify is often a GIANT one (its first zstd frame is
+  // bigger than the probe budget), so this loop — not the branch above — is
+  // where an oversized session usually gets opened; warn here too.
   const leftover = heads
     .filter((entry) => entry.facts?.confident !== true || entry.facts.blank)
     .map((entry) => entry.header)
@@ -4023,6 +4030,7 @@ async function autoResumeNewest(
       // Retry a concurrent-write false "corrupt" read before skipping to the
       // next candidate (the newest session is often the one still being
       // appended to by the process that owns it).
+      announceOversizedResume(cwd, header.id)
       const handle = await withResumeCorruptRetry(
         () => agents.resume({ resumeSessionId: header.id, agentOptions, setup }),
         { retries: 2, waitMs: 250 },
@@ -4316,6 +4324,53 @@ async function paintBeforeBlock(timeoutMs = 150): Promise<void> {
  *  every full pass expensive, and the harness's own compaction is the intended
  *  cure (the TUI only SUGGESTS it — never runs it behind the user's back). */
 export const COMPACT_HINT_EVENTS = 200_000
+
+/** Durable log size above which `resume` warns BEFORE opening (the harness
+ *  decodes the whole log synchronously inside `agents.resume`, so the user
+ *  otherwise stares at the splash for ~10s with no idea why). */
+export const OVERSIZED_LOG_BYTES = 5 * 1024 * 1024
+
+/** One line shown (synchronously, splash-style) before opening a large session.
+ *  Pure so it is unit-tested. */
+export function oversizedResumeNotice(bytes: number): string {
+  const size = formatByteSize(bytes)
+  return `dsh-tui: resuming a large session (${size} log) — opening it can take a while; `
+    + 'consider /compact (with a configured model) or /new to continue in a fresh session'
+}
+
+/** The warning to show for a durable log of `bytes` (undefined when the log is
+ *  unknown or small enough to open promptly). Pure so it is unit-tested. */
+export function oversizedResumeWarning(bytes: number | undefined): string | undefined {
+  if (bytes === undefined || bytes < OVERSIZED_LOG_BYTES) return undefined
+  return oversizedResumeNotice(bytes)
+}
+
+/** Sessions already announced, so a candidate loop that opens several sessions
+ *  (auto-resume retries) cannot print the same warning twice. */
+const announcedOversized = new Set<string>()
+
+/** Warn (once per session) on the tty BEFORE a session is opened, when its
+ *  durable log is big enough that the harness's synchronous decode will hold
+ *  the thread for seconds.
+ *
+ *  The warning rides the same channel as the boot splash: it is written
+ *  straight to stdout because Ink is not mounted yet, and the first frame
+ *  repaints over it. Best-effort by design — a non-tty (piped/CI) launch stays
+ *  quiet, and an unreadable log simply skips the hint.
+ * @param cwd - the session's working directory (locates the durable log).
+ * @param id - the session that is about to be opened.
+ */
+function announceOversizedResume(cwd: string, id: SessionId | string): void {
+  const key = String(id)
+  if (announcedOversized.has(key)) return
+  announcedOversized.add(key)
+  if (process.stdout.isTTY !== true) return
+  const warning = oversizedResumeWarning(sessionLogBytes(cwd, key))
+  if (warning === undefined) return
+  try {
+    process.stdout.write(`\x1b[90m${warning}\x1b[0m\n`)
+  } catch { /* best-effort: a closed stdout must not break the launch */ }
+}
 
 /** One-line suggestion shown for an oversized session (transcript + status
  *  bar). Pure so it is unit-tested. */

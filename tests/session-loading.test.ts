@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { COMPACT_HINT_EVENTS, STATS_FULL_SCAN_MAX, Store, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
+import { COMPACT_HINT_EVENTS, OVERSIZED_LOG_BYTES, STATS_FULL_SCAN_MAX, Store, oversizedResumeNotice, oversizedResumeWarning, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
 import type { SessionLoadingState } from '../packages/dsh-tui-app/src/index.tsx'
 
 const BASE: SessionLoadingState = { id: 'session-3c1c6602-1ddc-40ee-a295-f34348c87153', title: 'fix the tests', bytes: 19_300_000, startedAt: 1_000 }
@@ -231,5 +231,26 @@ describe('P2: window-only stats for oversized sessions', () => {
 
   test('the threshold keeps small sessions exact', () => {
     expect(STATS_FULL_SCAN_MAX).toBe(200_000)
+  })
+})
+
+describe('oversized resume notice (P2③ follow-up)', () => {
+  test('warns with the real log size and the two ways out', () => {
+    expect(OVERSIZED_LOG_BYTES).toBe(5 * 1024 * 1024)
+    const notice = oversizedResumeNotice(28_067_145)
+    expect(notice).toContain('resuming a large session (26.8 MB log)')  // MiB scale
+    expect(notice).toContain('/compact')
+    expect(notice).toContain('/new')
+  })
+
+  test('only a known log at/over the threshold produces a warning', () => {
+    expect(oversizedResumeWarning(undefined)).toBeUndefined()
+    expect(oversizedResumeWarning(0)).toBeUndefined()
+    expect(oversizedResumeWarning(OVERSIZED_LOG_BYTES - 1)).toBeUndefined()
+    expect(oversizedResumeWarning(OVERSIZED_LOG_BYTES)).toContain('resuming a large session')
+    // The real giant session's log: the HEAD probe cannot classify it (first
+    // zstd frame > probe budget), so the size check — not the probe — is what
+    // has to carry the warning for it.
+    expect(oversizedResumeWarning(28_067_145)).toContain('26.8 MB')
   })
 })
