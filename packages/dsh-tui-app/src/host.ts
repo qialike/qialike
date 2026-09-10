@@ -19,6 +19,8 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import { logErrorFileOnly } from './log.ts'
@@ -26,7 +28,9 @@ import { logErrorFileOnly } from './log.ts'
 /** Messages the client sends. */
 interface HostRequest {
   id?: number
-  type: 'attach' | 'page' | 'shutdown'
+  type: 'attach' | 'page' | 'prompt' | 'cancel' | 'shutdown'
+  /** `prompt`: the user message's content blocks, sent as plain JSON. */
+  blocks?: unknown[]
   /** `attach`: explicit session id (absent = newest with content in the cwd). */
   sessionId?: string
   /** `page`: inclusive-exclusive event range. */
@@ -95,6 +99,9 @@ export async function startHost(
     : { provider: selection.provider, model: config.model }
 
   let handle: AgentHandleLike | undefined
+  let forwarding = false
+  const eventQueue: Record<string, unknown>[] = []
+  let eventTimer: ReturnType<typeof setTimeout> | undefined
   /** The client's page cache is the handle's snapshot; fetched per `page`. */
   const snapshot = (): readonly SessionEventLike[] => handle?.agent.session.snapshotEvents() ?? []
 
@@ -115,6 +122,35 @@ export async function startHost(
     if (wanted === undefined) {
       send({ type: 'error', code: 'no-session', message: 'no session to attach in this workspace' })
       return
+    }
+    // Forward this session's live events to the client, batched (~50 ms) so a
+    // streaming turn does not become one message per delta. The client feeds
+    // them into the same listener the in-process path uses.
+    if (!forwarding) {
+      forwarding = true
+      // `agent/status` is a SERVICE event, not a session event: without it the
+      // client never learns the turn is running (so Esc-to-cancel and the busy
+      // indicator would stay dead). Forward it verbatim.
+      // NOTE: forward only the STATUS. `payload.agent` is the live Agent object
+      // (circular, huge) — JSON.stringify on it throws, which silently killed
+      // this handler before (the client never learned the turn was running, so
+      // Esc-to-cancel stayed dead).
+      ctx.on('agent/status', (payload: { agent: { id: string }; status: 'idle' | 'running' }) => {
+        if (payload.agent.id !== wanted) return
+        send({ type: 'agent-status', status: payload.status })
+      })
+      ctx.on('session/event', (session, event) => {
+        if (session.id !== wanted) return
+        eventQueue.push(event as unknown as Record<string, unknown>)
+        if (eventTimer === undefined) {
+          eventTimer = setTimeout(() => {
+            eventTimer = undefined
+            if (eventQueue.length === 0) return
+            const batch = eventQueue.splice(0, eventQueue.length)
+            send({ type: 'events', batch })
+          }, 50)
+        }
+      })
     }
     const t0 = Date.now()
     logErrorFileOnly('host', `attach: resuming ${wanted}`)
@@ -166,6 +202,31 @@ export async function startHost(
     setTimeout(() => process.exit(0), 10)
   }
 
+  /** Prompt = the client's `agent.followup`; the harness queues it exactly as
+   *  in-process (approval/question waterfalls are NOT bridged yet — M3 — so a
+   *  host-side claim would fail closed with `next()`). */
+  const prompt = (requestId: number | undefined, blocks: readonly unknown[] | undefined): void => {
+    if (handle === undefined) {
+      send({ id: requestId, type: 'error', code: 'not-attached', message: 'attach first' })
+      return
+    }
+    const content = (blocks ?? []) as ContentBlock[]
+    const agent = handle.agent as unknown as { followup(message: unknown): void }
+    agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
+    send({ id: requestId, type: 'accepted' })
+  }
+
+  /** Cancellation: the harness's ordinary user cancel (keeps queued inbox work). */
+  const cancel = (requestId: number | undefined): void => {
+    if (handle === undefined) {
+      send({ id: requestId, type: 'error', code: 'not-attached', message: 'attach first' })
+      return
+    }
+    const agent = handle.agent as unknown as { cancel?(reason: unknown, options: unknown): void }
+    try { agent.cancel?.({ kind: 'user' }, { keepInbox: true }) } catch (error) { logErrorFileOnly('host', error) }
+    send({ id: requestId, type: 'accepted' })
+  }
+
   const dispatch = (line: string): void => {
     if (process.env.DSH_TUI_HOST_TRACE === '1') logErrorFileOnly('host', `request: ${line.slice(0, 120)}`)
     let request: HostRequest
@@ -180,6 +241,8 @@ export async function startHost(
         switch (request.type) {
           case 'attach': await attach(request.id, request.sessionId); break
           case 'page': page(request.id, request.from ?? 0, request.to ?? Number.MAX_SAFE_INTEGER); break
+          case 'prompt': prompt(request.id, request.blocks); break
+          case 'cancel': cancel(request.id); break
           case 'shutdown': await shutdown(); break
           default: send({ id: request.id, type: 'error', code: 'unknown-request', message: String(request.type) })
         }

@@ -3095,10 +3095,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       id: SessionId(info.sessionId),
       session,
       options: { provider: selection.provider, model: config.model ?? selection.model },
-      followup: () => {
-        store.append('status', 'host mode (M1): prompting lands in the next milestone', true)
+      followup: (message: { content?: readonly unknown[] }) => {
+        // The harness's own user message → plain blocks over the wire; the host
+        // rebuilds it with `createUserMessage`.
+        void client.prompt(message.content ?? []).catch((error: unknown) => {
+          store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
+        })
       },
-      cancel: () => { /* host-side cancel lands with prompting */ },
+      cancel: () => { void client.cancel().catch(() => { /* best-effort */ }) },
       whenIdle: () => Promise.resolve(),
     }
     return {
@@ -3411,7 +3415,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // spent on reasoning) that the UI must explain instead of leaving Idle bare.
   let textSinceThisTurn = false
 
-  ctx.on('session/event', (session, event: SessionEvent) => {
+  /** One live `session/event`, from EITHER source: the in-process harness or a
+   *  P4c host process forwarding its session's events. Extracted so the host
+   *  path can feed the exact same rendering logic (P4c M1.2). */
+  const handleLiveEvent = (session: { id: string }, event: SessionEvent): void => {
     if (session.id === sessionId) sessionEventCount += 1
     if (debugLayoutEvents) { eventsThisWindow += 1; if (session.id === sessionId) eventsForSession += 1 }
     // P0 probe: the gap submit → first live event is where a giant session's
@@ -3621,7 +3628,25 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       }
       default:
     }
-  })
+  }
+
+  ctx.on('session/event', (session, event: SessionEvent) => { handleLiveEvent(session, event) })
+
+  // P4c: a host process streams its session's events; they render through the
+  // very same listener (the batches arrive already coalesced by the host).
+  if (hostMode && hostClient !== undefined) {
+    hostClient.onEvents((batch) => {
+      const id = sessionRef.current
+      if (id === undefined) return
+      for (const event of batch) handleLiveEvent({ id: String(id) }, event as unknown as SessionEvent)
+    })
+    // The host forwards the turn-status beat as well, so the busy indicator and
+    // Esc-to-cancel behave exactly as in-process.
+    hostClient.onStatus((status) => {
+      if (status === 'running') store.lastEscTime = 0
+      store.setRunning(status === 'running')
+    })
+  }
 
   store.append('status', 'Ready. Enter to send · Ctrl+C clears the input · /exit quits.', true)
 

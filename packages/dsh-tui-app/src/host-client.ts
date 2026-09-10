@@ -45,6 +45,14 @@ export interface HostClient {
   attach(sessionId?: string): Promise<{ sessionId: string; title?: string; eventCount: number; openMs: number }>
   /** Fetch `[from, to)` of the durable event log. */
   page(from: number, to: number): Promise<HostEvent[]>
+  /** Submit a user message (the host's `agent.followup`). */
+  prompt(blocks: readonly unknown[]): Promise<void>
+  /** Cancel the running turn (the host's `agent.cancel`). */
+  cancel(): Promise<void>
+  /** Subscribe to the host's live `session/event` batches. */
+  onEvents(handler: (batch: HostEvent[]) => void): void
+  /** Subscribe to the host's turn-status beats (`agent/status`). */
+  onStatus(handler: (status: 'idle' | 'running') => void): void
   /** Ask the host to dispose and exit. */
   close(): void
 }
@@ -72,6 +80,8 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
   let buffer = ''
   let nextId = 1
   const pending = new Map<number, Pending>()
+  const eventHandlers = new Set<(batch: HostEvent[]) => void>()
+  const statusHandlers = new Set<(status: 'idle' | 'running') => void>()
   let readyResolve: ((value: { model?: string; pid?: number }) => void) | undefined
   let readyReject: ((error: Error) => void) | undefined
   const ready = new Promise<{ model?: string; pid?: number }>((resolve, reject) => {
@@ -108,6 +118,17 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
         return
       case 'page':
         settle(message.id, message.events)
+        return
+      case 'events':
+        for (const handler of eventHandlers) handler((message.batch ?? []) as HostEvent[])
+        return
+      case 'agent-status': {
+        const status = message.status as 'idle' | 'running' | undefined
+        if (status !== undefined) for (const handler of statusHandlers) handler(status)
+        return
+      }
+      case 'accepted':
+        settle(message.id, undefined)
         return
       case 'bye':
         settle(message.id, undefined)
@@ -201,6 +222,10 @@ export function spawnHostClient(options: { workspace: string; resume?: string })
       sessionId === undefined ? { type: 'attach' } : { type: 'attach', sessionId },
     ),
     page: (from: number, to: number) => request<HostEvent[]>({ type: 'page', from, to }),
+    prompt: (blocks: readonly unknown[]) => request<void>({ type: 'prompt', blocks }),
+    cancel: () => request<void>({ type: 'cancel' }),
+    onEvents: (handler: (batch: HostEvent[]) => void) => { eventHandlers.add(handler) },
+    onStatus: (handler: (status: 'idle' | 'running') => void) => { statusHandlers.add(handler) },
     close: () => {
       try { child.stdin.write(`${JSON.stringify({ type: 'shutdown' })}\n`) } catch { /* best-effort */ }
       setTimeout(() => { try { child.kill() } catch { /* already gone */ } }, 500)
