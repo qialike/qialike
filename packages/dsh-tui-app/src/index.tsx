@@ -4266,7 +4266,15 @@ export const RESUME_OLDER_ITEM_CAP = 4000
  *  @returns the item cap for that height. */
 export function olderItemCap(rows: number): number {
   if (!Number.isFinite(rows) || rows <= 0) return RESUME_OLDER_ITEM_CAP
-  return Math.max(400, Math.min(RESUME_OLDER_ITEM_CAP, Math.round(rows * 12)))
+  // Measured regression report: a 400-item floor made the fold driver
+  // fold-and-evict in bulk (820k events evicted across 147 slices in one run)
+  // because the tail window could never hold what it kept folding — pure waste,
+  // since the retention size is NOT what makes frames slow (the layout probes
+  // showed zero >200ms passes). The floor is therefore generous (≈40 rows of
+  // history per terminal row, never below 2000): small enough that a huge
+  // session is not held in full, large enough that the driver stops discarding
+  // everything it folds.
+  return Math.max(2000, Math.min(RESUME_OLDER_ITEM_CAP, Math.round(rows * 40)))
 }
 
 /** Bytes of one persisted session's durable log (`session.jsonl.zstd`, or the

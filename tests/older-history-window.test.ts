@@ -75,9 +75,9 @@ describe('Store older-history window primitives', () => {
 
 describe('P2③ viewport-bounded retention', () => {
   test('the older-history item cap scales with the terminal height', () => {
-    expect(olderItemCap(30)).toBe(400)    // floor: 30 × 12 = 360 → 400
-    expect(olderItemCap(60)).toBe(720)
-    expect(olderItemCap(100)).toBe(1200)
+    expect(olderItemCap(30)).toBe(2000)   // floor: 30 × 40 = 1200 → 2000
+    expect(olderItemCap(60)).toBe(2400)
+    expect(olderItemCap(100)).toBe(4000)  // capped at the historical max
     expect(olderItemCap(1000)).toBe(RESUME_OLDER_ITEM_CAP) // capped at the historical max
     expect(olderItemCap(0)).toBe(RESUME_OLDER_ITEM_CAP)    // unknown height → old behavior
   })
