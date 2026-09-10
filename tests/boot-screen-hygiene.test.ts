@@ -48,6 +48,42 @@ describe('boot log lines stay in the log file', () => {
   })
 })
 
+describe('the alternate screen is entered WITH the first frame that has content', () => {
+  const build = readFileSync(new URL('../apps/tui-bin/build.mjs', import.meta.url), 'utf8')
+
+  test('the interactive launch does not enter it at boot', () => {
+    // Entering it early left the screen blank from t≈0 until Ink painted (~0.6 s).
+    expect(bin).toContain("const interactiveLaunch = !hostMode && !wantsHelp && process.stdout.isTTY === true")
+    expect(bin).toContain("if (!hostMode && !interactiveLaunch) process.stdout.write('\\x1b[?1049h')")
+  })
+
+  test('the frame writer enters it with the first frame, and holds back empty ones', () => {
+    // Empty first frames must not be painted either: on the normal screen they
+    // would wipe the user's shell, and in the alternate screen they would be the
+    // blank flash.
+    expect(build).toContain('const __dshEnterAlt = () => {')
+    expect(build).toContain('const __dshFrameHasText = (lines) => {')
+    expect(build).toContain('if (writeFullScreenFrame._alt !== true && !__dshFrameHasText(lines)) return;')
+    expect(build).toContain('if (writeFullScreenFrame._alt !== true && !__dshFrameHasText(pending)) return;')
+  })
+
+  test('help and version keep their pre-mount entry (byte contract)', () => {
+    const main = readFileSync(new URL('../apps/tui-bin/src/main.ts', import.meta.url), 'utf8')
+    expect(main).toContain("process.stdout.write('\\x1b[?1049h')")
+  })
+})
+
+describe('the CPR probe is invisible and non-destructive', () => {
+  test('the glyph is concealed, and no line is erased', () => {
+    const charwidth = app('charwidth.ts')
+    expect(charwidth).toContain('\\x1b[8m${glyph}\\x1b[28m\\x1b[6n')
+    // The old probe + finish erased the whole bottom row (`2K`) — on the normal
+    // screen that ate a line of the user's shell.
+    expect(charwidth).not.toContain('\\x1b[2K${glyph}')
+    expect(charwidth).toContain('try { process.stdout.write(`\\x1b8`) }')
+  })
+})
+
 describe('the splash is a slow-boot indicator, not a first-frame placeholder', () => {
   test('it is deferred and cancelled by the first flushed frame', () => {
     expect(bin).toContain('const SPLASH_DELAY_MS')

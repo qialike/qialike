@@ -470,10 +470,15 @@ async function main(): Promise<void> {
   // P4c host mode owns stdout as a JSONL protocol channel: no alternate
   // screen, no splash — anything written there would corrupt the protocol.
   const hostMode = args.includes('--dsh-host')
-  if (!hostMode) process.stdout.write('\x1b[?1049h')
   const wantsHelp = args.some((arg) => arg === '--help' || arg === '-h')
-  if (!hostMode && !wantsHelp && process.stdout.isTTY === true) {
-    process.stdout.write('\x1b[2J\x1b[H')
+  // The interactive launch enters the alternate screen WITH ITS FIRST FRAME (the
+  // frame-writer patch does it), because entering it here left the screen blank
+  // from t≈0 until Ink painted (~0.6 s) — a flash of emptiness before the hero.
+  // Help keeps the pre-mount entry (its fast path in main.ts writes the same
+  // bytes), and a non-tty stdout keeps today's behaviour too.
+  const interactiveLaunch = !hostMode && !wantsHelp && process.stdout.isTTY === true
+  if (!hostMode && !interactiveLaunch) process.stdout.write('\x1b[?1049h')
+  if (interactiveLaunch) {
     // DEFERRED splash: `dsh-tui <version> — starting…` used to be written
     // immediately, so a normal launch showed a grey status line and then
     // replaced it with the hero ~0.6 s later — a flash where the user asked for

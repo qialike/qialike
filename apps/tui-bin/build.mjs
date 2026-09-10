@@ -732,11 +732,25 @@ const __dshForceBg = (line, bgHex, fgHex) => {
     out += tail;
     return out;
 };
+// Enter the alternate screen WITH the first frame. Entering it at boot instead
+// left the terminal blank until Ink painted (~0.6 s), which reads as a flash of
+// emptiness before the hero; this way the user's shell stays visible until the
+// hero appears in one write. Idempotent, and shared by both frame paths (the
+// CPR calibration lock can buffer the first frame into the flush below).
+const __dshEnterAlt = () => {
+    if (writeFullScreenFrame._alt === true) return '';
+    writeFullScreenFrame._alt = true;
+    return '\\x1b[?1049h\\x1b[2J\\x1b[H';
+};
+// Whether a frame carries any visible text (background fills and SGR-only rows
+// do not count). Used to hold back the first, empty frames — see below.
+const __dshFrameHasText = (lines) => {
+    for (const line of lines) {
+        if (line.replace(/\\x1b\\[[0-9;?]*[A-Za-z]/g, '').trim() !== '') return true;
+    }
+    return false;
+};
 const writeFullScreenFrame = (stdout, output) => {
-    // Watchdog liveness: record the wall-clock every time Ink hands us a frame,
-    // so the app can tell a stalled render loop from a quiet-but-alive screen
-    // (see __dshTuiRepaintLastFrame below).
-    if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
     const lines = output.split('\\n');
     // CPR glyph-width calibration window: while the app measures a glyph's real
     // terminal width (ESC[6n round trips on the bottom row), frames must NOT
@@ -746,12 +760,25 @@ const writeFullScreenFrame = (stdout, output) => {
         writeFullScreenFrame._pending = lines;
         return;
     }
+    // Before the alternate screen is entered, hold back frames with no content:
+    // the app's first frames are background fills only, and painting one on the
+    // NORMAL screen would wipe the user's shell, while entering the alternate
+    // screen for it would leave a blank screen until the hero arrives (~0.4 s —
+    // the flash the user reported). The entry therefore rides the first frame
+    // that actually has something to show, and the shell stays visible until
+    // then. Deliberately before the liveness stamp too: nothing was flushed, and
+    // the boot splash uses that stamp to decide whether to speak up.
+    if (writeFullScreenFrame._alt !== true && !__dshFrameHasText(lines)) return;
+    // Watchdog liveness: record the wall-clock every time Ink hands us a frame,
+    // so the app can tell a stalled render loop from a quiet-but-alive screen
+    // (see __dshTuiRepaintLastFrame below).
+    if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
     const prev = writeFullScreenFrame._prev;
     const bgHex = __dshLineHex('__dshTuiBgColor');
     const fgHex = __dshLineHex('__dshTuiTextColor');
     const paint = (line) => (bgHex || fgHex) ? __dshForceBg(line, bgHex, fgHex) : line;
     const changedLines = [];
-    let frame = '';
+    let frame = __dshEnterAlt();
     if (prev === undefined || prev.length !== lines.length) {
         // first frame or a resize: rewrite every line
         for (let i = 0; i < lines.length; i++) {
@@ -779,10 +806,11 @@ globalThis.__dshCalibrationFlush = () => {
     const pending = writeFullScreenFrame._pending;
     if (!pending || pending.length === 0) return;
     writeFullScreenFrame._pending = undefined;
+    if (writeFullScreenFrame._alt !== true && !__dshFrameHasText(pending)) return;
     const bgHex = __dshLineHex('__dshTuiBgColor');
     const fgHex = __dshLineHex('__dshTuiTextColor');
     const paint = (line) => (bgHex || fgHex) ? __dshForceBg(line, bgHex, fgHex) : line;
-    let frame = '';
+    let frame = __dshEnterAlt();
     for (let i = 0; i < pending.length; i++) frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(pending[i]);
     if (pending.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J';
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';

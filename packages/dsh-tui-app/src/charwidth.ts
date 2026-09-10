@@ -126,7 +126,12 @@ export function measureOne(cp: number, timeoutMs = 300): Promise<number | null> 
       done = true
       clearTimeout(timer)
       process.stdin.off('data', onData)
-      try { process.stdout.write(`\x1b[${rows};1H\x1b[2K\x1b8`) } catch { /* ignore */ }
+      // Restore the cursor only: the probe glyph is concealed (SGR 8) and this
+      // cell is about to be repainted by the first frame, so there is nothing to
+      // erase. The old `2K` here wiped a whole line — on the normal screen (when
+      // the alternate one has not been entered yet) that ate a row of the user's
+      // shell output.
+      try { process.stdout.write(`\x1b8`) } catch { /* ignore */ }
     }
     const onData = (chunk: Buffer | string): void => {
       buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
@@ -139,8 +144,12 @@ export function measureOne(cp: number, timeoutMs = 300): Promise<number | null> 
     const timer = setTimeout(() => { finish(); resolve(null) }, timeoutMs)
     process.stdin.on('data', onData)
     try {
-      // save cursor → bottom row col 1 → print glyph → query position
-      process.stdout.write(`\x1b7\x1b[${rows};1H\x1b[2K${glyph}\x1b[6n`)
+      // Save cursor → bottom row col 1 → print the glyph CONCEALED (SGR 8 hides
+      // it while the cursor still advances, which is all the round trip needs) →
+      // query position. Without the concealment a `⚠` sat on screen for the whole
+      // timeout (~200 ms on a terminal that does not answer CPR) and read as a
+      // flash before the hero.
+      process.stdout.write(`\x1b7\x1b[${rows};1H\x1b[8m${glyph}\x1b[28m\x1b[6n`)
     } catch {
       finish()
       resolve(null)
