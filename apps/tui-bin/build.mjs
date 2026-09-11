@@ -157,6 +157,76 @@ const NATIVE_SUBPATH_STUB_SOURCE = {
 }
 
 /**
+ * Give the workflow tool a Worker entry that exists inside a single-file binary.
+ *
+ * `@deepseek-ai/dsh-workflow-worker-thread` runs each workflow script in a
+ * Worker Thread whose entry is the sibling `lib/worker.cjs`. In a Bun SEA
+ * `import.meta.url` points into the blob, so the built-mode entry
+ * (`fileURLToPath(new URL('./worker.cjs', import.meta.url))`) resolves to
+ * `/$bunfs/root/worker.cjs`, which does not exist — every `workflow` tool call
+ * failed with `ModuleNotFound resolving "/$bunfs/root/worker.cjs"`.
+ *
+ * That bundle is small (~32 KB) but NOT self-contained (it requires
+ * `@deepseek-ai/dsh-{brand,tools,util-values,workflow}`), so a copy dropped in
+ * the temp dir could not resolve them. This step therefore RE-BUNDLES it out of
+ * the farm with Bun into one self-contained CJS file, embeds those bytes, and
+ * patches the built-mode branch to materialize the file once under the OS temp
+ * dir (content-hash named) before spawning. Only `apps/tui-bin/x/**` is touched.
+ */
+function patchBunSeaWorkflowWorker() {
+  const pkg = join(ROOT, 'apps/tui-bin/x', '-deepseek-ai-dsh-workflow-worker-thread')
+  const host = join(pkg, 'lib', 'index.js')
+  const entry = join(pkg, 'lib', 'worker.cjs')
+  if (!existsSync(host) || !existsSync(entry)) return
+  const out = join(ROOT, 'apps/tui-bin/stub-native', 'workflow-worker.bundle.cjs')
+  try {
+    mkdirSync(dirname(out), { recursive: true })
+    rmSync(out, { force: true })
+    run('bun', ['build', '--target=bun', '--format=cjs', '--outfile', out, entry])
+  } catch (error) {
+    console.log(`dsh-tui: workflow worker re-bundle failed (${
+      error instanceof Error ? error.message.split('\n')[0] : String(error)}); workflow stays unavailable`)
+    return
+  }
+  const bundled = readFileSync(out)
+  const source = bundled.toString('base64')
+  const text = readFileSync(host, 'utf8')
+  const entryLine = 'entry: fileURLToPath(new URL("./worker.cjs", import.meta.url)),'
+  if (!text.includes(entryLine)) {
+    console.log('dsh-tui: workflow worker spawn shape changed; leaving it patched as-is')
+    return
+  }
+  const preamble = [
+    'import { existsSync as __dshWfExists, mkdirSync as __dshWfMkdir, writeFileSync as __dshWfWrite } from "node:fs";',
+    'import { tmpdir as __dshWfTmp } from "node:os";',
+    'import { join as __dshWfJoin } from "node:path";',
+    'import { createHash as __dshWfHash } from "node:crypto";',
+    '/* dsh-tui patch: materialize the embedded workflow worker (see build.mjs). */',
+    `const __dshWorkflowWorkerSource = ${JSON.stringify(source)};`,
+    'let __dshWorkflowWorkerPathCache;',
+    'function __dshWorkflowWorkerPath() {',
+    '  if (__dshWorkflowWorkerPathCache !== undefined) return __dshWorkflowWorkerPathCache;',
+    '  const digest = __dshWfHash("sha256").update(__dshWorkflowWorkerSource).digest("hex").slice(0, 16);',
+    '  const dir = __dshWfJoin(__dshWfTmp(), "dsh-tui-workflow");',
+    '  const file = __dshWfJoin(dir, `worker-${digest}.cjs`);',
+    '  try {',
+    '    if (!__dshWfExists(file)) {',
+    '      __dshWfMkdir(dir, { recursive: true });',
+    '      __dshWfWrite(file, Buffer.from(__dshWorkflowWorkerSource, "base64"), { mode: 0o600 });',
+    '    }',
+    '  } catch { /* fall through: the Worker surfaces its own error */ }',
+    '  __dshWorkflowWorkerPathCache = file;',
+    '  return file;',
+    '}',
+    '',
+  ].join('\n')
+  writeFileSync(host, preamble + text.replace(entryLine, 'entry: __dshWorkflowWorkerPath(),'))
+  const bare = /require\("@deepseek-ai\//.test(bundled.toString('utf8'))
+  console.log(`dsh-tui: embedded workflow worker (${(bundled.length / 1024).toFixed(0)} KB)`
+    + `${bare ? ' — WARNING: bundle still requires @deepseek-ai/* by name' : ''}`)
+}
+
+/**
  * Third-party modules that load a native binding (or an optional dev-only
  * tool) and must be stubbed so Bun never bundles the native `.node`/WASM it
  * cannot load inside a single file. Each is Windows-only FFI or a capability a
@@ -619,6 +689,7 @@ function createResolveFarm() {
   // Bun gaps in the Node builtins the bundled harness uses (see the function).
   patchBunNodeUtilGaps()
   patchBunSeaWorkerEntries()
+  patchBunSeaWorkflowWorker()
 }
 
 /**
