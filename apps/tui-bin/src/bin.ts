@@ -453,7 +453,6 @@ async function main(): Promise<void> {
   // handler exists (boot failure, early fatal errors), which is why it is a
   // no-op once `appMounted` is set.
   const leaveAlt = (): void => {
-    if (args.includes('--dsh-host')) return // host mode never entered it
     try { process.stdout.write('\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
   }
   // Enter the alternate screen buffer. `--help` must keep its exact current
@@ -467,17 +466,14 @@ async function main(): Promise<void> {
   // before the app mounts exits through the backstop above, which leaves the
   // alternate buffer and discards the splash with it. Nothing reaches the
   // normal screen buffer, so no residue.
-  // P4c host mode owns stdout as a JSONL protocol channel: no alternate
-  // screen, no splash — anything written there would corrupt the protocol.
-  const hostMode = args.includes('--dsh-host')
   const wantsHelp = args.some((arg) => arg === '--help' || arg === '-h')
   // The interactive launch enters the alternate screen WITH ITS FIRST FRAME (the
   // frame-writer patch does it), because entering it here left the screen blank
   // from t≈0 until Ink painted (~0.6 s) — a flash of emptiness before the hero.
   // Help keeps the pre-mount entry (its fast path in main.ts writes the same
   // bytes), and a non-tty stdout keeps today's behaviour too.
-  const interactiveLaunch = !hostMode && !wantsHelp && process.stdout.isTTY === true
-  if (!hostMode && !interactiveLaunch) process.stdout.write('\x1b[?1049h')
+  const interactiveLaunch = !wantsHelp && process.stdout.isTTY === true
+  if (!interactiveLaunch) process.stdout.write('\x1b[?1049h')
   if (interactiveLaunch) {
     // DEFERRED splash: `dsh-tui <version> — starting…` used to be written
     // immediately, so a normal launch showed a grey status line and then

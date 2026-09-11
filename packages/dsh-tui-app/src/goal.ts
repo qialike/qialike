@@ -12,8 +12,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import { GoalError, type GoalErrorCode, type GoalPhase, type GoalRef, type GoalView } from '@deepseek-ai/dsh-goal'
-import type { HostCommandResult } from './host-command.ts'
+import { GoalError, type GoalPhase, type GoalRef, type GoalView } from '@deepseek-ai/dsh-goal'
 import type { TuiService, Store } from './index.tsx'
 
 /** Stable Cordis plugin name. */
@@ -99,26 +98,9 @@ function goalRef(goal: GoalView): GoalRef {
 }
 
 /**
- * Turn a host answer into the value the local seam would have returned, or throw
- * the SAME `GoalError` the harness would have thrown — so every message below
- * (and the `instanceof GoalError` branch that renders the state hint) behaves
- * identically whether the goal lives here or in the host.
- * @param result - the host's answer.
- * @param value - the field to return on success.
- * @returns the service value.
- */
-function fromHost<T>(result: HostCommandResult, value: (r: HostCommandResult) => T): T {
-  if (result.error !== undefined) {
-    throw new GoalError(result.error.message, result.error.code as GoalErrorCode)
-  }
-  return value(result)
-}
-
-/**
  * Run one `/goal` request: the state machine, the grammar and every human
- * message live HERE, and the seam calls go either to the local harness or (host
- * mode) over the protocol — the goal service only accepts the registry's live
- * agent, so in host mode that agent is the child's.
+ * message live HERE; the seam calls go to the local harness (the goal service
+ * only accepts the registry's live agent).
  * @param arg - the raw composer argument.
  */
 async function runGoal(ctx: Context, arg: string): Promise<void> {
@@ -127,37 +109,17 @@ async function runGoal(ctx: Context, arg: string): Promise<void> {
     store.append('status', 'goal: no active session', true)
     return
   }
-  const host = store.hostCommand
-  const localAgent = host === undefined
-    ? (ctx.agents as { get(id: string): unknown }).get(String(session.id))
-    : undefined
-  if (host === undefined && localAgent === undefined) {
+  const agent = (ctx.agents as { get(id: string): unknown }).get(String(session.id))
+  if (agent === undefined) {
     store.append('status', 'goal: no active agent', true)
     return
   }
-  const agent = localAgent
-  const get = async (): Promise<GoalView | undefined> => host === undefined
-    ? ctx.goals.get(agent as never)
-    : fromHost(await host({ kind: 'goal', op: 'get' }), (r) => r.goal)
-  const create = async (objective: string): Promise<GoalView> => host === undefined
-    ? ctx.goals.create(agent as never, { objective })
-    : fromHost(await host({ kind: 'goal', op: 'create', objective }), (r) => r.goal as GoalView)
-  const edit = async (ref: GoalRef, objective: string): Promise<GoalView> => host === undefined
-    ? ctx.goals.edit(agent as never, ref, { objective })
-    : fromHost(await host({ kind: 'goal', op: 'edit', ref, objective }), (r) => r.goal as GoalView)
-  const pause = async (ref: GoalRef): Promise<GoalView> => host === undefined
-    ? ctx.goals.pause(agent as never, ref)
-    : fromHost(await host({ kind: 'goal', op: 'pause', ref }), (r) => r.goal as GoalView)
-  const resume = async (ref: GoalRef): Promise<GoalView> => host === undefined
-    ? ctx.goals.resume(agent as never, ref)
-    : fromHost(await host({ kind: 'goal', op: 'resume', ref }), (r) => r.goal as GoalView)
-  const clear = async (ref: GoalRef): Promise<void> => {
-    if (host === undefined) {
-      ctx.goals.clear(agent as never, ref)
-      return
-    }
-    fromHost(await host({ kind: 'goal', op: 'clear', ref }), () => undefined)
-  }
+  const get = async (): Promise<GoalView | undefined> => ctx.goals.get(agent as never)
+  const create = async (objective: string): Promise<GoalView> => ctx.goals.create(agent as never, { objective })
+  const edit = async (ref: GoalRef, objective: string): Promise<GoalView> => ctx.goals.edit(agent as never, ref, { objective })
+  const pause = async (ref: GoalRef): Promise<GoalView> => ctx.goals.pause(agent as never, ref)
+  const resume = async (ref: GoalRef): Promise<GoalView> => ctx.goals.resume(agent as never, ref)
+  const clear = async (ref: GoalRef): Promise<void> => { ctx.goals.clear(agent as never, ref) }
 
   const command = parseGoalCommand(arg)
   try {

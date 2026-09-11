@@ -23,18 +23,15 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
-import { startHost } from './host.ts'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import { SessionLogReader } from './log-frames.ts'
-import { spawnHostClient, type HostAttached, type HostClient, type HostEvent } from './host-client.ts'
-import type { HostCommand, HostCommandResult } from './host-command.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
 import { createUserMessage, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { projectKey, resolveSessionLogPath, sessionDir, sessionLogPath } from './session-files.ts'
+import { projectKey, resolveSessionLogPath, sessionDir } from './session-files.ts'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { existsSync, readdirSync } from 'node:fs'
 import { probeSessionHead } from './session-head.ts'
@@ -62,8 +59,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { createPromptQueue } from './host-prompt-queue.ts'
-import { HISTORY_FAST_EVENTS, HISTORY_SLICE_EVENTS, HISTORY_TAIL_EVENTS, describeResumeFailure, isCorruptLogMessage, localCut, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
+import { describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -119,11 +115,6 @@ export interface Config {
    *  directory and open the conversation view directly. A bare launch never
    *  auto-resumes (it opens/reuses the New Session placeholder + hero). */
   resumeNewest: boolean | undefined
-  /** P4c: run as the headless host (JSONL over stdio) instead of the Ink app. */
-  host: boolean | undefined
-  /** P4c M5: keep the harness in this process (`--in-process`); host mode is
-   *  the default. `DSH_TUI_HOST=0` means the same thing. */
-  inProcess: boolean | undefined
   model: string | undefined
 }
 
@@ -131,8 +122,6 @@ export const Config: z<Config> = z.object({
   workspace: z.string().required(),
   resume: z.string(),
   resumeNewest: z.boolean(),
-  host: z.boolean(),
-  inProcess: z.boolean(),
   model: z.string(),
 })
 
@@ -204,8 +193,7 @@ declare module '@deepseek-ai/dsh-session' {
 }
 
 /** Session file-permission mode, cycled by Tab in the composer (matches the web surface).
- *  The union itself lives in `bash-policy.ts`, next to the rule it selects, so
- *  the host process can enforce the very same fence (P4c M3). */
+ *  The union itself lives in `bash-policy.ts`, next to the rule it selects. */
 export type { SandboxMode }
 export const SANDBOX_CYCLE: readonly SandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access']
 /** Status-bar labels for the sandbox modes. Exported so the decoupling
@@ -245,9 +233,8 @@ export interface SessionSummary {
 }
 
 /** What the approval dock needs from a request in flight: the tool and the
- *  asker's reason. Structural rather than the harness's full `ApprovalRequest`
- *  (which carries a live `Agent`) because in host mode (P4c M3) the ask is
- *  raised in the host process and only these fields cross the wire. */
+ *  asker's reason. Structural rather than the harness's full `ApprovalRequest`,
+ *  which carries a live `Agent` the dock has no use for. */
 export interface ApprovalPrompt {
   readonly toolName: string
   readonly reason?: string
@@ -446,9 +433,8 @@ export const PREPARING_REQUEST_LABEL = 'preparing the request…'
  *  Why the ticker gates the clock: the frame carrying this label is flushed
  *  right before the harness may take the thread, so a clock printed at that
  *  moment would be frozen at `0.0s` and read as a hang. Only a tick proves the
- *  loop is servicing timers — in host mode (the default) that happens while the
- *  host assembles, so the seconds tick live; in-process they appear once the
- *  block is over (and may be superseded at once by the step's first content).
+ *  loop is servicing timers; otherwise the seconds appear once the block is over
+ *  (and may be superseded at once by the step's first content).
  *  @param startedAt - epoch ms the assembly began, or null when idle.
  *  @param now - current epoch ms (injectable for tests).
  *  @param ticked - whether the preparing ticker fired since the assembly began.
@@ -1265,7 +1251,7 @@ export class Store {
   /** Enter the "opening a session" state (paints the dialog; suppresses keys).
    *  A second Enter replaces the state instead of stacking dialogs.
    *  @param state.keepHero - the load is expected to LAND ON the hero (a flat
-   *    launch or `/new`: the host creates or adopts an unused blank session), so
+   *    launch or `/new`: the runtime creates or adopts an unused blank session), so
    *    the hero stays up while it runs. Without it the docked chrome (status bar
    *    + `Load session:`) is painted instead — right for a `/sessions` switch,
    *    which needs that progress slot, but it made a plain `dsh-tui` start on the
@@ -2007,17 +1993,9 @@ export class Store {
   get permission(): SandboxMode { return this._permission }
   get permissionLabel(): string { return PERMISSION_LABEL[this._permission] }
   get permissionColor(): string { return theme[PERMISSION_ROLE[this._permission]] }
-  /** P4c M4.3: the session-scoped command plane (`/goal`, `/plan`) when the
-   *  session lives in another process. The command plugins call it through this
-   *  shared store — their bundles cannot see a module VALUE of this file — and
-   *  the runtime assigns it in host mode only (in-process they use the local
-   *  harness seams directly). */
-  hostCommand?: (command: HostCommand) => Promise<HostCommandResult>
-  /** P4c M3: notified when the sandbox mode is cycled, so the process that OWNS
-   *  the session can mirror it (in host mode the child enforces the bash fence
-   *  and writes the durable `sandbox/mode` event). A callback on the shared
-   *  store — not a module export — because the panel bundles each get their own
-   *  copy of every module VALUE (only this store instance is shared). */
+  /** Notified when the sandbox mode is cycled. A callback on the shared store —
+   *  not a module export — because the panel bundles each get their own copy of
+   *  every module VALUE (only this store instance is shared). */
   onPermissionChange: (mode: SandboxMode) => void = () => {}
   cyclePermission(): SandboxMode {
     const i = SANDBOX_CYCLE.indexOf(this._permission)
@@ -2028,8 +2006,7 @@ export class Store {
   }
   /** Adopt the SESSION's durable mode (its last `sandbox/mode`) when a session is
    *  opened or switched to. No `onPermissionChange`: the session is the source of
-   *  this value, so pushing it back would be a no-op write (in host mode it would
-   *  append a duplicate event to the durable log). */
+   *  this value, so pushing it back would be a no-op write. */
   adoptPermission(mode: SandboxMode | undefined): void {
     if (mode === undefined || mode === this._permission) return
     this._permission = mode
@@ -2069,7 +2046,7 @@ export class Store {
     // the target, so the load has a visible progress slot from the first frame
     // instead of a modal over the hero. A LAUNCH that can only land on a blank
     // session (`keepHero`) is the exception: `dsh-tui` must START on the hero,
-    // not flash the conversation view for the ~0.4 s the host needs.
+    // not flash the conversation view while the session opens.
     if (this._sessionLoading !== null && this._sessionLoading.keepHero !== true) return false
     // A FAILED load keeps the docked view up too: the hero has neither a status
     // bar nor transcript rows, so an error shown there would be invisible.
@@ -2769,12 +2746,6 @@ export interface ImageAttachApi {
 /** The single UI store; settled plugins and the Ink app share it. */
 export const store = new Store()
 
-/** P4c M5: true when the harness runs in a CHILD process. Set by `start()` and
- *  read by the module-level key router, whose policy differs between the modes:
- *  an in-process session load blocks this thread (so keys must be swallowed to
- *  avoid a burst landing afterwards), a host-mode load does not. */
-let hostModeActive = false
-
 /** The live session id, for claim-or-delegate on approval/question listeners. */
 const sessionRef: { current?: SessionId } = {}
 
@@ -2931,12 +2902,9 @@ function handleKey(k: RawKey): void {
   // Ctrl+C stays available as the single escape hatch — it exits the process,
   // and in raw mode the key path IS the exit path, so swallowing it would make
   // a long harness open look like a hard hang with no way out.
-  // While a session is being opened in-process, every key is swallowed: the
-  // harness blocks this thread, so keystrokes would only pile up and land later.
-  // In HOST mode the same load runs in the child and this thread stays live, so
-  // the guard would just make the UI look dead (no /exit, no scrolling) for the
-  // whole load — keep keys flowing there.
-  if (!hostModeActive && store.sessionLoading !== null && !(k.ctrl === true && (k.char ?? '') === 'c')) return
+  // While a session is being opened, every key is swallowed: the harness blocks
+  // this thread, so keystrokes would only pile up and land later.
+  if (store.sessionLoading !== null && !(k.ctrl === true && (k.char ?? '') === 'c')) return
   // A running manual compaction owns Esc: the harness's cancellation signal is
   // the only way out of a summary that keeps generating. Dialogs keep their own
   // Esc (the panel is asked first) so an open /help still closes normally.
@@ -3075,9 +3043,6 @@ export function apply(ctx: Context, config: Config): void {
 
   // Register the approval answerer: claim questions for our agent and block on
   // the in-band dialog; delegate every other agent to the rest of the chain.
-  // In host mode this handler never fires (the session lives in the child
-  // process, so the host's own handler claims the ask and forwards it here —
-  // see the `onAsk` bridge in start()).
   ctx.on('approval/request', async (req, next) => {
     if (sessionRef.current === undefined || req.agent.session.id !== sessionRef.current) return next()
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -3105,7 +3070,7 @@ export function apply(ctx: Context, config: Config): void {
   // deny commands that would modify the filesystem, carrying the `[sandbox: …]`
   // marker the model surfaces for a `sandbox_permissions` escalation (which
   // routes to the approval answerer above). The rule itself lives in
-  // `bash-policy.ts` because the HOST enforces it too when it owns the session.
+  // `bash-policy.ts` so it stays pure and independently testable.
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
     return readOnlyBashDecision(exec, store.permission) ?? next()
   })
@@ -3155,21 +3120,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     await new Promise<void>((resolve) => { setTimeout(resolve, 10) })
   }
   logErrorFileOnly('boot', `phases: loader+factory ready ms=${Date.now() - bootT0}`)
-  // P4c host mode: serve a session over stdio instead of mounting the Ink
-  // surface. Everything below this line is the client.
-  if (config.host === true) {
-    await startHost(ctx, { workspace: config.workspace, resume: config.resume, model: config.model })
-    return
-  }
   const agents = ctx.get('agents')
   const defaultModel = ctx.get('agentDefaultModel')
   const sessions = ctx.get('sessions')
   if (agents === undefined || defaultModel === undefined || sessions === undefined) return
 
-  /** The model this session runs under. In-process that is the persisted default;
-   *  in host mode the CHILD decides (it assembles every request) and reports it in
-   *  `ready`, which `establishFromHost` copies here — so the composer label can
-   *  never disagree with the model actually requested. */
+  /** The model this session runs under: the persisted default. */
   let selection = defaultModel.currentSelection()
   const agentOptions = config.model === undefined
     ? { provider: selection.provider, model: selection.model }
@@ -3184,10 +3140,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
 
   // Explicit `--resume <id>` wins; otherwise `dsh-tui resume` (positional) — or
   // the opt-in `resume_last` default — continues the session the user was last
-  // working in within this directory. HOW it is picked depends on the path: host
-  // mode (the default) takes the newest by log ACTIVITY with no content filter
-  // (`mostRecentlyActiveSession`), while the in-process path probes for the
-  // newest WITH content and skips empty sessions (created and exited without a
+  // working in within this directory. The picker probes for the newest session
+  // WITH content and skips empty sessions (created and exited without a
   // message), so it continues the last actual work rather than a blank
   // transcript. A BARE launch does none of this: it opens the New Session
   // placeholder on the hero (see `DEFAULT_RESUME_LAST = false` in config.ts).
@@ -3209,144 +3163,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
    *  gaps land (before the attach/[resume] markers). */
   const openT0 = Date.now()
   const resumeId = config.resume
-  /** P4c client mode (`DSH_TUI_HOST=1`): the harness lives in a child process,
-   *  so the frames below keep flowing while the giant session decodes over
-   *  there. M1 slice = read-only attach + tail page; M2 = chunked paging; M3 =
-   *  the approval/question waterfalls answered from this process's dialogs plus
-   *  the mirrored sandbox mode (see dsh-tui-p4c-spike.md). */
-  let hostClient: HostClient | undefined
-  /** P4c M5: HOST MODE IS THE DEFAULT. The harness's synchronous work (opening a
-   *  giant session, assembling a request) blocks whatever thread it runs on, and
-   *  that thread is the renderer in-process — measured 10-12 s of frozen UI on a
-   *  1.45 M-event session, 4-6 s per request assembly. The child costs ~0.6 s on
-   *  a small session (hero paints immediately either way), which is why
-   *  `--in-process` / `DSH_TUI_HOST=0` stay available as the escape hatch. */
-  const hostMode = config.inProcess !== true && process.env.DSH_TUI_HOST !== '0'
-  hostModeActive = hostMode
-  /** Set when the host could not be started and the launch fell back in-process
-   *  (surfaced as a status line so the degradation is never silent). */
-  let hostFallback: string | undefined
-  /** May a prompt go to the host yet? The gate is CLOSED until the host reports
-   *  the session on screen attached, and is closed again when a switch starts —
-   *  in host mode the client is regularly ahead of the host (M6 renders from the
-   *  log file), and a prompt must never be delivered to the session the user just
-   *  left. Held prompts are sent in arrival order on release. */
-  const promptQueue = createPromptQueue()
-/** How far past a slice start the file source looks for a safe boundary (M6.1b). */
-  const SAFE_LOOKAHEAD = 512
-  /** Send one prompt to the host, reporting a failure instead of swallowing it. */
-  const sendHostPrompt = (client: HostClient, blocks: readonly unknown[]): void => {
-    void client.prompt(blocks).catch((error: unknown) => {
-      store.append('status', `host prompt failed: ${error instanceof Error ? error.message : String(error)}`, true)
-    })
-  }
-
-  /**
-   * The host has just confirmed the session now on screen is attached: open the
-   * gate and send whatever was typed while it was still opening.
-   *
-   * EVERY host-attach path must call this — the file-backed one and the one that
-   * renders from the host's pages. Opening it on only one of them left every
-   * prompt queued forever on a non-file launch (flat launch / `/new`, both of
-   * which ask the host for a session instead of reading a log file).
-   */
-  const releaseHostPrompts = (client: HostClient): void => {
-    promptQueue.release((blocks) => { sendHostPrompt(client, blocks) })
-  }
-
-  /** Build the client-side stand-ins for a host-owned agent: the transcript
-   *  fold, the store and the commands only need `id` / `snapshotEvents()` /
-   *  `followup` / `cancel`, all of which are served over the protocol. */
-  const hostAgentShim = (
-    client: HostClient,
-    info: { sessionId: string; eventCount: number },
-    events: readonly SessionEvent[],
-  ): { handle: AgentHandle; agent: unknown } => {
-    const session = {
-      id: info.sessionId,
-      snapshotEvents: () => events,
-      requestHeader: () => undefined,
-    }
-    const agent = {
-      id: SessionId(info.sessionId),
-      session,
-      options: { provider: selection.provider, model: config.model ?? selection.model },
-      followup: (message: { content?: readonly unknown[] }) => {
-        // The harness's own user message → plain blocks over the wire; the host
-        // rebuilds it with `createUserMessage`. Before the host has resumed the
-        // session (M6: the transcript is already readable by then) a prompt would
-        // be rejected `not-attached`, so it is held and sent on readiness.
-        const blocks = (message.content ?? []) as unknown[]
-        if (promptQueue.enqueue(blocks)) {
-          store.append('status', 'Queued — the session is still opening.', true)
-          return
-        }
-        sendHostPrompt(client, blocks)
-      },
-      cancel: () => { void client.cancel().catch(() => { /* best-effort */ }) },
-      whenIdle: () => Promise.resolve(),
-    }
-    return {
-      handle: { agent, dispose: async () => { client.close() } } as unknown as AgentHandle,
-      agent,
-    }
-  }
-  /** Mount FIRST, attach second: the Ink surface (hero + the `Load session:`
-   *  status) is up before the host starts decoding, so the ~12 s it spends on a
-   *  giant log are spent with a live UI instead of a dead splash. */
-  const establishFromHost = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
-    const client = spawnHostClient({
-      workspace: config.workspace,
-      ...resumeId === undefined ? {} : { resume: resumeId },
-      // The host builds the agent that actually serves requests, so an explicit
-      // `--model` has to travel with it (it used to stay in this process only).
-      ...config.model === undefined ? {} : { model: config.model },
-    })
-    hostClient = client
-    // The host enforces the sandbox mode (bash fence + the durable
-    // `sandbox/mode` event) because it owns the session: mirror every Tab press
-    // there, through the shared store (the panels' bundles cannot see a module
-    // export from this file). Sent on demand only — a mode the user never chose
-    // must not append an event to the log.
-    store.onPermissionChange = (mode) => { client.setPolicy(mode) }
-    // `/goal` and `/plan` need the live agent: in host mode that is the child's,
-    // so the command plugins go through this seam instead of the local services.
-    store.hostCommand = (command) => client.command(command)
-    // The handshake continues in the BACKGROUND: the surface must not wait for the
-    // child to boot (~0.6 s measured) before it can paint — nothing on screen needs
-    // the host, and the reading path (M6) does not need it at all.
-    void (async (): Promise<void> => {
-      try {
-        const info = await client.ready
-        logErrorFileOnly('host', `client: host ready pid=${String(info.pid)} model=${String(info.model)}`)
-        // Adopt the host's route as this client's selection: `provider/model`,
-        // exactly as `agentDefaultModel` spells it. A host that reports nothing
-        // (or a form we cannot parse) leaves the persisted default in place.
-        const reported = /^([^/]+)\/(.+)$/.exec(info.model ?? '')
-        if (reported !== null) selection = { provider: reported[1]!, model: reported[2]! }
-      } catch (error) {
-        logErrorFileOnly('host', `client: host handshake failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    })()
-    // No session yet: empty shim ⇒ the app mounts on the hero screen.
-    const placeholder = hostAgentShim(client, { sessionId: 'host-pending', eventCount: 0 }, [])
-    return { handle: placeholder.handle, resumed: false }
-  }
   const establish = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
-    if (hostMode) {
-      try {
-        return await establishFromHost()
-      } catch (error) {
-        // Host mode is a DEFAULT, so it must never make the launch fail: if the
-        // child cannot start (or answers with a fatal error), fall back to the
-        // in-process path and SAY SO. Only possible while the local harness is
-        // still mounted, which is the case today.
-        hostFallback = error instanceof Error ? error.message : String(error)
-        logErrorFileOnly('host', `client: host unavailable, falling back in-process: ${hostFallback}`)
-        try { hostClient?.close() } catch { /* best-effort */ }
-        hostClient = undefined
-      }
-    }
     let nextHandle: AgentHandle | undefined
     let nextResumed = false
     if (resumeId !== undefined) {
@@ -3435,10 +3252,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // one exists — e.g. the web-created "deepseek" workspace) so it groups
       // under the SAME workspace instead of Ungrouped. Best-effort: a path or
       // registry mismatch must never break the TUI boot.
-      if (handle !== undefined && !hostMode) {
-        // Host mode: this handle is the placeholder shim (`host-pending`), not a
-        // real session — the attached session is grouped once the host answers
-        // the attach request (see the host attach block below).
+      if (handle !== undefined) {
         void attachSessionToWorkspace(ctx, config.workspace, handle.agent.session.id)
       }
       break
@@ -3472,325 +3286,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     toolCallsAt.clear()
     store.resetStats()
   }
-  // ── P4c host attach (client side) ────────────────────────────────────────
-  /** Serve a session the host just attached or switched to: pull the tail page,
-   *  install the agent shim, and fold it into the transcript.
-   *
-   *  Shared by the boot attach, `/sessions` switches and `/new` — in host mode
-   *  the session belongs to the child process, so all three are one operation:
-   *  ask the host, then render what it hands back.
-   *  @param client - the host transport.
-   *  @param attached - the host's `attached` answer (session id, plan, counts).
-   *  @param replace - true when this REPLACES the session on screen (switch/new):
-   *    the transcript is cleared first and the next idle frame paints the new one.
-   */
-  const serveHostSession = async (
-    client: HostClient,
-    attached: HostAttached,
-    replace: boolean,
-  ): Promise<void> => {
-    if (replace) {
-      abortResumeFold() // a chunked resume of the OLD session must not feed the new one
-      store.clear()
-    }
-    store.beginSessionLoadStep('attaching', attached.openMs)
-    // Giant log: keep only the tail page locally and let the fold driver pull
-    // older slices from the host on demand (M2). Small logs are cheap enough to
-    // hold whole (the footer stays exact, no `window ·` marker).
-    const paged = attached.plan?.mode === 'chunked' && attached.eventCount > STATS_FULL_SCAN_MAX
-    const tailStart = paged && attached.plan?.mode === 'chunked'
-      ? attached.plan.tailStart
-      : Math.max(0, attached.eventCount - HISTORY_FAST_EVENTS)
-    const events = await client.page(tailStart, attached.eventCount) as unknown as SessionEvent[]
-    const shim = hostAgentShim(client, attached, events)
-    handle = shim.handle
-    agent = shim.agent as typeof agent
-    sessionId = SessionId(attached.sessionId)
-    sessionRef.current = sessionId
-    // Group the host-owned session under this workspace for the web listing
-    // (the boot-time attach is skipped in host mode: no real session there).
-    void attachSessionToWorkspace(ctx, config.workspace, attached.sessionId)
-    store.setSession(agent.session)
-    // The chip must show what the SESSION enforces, not a fresh default: the
-    // durable mode is the boundary the harness's own backends apply.
-    store.adoptPermission(attached.sandboxMode as SandboxMode | undefined)
-    touchSession(sessionId)
-    resetSessionStats()
-    store.beginSessionLoadStep('tail', 0)
-    if (paged && attached.plan?.mode === 'chunked') {
-      const plan = attached.plan
-      resumeHistoryIntoStore(store, agent.session, events, {
-        plan,
-        total: attached.eventCount,
-        readRange: async (from: number, to: number) => await client.page(from, to) as unknown as readonly SessionEvent[],
-      })
-    } else {
-      resumeHistoryIntoStore(store, agent.session, events)
-    }
-    // Window-only numbers apply exactly when the log was NOT held whole.
-    store.setStatsWindowOnly(paged)
-    if (attached.title !== undefined) {
-      rememberTitle(sessionId, attached.title)
-      store.notifyTitles()
-    }
-    // Blank ("New Session" / hero) state comes from the HOST: it holds the whole
-    // log, while this client may hold only a window of it. Without this the hero
-    // never appeared in host mode at all — `sessionBlank()` stayed `undefined`,
-    // so `Store.hero` was always false (the default mode since M5).
-    if (attached.blank !== undefined) rememberBlank(SessionId(attached.sessionId), attached.blank)
-    logErrorFileOnly('host',
-      `client: served id=${attached.sessionId} events=${attached.eventCount} open=${attached.openMs}ms tail=${events.length}`)
-    // The host served THIS session, so it is attached to it: prompts may go out.
-    // (This is the path a flat launch and `/new` take — it must not depend on the
-    // file-backed warm-up below, which those paths never reach.)
-    releaseHostPrompts(client)
-  }
-  /** `/compact` in host mode: the harness's manual compaction runs where the
-   *  live agent is, so this process only drives the UI — the status bar, the
-   *  progress reads and Esc's abort — and renders the checkpoint row from the
-   *  session events the host already forwards. */
-  const compactInHost = async (client: HostClient): Promise<void> => {
-    if (store.compactionActive) {
-      store.flashStatus('Compaction is already running', 4000)
-      return
-    }
-    const rowsBefore = store.getItems().length
-    store.beginCompaction(Date.now())
-    store.setCompactionCancel(() => { client.abortCompact() })
-    const ticker = setInterval(() => store.tickCompaction(), 250)
-    try {
-      await paintBeforeBlock()
-      const outcome = await client.compact()
-      // The host batches session events (~50 ms), so the final `compaction/*`
-      // batch and the checkpoint row can still be in flight when the reply
-      // lands: settle briefly before deciding whether the row already reported
-      // this run, or the summary would be printed twice.
-      await new Promise<void>((resolve) => { setTimeout(resolve, 150) })
-      if (outcome.failed !== undefined) {
-        const { code, message, cancelled } = outcome.failed
-        // Rebuild the classified error so the human text stays in ONE place
-        // (`compactionFailureText`) instead of being duplicated host-side.
-        const error = code === 'failed' || code === 'unavailable'
-          ? new Error(message)
-          : new ManualCompactionError(code as ManualCompactionErrorCode, message)
-        store.append('status', compactionFailureText(error, cancelled === true), true)
-        return
-      }
-      const result = outcome.result ?? null
-      const landed = store.getItems().slice(rowsBefore).some((item) => item.kind === 'compaction')
-      if (result === null) store.append('status', 'No compactable history yet.', true)
-      else if (!landed) {
-        store.append('status', `Compacted ${result.items} history items (~${result.tokens} tokens).`, true)
-      }
-      logErrorFileOnly('compact', result === null
-        ? 'compact: no compactable history (host)'
-        : `compact: compacted items=${result.items} tokens=${result.tokens} row=${landed} (host)`)
-    } catch (error) {
-      logErrorFileOnly('compact', error)
-      store.append('status', compactionFailureText(error), true)
-    } finally {
-      clearInterval(ticker)
-      store.setCompactionCancel(null)
-      store.endCompaction()
-    }
-  }
-
-  /**
-   * Render a session straight from its durable log file (P4c M6) — the
-   * less/vim-style open.
-   *
-   * The log is a sequence of independent zstd frames, so a tail window costs a
-   * frame-table scan plus a few frames (~30 ms measured on a 1.49 M-event
-   * session) instead of the harness's ~12 s full materialization; older history is
-   * read on demand by seq range, exactly like the host's paged path but from disk.
-   * The host is still brought up for TURNS (see the boot block) — this only takes
-   * the reading off its critical path.
-   * @param client - the host transport (kept for the shim's prompt/cancel).
-   * @param sessionId - the session the host will serve.
-   * @param cwd - the session's working directory (its log lives under that key).
-   * @param logPath - the log path the host reported, when it could resolve one.
-   * @param replace - true when this REPLACES the session on screen (switch/new).
-   * @returns true when the transcript was served from the file.
-   */
-  const serveFromLog = async (
-    client: HostClient,
-    sessionId_: string,
-    cwd: string,
-    logPath: string | undefined,
-    replace: boolean,
-  ): Promise<boolean> => {
-    // The host reports the path when it can resolve one; otherwise build it the
-    // same way the /sessions list does — the HIGHEST log generation under the
-    // session's project key (0.1.5 writes `session.vN.jsonl.zstd` and keeps the
-    // older generations, so the v0 name alone can be a stale file).
-    const path = logPath ?? sessionLogPath(cwd, SessionId(sessionId_))
-    const reader = new SessionLogReader(path)
-    const t0 = Date.now()
-    const tail = await reader.readTail(HISTORY_TAIL_EVENTS)
-    if (tail.events.length === 0) return false       // empty/foreign/unreadable: use the host
-    if (replace) {
-      abortResumeFold()
-      store.clear()
-    }
-    const events = tail.events as unknown as SessionEvent[]
-    const info = { sessionId: sessionId_, eventCount: tail.total }
-    const shim = hostAgentShim(client, info, events)
-    handle = shim.handle
-    agent = shim.agent as typeof agent
-    sessionId = SessionId(sessionId_)
-    sessionRef.current = sessionId
-    store.setSession(agent.session)
-    // The chip follows the session's own durable mode, read from the same events.
-    store.adoptPermission(lastSandboxMode(events))
-    touchSession(sessionId)
-    resetSessionStats()
-    // Chunked when there is older history to fetch lazily; a small log folds whole.
-    // Cut the tail at a safe boundary too (the window we already hold is enough to
-    // find one): the top edge of the first painted frame must not be a half turn.
-    const tailBounds = safeBoundaries(events)
-    const tailCut = tailBounds.find((boundary) => boundary > 0) ?? 0
-    const tailEvents = tailCut > 0 ? events.slice(tailCut) : events
-    const tailStartSeq = tail.startSeq + tailCut
-    if (tailStartSeq > 0) {
-      const olderRanges: Array<readonly [number, number]> = []
-      for (let cursor = 0; cursor < tailStartSeq; cursor += HISTORY_SLICE_EVENTS) {
-        olderRanges.push([cursor, Math.min(cursor + HISTORY_SLICE_EVENTS, tailStartSeq)])
-      }
-      // Local safe cuts: a slice may legitimately begin a little later than the
-      // plan asked, and the range OLDER than it then ends where it began — that
-      // keeps coverage exact (no gap) and duplicate-free, because the ranges are
-      // folded newest-first and re-folded with the same cuts after eviction.
-      const adjustedEnds = new Map<number, number>()
-      /** Starts already certified safe (chained slices must not be re-cut). */
-      const safeStarts = new Set<number>()
-      const readRange = async (requestedFrom: number, requestedTo: number): Promise<readonly SessionEvent[]> => {
-        const end = adjustedEnds.get(requestedTo) ?? requestedTo
-        const look = await reader.read(requestedFrom, Math.min(end, requestedFrom + SAFE_LOOKAHEAD))
-        if (look.length === 0) return []
-        const start = safeStarts.has(requestedFrom)
-          ? requestedFrom
-          : localCut(look as unknown as { type: string }[], requestedFrom, requestedFrom, end)
-        if (start !== requestedFrom) {
-          safeStarts.add(start)
-          adjustedEnds.set(requestedFrom, start)
-        }
-        if (start === requestedFrom) return look as unknown as readonly SessionEvent[]
-        return await reader.read(start, end) as unknown as readonly SessionEvent[]
-      }
-      resumeHistoryIntoStore(store, agent.session, tailEvents, {
-        plan: { mode: 'chunked', tailStart: tailStartSeq, olderRanges },
-        total: tail.total,
-        readRange,
-      })
-      store.setStatsWindowOnly(true)
-    } else {
-      resumeHistoryIntoStore(store, agent.session, tailEvents)
-    }
-    // Best-effort blank state before the host answers (phase 2 corrects it with
-    // the authoritative value): a small log read whole is the session, while a
-    // window with `tail.startSeq > 0` proves the session is older than the hero.
-    rememberBlank(SessionId(sessionId_), tail.startSeq === 0 ? foldSessionBlank(events) : false)
-    logErrorFileOnly('host',
-      `client: opened from the log file id=${sessionId_} rows=${events.length} total=${tail.total} start=${tail.startSeq} ms=${Date.now() - t0}`)
-    return true
-  }
-
-  // The surface is already mounted, so everything below runs with frames
-  // flowing: the host decodes the giant log on ITS thread while this window
-  // shows the hero plus a `Load session:` banner.
-  if (hostMode && hostClient !== undefined) {
-    const client = hostClient
-    const startedAt = Date.now()
-    // Decided BEFORE the loading state: a flat launch (no `--resume`, no
-    // auto-resume) can only land on an unused blank session — the host creates
-    // one or adopts one — so the hero must be the FIRST frame, not a late
-    // replacement for the docked chrome.
-    const wantsExistingSession = resumeId !== undefined
-      || config.resumeNewest === true
-      || resolveResumeLast()
-    // An explicit resume request is a request for that session's CONVERSATION
-    // view — even when the most recently active session happens to be an unused
-    // blank. The hero stays a bare-`dsh-tui` screen.
-    if (wantsExistingSession) store.leaveHero()
-    store.beginSessionLoading({ id: 'host', startedAt, keepHero: !wantsExistingSession })
-    const ticker = setInterval(() => store.tickSessionLoading(), 250)
-    void (async (): Promise<void> => {
-      // Which session? Resolved HERE, without the host, so the transcript does not
-      // wait for the child's boot: an explicit `--resume` names it, while the
-      // positional `resume` (or the `resume_last` opt-in) resolves the newest by log
-      // ACTIVITY in this directory with NO content filter (`mostRecentlyActiveSession`
-      // reads the session files themselves), and the id we pick is then handed to the
-      // host, so client and host can never serve different sessions.
-      let servedFromFile = false
-      let wantedId = resumeId
-      try {
-        // The same question the in-process path answers: an
-        // explicit `--resume`, or the auto-resume opt-in, attaches to an EXISTING
-        // session; a flat launch must reuse-or-create an unused one (the hero).
-        // Asking the host to `attach` without an id means "newest with content",
-        // which is why a flat launch in a session-less workspace used to fail
-        // with `no session to attach` instead of showing the hero.
-        const wantsExisting = wantsExistingSession
-        // ── M6: paint the transcript from the LOG FILE first ────────────────
-        // A seekable frame read costs ~30 ms for a tail window where the harness
-        // needs ~12 s to materialize every event, and the host is only needed for
-        // what happens NEXT (a turn), so it resumes in the background meanwhile.
-        if (wantsExisting && wantedId === undefined) {
-          wantedId = await mostRecentlyActiveSession(config.workspace)
-        }
-        if (wantedId !== undefined) {
-          try {
-            servedFromFile = await serveFromLog(client, wantedId, config.workspace, undefined, false)
-          } catch (error) {
-            logErrorFileOnly('host', `client: file-backed open unavailable: ${error instanceof Error ? error.message : String(error)}`)
-          }
-        }
-        // The loading banner covers getting the SESSION on screen — nothing else.
-        if (servedFromFile) {
-          store.beginSessionLoadStep('ready', 0)
-        } else {
-          const answer = wantsExisting
-            ? await client.attach(wantedId)
-            : await client.newSession()
-          await serveHostSession(
-            client,
-            answer.type === 'new-session' ? await client.attach(answer.sessionId) : answer,
-            false,
-          )
-        }
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
-        logErrorFileOnly('host', `client: attach failed: ${message}`)
-        store.failSessionLoad(`host attach failed: ${message}`)
-      } finally {
-        clearInterval(ticker)
-        store.endSessionLoading()
-      }
-      if (!servedFromFile) return
-      // The host warms up for TURNS after the transcript is up: its ~12 s resume
-      // must not keep a "Load session:" banner on screen, and a prompt typed in
-      // the window is queued rather than rejected. The child is also CPU-heavy, so
-      // it starts only once the first paint is out (measured: overlapping it
-      // stretched the file read from 128 ms to 452 ms).
-      try {
-        const target = wantedId ?? resumeId
-        await paintBeforeBlock()
-        const attached = await client.attach(target)
-        releaseHostPrompts(client)
-        if (attached.title !== undefined) {
-          rememberTitle(sessionId, attached.title)
-          store.notifyTitles()
-        }
-        if (attached.blank !== undefined) rememberBlank(SessionId(attached.sessionId), attached.blank)
-        logErrorFileOnly('host', `client: opened from the log file; host ready after ${attached.openMs}ms`)
-      } catch (error) {
-        // A failed warm-up must not leave prompts held forever: release them so
-        // the user gets the host's own error instead of an eternal "still opening".
-        releaseHostPrompts(client)
-        logErrorFileOnly('host', `client: host warm-up failed: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    })()
-  }
 
   // The active session is the most recently used one (drives list ordering and
   // the launch auto-resume).
@@ -3807,13 +3302,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const launchSnapshot = agent.session.snapshotEvents()
     // The chip shows the session's DURABLE mode (what the harness's own backends
     // enforce), not a fresh default: otherwise a resumed read-only session would
-    // claim "Workspace Write" while every write is refused. Host mode adopts the
-    // same value from the host's `attached`.
+    // claim "Workspace Write" while every write is refused.
     store.adoptPermission(lastSandboxMode(launchSnapshot))
     resumeHistoryIntoStore(store, agent.session, launchSnapshot)
-    // The host page covers only the newest window, so the footer numbers must
-    // say so (the same `window ·` marker an oversized session already uses).
-    if (hostMode) store.setStatsWindowOnly(true)
     // Backfill the sidebar title from the in-memory log: the launch session
     // may predate this process (its session/title event never reached a live
     // listener here) and the disk-cache prewarm runs on a delay. The SAME
@@ -3903,11 +3394,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           const facts = probeSessionHead(header.cwd ?? config.workspace, String(header.id))
           return facts === undefined ? undefined : { ...facts }
         })
-        // Host mode: the host owns the session (and supplies the title in
-        // `attached`), so the local prewarm must NOT inspect logs — an
-        // `inspect()` of a 28 MB session would block this client for ~5 s, the
-        // very freeze P4c exists to remove.
-        if (!hostMode) await prewarmTitles(persistence, listRowHeaders(await persistence.list()))
+        await prewarmTitles(persistence, listRowHeaders(await persistence.list()))
       } catch {
         // Prewarm is best-effort; a failing list must not disturb the session.
       }
@@ -3919,12 +3406,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // spent on reasoning) that the UI must explain instead of leaving Idle bare.
   let textSinceThisTurn = false
 
-  /** One live `session/event`, from EITHER source: the in-process harness or a
-   *  P4c host process forwarding its session's events. Extracted so the host
-   *  path can feed the exact same rendering logic (P4c M1.2). */
-  /** Apply one model delta to the streaming transcript. Shared by the 0.1.2
-   *  durable `assistant/chunk` events and 0.1.5's `agent/assistant-stream`
-   *  frames, so both vocabularies render token by token identically. */
+  /** Apply one model delta to the streaming transcript. */
   const applyModelDelta = (chunk: { type?: string; text?: string } | undefined): void => {
     if (chunk === undefined) return
     // Reasoning is shown as a collapsed Think block; text streams as the
@@ -3949,13 +3431,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // Liveness beat: any live event means the run is active, so the status bar
     // can show "Ns since last event" even across silent model stretches.
     store.markActivity()
-    // TWO streaming vocabularies reach this listener:
-    // - a 0.1.2 host forwards one durable `assistant/chunk` event per delta;
-    // - a 0.1.5 host forwards `agent/assistant-stream` chunk frames (see the
-    //   `onAssistantFrame` subscription), and `assistant/chunk` no longer
-    //   exists in the session event union.
-    // The legacy type is handled BEFORE the switch so the switch keeps its
-    // per-event narrowing under either harness.
+    // The durable `assistant/chunk` event carries one model delta. The legacy
+    // type is handled BEFORE the switch so the switch keeps its per-event
+    // narrowing.
     const rawType = (event as unknown as { type: string }).type
     if (rawType === 'assistant/chunk') {
       store.endPreparingRequest()
@@ -4149,100 +3627,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
 
   ctx.on('session/event', (session, event: SessionEvent) => { handleLiveEvent(session, event) })
 
-  // P4c: a host process streams its session's events; they render through the
-  // very same listener (the batches arrive already coalesced by the host).
-  if (hostMode && hostClient !== undefined) {
-    hostClient.onEvents((batch, sessionId) => {
-      const id = sessionRef.current
-      if (id === undefined) return
-      // A batch from the session we just switched AWAY from (it was in flight
-      // when the host switched) must not be rendered as the new session's.
-      if (sessionId !== undefined && sessionId !== String(id)) return
-      for (const event of batch) handleLiveEvent({ id: String(id) }, event as unknown as SessionEvent)
-    })
-    // The host forwards the turn-status beat as well, so the busy indicator and
-    // Esc-to-cancel behave exactly as in-process.
-    hostClient.onStatus((status) => {
-      if (status === 'running') store.lastEscTime = 0
-      store.setRunning(status === 'running')
-    })
-    // Live model deltas from the host (`agent/assistant-stream` frames): the
-    // 0.1.5 replacement for the durable `assistant/chunk` events the switch in
-    // `handleLiveEvent` still accepts from an older host.
-    hostClient.onAssistantFrame((frame) => {
-      if (frame.chunk === undefined) return
-      store.endPreparingRequest()
-      applyModelDelta(frame.chunk)
-    })
-    // ── M3: the host's waterfalls, answered by THIS process's dialogs ───────
-    // The harness raises approvals and `ask_user_question` in the host (it owns
-    // the session) and blocks its turn on the answer, exactly as the in-process
-    // handlers above do. Same dialogs, same store, one wire hop.
-    const approvalAsks = new Map<number, (outcome: ApprovalOutcome) => void>()
-    const questionAsks = new Map<number, () => void>()
-    hostClient.onAsk((ask) => {
-      void (async (): Promise<void> => {
-        if (ask.kind === 'approval') {
-          const toolName = String(ask.payload.toolName ?? 'tool')
-          const reason = typeof ask.payload.reason === 'string' ? ask.payload.reason : undefined
-          // "allow always" is a CLIENT-side memory (the dock's `a`), so the
-          // short-circuit lives here: the host still asks, we answer at once.
-          if (store.isAllowAlways(toolName)) {
-            store.append('status', `approval: ${toolName} auto-allowed (allow always)`, true)
-            hostClient?.answer(ask.requestId, { outcome: 'allowed-once' })
-            return
-          }
-          const outcome = await new Promise<ApprovalOutcome>((resolve) => {
-            approvalAsks.set(ask.requestId, resolve)
-            store.setApproval({ req: { toolName, reason }, resolve })
-          })
-          approvalAsks.delete(ask.requestId)
-          store.setApproval(null)
-          hostClient?.answer(ask.requestId, { outcome })
-          return
-        }
-        // Question dock. The host's own abort/timeout arrives as `ask-cancelled`
-        // (there is no AbortSignal across the wire), which aborts this
-        // controller and makes `askUser` reject exactly like the abort path.
-        const questions = ((ask.payload.questions ?? []) as AskUserQuestionItem[])
-        const controller = new AbortController()
-        questionAsks.set(ask.requestId, () => controller.abort())
-        try {
-          const answer = await askUser({ questions, signal: controller.signal })
-          hostClient?.answer(ask.requestId, { answers: answer.answers })
-        } catch {
-          hostClient?.answer(ask.requestId, { cancelled: true })
-        } finally {
-          questionAsks.delete(ask.requestId)
-        }
-      })()
-    })
-    // The host is a separate process: if it dies, the session on screen is
-    // orphaned and the user must be told (and can relaunch with `--in-process`).
-    hostClient.onExit((reason) => {
-      if (hostFallback !== undefined) return   // already reported
-      hostFallback = reason
-      store.append('status', `Host process ended (${reason}) — this session is no longer attached; relaunch with --in-process if it keeps happening.`, true)
-      store.setRunning(false)
-    })
-    hostClient.onAskCancelled((requestId) => {
-      // The host withdrew the ask: close whatever dialog it opened, so the user
-      // is never left staring at a dead dock.
-      approvalAsks.get(requestId)?.('cancelled')
-      questionAsks.get(requestId)?.()
-    })
-  }
-
-  if (hostFallback !== undefined) {
-    // Both a transcript row AND the status bar: on a fresh launch the hero owns
-    // the screen, and a degradation the user cannot see is a silent one.
-    // The raw reason is a full spawn/ENOENT sentence: clip it so the row and the
-    // status bar stay readable (the log keeps the whole thing).
-    const reason = hostFallback.length > 90 ? `${hostFallback.slice(0, 89)}…` : hostFallback
-    const note = `Host mode unavailable (${reason}) — running in-process this session.`
-    store.append('status', note, true)
-    store.flashStatus(note, 15_000)
-  }
   store.append('status', 'Ready. Enter to send · Ctrl+C clears the input · /exit quits.', true)
 
   // Wire the slash commands (built after the agent exists). Core commands
@@ -4265,10 +3649,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // The harness `/compact` takes no arguments; mirror its usage guard.
       if (arg.trim() !== '') {
         store.append('status', 'Usage: /compact (no arguments)', true)
-        return
-      }
-      if (hostMode && hostClient !== undefined) {
-        void compactInHost(hostClient)
         return
       }
       void compact(ctx, agent)
@@ -4360,14 +3740,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       : { provider, model, reasoningEffort: effort as ModelSelection['reasoningEffort'] }
     selected.current = next
     store.currentModel = { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
-    // Host mode: the request is assembled over there, so the switch must reach
-    // the host's own selection ref (its `setup` installed the same one this
-    // process uses in-process). Without this the dialog changed only the label.
-    if (hostMode && hostClient !== undefined) {
-      void hostClient.setModel(next).catch((error: unknown) => {
-        store.append('status', `models: host did not take the switch — ${error instanceof Error ? error.message : String(error)}`, true)
-      })
-    }
     void defaultModel.saveSelection(next).catch(() => { /* best-effort persist */ })
     // Label with the provider name too, so the same model id from different
     // gateways is distinguishable (OpenCode Zen · DeepSeek V4 Flash vs
@@ -4558,44 +3930,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (store.running) {
       try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
     }
-    // Host mode: creating a session is the host's job (it owns the runtime and
-    // the durable log). It applies the same blank-reuse rule and answers with
-    // the session it now serves.
-    if (hostMode && hostClient !== undefined) {
-      const client = hostClient
-      const startedAt = Date.now()
-      // `/new` asks for a session EXPLICITLY: the docked conversation view is the
-      // right screen while it opens — and stays the right screen afterwards, even
-      // though the new session is blank. The hero is a launch-only screen now.
-      store.leaveHero()
-      store.beginSessionLoading({ id: 'new', startedAt })
-      const ticker = setInterval(() => store.tickSessionLoading(), 250)
-      void (async (): Promise<void> => {
-        promptQueue.hold() // prompts typed during /new belong to the NEW session
-        try {
-          await paintBeforeBlock()
-          const answer = await client.newSession()
-          if (answer.type === 'new-session') {
-            // Same session, host already attached: nothing was switched — and the
-            // host just said it is still an unused blank, so the hero stays.
-            rememberBlank(SessionId(answer.sessionId), true)
-            releaseHostPrompts(client)
-            store.append('status', 'already on a new (unused) session', true)
-            return
-          }
-          await serveHostSession(client, answer, true)
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          logErrorFileOnly('host', `client: new failed: ${message}`)
-          store.append('status', `new session failed: ${message}`, true)
-          releaseHostPrompts(client) // the old session is still attached; do not hold prompts
-        } finally {
-          clearInterval(ticker)
-          store.endSessionLoading()
-        }
-      })()
-      return
-    }
     void (async (): Promise<void> => {
       try {
         // Web parity: an unused blank session is REUSED instead of minting a
@@ -4675,74 +4009,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // failed load leaves the current session untouched.
     if (String(id) === String(sessionId)) {
       store.append('status', `already on session ${sessionId}`, true)
-      return
-    }
-    // Host mode: the session lives in the child process, so switching is a
-    // protocol round trip — the host disposes the session it was serving and
-    // resumes this one. (Before M4 the client resumed locally and dropped the
-    // shim, which closed the host and left the UI on a session nobody owned.)
-    if (hostMode && hostClient !== undefined) {
-      const client = hostClient
-      if (store.running) {
-        try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }
-      }
-      const startedAt = Date.now()
-      const picked = store.sessionsDialog.find((row) => String(row.id) === String(id))
-      store.beginSessionLoading({
-        id: String(id),
-        title: picked?.title,
-        bytes: sessionLogBytes(picked?.cwd ?? config.workspace, String(id)),
-        startedAt,
-      })
-      const ticker = setInterval(() => store.tickSessionLoading(), 250)
-      void (async (): Promise<void> => {
-        // PHASE 1: get the session on screen. The banner covers exactly this — not
-        // the host's warm-up, which is what left "Load session:" ticking for ~12 s
-        // after the transcript had visibly arrived.
-        let servedFromFile = false
-        // A switch closes the gate: until the host confirms the NEW session, a
-        // prompt typed now would be delivered to the session being left.
-        promptQueue.hold()
-        try {
-          await paintBeforeBlock()
-          // M6.1b: switch the same way the boot does — read the target's log file
-          // (≈100 ms) and let the host catch up in the background for turns.
-          try {
-            servedFromFile = await serveFromLog(
-              client, String(id), picked?.cwd ?? config.workspace, undefined, true,
-            )
-          } catch (error) {
-            logErrorFileOnly('host', `client: file-backed switch unavailable: ${error instanceof Error ? error.message : String(error)}`)
-          }
-          if (!servedFromFile) {
-            // No readable log: only the host can render it, so the banner must
-            // stay up until its page lands.
-            await serveHostSession(client, await client.attach(String(id)), true)
-          }
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
-          logErrorFileOnly('host', `client: switch failed: ${message}`)
-          store.append('status', `switch failed: ${message}`, true)
-        } finally {
-          clearInterval(ticker)
-          store.endSessionLoading()
-        }
-        if (!servedFromFile) return
-        // PHASE 2: the host catches up for TURNS, with no banner — the session is
-        // already on screen and a prompt typed now is queued, not lost.
-        try {
-          const attached = await client.attach(String(id))
-          releaseHostPrompts(client)
-          if (attached.title !== undefined) {
-            rememberTitle(sessionId, attached.title)
-            store.notifyTitles()
-          }
-          if (attached.blank !== undefined) rememberBlank(SessionId(attached.sessionId), attached.blank)
-        } catch (error) {
-          releaseHostPrompts(client)
-          logErrorFileOnly('host', `client: switch warm-up failed: ${error instanceof Error ? error.message : String(error)}`)
-        }
-      })()
       return
     }
     abortResumeFold() // a previous chunked resume must not feed the next session
@@ -4854,6 +4120,25 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (payload.agent.id !== sessionId) return
     if (payload.status === 'running') store.lastEscTime = 0 // fresh turn: clear a stale single-Esc window
     store.setRunning(payload.status === 'running')
+  })
+  // Live model deltas, in-process. Harness 0.1.5 removed the durable
+  // `assistant/chunk` events the transcript used to stream from: the deltas now
+  // arrive as `agent/assistant-stream` frames (start/chunk/end, attempt id and
+  // dense index) and only the settled `assistant/message`/`assistant/attempt`
+  // reaches the session log. The P4c host used to subscribe here and forward
+  // each chunk to the client; with the split gone the subscription lives in the
+  // client process, filtered to the session being shown (the same filter the
+  // `agent/status` subscription above uses), so the transcript still streams
+  // token by token and the "preparing the request…" label clears on the first
+  // delta.
+  ctx.on('agent/assistant-stream', (payload: {
+    agent: { id: SessionId }
+    frame: { type?: string; chunk?: { type?: string; text?: string } }
+  }) => {
+    if (payload.agent.id !== sessionId) return
+    if (payload.frame?.type !== 'chunk') return
+    store.endPreparingRequest()
+    applyModelDelta(payload.frame.chunk)
   })
 
   // ── render-loop watchdog ──────────────────────────────────────────────────
@@ -4983,19 +4268,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   await agent.whenIdle()
 }
 
-/**
- * The newest session WITH CONTENT in one workspace, read from the session files
- * themselves (P4c M6.2).
- *
- * The positional `resume` means exactly this, and resolving it here (instead of
- * asking the host) keeps the child's ~0.6 s boot OFF the critical path: the caller
- * then hands the id to the host, so the two can never serve different sessions.
- * "With content" is decided cheaply — a session that never ran a turn has a
- * handful of events, so the durable log's event count separates the two without
- * decoding anything (the log is opened by frame table only).
- * @param workspace - the directory whose sessions are candidates.
- * @returns the session id, or undefined when the workspace holds none.
- */
 /** Order `resume` candidates by ACTIVITY — the session's log mtime — falling
  *  back to creation time when two logs share a timestamp. Pure so the rule is
  *  testable: `resume` must continue the session the user was last WORKING in, not

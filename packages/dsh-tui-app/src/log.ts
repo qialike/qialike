@@ -100,10 +100,6 @@ export function logErrorFileOnly(tag: string, error: unknown): void {
   logErrorImpl(tag, error, false)
 }
 
-/** True inside a `--dsh-host` child (see the host/client split in
- *  dsh-tui-p4c-spike.md): tags every line it writes. */
-const HOST_CHILD = process.env.DSH_TUI_HOST_CHILD === '1'
-
 function logErrorImpl(tag: string, error: unknown, mirror: boolean): void {
   const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
   writeLine(`[${tag}] ${detail}`, mirror)
@@ -116,10 +112,6 @@ export function logConsoleError(text: string): void {
 
 function writeLine(line: string, mirror = true): void {
   const stamp = new Date().toISOString()
-  // P4c: the host process writes into the SAME log file as its client, so its
-  // lines carry a marker — otherwise a reader cannot tell whose `[stall]` or
-  // `[boot]` line they are looking at (two processes, one file).
-  if (HOST_CHILD) line = `[host] ${line}`
   try {
     rotateIfNeeded()
     appendFileSync(LOG_PATH, `[${stamp}] ${line}\n`)

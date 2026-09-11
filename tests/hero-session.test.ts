@@ -163,10 +163,6 @@ describe('resume targets the most recently active session, content or not', () =
     expect(body).not.toContain('totalEvents()')
     expect(source).not.toContain('BLANK_SESSION_EVENTS')
   })
-
-  test('an explicit resume leaves the hero, so a blank target is still the conversation view', () => {
-    expect(source).toContain('if (wantsExistingSession) store.leaveHero()')
-  })
 })
 
 describe('orderResumeCandidates (what `dsh-tui resume` continues)', () => {

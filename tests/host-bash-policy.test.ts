@@ -1,15 +1,13 @@
 /**
- * P4c M3 contract: the `read-only` bash fence is ONE rule shared by both
- * processes. In host mode the client draws the permission chip but the HOST
- * owns the session and enforces the fence, so a duplicated regex or a second
+ * The `read-only` bash fence is ONE rule: the TUI's own `tools/pre-execute`
+ * handler applies `readOnlyBashDecision`, so a duplicated regex or a second
  * copy of the decision would let a write slip through exactly when the user
  * believes they are read-only.
  *
  * Anchors:
  *  - the rule itself (mutation detection + the `[sandbox: …]` denial marker);
  *  - the mirror source: cycling the mode notifies through the SHARED store, not
- *    a module export (the panel bundles each get their own module copies);
- *  - a source-level guard that `host.ts` uses the shared rule instead of its own.
+ *    a module export (the panel bundles each get their own module copies).
  *
  * Run with `bun test tests/host-bash-policy.test.ts`.
  *
@@ -82,10 +80,7 @@ describe('readOnlyBashDecision fences bash only under read-only', () => {
 })
 
 describe('the fence is shared, not duplicated', () => {
-  test('host.ts applies the same rule (no second copy of the regexes)', () => {
-    const host = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/host.ts'), 'utf8')
-    expect(host).toContain('readOnlyBashDecision')
-    expect(host).not.toMatch(/\(rm\|mv\|cp\|mkdir/)
+  test('index.tsx applies the shared rule (no second copy of the regexes)', () => {
     const client = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
     expect(client).toContain('readOnlyBashDecision')
     expect(client).not.toMatch(/function bashMutates/)

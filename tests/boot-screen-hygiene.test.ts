@@ -53,8 +53,8 @@ describe('the alternate screen is entered WITH the first frame that has content'
 
   test('the interactive launch does not enter it at boot', () => {
     // Entering it early left the screen blank from t≈0 until Ink painted (~0.6 s).
-    expect(bin).toContain("const interactiveLaunch = !hostMode && !wantsHelp && process.stdout.isTTY === true")
-    expect(bin).toContain("if (!hostMode && !interactiveLaunch) process.stdout.write('\\x1b[?1049h')")
+    expect(bin).toContain("const interactiveLaunch = !wantsHelp && process.stdout.isTTY === true")
+    expect(bin).toContain("if (!interactiveLaunch) process.stdout.write('\\x1b[?1049h')")
   })
 
   test('the frame writer enters it with the first frame, and holds back empty ones', () => {
