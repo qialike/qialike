@@ -445,6 +445,12 @@ export function preparingRequestStatusText(startedAt: number | null, now: number
 }
 
 /** Mutable UI store the Ink app subscribes to. */
+/** S0 assembly probe (`session/optimization-plan.md` §3): true when the harness's
+ *  `derived`/`frozenMessages` caches are cold — set on every attach (launch /
+ *  switch / new) because a fresh Session+Agent instance has to derive and
+ *  deep-freeze the whole context on its first request (the 4-6 s class). */
+let coldNextRequest = true
+
 export class Store {
   private items: TranscriptItem[] = []
   private key = 0
@@ -2036,6 +2042,7 @@ export class Store {
   get session(): Session | undefined { return this._session }
   setSession(session: Session): void {
     this._session = session
+    coldNextRequest = true // S0 probe: the next LLM request pays a cold derive+freeze
     // A session switch (launch / /new / /sessions) starts a fresh hero state.
     this._promptAttempted = false
     // Stats belong to the session that produced them: a new session is not
@@ -3439,6 +3446,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       if (event.type === 'turn/end') {
         logErrorFileOnly('submit', pendingSubmitProbe.logLabel())
         pendingSubmitProbe = null
+        ;(globalThis as AssemblyProbeSeam).__dshSubmitProbe = undefined
       }
     }
     if (session.id !== sessionId) return
@@ -3483,6 +3491,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         const data = event.data as { turn?: number; step?: number }
         if (typeof data.turn === 'number' && typeof data.step === 'number') {
           stepStartAt.set(`${data.turn}:${data.step}`, Date.now())
+          pendingSubmitProbe?.noteStepStart(data.turn, data.step)
         }
         // A fresh step begins with the model computing (reasoning deltas flip
         // the phase to `thinking` as they arrive).
@@ -3501,6 +3510,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // Between steps the model is computing the next one; keep the phase
       // honest so a silent gap reads as "working", never as Idle.
       case 'step/end': {
+        const data = event.data as { turn?: number; step?: number }
+        pendingSubmitProbe?.noteStepEnd(data.turn ?? -1, data.step ?? -1)
         store.setRunPhase('working')
         break
       }
@@ -3686,15 +3697,56 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       startedAt: submitT0,
       events: eventCount(),
       heapMb: Math.round(memory.heapUsed / 1024 / 1024),
+      steps: [],
       logLabel: (): string => {
         const first = markFirstEvent === 0 ? -1 : markFirstEvent - submitT0
         const follow = markFollowup === 0 ? -1 : markFollowup - submitT0
+        const assembly = pendingSubmitProbe === null
+          ? ''
+          : pendingSubmitProbe.steps.map((st) => (st.streamAt === 0 ? '?' : `${st.streamAt - st.startedAt}`)).join(',')
         return `submit chars=${text.length} events=${eventCount()} heap=${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB `
-          + `followup=${follow}ms firstEvent=${first}ms`
+          + `followup=${follow}ms firstEvent=${first}ms assembly=[${assembly}]ms`
       },
       noteFollowup: () => { if (markFollowup === 0) markFollowup = Date.now() },
       noteFirstEvent: () => { if (markFirstEvent === 0) markFirstEvent = Date.now() },
+      noteStepStart: (turn, step) => {
+        pendingSubmitProbe?.steps.push({
+          turn, step, cold: coldNextRequest, startedAt: Date.now(),
+          streamAt: 0, bytes: -1, messages: -1, chunkAt: 0, fetchAt: 0, retries: 0,
+        })
+      },
+      noteRequest: (bytes, messages) => {
+        const cur = pendingSubmitProbe?.steps.at(-1)
+        if (cur === undefined) return
+        if (cur.streamAt === 0) {
+          cur.streamAt = Date.now()
+          cur.bytes = bytes
+          cur.messages = messages
+        } else {
+          cur.retries += 1
+        }
+        coldNextRequest = false // this request warmed the harness's caches
+      },
+      noteFetch: () => {
+        const cur = pendingSubmitProbe?.steps.at(-1)
+        if (cur !== undefined && cur.fetchAt === 0) cur.fetchAt = Date.now()
+      },
+      noteFirstChunk: () => {
+        const cur = pendingSubmitProbe?.steps.at(-1)
+        if (cur !== undefined && cur.chunkAt === 0) cur.chunkAt = Date.now()
+      },
+      noteStepEnd: (turn, step) => {
+        const cur = pendingSubmitProbe?.steps.findLast((st) => st.turn === turn && st.step === step)
+        if (cur === undefined || cur.streamAt === 0) return
+        logErrorFileOnly('assembly',
+          `turn=${cur.turn} step=${cur.step} cold=${cur.cold ? 1 : 0} `
+          + `stepToStream=${cur.streamAt - cur.startedAt}ms assemblyMs=${cur.streamAt - cur.startedAt} `
+          + `streamToChunk=${cur.chunkAt === 0 ? -1 : cur.chunkAt - cur.streamAt}ms `
+          + `serializeMs=${cur.fetchAt === 0 ? -1 : cur.fetchAt - cur.streamAt} `
+          + `bytes=${cur.bytes} msgs=${cur.messages} retries=${cur.retries}`)
+      },
     }
+    ;(globalThis as AssemblyProbeSeam).__dshSubmitProbe = pendingSubmitProbe
     // Local first-submit flip (web parity): the hero leaves on this frame,
     // ahead of the harness round-trip that records the real turn/start.
     store.markPromptAttempted()
@@ -4151,6 +4203,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }) => {
     if (payload.agent.id !== sessionId) return
     if (payload.frame?.type !== 'chunk') return
+    pendingSubmitProbe?.noteFirstChunk()
     store.endPreparingRequest()
     applyModelDelta(payload.frame.chunk)
   })
@@ -4993,16 +5046,51 @@ export function compactHintText(events: number): string {
   return `Large session (${millions} events) — /compact is recommended to keep resume and turns fast`
 }
 
-/** In-flight submit probe (P0 diagnostics). */
+/** One step's assembly timeline (S0 probe). Timestamps are `Date.now()` marks
+ *  taken while the single thread runs the step in order, so the deltas are the
+ *  real synchronous costs:
+ *   - `startedAt`   : our `step/start` handler (the harness emits it right
+ *                     before it assembles the request),
+ *   - `streamAt`    : the LLM adapter's stream call = **assembly end**
+ *                     (`prepareRequest` + `systemPrompt.project` + `buildRequest`),
+ *   - `chunkAt`     : the first streamed chunk = **network TTFT**. */
+interface SubmitProbeStep {
+  turn: number
+  step: number
+  cold: boolean
+  startedAt: number
+  streamAt: number
+  bytes: number
+  messages: number
+  chunkAt: number
+  /** Adapter's fetch call = after the payload was serialized. */
+  fetchAt: number
+  retries: number
+}
+/** In-flight submit probe (P0 diagnostics + S0 assembly timeline). */
 interface SubmitProbe {
   startedAt: number
   events: number
   heapMb: number
+  steps: SubmitProbeStep[]
   logLabel: () => string
   noteFollowup: () => void
   noteFirstEvent: () => void
+  noteStepStart: (turn: number, step: number) => void
+  noteRequest: (bytes: number, messages: number) => void
+  noteFetch: () => void
+  noteFirstChunk: () => void
+  noteStepEnd: (turn: number, step: number) => void
 }
 let pendingSubmitProbe: SubmitProbe | null = null
+
+/** The LLM adapter lives in a separate module (which the bundler can load as a
+ *  second copy), so the in-flight probe is ALSO published on globalThis: the
+ *  adapter reads that object directly, which works across module copies (the
+ *  same seam the frame writer uses: `__dshTuiLastFlushAt`). */
+type AssemblyProbeSeam = {
+  __dshSubmitProbe?: { noteRequest: (bytes: number, messages: number) => void; noteFetch: () => void }
+}
 
 /** Counts/model of the `compaction/summary` event whose replacement
  *  `user/message` (the checkpoint) has not arrived yet — the harness appends

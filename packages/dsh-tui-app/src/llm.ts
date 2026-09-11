@@ -1848,11 +1848,25 @@ class TuiLlmAdapter extends LlmAdapter {
     options: GenerateOptions,
   ): Promise<Response> {
     let response: Response
+    // S0 probe (session/optimization-plan.md §3): the payload string already
+    // exists, so reporting its size to the app's submit probe is free — and the
+    // moment this adapter is entered IS the end of the harness's synchronous
+    // request assembly (prepareRequest + systemPrompt.project + buildRequest).
+    const payload = JSON.stringify(body)
+    const rawMessages = (body as { messages?: unknown }).messages
+    // Read the probe OBJECT from globalThis (not a per-copy variable): the app
+    // module can be bundler-duplicated, and the object identity is what carries
+    // the state across copies.
+    const probe = (globalThis as typeof globalThis & {
+      __dshSubmitProbe?: { noteRequest: (bytes: number, messages: number) => void; noteFetch: () => void }
+    }).__dshSubmitProbe
+    probe?.noteRequest(payload.length, Array.isArray(rawMessages) ? rawMessages.length : -1)
+    probe?.noteFetch() // payload built: everything after this is network + provider
     try {
       response = await fetch(url, {
         method: 'POST',
         headers,
-        body: JSON.stringify(body),
+        body: payload,
         signal: options.signal,
       })
     } catch (error) {

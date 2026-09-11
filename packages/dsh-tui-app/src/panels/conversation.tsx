@@ -1130,6 +1130,18 @@ const legacyEstimate = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_LEGACY_EST 
  *  row key instead. */
 const estCache = new WeakMap<TranscriptItem, Map<string, number>>()
 
+/** S0 diagnostic (`DSH_TUI_DEBUG_EST=1`, `session/optimization-plan.md` §3):
+ *  per-layout-pass height-estimate accounting, so "0.66 s per pass" can be
+ *  attributed to cache misses/parses instead of guessed at. Logging only. */
+const debugEst = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_EST ?? '')
+let estHits = 0
+let estParses = 0
+let estParseMs = 0
+/** Last `store.loadGeneration` the layout saw: a change drops the debounced
+ *  markdown cache inside {@link estimateMarkdownHeightDebounced} (full
+ *  re-parse of every markdown row). Logged, never acted on. */
+let estLastLoadGen = -1
+
 /** Invalidates every entry of {@link estCache} at once. The per-item map is
  *  keyed by wrap width, so an entry computed for an older wrap width would be
  *  reused verbatim when the width comes back (a resize round trip) — measured:
@@ -1233,7 +1245,11 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
     estCache.set(item, byItem)
   }
   const hit = byItem.get(cacheKey)
-  if (hit !== undefined) return hit
+  if (hit !== undefined) {
+    if (debugEst) estHits += 1
+    return hit
+  }
+  const tParse = debugEst ? Date.now() : 0
 
   const w = MESSAGE_TEXT_WIDTH(usable)
   let lines: number
@@ -1275,6 +1291,7 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
   } else {
     lines = countWrappedLines(item.text, w)
   }
+  if (debugEst) { estParses += 1; estParseMs += Date.now() - tParse }
   byItem.set(cacheKey, lines)
   return lines
 }
@@ -2208,6 +2225,16 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     const tLayout0 = debugLayout ? Date.now() : 0
     let mdMs = 0
     let mdCalls = 0
+    if (debugEst) {
+      estHits = 0
+      estParses = 0
+      estParseMs = 0
+      if (store.loadGeneration !== estLastLoadGen) {
+        logErrorFileOnly('est',
+          `loadGeneration ${estLastLoadGen} → ${store.loadGeneration}: debounced markdown cache dropped (all markdown rows re-parse once)`)
+        estLastLoadGen = store.loadGeneration
+      }
+    }
     // A width change invalidates every cached row height (wrap counts differ);
     // drop the caches and bump the estimate generation so no entry computed for
     // the previous width can be served again (the mounted rows re-measure right
@@ -2279,6 +2306,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     const starts: number[] = []
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i]! }
+    if (debugEst) {
+      logErrorFileOnly('est',
+        `pass rows=${rows.length} hits=${estHits} parses=${estParses} parseMs=${estParseMs} `
+        + `content=${s} estGen=${estGeneration} loadGen=${store.loadGeneration} usable=${usable} settled=${store.assistantSettleEpoch}`)
+    }
     return { hts, starts, content: s }
   }, [rows, usable, steps, store.measureEpoch, store.expansionEpoch, store.loadGeneration, store.assistantSettleEpoch])
   const maxScroll = Math.max(0, layout.content - viewportLines)
