@@ -55,7 +55,7 @@ import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
-import { findReusableBlank, foldSessionBlank, isPinned, prewarmTitles, rememberBlank, rememberFoldedTitle, rememberTitle, sessionBlank, sessionDisplayTitle, setHeadTitleProbe, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { findReusableBlank, foldSessionBlank, isPinned, listRowHeaders, prewarmTitles, rememberBlank, rememberFoldedTitle, rememberTitle, sessionBlank, sessionDisplayTitle, setHeadTitleProbe, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
@@ -3333,7 +3333,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       } | undefined
       if (persistence?.list !== undefined && persistence.inspect !== undefined) {
         try {
-          const headers = await persistence.list()
+          const headers = listRowHeaders(await persistence.list())
           const reused = await findReusableBlank(
             { inspect: (id) => persistence.inspect!(id) },
             headers,
@@ -3848,7 +3848,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // `attached`), so the local prewarm must NOT inspect logs — an
         // `inspect()` of a 28 MB session would block this client for ~5 s, the
         // very freeze P4c exists to remove.
-        if (!hostMode) await prewarmTitles(persistence, await persistence.list())
+        if (!hostMode) await prewarmTitles(persistence, listRowHeaders(await persistence.list()))
       } catch {
         // Prewarm is best-effort; a failing list must not disturb the session.
       }
@@ -4552,7 +4552,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         let reused: SessionId | undefined
         if (persistence?.list !== undefined && persistence.inspect !== undefined) {
           try {
-            const headers = await persistence.list()
+            const headers = listRowHeaders(await persistence.list())
             reused = await findReusableBlank(
               { inspect: (id) => persistence.inspect!(id) },
               headers,
@@ -5066,11 +5066,11 @@ async function autoResumeNewest(
   agentOptions: { provider: string; model: string },
   setup: (agentCtx: Context) => void,
 ): Promise<AgentHandle | undefined> {
-  const persistence = ctx.get('sessionPersistence') as { list?: (signal?: AbortSignal) => Promise<Array<{ id: SessionId; cwd?: string; createdAt?: number }>> } | undefined
+  const persistence = ctx.get('sessionPersistence') as { list?: (signal?: AbortSignal) => Promise<readonly unknown[]> } | undefined
   if (persistence?.list === undefined) return undefined
-  let list: Array<{ id: SessionId; cwd?: string; createdAt?: number }>
+  let list: readonly SessionHeaderLike[]
   try {
-    list = await persistence.list()
+    list = listRowHeaders(await persistence.list())
   } catch {
     return undefined // A failing list must not block a fresh launch.
   }

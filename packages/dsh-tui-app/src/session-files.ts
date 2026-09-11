@@ -16,11 +16,13 @@
  * @module @yourname/dsh-tui-app/session-files
  */
 
-import { readdirSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SessionLogReader, type DurableEvent } from './log-frames.ts'
+import type { SessionHeaderLike } from './session-titles.ts'
 
 /** True for characters the jsonl backend keeps verbatim in path segments. */
 function isSafeSegmentChar(ch: string): boolean {
@@ -147,4 +149,80 @@ export function resolveSessionLogPath(dir: string): string | undefined {
 export function sessionLogPath(cwd: string, id: SessionId): string {
   const dir = sessionDir(cwd, id)
   return resolveSessionLogPath(dir) ?? join(dir, 'session.jsonl.zstd')
+}
+
+/** One session's log, searching every project directory when the given
+ *  workspace does not hold it (a session id is unique across the home, and
+ *  `/export <id>` / `/sessions` may name a session created elsewhere). */
+export function findSessionLogPath(cwd: string, id: SessionId): string | undefined {
+  const direct = sessionLogPath(cwd, id)
+  if (existsSync(direct)) return direct
+  try {
+    const root = dshHomePath('sessions')
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const candidate = resolveSessionLogPath(join(root, entry.name, encodeSegment(id)))
+      if (candidate !== undefined) return candidate
+    }
+  } catch { /* unreadable home: report no log */ }
+  return undefined
+}
+
+/**
+ * Read one session's whole durable log through the file-backed reader (highest
+ * generation present, historical packed rows and current rows both decoded).
+ *
+ * This is the client's stand-in for `persistence.inspect` when the harness's
+ * persistence service is out of reach — in host mode it lives in the host child.
+ * Windowed so a giant log never lands in one slice burst; callers that want the
+ * whole transcript (export, title folding) hold the result on purpose.
+ * @param cwd - the session's working directory (project key).
+ * @param id - the session id.
+ * @returns every event of the session, in log order.
+ * @throws when no canonical log exists for that session.
+ */
+export async function readSessionEvents(cwd: string, id: SessionId): Promise<DurableEvent[]> {
+  const path = findSessionLogPath(cwd, id)
+  if (path === undefined) throw new Error(`no persisted log for ${String(id)}`)
+  const reader = new SessionLogReader(path)
+  const total = await reader.totalEvents()
+  const out: DurableEvent[] = []
+  const window = 100_000
+  for (let from = 0; from < total; from += window) {
+    for (const event of await reader.read(from, Math.min(from + window, total))) out.push(event)
+  }
+  return out
+}
+
+/**
+ * List this workspace's persisted sessions straight from disk, by reading frame
+ * 0 (the header) of each session directory's log.
+ *
+ * The `/sessions` dialog used to ask the harness for the list, which is empty in
+ * host mode — the persistence service is in the host child — so the picker (and
+ * with it rename/delete) could never see a session. A project directory holds
+ * one header read per session, which is bounded and cheap even for a directory
+ * of giant logs.
+ * @param cwd - the workspace whose project directory to scan.
+ * @returns header-shaped rows, in directory order (the dialog sorts them).
+ */
+export async function listSessionFiles(cwd: string): Promise<readonly SessionHeaderLike[]> {
+  const out: SessionHeaderLike[] = []
+  try {
+    for (const entry of readdirSync(join(dshHomePath('sessions'), projectKey(cwd)), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const path = resolveSessionLogPath(join(dshHomePath('sessions'), projectKey(cwd), entry.name))
+      if (path === undefined) continue
+      try {
+        const header = await new SessionLogReader(path).header()
+        const id = typeof header?.id === 'string' && header.id !== '' ? header.id : entry.name
+        out.push({
+          id: id as SessionId,
+          ...typeof header?.cwd === 'string' ? { cwd: header.cwd } : {},
+          ...typeof header?.createdAt === 'number' ? { createdAt: header.createdAt } : {},
+        })
+      } catch { /* unreadable session: leave it out of the list */ }
+    }
+  } catch { /* no project directory yet: an empty list */ }
+  return out
 }

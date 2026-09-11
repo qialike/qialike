@@ -35,6 +35,44 @@ export interface SessionHeaderLike {
   readonly createdAt?: number
 }
 
+/**
+ * Normalize one `sessionPersistence.list()` row to the flat header shape the UI
+ * uses. Harness 0.1.5 wraps every row as `{ header, revision, sizeBytes }`
+ * (`SessionPersistenceSnapshot`); earlier compositions returned the header
+ * object itself. Without this unwrap the `/sessions` picker filtered EVERY row
+ * out — `h.cwd === workspace` was always false — so the dialog reported "no
+ * sessions in this directory" (and Ctrl+R rename / Ctrl+D delete, which need a
+ * highlighted row, were unreachable).
+ * @param row - one element of `list()`'s result, of unknown shape.
+ * @returns the flat header, or undefined when the row carries no usable id.
+ */
+export function listRowHeader(row: unknown): SessionHeaderLike | undefined {
+  if (row === null || typeof row !== 'object') return undefined
+  const wrapped = (row as { header?: unknown }).header
+  const candidate = (wrapped !== null && typeof wrapped === 'object' ? wrapped : row) as {
+    id?: unknown
+    cwd?: unknown
+    createdAt?: unknown
+  }
+  const id = candidate.id
+  if (typeof id !== 'string' && (id === null || typeof id !== 'object')) return undefined
+  return {
+    id: id as SessionId,
+    ...typeof candidate.cwd === 'string' ? { cwd: candidate.cwd } : {},
+    ...typeof candidate.createdAt === 'number' ? { createdAt: candidate.createdAt } : {},
+  }
+}
+
+/** {@link listRowHeader} over a whole `list()` result. */
+export function listRowHeaders(rows: readonly unknown[]): SessionHeaderLike[] {
+  const out: SessionHeaderLike[] = []
+  for (const row of rows) {
+    const header = listRowHeader(row)
+    if (header !== undefined) out.push(header)
+  }
+  return out
+}
+
 /** The slice of `sessionPersistence` this module needs. */
 export interface SessionTitlesPersistence {
   inspect(id: SessionId): Promise<{ events: readonly unknown[] }>

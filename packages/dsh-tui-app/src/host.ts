@@ -22,7 +22,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { planResumeFold } from './resume-fold.ts'
-import { findReusableBlank, foldSessionBlank, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { findReusableBlank, foldSessionBlank, listRowHeaders, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext } from '@deepseek-ai/dsh-compaction'
 import { GoalError } from '@deepseek-ai/dsh-goal'
@@ -519,7 +519,7 @@ function withoutUnsupportedEffort(selection: ModelSelection | undefined): ModelS
   const pickSessionId = async (): Promise<string | undefined> => {
     if (config.resume !== undefined) return config.resume
     try {
-      const list = await persistence?.list?.() ?? []
+      const list = listRowHeaders(await persistence?.list?.() ?? [])
       const here = list.filter((h) => h.cwd === config.workspace)
       const newest = here.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))[0]
       return newest?.id
@@ -631,7 +631,7 @@ function withoutUnsupportedEffort(selection: ModelSelection | undefined): ModelS
     const t0 = Date.now()
     let wanted: string | undefined
     try {
-      const headers = await persistence?.list?.() ?? []
+      const headers = listRowHeaders(await persistence?.list?.() ?? [])
       const reused = await findReusableBlank(
         persistence as unknown as SessionTitlesPersistence,
         headers as unknown as readonly SessionHeaderLike[],

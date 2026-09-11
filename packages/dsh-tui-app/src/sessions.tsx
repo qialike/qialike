@@ -21,9 +21,10 @@ import { useListGeometry, dialogListIndexFromRow } from './list-geometry.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TuiService, Store, SessionSummary } from './index.tsx'
 import { truncateWide } from './markdown.tsx'
-import { deleteSession } from './session-files.ts'
-import { forgetTitle, hideUnselectedBlanks, isPinned, listWithTitles, renameTitle, togglePin, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { deleteSession, listSessionFiles, readSessionEvents } from './session-files.ts'
+import { forgetTitle, hideUnselectedBlanks, isPinned, listRowHeaders, listWithTitles, renameTitle, togglePin, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { forgetActivity } from './session-activity.ts'
+import { logErrorFileOnly } from './log.ts'
 import { theme } from './theme.ts'
 import { stripTerminalControls } from './terminal-safe.ts'
 import type { RawKey } from './stdin.ts'
@@ -307,25 +308,44 @@ export function apply(ctx: Context): void {
   // Shared list load: the `/sessions` command opens it; deletion refreshes it.
   const reload = (): void => {
     const persistence = ctx.get('sessionPersistence') as (SessionTitlesPersistence & { list?: (signal?: AbortSignal) => Promise<SessionHeaderLike[]> }) | undefined
+    // Web parity: only the SELECTED untasked "New Session" placeholder stays in
+    // the list; other blanks are hidden (the durable file is untouched).
+    const publish = (rows: SessionSummary[]): void => {
+      store.refreshSessionsDialog(hideUnselectedBlanks(rows, store.session?.id))
+    }
     if (persistence?.list === undefined) {
-      store.append('status', 'sessions: service unavailable', true)
+      // HOST MODE (and any composition without a local persistence service):
+      // the service lives in the host child, so the picker asks the FILE SYSTEM
+      // instead — the same generation-aware reader the transcript and /export
+      // use. Without this the list was always empty, which also made Ctrl+R
+      // rename and Ctrl+D delete unreachable.
+      const filePersistence: SessionTitlesPersistence = {
+        inspect: async (id) => ({ events: await readSessionEvents(store.workspace, id) }),
+      }
+      void (async (): Promise<void> => {
+        const headers = await listSessionFiles(store.workspace)
+        logErrorFileOnly('sessions', `file-backed list: ${headers.length} session(s) for ${store.workspace}`)
+        // Renders from the title cache immediately; the bounded head probe (or
+        // the file-backed inspect above) enriches the rows through `publish`.
+        const rows = await listWithTitles(filePersistence, headers, publish)
+        logErrorFileOnly('sessions', `file-backed rows: ${rows.length} after title merge`)
+        publish(rows)
+      })().catch((error: unknown) => {
+        store.append('status', `sessions: ${error instanceof Error ? error.message : String(error)}`, true)
+      })
       return
     }
     void persistence.list().then((list) => {
+      // 0.1.5 wraps each row as `{ header, revision, sizeBytes }`: unwrap before
+      // filtering, or every row is dropped and the dialog looks empty.
+      const unwrapped = listRowHeaders(list)
+      logErrorFileOnly('sessions', `harness list: ${list.length} row(s), ${unwrapped.length} header(s) for ${store.workspace}`)
       // Only sessions created in the current workspace (same-directory
       // semantics as the auto-resume default).
-      const sameDir = list.filter((h) => h.cwd === store.workspace)
-      // Web parity: only the SELECTED untasked "New Session" placeholder stays
-      // in the list; other blanks are hidden (the durable file is untouched).
-      const visible = (rows: SessionSummary[]): SessionSummary[] =>
-        hideUnselectedBlanks(rows, store.session?.id)
+      const sameDir = unwrapped.filter((h) => h.cwd === store.workspace)
       // Render from the title cache immediately; fold missing titles in the
       // background and refresh the dialog in place (keeps filter/highlight).
-      void listWithTitles(persistence, sameDir, (rows) => {
-        store.refreshSessionsDialog(visible(rows))
-      }).then((rows) => {
-        store.refreshSessionsDialog(visible(rows))
-      })
+      void listWithTitles(persistence, sameDir, publish).then(publish)
     })
   }
   tui.commands.register({
