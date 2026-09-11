@@ -82,8 +82,16 @@ describe('shouldStoreMeasured: the final one-row growth must be stored', () => {
 
 describe('the layout never lets an estimate pass as a measurement', () => {
   test('the height walk reads the measured cache but never writes an estimate into it', () => {
-    expect(panel).toContain('return resolveRowHeight(est, measuredHeights.get(key))')
+    expect(panel).toContain('resolveRowHeight(est, measuredHeights.get(String(r.item.key)))')
     expect(panel).not.toContain('measuredHeights.set(key, est)')
+    // S1b: a windowed row is refined from its precise estimate, and the cheap
+    // placeholder outside the window must ALSO go through resolveRowHeight —
+    // writing either into the measured cache would let an estimate pose as truth
+    // (the tail-clipping failure of §2.5.51).
+    expect(panel).toContain('const est = estItemLinesCachedOrCoarse(r.item, usable, reasoningExpandedFor(r.item))')
+    // Exactly ONE write site — setMeasuredHeight, which only ever stores a
+    // painted reading. The layout walk must not add a second one.
+    expect(panel.split('measuredHeights.set(').length - 1).toBe(1)
   })
 
   test('settlement re-parses the row height from the authoritative text', () => {
@@ -105,7 +113,12 @@ describe('the layout never lets an estimate pass as a measurement', () => {
     expect(panel).toContain('estGeneration += 1')
     // The per-item estimate cache key must carry the generation, or returning to
     // a previous width resurrects the stale estimate (the 97 vs 115 rows clip).
-    expect(panel).toContain('const cacheKey = `${estGeneration}|${usable}|')
+    expect(panel).toContain('function estItemCacheKey(')
+    expect(panel).toContain('return `${estGeneration}|${usable}|${expandReasoning ? 1 : 0}')
+    // S1b: only an EXACT estimate may enter the cache — the coarse placeholder is
+    // recomputed per pass and must never be served as a parsed height.
+    expect(panel).toContain('const key = estItemCacheKey(item, usable, expandReasoning)')
+    expect(panel).toContain('return coarseItemLines(item, usable)')
     // The measure effect depends on the wrap width so a resize refills the cache.
     expect(panel).toContain('}, [props.item.text, props.usable, props.expandReasoning, props.toolExpanded, props.compactionExpanded])')
   })

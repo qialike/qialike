@@ -1137,6 +1137,10 @@ const debugEst = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_EST ?? '')
 let estHits = 0
 let estParses = 0
 let estParseMs = 0
+/** Coarse (O(1)) placeholders handed out this pass: the S1b accounting split,
+ *  so `[est] pass` shows exactly-estimated rows and placeholder rows apart
+ *  (`session/optimization-plan.md` §3). */
+let estCheap = 0
 /** Last `store.loadGeneration` the layout saw: a change drops the debounced
  *  markdown cache inside {@link estimateMarkdownHeightDebounced} (full
  *  re-parse of every markdown row). Logged, never acted on. */
@@ -1240,14 +1244,108 @@ export function resolveRowHeight(est: number, measured: number | undefined): num
   return est
 }
 
-function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
+/** Rows above/below the viewport that pass B still parses precisely: about two
+ *  screens of scroll slack, so a scroll step, a wheel notch or the tail growing
+ *  by a wrapped line stays inside precisely-measured rows. */
+const OVERSCAN_ROWS = 48
+/** Pass B stops parsing once this much mdast time is spent. The visible rows are
+ *  refined first (see {@link windowRefineOrder}), so the budget can only starve
+ *  overscan rows — never the frame the user is looking at. 35 ms keeps the whole
+ *  first layout after a load under ~60 ms while still parsing ~2.5 screens. */
+const MD_PARSE_BUDGET_MS = 35
+
+/** Row indices pass B refines, most-visible first: the viewport rows, then the
+ *  overscan rows from the bottom up (the tail is what follow-mode shows) and the
+ *  top down. Deterministic and duplicate-free, so a starved budget is a stable
+ *  prefix of this order rather than a random subset. */
+export function windowRefineOrder(winFirst: number, winLast: number, rowCount: number): number[] {
+  const out: number[] = []
+  if (rowCount <= 0) return out
+  const lo = Math.max(0, winFirst)
+  const hi = Math.min(rowCount - 1, winLast)
+  for (let i = lo; i <= hi; i++) out.push(i)
+  for (let k = 1; k <= OVERSCAN_ROWS; k++) {
+    if (hi + k < rowCount) out.push(hi + k)
+    if (lo - k >= 0) out.push(lo - k)
+  }
+  return out
+}
+
+/** Whether a row's height needs a mdast parse (assistant/plan bodies, and a
+ *  compaction summary only while expanded — the same branches
+ *  {@link estItemLines} takes the markdown path for). Everything else is a
+ *  wrapped-line count either way, so pass B skips it. */
+function isMarkdownKind(item: TranscriptItem): boolean {
+  if (item.kind === 'assistant' || item.kind === 'plan') return true
+  return item.kind === 'compaction' && item.compaction?.summary !== undefined && store.isToolExpanded(item.key)
+}
+
+/** Cache key of {@link estItemLines}'s per-item estimate. The disclosure flags
+ *  are part of it: an EXPANDED compaction row is header + whole summary, so
+ *  serving the collapsed entry would clip its body away after a click. */
+function estItemCacheKey(item: TranscriptItem, usable: number, expandReasoning: boolean): string {
   const toolExpanded = item.kind === 'tool' && item.tool?.body !== undefined && store.isToolExpanded(item.key)
-  // The disclosure state has to be part of the cache key: the estimate for an
-  // EXPANDED compaction row is the header plus the whole summary markdown, so
-  // serving the collapsed entry (1 line) would clip the body away after a click.
   const compactionExpanded = item.kind === 'compaction' && item.compaction?.summary !== undefined
     && store.isToolExpanded(item.key)
-  const cacheKey = `${estGeneration}|${usable}|${expandReasoning ? 1 : 0}|${toolExpanded ? 1 : 0}|${compactionExpanded ? 1 : 0}`
+  return `${estGeneration}|${usable}|${expandReasoning ? 1 : 0}|${toolExpanded ? 1 : 0}`
+    + `|${compactionExpanded ? 1 : 0}`
+}
+
+/** Pass-A height: the already-computed exact estimate when this row has one,
+ *  otherwise an O(1) coarse placeholder. Pass A must never compute a real
+ *  estimate — its job is to produce the offsets that locate the viewport (see
+ *  the layout memo), and only the window pass B refines needs exact heights.
+ *  Measured (painted) heights override both in the memo. */
+function estItemLinesCachedOrCoarse(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
+  const key = estItemCacheKey(item, usable, expandReasoning)
+  const cached = estCache.get(item)?.get(key)
+  if (cached !== undefined) {
+    if (debugEst) estHits += 1
+    return cached
+  }
+  if (debugEst) estCheap += 1
+  return coarseItemLines(item, usable)
+}
+
+/** O(1), allocation-free placeholder for a row OUTSIDE the parse window: source
+ *  length ÷ wrap width, with 1.5 cells per character (source is mostly ASCII but
+ *  CJK counts 2, so neither 1 nor 2 is right and the exact per-char scan is
+ *  exactly the cost this avoids). It only ever stands in for a row the viewport
+ *  cannot show: painting a row stores its MEASURED height, which wins over any
+ *  estimate (see {@link resolveRowHeight}), so an off-window placeholder can
+ *  never clip the visible frame — including the tail, which is always in-window
+ *  and therefore exact. */
+function coarseWrapped(text: string, width: number): number {
+  return Math.max(1, Math.ceil((text.length * 1.5) / Math.max(1, width)))
+}
+
+function coarseItemLines(item: TranscriptItem, usable: number): number {
+  const w = MESSAGE_TEXT_WIDTH(usable)
+  switch (item.kind) {
+    // Collapsed reasoning is a FIXED 2 rows (label + one-line summary), so the
+    // placeholder is exact there; only the expanded body depends on the text.
+    case 'reasoning': return 2
+    case 'plan': return 1 + coarseWrapped(item.text, w)
+    case 'assistant':
+    case 'user': return coarseWrapped(item.text, w)
+    case 'compaction': {
+      const summary = item.compaction?.summary
+      const expanded = summary !== undefined && store.isToolExpanded(item.key)
+      return 1 + (expanded ? coarseWrapped(summary, w) : 0)
+    }
+    case 'tool': {
+      const body = item.tool?.body
+      const expanded = body !== undefined && store.isToolExpanded(item.key)
+      // The header is one or two rows; the body is what can be huge.
+      return 1 + (expanded ? coarseWrapped(body, w) : 0)
+    }
+    default: return coarseWrapped(item.text, w)
+  }
+}
+
+function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boolean): number {
+  // The disclosure flags are part of the key — see {@link estItemCacheKey}.
+  const cacheKey = estItemCacheKey(item, usable, expandReasoning)
   let byItem = estCache.get(item)
   if (byItem === undefined) {
     byItem = new Map()
@@ -1284,7 +1382,7 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
     // rule the tool rows use, so a click never desyncs scroll/selection. The
     // markdown estimate is the shared debounced one (assistant/plan rows).
     const summary = item.compaction?.summary
-    const expanded = summary !== undefined && compactionExpanded
+    const expanded = summary !== undefined && store.isToolExpanded(item.key)
     lines = countWrappedLines(compactionRowHeader(item.compaction ?? {}, expanded), w)
       + (expanded
         ? (legacyEstimate
@@ -1295,6 +1393,7 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
     // Header (summary) lines + the result/error body ONLY while expanded —
     // mirror of the rendered row, so scroll stays aligned on toggle.
     const body = item.tool?.body
+    const toolExpanded = body !== undefined && store.isToolExpanded(item.key)
     lines = countWrappedLines(toolRowHeader(item, usable), w)
       + (body !== undefined && toolExpanded ? countWrappedLines(body, w) : 0)
   } else {
@@ -1348,6 +1447,15 @@ function wrapRows(text: string, usable: number): string[] {
  *  specific pathological row (a giant tool body) instead of guessed at. Off by
  *  default: the per-item `Date.now()` pairs are only paid when debugging. */
 const debugLayout = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_LAYOUT ?? '')
+/** Threshold (ms) above which a layout pass is logged. 200 keeps the log quiet
+ *  in normal runs; `DSH_TUI_DEBUG_LAYOUT_MS=0` logs EVERY pass, which is what
+ *  measuring the steady-state cost needs — after the S1a fix the warm passes
+ *  are far below 200 ms, so "no line" says nothing about how far below.
+ *  Diagnosis only (`session/optimization-plan.md` §3 S1b). */
+const debugLayoutMs = (() => {
+  const n = Number(process.env.DSH_TUI_DEBUG_LAYOUT_MS ?? Number.NaN)
+  return Number.isFinite(n) && n >= 0 ? n : 200
+})()
 /** Tail-geometry probe (`DSH_TUI_DEBUG_TAIL=1`, diagnosis only): one line per
  *  render pass with the window geometry and the TAIL row's estimate/measured
  *  height, so "the answer's last line never shows up" can be told apart from a
@@ -2238,6 +2346,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       estHits = 0
       estParses = 0
       estParseMs = 0
+      estCheap = 0
       if (store.loadGeneration !== estLastLoadGen) {
         logErrorFileOnly('est',
           `loadGeneration ${estLastLoadGen} → ${store.loadGeneration}: debounced markdown cache dropped (all markdown rows re-parse once)`)
@@ -2283,46 +2392,98 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // stays in estCache — it is never written into the measured map, because a
     // cache entry there is treated as painted truth (and a stale estimate in
     // that slot is what leaves the window one row short of the real content).
-    const heightOf = (r: Row): number => {
-      // Content rows first, then the row's layout margins add their rows so
-      // starts[] tracks the real rendered extent (content + spacing).
-      const content = r.type === 'steps'
-        ? rowHeight('steps', stepsBlockHeight(steps.length))
-        : (() => {
-          const key = String(r.item.key)
-          // The estimate is a placeholder for a row that has not been painted
-          // (or only returned a collapsed, implausible reading — see
-          // resolveRowHeight); a real measurement always wins.
-          const tEst = debugLayout ? Date.now() : 0
-          const est = estItemLines(r.item, usable, reasoningExpandedFor(r.item))
-          if (debugLayout && (r.item.kind === 'assistant' || r.item.kind === 'plan' || r.item.kind === 'compaction')) {
-            mdCalls += 1
-            mdMs += Date.now() - tEst
-          }
-          return resolveRowHeight(est, measuredHeights.get(key))
-        })()
-      return content + r.top + r.bottom
+    //
+    // S1b — windowed estimation (session/optimization-plan.md §3): a mdast parse
+    // costs ~0.55 ms, and the replayed giant session has 1240 markdown rows, so
+    // parsing ALL of them on the first frame was 683 of the 752 ms cold layout.
+    // Pass A walks every row with a cheap wrapped-line placeholder (or the
+    // precise value when it is already cached); pass B re-parses only the rows
+    // the viewport can actually show (± {@link OVERSCAN_ROWS}), visible rows
+    // first. Heights outside that window are only used for `content`/offsets of
+    // unpainted history: a row that gets painted is re-laid from its MEASURED
+    // height (the truth, see {@link resolveRowHeight}), so scrolling into a
+    // cheap-estimated region self-corrects without any guesswork, and the tail
+    // (always in-window, hence precise) can never be clipped by a placeholder
+    // that is too small.
+    const contents = new Array<number>(rows.length)
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i]!
+      if (r.type === 'steps') {
+        contents[i] = rowHeight('steps', stepsBlockHeight(steps.length))
+        continue
+      }
+      // The estimate is a placeholder for a row that has not been painted
+      // (or only returned a collapsed, implausible reading — see
+      // resolveRowHeight); a real measurement always wins.
+      const est = estItemLinesCachedOrCoarse(r.item, usable, reasoningExpandedFor(r.item))
+      contents[i] = resolveRowHeight(est, measuredHeights.get(String(r.item.key)))
     }
     // Full layout walk every pass (optimization-5 incremental prefix reuse was
     // REMOVED: real-terminal A/B showed it garbled streaming messages — stale
     // prefix heights combined with the debounced estimate clipped the live
     // tail. A full walk over cached per-row heights is cheap (est/measured
     // maps), and notify batching (优化2) bounds it to ≤40fps.)
-    const hts = rows.map((r) => heightOf(r))
-    if (debugLayout) {
-      const ms = Date.now() - tLayout0
-      if (ms > 200) {
-        logErrorFileOnly('layout',
-          `pass rows=${rows.length} ms=${ms} markdownRows=${mdCalls} markdownMs=${mdMs} `
-          + `items=${items.length} heap=${Math.round(process.memoryUsage().heapUsed / 1048576)}MB`)
-      }
-    }
+    const hts = new Array<number>(rows.length)
+    for (let i = 0; i < rows.length; i++) hts[i] = contents[i]! + rows[i]!.top + rows[i]!.bottom
     const starts: number[] = []
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i]! }
+    // Pass B: precise heights for the rows the viewport can show. The window is
+    // derived from the pass-A offsets, so it needs no guess about where the view
+    // is (follow-tail, a drag, PgUp — all of them already produced `effGuess`).
+    const effGuess = store.followTail
+      ? Math.max(0, s - viewportLines)
+      : Math.max(0, Math.min(store.scroll, Math.max(0, s - viewportLines)))
+    let winFirst = 0
+    while (winFirst < rows.length && starts[winFirst]! + hts[winFirst]! <= effGuess) winFirst++
+    if (winFirst >= rows.length) winFirst = Math.max(0, rows.length - 1)
+    let winLast = rows.length - 1
+    while (winLast >= 0 && starts[winLast]! >= effGuess + viewportLines) winLast--
+    if (winFirst > winLast) winFirst = Math.max(0, winLast)
+    let refined = 0
+    let refineMs = 0
+    let changed = false
+    for (const i of windowRefineOrder(winFirst, winLast, rows.length)) {
+      const r = rows[i]!
+      if (r.type !== 'item') continue
+      // Timed ALWAYS (not just under a debug flag): the budget below has to
+      // hold in a normal run too, and it is two `Date.now()` calls per refined
+      // row (a few dozen on a warm pass).
+      const tParse = Date.now()
+      const exact = estItemLines(r.item, usable, reasoningExpandedFor(r.item))
+      const dt = Date.now() - tParse
+      refineMs += dt
+      refined += 1
+      if (isMarkdownKind(r.item)) { mdCalls += 1; mdMs += dt }
+      const c = resolveRowHeight(exact, measuredHeights.get(String(r.item.key)))
+      if (c !== contents[i]) {
+        contents[i] = c
+        hts[i] = c + r.top + r.bottom
+        changed = true
+      }
+      // Time budget: the visible rows were refined first, so stopping here only
+      // leaves overscan rows on their placeholder (never the visible frame).
+      // They get their exact height on a later pass, and are measured for real
+      // as soon as they are painted.
+      if (refineMs > MD_PARSE_BUDGET_MS) break
+    }
+    if (changed) {
+      s = 0
+      for (let i = 0; i < hts.length; i++) { starts[i] = s; s += hts[i]! }
+    }
+    if (debugLayout) {
+      const ms = Date.now() - tLayout0
+      if (ms > debugLayoutMs) {
+        logErrorFileOnly('layout',
+          `pass rows=${rows.length} ms=${ms} markdownRows=${mdCalls} markdownMs=${mdMs} `
+          + `coarseRows=${estCheap} win=${winFirst}-${winLast} refined=${refined} refineMs=${refineMs} `
+          + `items=${items.length} heap=${Math.round(process.memoryUsage().heapUsed / 1048576)}MB`)
+      }
+    }
     if (debugEst) {
       logErrorFileOnly('est',
         `pass rows=${rows.length} hits=${estHits} parses=${estParses} parseMs=${estParseMs} `
+        + `coarse=${estCheap} win=${winFirst}-${winLast} refined=${refined} refineMs=${refineMs} `
         + `content=${s} estGen=${estGeneration} loadGen=${store.loadGeneration} usable=${usable} settled=${store.assistantSettleEpoch}`)
     }
     return { hts, starts, content: s }
