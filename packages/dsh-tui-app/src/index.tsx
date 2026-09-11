@@ -437,7 +437,25 @@ export function sessionLoadErrorText(error: unknown): string {
  *  (and on submit, before the turn's first step) — and `paintBeforeBlock()`
  *  flushes the frame BEFORE the thread is taken. It clears on the first content
  *  event of that step (chunk / tool call / settled message / turn end). */
-export const PREPARING_REQUEST_LABEL = 'Working…  preparing the request'
+export const PREPARING_REQUEST_LABEL = 'preparing the request…'
+
+/** Status-bar text while a model request is being assembled: the base label,
+ *  plus the elapsed seconds once the ticker has fired.
+ *
+ *  Why the ticker gates the clock: the frame carrying this label is flushed
+ *  right before the harness may take the thread, so a clock printed at that
+ *  moment would be frozen at `0.0s` and read as a hang. Only a tick proves the
+ *  loop is servicing timers — in host mode (the default) that happens while the
+ *  host assembles, so the seconds tick live; in-process they appear once the
+ *  block is over (and may be superseded at once by the step's first content).
+ *  @param startedAt - epoch ms the assembly began, or null when idle.
+ *  @param now - current epoch ms (injectable for tests).
+ *  @param ticked - whether the preparing ticker fired since the assembly began.
+ *  @returns the status-bar string. */
+export function preparingRequestStatusText(startedAt: number | null, now: number, ticked: boolean): string {
+  if (startedAt === null || !ticked) return PREPARING_REQUEST_LABEL
+  return `${PREPARING_REQUEST_LABEL} ${Math.max(0, (now - startedAt) / 1000).toFixed(1)}s`
+}
 
 /** Mutable UI store the Ink app subscribes to. */
 export class Store {
@@ -475,6 +493,10 @@ export class Store {
   /** True while a step's request is being assembled (see
    *  {@link PREPARING_REQUEST_LABEL}). */
   private _preparingRequest = false
+  /** Epoch ms the in-flight assembly began (null when idle). */
+  private _preparingStartedAt: number | null = null
+  /** True once the preparing ticker fired (loop alive → show elapsed). */
+  private _preparingTicked = false
   /** In-flight manual `/compact` (status bar + Esc cancel), or null. */
   private _compaction: CompactionState | null = null
   /** True once the compaction ticker fired (loop alive → show elapsed). */
@@ -1303,11 +1325,28 @@ export class Store {
   /** Whether a request is being assembled (see {@link PREPARING_REQUEST_LABEL}). */
   get preparingRequest(): boolean { return this._preparingRequest }
 
+  /** Epoch ms the in-flight assembly began, or null when idle. */
+  get preparingRequestStartedAt(): number | null { return this._preparingStartedAt }
+
+  /** Whether the preparing ticker ever fired (loop alive → show elapsed). */
+  get preparingRequestTicked(): boolean { return this._preparingTicked }
+
   /** Mark the assembly window: set on `step/start` (and on submit), i.e. right
-   *  before the harness takes the thread. */
-  beginPreparingRequest(): void {
+   *  before the harness takes the thread. A second call inside the same window
+   *  (submit → `step/start`) keeps the original clock, so the seconds measure
+   *  the wait the user actually experiences. */
+  beginPreparingRequest(startedAt: number = Date.now()): void {
     if (this._preparingRequest) return
     this._preparingRequest = true
+    this._preparingStartedAt = startedAt
+    this._preparingTicked = false
+    this.notify()
+  }
+
+  /** Re-render so the elapsed seconds advance (firing proves the loop is free). */
+  tickPreparingRequest(): void {
+    if (!this._preparingRequest) return
+    this._preparingTicked = true
     this.notify()
   }
 
@@ -1316,6 +1355,8 @@ export class Store {
   endPreparingRequest(): void {
     if (!this._preparingRequest) return
     this._preparingRequest = false
+    this._preparingStartedAt = null
+    this._preparingTicked = false
     this.notify()
   }
 
@@ -2937,6 +2978,17 @@ class RenderErrorBoundary extends React.Component<{ children: React.ReactNode },
 export function App(): React.JSX.Element {
   const [, forceRender] = React.useReducer((c: number) => c + 1, 0)
   React.useEffect(() => store.subscribe(() => forceRender()), [])
+  // While a request is being assembled the harness produces no session events
+  // of its own (that silence IS the phase), so nothing would re-render and the
+  // elapsed clock would sit still. This 250 ms ticker keeps it honest — and a
+  // tick firing is itself the proof that the loop is free, which is what gates
+  // the clock in the first place (see `preparingRequestStatusText`).
+  const preparing = store.preparingRequest
+  React.useEffect(() => {
+    if (!preparing) return
+    const ticker = setInterval(() => store.tickPreparingRequest(), 250)
+    return () => clearInterval(ticker)
+  }, [preparing])
   const active = tui.panels.byId(store.panel)
   // Fullscreen panels replace the tree; overlay panels render inside the
   // conversation surface, which embeds them (see the overlay() slots).

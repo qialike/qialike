@@ -242,8 +242,10 @@ describe('P2: window-only stats for oversized sessions', () => {
 
 describe('request-assembly label (step/start → first content event)', () => {
   test('the label states what the wait is', () => {
-    expect(PREPARING_REQUEST_LABEL).toContain('Working')
-    expect(PREPARING_REQUEST_LABEL).toContain('request')
+    expect(PREPARING_REQUEST_LABEL).toContain('preparing the request')
+    // The elapsed seconds ride on the same line (see preparing-request.test.ts);
+    // the base label carries no digits of its own.
+    expect(PREPARING_REQUEST_LABEL).not.toMatch(/[0-9]/)
   })
 
   test('the window opens at step/start and closes on content events', () => {

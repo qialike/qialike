@@ -19,7 +19,7 @@ import {
   sessionLoadBar,
   sessionLoadPercent,
   compactionRowHeader,
-  PREPARING_REQUEST_LABEL,
+  preparingRequestStatusText,
   compactionStatusText,
   sessionLoadingStatusText,
   sessionLoadingText,
@@ -2615,8 +2615,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             : store.preparingRequest
               // The harness assembles this step's request on this thread right
               // after `step/start` (4-6 s on a giant session, `[stall]` in the
-              // log): the frame carrying this label is flushed BEFORE that block.
-              ? <Text color={theme.accent} wrap="truncate">{PREPARING_REQUEST_LABEL}</Text>
+              // log): the frame carrying this label is flushed BEFORE that block,
+              // so the clock stays hidden until a tick proves the loop is free.
+              ? <Text color={theme.accent} wrap="truncate">{preparingRequestStatusText(store.preparingRequestStartedAt, Date.now(), store.preparingRequestTicked)}</Text>
               : store.historyLoadingVisible
             ? <Text color={theme.accent} wrap="truncate">{store.historyProgressText}</Text>
             : store.statusFlash
