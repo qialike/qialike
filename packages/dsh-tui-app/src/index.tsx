@@ -7,7 +7,8 @@
  * Surface features (each owned here, none touching the harness core):
  *   - slash command palette (type `/`)
  *   - a `approval/request` answerer that prompts for tool approval in-band
- *   - launch auto-resume (`resume_last`) / `--resume <id>` over persisted sessions
+ *   - launch resume (`resume` positional, or the opt-in `resume_last`) and
+ *     `--resume <id>` over persisted sessions
  *   - a two-panel layout (conversation + activity) and an input dock
  *
  * @module @yourname/dsh-tui-app
@@ -3181,11 +3182,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     installModelSelection(agentCtx, selected)
   }
 
-  // Explicit `--resume <id>` wins; otherwise the auto-resume default
-  // (dsh-tui.json `resume_last`, default on) continues the newest session with
-  // real content in this same directory — empty sessions (created and exited
-  // without a message) are skipped, so relaunching picks up the last actual
-  // work rather than a blank transcript.
+  // Explicit `--resume <id>` wins; otherwise `dsh-tui resume` (positional) — or
+  // the opt-in `resume_last` default — continues the session the user was last
+  // working in within this directory. HOW it is picked depends on the path: host
+  // mode (the default) takes the newest by log ACTIVITY with no content filter
+  // (`mostRecentlyActiveSession`), while the in-process path probes for the
+  // newest WITH content and skips empty sessions (created and exited without a
+  // message), so it continues the last actual work rather than a blank
+  // transcript. A BARE launch does none of this: it opens the New Session
+  // placeholder on the hero (see `DEFAULT_RESUME_LAST = false` in config.ts).
   //
   // The registry's factory registration can land a short moment AFTER the
   // loader reports quiescence (late service-availability waves during boot);
@@ -3711,10 +3716,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const ticker = setInterval(() => store.tickSessionLoading(), 250)
     void (async (): Promise<void> => {
       // Which session? Resolved HERE, without the host, so the transcript does not
-      // wait for the child's boot: an explicit `--resume` names it, the positional
-      // `resume` means "newest WITH CONTENT in this directory" (computed from the
-      // session files themselves), and the id we pick is then handed to the host,
-      // so client and host can never serve different sessions.
+      // wait for the child's boot: an explicit `--resume` names it, while the
+      // positional `resume` (or the `resume_last` opt-in) resolves the newest by log
+      // ACTIVITY in this directory with NO content filter (`mostRecentlyActiveSession`
+      // reads the session files themselves), and the id we pick is then handed to the
+      // host, so client and host can never serve different sessions.
       let servedFromFile = false
       let wantedId = resumeId
       try {

@@ -341,7 +341,7 @@ export function apply(ctx: Context): void {
       const unwrapped = listRowHeaders(list)
       logErrorFileOnly('sessions', `harness list: ${list.length} row(s), ${unwrapped.length} header(s) for ${store.workspace}`)
       // Only sessions created in the current workspace (same-directory
-      // semantics as the auto-resume default).
+      // semantics as `resume` / the `resume_last` opt-in).
       const sameDir = unwrapped.filter((h) => h.cwd === store.workspace)
       // Render from the title cache immediately; fold missing titles in the
       // background and refresh the dialog in place (keeps filter/highlight).

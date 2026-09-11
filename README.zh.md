@@ -39,14 +39,15 @@ pnpm typecheck
 ## 运行
 
 ```sh
-dist/dsh-tui                              # 继续当前目录下最近一次会话，无则开启新会话
-dist/dsh-tui --workspace ~/proj           # 继续 ~/proj 下最近一次会话
+dist/dsh-tui                              # 开启新会话并显示 hero 首屏（从不自动续接）
+dist/dsh-tui resume                       # 继续当前目录下最近一次会话
+dist/dsh-tui --workspace ~/proj           # 在 ~/proj 下操作（其自身的会话）
 dist/dsh-tui --resume <sessionId>         # 恢复指定持久化会话
-dist/dsh-tui --model deepseek-flash    # 选择模型（DeepSeek V4.1 Flash）
+dist/dsh-tui --model deepseek-flash       # 选择模型（DeepSeek V4.1 Flash）
 dist/dsh-tui --help
 ```
 
-启动时 dsh-tui **自动恢复当前目录下最近使用过的会话**(最后活动时间优先,`~/.dsh/dsh-tui.json` 的 `resume_last: true`,默认开启),重启后接续上次工作——恢复某会话或向其发消息即标记为最近使用。状态行标注 `(resumed)`。显式 `--resume <sessionId>` 始终优先;设 `resume_last: false`(或 `DSH_TUI_RESUME_LAST=0`)则每次全新开始。
+裸执行 dsh-tui 会**开启新会话**并显示 hero 首屏,从不自动续接;要接续上次工作请执行 dsh-tui resume——它继续**当前目录下**最近使用过的会话(最后活动时间优先),直接进入会话界面(该目录下尚无有内容的会话时,也进入会话界面而非 hero 首屏)。恢复某会话或向其发消息即标记为最近使用,状态行标注 `(resumed)`。显式 `--resume <sessionId>` 始终优先。**每次启动都自动续接**为可选项:设 `~/.dsh/dsh-tui.json` 的 `resume_last: true`(或 `DSH_TUI_RESUME_LAST=1`)——默认为 `false`,即每次启动全新开始。
 
 ### 界面特性
 
@@ -120,7 +121,7 @@ dist/dsh-tui --help
   可接收会话中附带的图片，适配器转成 OpenAI `image_url` parts 或 Anthropic base64 source 块。
 - **审批对话框**：某工具请求审批时，带内弹窗显示工具名与原因。`y`/`a` 允许一次，`n`/`Esc` 拒绝。
   （无沙箱 profile 下当前无工具会请求审批，故对话框默认休眠——已在需要时接线就绪。）
-- **`/sessions` 会话管理器（唯一的会话选择入口）**：全屏对话框——列出持久化会话（**仅当前工作目录**，与自动恢复同目录语义一致）（**标题**/id，不显示日期时间——日期由分组组头承载），**打字即过滤**（标题/id/cwd），`Enter` 恢复所选、`Ctrl+R` 改名所选（本地持久，重启仍有效）、`Ctrl+F` 置顶/取消置顶（置顶会话在顶部 `📌 Pinned` 组，持久）、`Ctrl+D` 删除所选历史会话（两次确认；当前会话受保护）、`Esc` 两级退出；列表超页支持 `PgUp`/`PgDn`/`Home`/`End`，**按创建时间倒序（最新在前）并按创建日期分组**（`Today` / `Yesterday` / 日期组头）。每行以会话**标题**打头——即**第一个任务的摘要**（如 `你是谁 · @9/1/2026, 5:47:18 PM · /home/pipo/temp`）：harness 的 `session-title` 服务从会话第一条消息折叠生成（确定性 fallback，可被 LLM 标题提供者润色），随会话持久化——包括 `/new` 切换掉的旧会话。该对话框只承载历史会话记录——开启全新会话由 `/new` 负责。内容级搜索暂不可用（harness 单文件进程无 remote 层的会话内容搜索 API）。
+- **`/sessions` 会话管理器（唯一的会话选择入口）**：全屏对话框——列出持久化会话（**仅当前工作目录**，与 `resume` 同目录语义一致）（**标题**/id，不显示日期时间——日期由分组组头承载），**打字即过滤**（标题/id/cwd），`Enter` 恢复所选、`Ctrl+R` 改名所选（本地持久，重启仍有效）、`Ctrl+F` 置顶/取消置顶（置顶会话在顶部 `📌 Pinned` 组，持久）、`Ctrl+D` 删除所选历史会话（两次确认；当前会话受保护）、`Esc` 两级退出；列表超页支持 `PgUp`/`PgDn`/`Home`/`End`，**按创建时间倒序（最新在前）并按创建日期分组**（`Today` / `Yesterday` / 日期组头）。每行以会话**标题**打头——即**第一个任务的摘要**（如 `你是谁 · @9/1/2026, 5:47:18 PM · /home/pipo/temp`）：harness 的 `session-title` 服务从会话第一条消息折叠生成（确定性 fallback，可被 LLM 标题提供者润色），随会话持久化——包括 `/new` 切换掉的旧会话。该对话框只承载历史会话记录——开启全新会话由 `/new` 负责。内容级搜索暂不可用（harness 单文件进程无 remote 层的会话内容搜索 API）。
 - **`/new` 新会话**：就地开启一个全新会话。取消当前回合、创建新 agent、拆除旧 agent——harness 对所有会话自动持久化，因此之前的对话仍可从 `/sessions` / `--resume` 找回；当前模型选择与工作目录保留。
 - **`/export` 会话导出**：输入 `/export` 弹出**导出对话框**（格式 JSON/Markdown、文件名可编辑、脱敏开关；`↑/↓` 移动字段、`←/→` 切换、输入文件名、`Enter` 导出）；带参数直达：导出会话为 **JSON**（机器可读）或 **Markdown**（人类可读回放）。`/export` 导出当前会话、`/export <sessionId>` 指定会话、`--markdown` 切换格式、`--sanitize` 脱敏（文本/工具输出替换为 `[redacted:…]`）、`--output <名称>` 自定义文件名（自动加扩展名,可含子目录,如 `notes/summary`）。写入**工作区根目录** `export-<时间>-<id>.(json|md)`，状态行显示路径。
 - **`/sidebar` 右侧栏开关**：右侧 **Steps** 面板（`session <id>` + `Steps X/Y` 进度 + 步骤清单；模型未用 `todo_write` 时显示 `no plan yet`）默认在终端足够宽（≥110 列）时自动显示。输入 `/sidebar` 可切换——无参时循环 `auto → on → off`，`/sidebar on|off|auto` 直接设档；**鼠标左键点击 Steps 标题栏**同样可切换。`auto` 随宽度、`on` 恒显（窄窗也显示）、`off` 恒隐（消息列与输入框随之变宽，等同窄窗布局）。选择持久化到 `~/.dsh/dsh-tui.json` 的 `sidebar_mode`（默认 `auto`）；消息列/输入框宽度、换行、光标格、鼠标点击、选区保护等全部几何与显隐判定一致，切换后布局与光标不会错位。

@@ -40,19 +40,23 @@ third-party deps from the harness pnpm store, then `bun build --compile`s `apps/
 ## Run
 
 ```sh
-dist/dsh-tui                              # continue the newest session in this directory, or start fresh
-dist/dsh-tui --workspace ~/proj           # continue the newest session in ~/proj
+dist/dsh-tui                              # start a NEW session on the hero screen (never auto-resumes)
+dist/dsh-tui resume                       # continue the newest session in this directory
+dist/dsh-tui --workspace ~/proj           # operate in ~/proj (its own sessions)
 dist/dsh-tui --resume <sessionId>         # resume a specific persisted session
-dist/dsh-tui --model deepseek-flash    # pick a model (DeepSeek V4.1 Flash)
+dist/dsh-tui --model deepseek-flash       # pick a model (DeepSeek V4.1 Flash)
 dist/dsh-tui --help
 ```
 
-On launch dsh-tui **auto-resumes the most recently used session in the same
-directory** (last-activity first, `resume_last: true` in `~/.dsh/dsh-tui.json`,
-the default), so a relaunch picks up where the last run left off — resuming a
-session or messaging it marks it most-recently-used. The status line marks the
-resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
-`resume_last: false` (or `DSH_TUI_RESUME_LAST=0`) to always start fresh.
+A bare `dsh-tui` starts a **new session** and shows the hero screen — it never
+auto-resumes. `dsh-tui resume` continues the most recently used session **in the
+same directory** (last-activity first) and lands directly in the conversation
+view; when no session in that directory has content yet it still opens the session
+view rather than the hero. Resuming a session or messaging it marks it
+most-recently-used, and the status line marks the resume `(resumed)`. An explicit
+`--resume <sessionId>` always wins. Auto-resume on **every** launch is opt-in: set
+`resume_last: true` in `~/.dsh/dsh-tui.json` (or `DSH_TUI_RESUME_LAST=1`) — the
+default is `false`, i.e. every launch starts fresh.
 
 ### Surface features
 
@@ -213,7 +217,7 @@ resume `(resumed)`. An explicit `--resume <sessionId>` always wins; set
   currently asks, so the dialog stays dormant — wired for when a tool requests approval.)
 - **`/sessions` session manager**: the one session picker — a full-screen dialog
    listing persisted sessions **of the current working directory only** (same-directory semantics as
-   the auto-resume default)
+   `resume`)
    (title / id — no date/time, the day headers carry it) with **live type-to-filter**
    (title/id/cwd), `Enter` resumes the selection, `Ctrl+R` renames the highlighted
    session (local, persists across restarts), `Ctrl+F` pins/unpins it (pinned sessions
