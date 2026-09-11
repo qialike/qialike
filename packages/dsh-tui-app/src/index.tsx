@@ -643,6 +643,12 @@ export class Store {
    *  (see the why there). Read by the conversation panel's layout memo. */
   private _assistantSettleEpoch = 0
   get assistantSettleEpoch(): number { return this._assistantSettleEpoch }
+  /** Row key of the item the last settlement replaced. The transcript panel
+   *  busts the debounced markdown estimate for THAT row only, instead of
+   *  invalidating every row's estimate (measured: a global bump re-parsed all
+   *  ~5.1k markdown rows, 0.72 s on every assistant settle). */
+  private _lastSettledKey = -1
+  get lastSettledKey(): number { return this._lastSettledKey }
 
   private notify(): void {
     this._lastMutationAt = Date.now()
@@ -1085,6 +1091,7 @@ export class Store {
     }
     if (idx === -1) {
       this.items = [...this.items, { key: this.key += 1, kind: 'assistant', text }]
+      this._lastSettledKey = this.key
       this.notify()
       return
     }
@@ -1092,6 +1099,7 @@ export class Store {
     const next = [...this.items]
     next[idx] = { ...next[idx]!, text }
     this.items = next
+    this._lastSettledKey = next[idx]!.key
     this.notify()
   }
 

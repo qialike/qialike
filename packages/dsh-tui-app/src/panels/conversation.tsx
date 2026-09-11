@@ -1181,6 +1181,15 @@ export function clearMarkdownHeightCache(): void {
   markdownHeightsByKey.clear()
 }
 
+/** Drop the debounced markdown estimate for ONE row key. Called on settlement:
+ *  the settled row is a NEW item object (so its per-item estimate cache is empty
+ *  anyway) and the debounce is keyed by row key, so busting that single key is
+ *  enough — the settled text gets an exact parse while every other row keeps its
+ *  cached estimate (a global clear re-parsed ~5.1k rows, 0.72 s per settle). */
+export function bustMarkdownHeight(key: number): void {
+  markdownHeightsByKey.delete(key)
+}
+
 /** Row-height estimate for markdown text (assistant/plan rows), debounced by
  *  streamed growth: reuse the last mdast parse until the text grew past
  *  {@link MARKDOWN_REPARSE_GROWTH} since it, so a fast long stream does not
@@ -2254,8 +2263,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // height is what clips the answer's last wrapped line off the viewport).
     if (store.assistantSettleEpoch !== lastSettleEpoch) {
       lastSettleEpoch = store.assistantSettleEpoch
-      clearMarkdownHeightCache()
-      estGeneration += 1
+      // Per-row bust (was: `clearMarkdownHeightCache()` + a global
+      // `estGeneration += 1`, i.e. every markdown row re-parsed ≈0.72 s per
+      // settle — the steady-state jank root cause, session/optimization-plan.md §8).
+      bustMarkdownHeight(store.lastSettledKey)
+      if (debugEst) {
+        logErrorFileOnly('est', `settle bust row=${store.lastSettledKey} (per-row; estGen=${estGeneration} unchanged)`)
+      }
     }
     if (debugTail) {
       // Snapshot the TAIL row's cache entry BEFORE this pass reads it, so the
