@@ -11,6 +11,7 @@
     model: deepseek-v4-flash
 
 # Pin the workspace for this deployment (overrides --workspace when unset).
+# Replace with an absolute path on your machine, e.g. /home/you/projects.
 - id: tui-runtime
   config:
-    workspace: /home/pipo/deepseek
+    workspace: /path/to/workspace
