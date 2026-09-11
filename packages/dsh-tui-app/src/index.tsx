@@ -3293,17 +3293,39 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // really reached the terminal, and only then pay for the attach. The docked
   // chrome + `Load session:` banner appear immediately instead of a hero that
   // sits there for ~2.4 s (session/optimization-plan.md §2 S2).
-  const fastFirstScreen = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_FAST_FIRST_SCREEN ?? '')
-    && resumeId !== undefined
+  // Default ON: paint the file-first screen for a `--resume <id>` launch, or for
+  // the auto-resume pick (`dsh-tui resume` / `resume_last`) once its target is
+  // known. `DSH_TUI_NO_FAST_FIRST_SCREEN=1` (or the opt-in var set to 0/false)
+  // returns to the attach-first boot for A/B and for a one-line rollback.
+  const fastFirstEnabled = !/^(1|true|yes|on)$/i.test(process.env.DSH_TUI_NO_FAST_FIRST_SCREEN ?? '')
+    && !/^(0|false|no|off)$/i.test(process.env.DSH_TUI_FAST_FIRST_SCREEN ?? '')
+  const autoResumeWanted = config.resumeNewest === true || resolveResumeLast()
+  let fileFirstId = resumeId
+  if (fastFirstEnabled && fileFirstId === undefined && autoResumeWanted) {
+    // Same candidate rule the attach itself will use (autoResumeCandidates), so
+    // the painted screen can never belong to a different session than the one
+    // about to be opened.
+    const heads = await autoResumeCandidates(ctx, config.workspace)
+    // Prefer the session `autoResumeNewest` will open (its HEAD-confident,
+    // non-blank pick). When the probe cannot classify anything — which is what a
+    // GIANT log looks like: its first zstd frame is 7.4 MB, far past the probe
+    // budget, so `facts` is undefined — fall back to the most-recently-used
+    // candidate, because that is the one the attach's leftover loop opens first.
+    // A wrong guess is harmless: a blank/empty target folds to zero items and
+    // `paintFileFirstScreen` paints nothing.
+    fileFirstId = (heads?.find((entry) => entry.facts?.confident === true && !entry.facts.blank)
+      ?? heads?.[0])?.header.id
+  }
+  const fastFirstScreen = fastFirstEnabled && fileFirstId !== undefined
   let earlyApp: ReturnType<typeof render> | undefined
-  if (fastFirstScreen && resumeId !== undefined) {
+  if (fastFirstScreen && fileFirstId !== undefined) {
     store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
     // Leaves the hero (a plain launch's placeholder) and paints the docked
     // chrome with the load banner: the transcript has somewhere to appear.
-    store.beginSessionLoading({ id: resumeId, startedAt: Date.now() })
+    store.beginSessionLoading({ id: fileFirstId, startedAt: Date.now() })
     earlyApp = render(<App />)
     if (process.stdout.isTTY) process.stdout.write('\x1b[?1006h\x1b[?1003h\x1b[?2004h')
-    const painted = await paintFileFirstScreen(store, config.workspace, resumeId)
+    const painted = await paintFileFirstScreen(store, config.workspace, fileFirstId)
     if (painted !== null) {
       logErrorFileOnly('boot', `phases: file-first screen painted ms=${painted.ms} (attach still pending)`)
       await waitForFirstPaint()
@@ -4516,13 +4538,22 @@ async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestion
  * @returns the resumed handle, or `undefined` when no candidate has content
  *   (or persistence is unavailable) — the caller starts fresh.
  */
-async function autoResumeNewest(
+/**
+ * Candidate sessions for the auto-resume picker, most-recently-used first and
+ * with the cheap HEAD facts already probed.
+ *
+ * Shared by {@link autoResumeNewest} (which resumes the first one with content)
+ * and the launch's file-first screen (`DSH_TUI_NO_FAST_FIRST_SCREEN`), so the
+ * screen can only ever be painted for the session the attach is about to open —
+ * two copies of this rule could show one session's tail and then attach another.
+ * @param ctx - the runtime context (sessionPersistence list).
+ * @param cwd - the workspace whose sessions to consider.
+ * @returns the ordered candidates, or undefined when the list is unavailable.
+ */
+async function autoResumeCandidates(
   ctx: Context,
-  agents: { resume(options: ResumeAgentOptions): Promise<AgentHandle> },
   cwd: string,
-  agentOptions: { provider: string; model: string },
-  setup: (agentCtx: Context) => void,
-): Promise<AgentHandle | undefined> {
+): Promise<Array<{ header: SessionHeaderLike; facts: ReturnType<typeof probeSessionHead> }> | undefined> {
   const persistence = ctx.get('sessionPersistence') as { list?: (signal?: AbortSignal) => Promise<readonly unknown[]> } | undefined
   if (persistence?.list === undefined) return undefined
   let list: readonly SessionHeaderLike[]
@@ -4544,10 +4575,18 @@ async function autoResumeNewest(
   // never opens a log to ask whether it has content). Resuming every candidate
   // to test it — the old behavior — decoded the WHOLE log per candidate, which
   // on a 1.4M-event session is seconds per attempt.
-  const heads = candidates.map((h) => {
-    const facts = probeSessionHead(cwd, String(h.id))
-    return { header: h, facts }
-  })
+  return candidates.map((h) => ({ header: h, facts: probeSessionHead(cwd, String(h.id)) }))
+}
+
+async function autoResumeNewest(
+  ctx: Context,
+  agents: { resume(options: ResumeAgentOptions): Promise<AgentHandle> },
+  cwd: string,
+  agentOptions: { provider: string; model: string },
+  setup: (agentCtx: Context) => void,
+): Promise<AgentHandle | undefined> {
+  const heads = await autoResumeCandidates(ctx, cwd)
+  if (heads === undefined) return undefined
   const firstWithContent = heads.find((entry) => entry.facts !== undefined && entry.facts.confident && !entry.facts.blank)
   if (firstWithContent !== undefined) {
     // Oversized target: say WHY the next seconds are quiet, BEFORE the blocking
