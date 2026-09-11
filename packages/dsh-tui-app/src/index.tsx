@@ -3285,6 +3285,30 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }
   const NO_FACTORY = /no agent factory registered/
   const factoryRetryDeadline = Date.now() + 10_000
+  // ── S2 phase 1: first screen from the durable log, before the attach ───────
+  // `agents.resume()` below decodes the whole log synchronously and blocks this
+  // thread, so nothing can be painted until it returns. For an explicit
+  // `--resume <id>` we already know WHICH log to read, so mount the UI, paint
+  // the newest events ourselves (paintFileFirstScreen), make sure that frame
+  // really reached the terminal, and only then pay for the attach. The docked
+  // chrome + `Load session:` banner appear immediately instead of a hero that
+  // sits there for ~2.4 s (session/optimization-plan.md §2 S2).
+  const fastFirstScreen = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_FAST_FIRST_SCREEN ?? '')
+    && resumeId !== undefined
+  let earlyApp: ReturnType<typeof render> | undefined
+  if (fastFirstScreen && resumeId !== undefined) {
+    store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
+    // Leaves the hero (a plain launch's placeholder) and paints the docked
+    // chrome with the load banner: the transcript has somewhere to appear.
+    store.beginSessionLoading({ id: resumeId, startedAt: Date.now() })
+    earlyApp = render(<App />)
+    if (process.stdout.isTTY) process.stdout.write('\x1b[?1006h\x1b[?1003h\x1b[?2004h')
+    const painted = await paintFileFirstScreen(store, config.workspace, resumeId)
+    if (painted !== null) {
+      logErrorFileOnly('boot', `phases: file-first screen painted ms=${painted.ms} (attach still pending)`)
+      await waitForFirstPaint()
+    }
+  }
   for (;;) {
     try {
       const result = await establish()
@@ -3370,6 +3394,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   } else {
     rememberBlank(sessionId, true) // freshly created: unused New Session
   }
+  // S2: the attach + authoritative fold are done, so the launch's load banner
+  // (raised by phase 1 to have a docked slot for the first screen) is over.
+  if (fastFirstScreen) store.endSessionLoading()
   // The merged template directory (core + plugin-registered), read live so a
   // sibling plugin's additions apply without a restart.
   const templates = (): readonly TuiProviderTemplate[] =>
@@ -4290,7 +4317,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // Chinese. The patched Ink frame writer (apps/tui-bin/build.mjs) appends the
   // suffix after all line updates, so the position is never overwritten by the
   // next frame.
-  const app = render(<App />)
+  // S2: phase 1 may already have mounted the UI to paint the file-first screen
+  // (see the boot block above) — never mount a second Ink root.
+  const app = earlyApp ?? render(<App />)
 
   // Enable SGR mouse tracking so the terminal sends press/drag/release/wheel
   // events to the app. The stdin decoder turns wheel bytes (64/65) into
@@ -5139,6 +5168,74 @@ export function describeActivity(): string { return activityLabel }
 
 function sleepFor(ms: number): Promise<void> {
   return new Promise<void>((resolve) => { setTimeout(resolve, ms) })
+}
+
+/** How many newest durable events phase 1 folds for the first screen (S2).
+ *  `SessionLogReader.readTail` is frame-granular, and this log's frame layout
+ *  makes the choice cheap: it returns 851 events (36 ms decode) for 1 000-6 000
+ *  and jumps to the WHOLE 12 282-event log (347 ms) above that, because the log
+ *  holds one 7.4 MB frame followed by ~449 small ones (.scan/tail-window-probe.ts). */
+const FIRST_SCREEN_EVENTS = Number(process.env.DSH_TUI_FIRST_SCREEN_EVENTS ?? 1_500)
+
+/**
+ * S2 phase 1: paint the newest events of a `--resume` session STRAIGHT FROM THE
+ * DURABLE LOG, before the harness attaches.
+ *
+ * `agents.resume()` decodes the whole log synchronously inside the harness
+ * (measured 1 795-1904 ms on this session) and blocks the thread it runs on, so
+ * today the UI cannot exist until it is done. The log is a concatenation of
+ * independent zstd frames, so the tail can be decoded by ourselves in ~70 ms
+ * (measured: head probe 18 ms + reader open 18 ms + `readTail(1500)` 36 ms +
+ * fold ~32 ms) — the same events the harness would hand us, just without
+ * waiting for it. The transcript then paints while the attach still runs.
+ *
+ * Everything here is best-effort: any failure returns null and the caller keeps
+ * the previous boot path (attach first), so a corrupt or missing log cannot break
+ * the launch.
+ * @param store - the TUI store to paint into.
+ * @param cwd - the session's workspace (project key).
+ * @param id - the session id to resume.
+ * @returns the event/item counts and elapsed ms, or null when nothing was painted.
+ */
+async function paintFileFirstScreen(store: Store, cwd: string, id: string): Promise<{ events: number; items: number; ms: number } | null> {
+  const t0 = Date.now()
+  try {
+    const path = resolveSessionLogPath(sessionDir(cwd, SessionId(id)))
+    if (path === undefined) return null
+    const reader = new SessionLogReader(path)
+    const tail = await reader.readTail(FIRST_SCREEN_EVENTS)
+    if (tail.events.length === 0) return null
+    // The reader returns durable log records; the fold is written against the
+    // harness event union but deliberately handles the durable-only vocabulary
+    // (`assistant/chunk`, packed rows) — it is what resume replays either way.
+    const events = tail.events as unknown as readonly SessionEvent[]
+    const folded = foldHistoryEvents(events)
+    if (folded.items.length === 0) return null
+    store.adoptPermission(lastSandboxMode(events))
+    store.beginHistory(folded.items, folded.steps, tail.startSeq)
+    const ms = Date.now() - t0
+    logErrorFileOnly('resume',
+      `first screen from file: events=${tail.events.length} startSeq=${tail.startSeq} items=${folded.items.length} ms=${ms}`)
+    return { events: tail.events.length, items: folded.items.length, ms }
+  } catch (error) {
+    // Best-effort: the launch falls back to the attach-first path below.
+    logErrorFileOnly('resume', `first screen from file failed: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  }
+}
+
+/** Wait until the frame writer has really flushed a frame (the patched writer
+ *  stamps `__dshTuiLastFlushAt` on every write), so a blocking harness call that
+ *  follows cannot swallow the first screen we just painted. Bounded: a terminal
+ *  that never flushes must not delay the attach. */
+async function waitForFirstPaint(capMs = 1_200): Promise<boolean> {
+  const g = globalThis as unknown as { __dshTuiLastFlushAt?: number }
+  const start = Date.now()
+  while (Date.now() - start < capMs) {
+    await sleepFor(10)
+    if ((g.__dshTuiLastFlushAt ?? 0) >= start) return true
+  }
+  return false
 }
 
 function abortResumeFold(): void {
