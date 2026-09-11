@@ -35,7 +35,7 @@ import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
 import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
 import { logErrorFileOnly } from './log.ts'
 import { join } from 'node:path'
-import { sessionDir } from './session-files.ts'
+import { sessionLogPath } from './session-files.ts'
 
 /** Messages the client sends. */
 interface HostRequest {
@@ -94,7 +94,7 @@ interface PersistenceLike extends PersistenceListLike {}
 /** The durable log path for a session under THIS host's harness home. */
 function logPathFor(sessionId: string): string | undefined {
   try {
-    return join(sessionDir(process.cwd(), sessionId as SessionId), 'session.jsonl.zstd')
+    return sessionLogPath(process.cwd(), sessionId as SessionId)
   } catch {
     return undefined
   }
@@ -511,6 +511,24 @@ export async function startHost(
     ctx.on('agent/status', (payload: { agent: { id: string }; status: 'idle' | 'running' }) => {
       if (payload.agent.id !== current) return
       send({ type: 'agent-status', status: payload.status })
+    })
+    // Live model deltas. Harness 0.1.5 removed the durable `assistant/chunk`
+    // events the client used to stream from; the deltas now arrive as
+    // `agent/assistant-stream` frames (start/chunk/end, with an attempt id and
+    // a dense index) and only the settled `assistant/message`/`assistant/attempt`
+    // reaches the session log. Forward each `chunk` frame's delta so the
+    // transcript keeps streaming token by token; the settlement still travels
+    // through `session/event` below.
+    ctx.on('agent/assistant-stream', (payload: {
+      agent: { id: string }
+      frame: { type?: string; turn?: number; step?: number; chunk?: unknown }
+    }) => {
+      if (payload.agent.id !== current) return
+      if (payload.frame?.type !== 'chunk') return
+      send({
+        type: 'assistant-frame',
+        frame: { turn: payload.frame.turn, step: payload.frame.step, chunk: payload.frame.chunk },
+      })
     })
     ctx.on('session/event', (session, event) => {
       if (session.id !== current) return

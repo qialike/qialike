@@ -30,10 +30,10 @@ import type { HostCommand, HostCommandResult } from './host-command.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { createUserMessage, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { projectKey, sessionDir } from './session-files.ts'
+import { projectKey, resolveSessionLogPath, sessionDir, sessionLogPath } from './session-files.ts'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { existsSync, readdirSync } from 'node:fs'
 import { probeSessionHead } from './session-head.ts'
@@ -3562,8 +3562,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     replace: boolean,
   ): Promise<boolean> => {
     // The host reports the path when it can resolve one; otherwise build it the
-    // same way the /sessions list does (the log lives under its cwd's project key).
-    const path = logPath ?? join(sessionDir(cwd, SessionId(sessionId_)), 'session.jsonl.zstd')
+    // same way the /sessions list does — the HIGHEST log generation under the
+    // session's project key (0.1.5 writes `session.vN.jsonl.zstd` and keeps the
+    // older generations, so the v0 name alone can be a stale file).
+    const path = logPath ?? sessionLogPath(cwd, SessionId(sessionId_))
     const reader = new SessionLogReader(path)
     const t0 = Date.now()
     const tail = await reader.readTail(HISTORY_TAIL_EVENTS)
@@ -3861,6 +3863,17 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   /** One live `session/event`, from EITHER source: the in-process harness or a
    *  P4c host process forwarding its session's events. Extracted so the host
    *  path can feed the exact same rendering logic (P4c M1.2). */
+  /** Apply one model delta to the streaming transcript. Shared by the 0.1.2
+   *  durable `assistant/chunk` events and 0.1.5's `agent/assistant-stream`
+   *  frames, so both vocabularies render token by token identically. */
+  const applyModelDelta = (chunk: { type?: string; text?: string } | undefined): void => {
+    if (chunk === undefined) return
+    // Reasoning is shown as a collapsed Think block; text streams as the
+    // answer. Tool-call deltas are dropped (the settled tool/call row renders).
+    if (chunk.type === 'reasoning-delta') store.streamReasoning(chunk.text ?? '')
+    else if (chunk.type === 'text-delta') store.streamText(chunk.text ?? '')
+  }
+
   const handleLiveEvent = (session: { id: string }, event: SessionEvent): void => {
     if (session.id === sessionId) sessionEventCount += 1
     if (debugLayoutEvents) { eventsThisWindow += 1; if (session.id === sessionId) eventsForSession += 1 }
@@ -3877,17 +3890,19 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // Liveness beat: any live event means the run is active, so the status bar
     // can show "Ns since last event" even across silent model stretches.
     store.markActivity()
+    // TWO streaming vocabularies reach this listener:
+    // - a 0.1.2 host forwards one durable `assistant/chunk` event per delta;
+    // - a 0.1.5 host forwards `agent/assistant-stream` chunk frames (see the
+    //   `onAssistantFrame` subscription), and `assistant/chunk` no longer
+    //   exists in the session event union.
+    // The legacy type is handled BEFORE the switch so the switch keeps its
+    // per-event narrowing under either harness.
+    const rawType = (event as unknown as { type: string }).type
+    if (rawType === 'assistant/chunk') {
+      store.endPreparingRequest()
+      applyModelDelta((event as unknown as { data?: { chunk?: { type?: string; text?: string } } }).data?.chunk)
+    }
     switch (event.type) {
-      case 'assistant/chunk': {
-        store.endPreparingRequest()
-        const chunk = event.data.chunk
-        // Reasoning is shown as a collapsed Think block; text streams as the
-        // answer. Tool-call deltas are dropped (the settled tool/call row is
-        // rendered instead).
-        if (chunk.type === 'reasoning-delta') store.streamReasoning(chunk.text)
-        else if (chunk.type === 'text-delta') store.streamText(chunk.text)
-        break
-      }
       case 'assistant/message': {
         store.endPreparingRequest()
         const data = event.data as {
@@ -4091,6 +4106,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     hostClient.onStatus((status) => {
       if (status === 'running') store.lastEscTime = 0
       store.setRunning(status === 'running')
+    })
+    // Live model deltas from the host (`agent/assistant-stream` frames): the
+    // 0.1.5 replacement for the durable `assistant/chunk` events the switch in
+    // `handleLiveEvent` still accepts from an older host.
+    hostClient.onAssistantFrame((frame) => {
+      if (frame.chunk === undefined) return
+      store.endPreparingRequest()
+      applyModelDelta(frame.chunk)
     })
     // ── M3: the host's waterfalls, answered by THIS process's dialogs ───────
     // The harness raises approvals and `ask_user_question` in the host (it owns
@@ -4940,8 +4963,8 @@ async function mostRecentlyActiveSession(workspace: string): Promise<string | un
     const candidates: { id: string; createdAt: number; activeAt: number }[] = []
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
-      const logPath = join(dir, entry.name, 'session.jsonl.zstd')
-      if (!existsSync(logPath)) continue
+      const logPath = resolveSessionLogPath(join(dir, entry.name))
+      if (logPath === undefined) continue
       const header = await new SessionLogReader(logPath).header()
       // The directory name is the encoded id; the header carries the CREATION
       // time, the file's mtime the last ACTIVITY (any writer updates it: this
@@ -5170,6 +5193,32 @@ function toolResultDisplay(message: { content?: unknown } | undefined): { text: 
 }
 
 /**
+ * The reasoning text carried by one 0.1.5 embedded assistant stream.
+ *
+ * The stream is the harness's `AssistantStreamRecord[]` (raw `chunk` records
+ * plus packed `text-chunks`/`reasoning-chunks`/`tool-call-chunks` runs); the
+ * harness's `expandAssistantStream` is the validating way to walk it. Only
+ * reasoning deltas are returned: the settled message already carries the answer
+ * text, exactly as the transcript treats the legacy `assistant/chunk` events.
+ * Malformed or absent streams yield '' (a corrupt tail must not kill a resume).
+ * @param stream - the event's `data.stream`, of unknown shape.
+ * @returns the concatenated reasoning deltas, in order.
+ */
+function reasoningTextFromStream(stream: unknown): string {
+  if (!Array.isArray(stream) || stream.length === 0) return ''
+  let text = ''
+  try {
+    for (const entry of expandAssistantStream(stream as never)) {
+      const chunk = (entry as { chunk?: { type?: string; text?: string } }).chunk
+      if (chunk?.type === 'reasoning-delta' && typeof chunk.text === 'string') text += chunk.text
+    }
+  } catch {
+    return ''
+  }
+  return text
+}
+
+/**
  * Fold a persisted session's event log into transcript rows, mirroring what
  * the live `session/event` listener renders — except assistant text comes from
  * the settled `assistant/message` events (streaming chunks are dropped) and
@@ -5190,8 +5239,38 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
   // consumed by the checkpoint message that immediately follows it (mirrors the
   // live listener's `pendingCompactionFacts`).
   let foldCompactionFacts: CompactionRowFacts | undefined
+  /** Append reasoning text, merging into a trailing reasoning row (the same rule
+   *  as `store.streamReasoning`, so resume and live render identically). */
+  const pushReasoning = (delta: string): void => {
+    if (delta === '') return
+    const tail = items.at(-1)
+    if (tail !== undefined && tail.kind === 'reasoning') {
+      items[items.length - 1] = { ...tail, text: tail.text + delta }
+    } else {
+      items.push({ key: key += 1, kind: 'reasoning', text: delta })
+    }
+  }
   for (const event of events) {
     stats?.observe(event)
+    // TWO vocabularies reach this fold and both must render:
+    // - a 0.1.2 log stores one durable `assistant/chunk` event per delta;
+    // - 0.1.5 folds the deltas into the message/attempt event's own `stream`
+    //   (`assistant/message` / `assistant/attempt`) and dropped
+    //   `assistant/chunk` from the session event union entirely.
+    // Handling the legacy type outside the switch keeps the switch's typing
+    // (and therefore its per-event narrowing) valid under either harness.
+    const rawType = (event as unknown as { type: string }).type
+    if (rawType === 'assistant/chunk') {
+      const chunk = (event as unknown as { data?: { chunk?: { type?: string; text?: string } } }).data?.chunk
+      if (chunk?.type === 'reasoning-delta' && typeof chunk.text === 'string') pushReasoning(chunk.text)
+      continue
+    }
+    if (rawType === 'assistant/attempt') {
+      // A model attempt that committed no surface message (failed/retried/
+      // cancelled): only its reasoning is visible in the transcript.
+      pushReasoning(reasoningTextFromStream((event as unknown as { data?: { stream?: unknown } }).data?.stream))
+      continue
+    }
     switch (event.type) {
       case 'user/message': {
         const source = event.data.source as { kind?: string; plugin?: string } | undefined
@@ -5237,28 +5316,13 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
       }
       case 'assistant/message': {
         // assistant/message carries `{ turn, step, message }` (unlike
-        // user/message, whose data IS the message).
+        // user/message, whose data IS the message). 0.1.5 also embeds the
+        // attempt's exact timed stream here; its reasoning deltas rebuild the
+        // same Think rows the legacy per-delta events used to produce.
+        pushReasoning(reasoningTextFromStream((event.data as { stream?: unknown }).stream))
         const joined = flattenContentText(event.data.message.content)
         if (joined === '') break
         items.push({ key: key += 1, kind: 'assistant', text: joined })
-        break
-      }
-      case 'assistant/chunk': {
-        // Rebuild the Think (reasoning) rows the live path renders: accumulate
-        // reasoning deltas into one reasoning item per contiguous run (append
-        // to the tail when it is already a reasoning item, mirroring
-        // store.streamReasoning). text-delta chunks stay dropped — the settled
-        // assistant/message above is the authoritative text.
-        const chunk = (event.data as { chunk?: { type?: string; text?: string } }).chunk
-        const delta = chunk?.type === 'reasoning-delta' ? chunk.text : undefined
-        if (typeof delta === 'string' && delta !== '') {
-          const tail = items.at(-1)
-          if (tail !== undefined && tail.kind === 'reasoning') {
-            items[items.length - 1] = { ...tail, text: tail.text + delta }
-          } else {
-            items.push({ key: key += 1, kind: 'reasoning', text: delta })
-          }
-        }
         break
       }
       case 'todo/write': {
@@ -5397,17 +5461,13 @@ export function olderItemCap(rows: number): number {
   return Math.max(2000, Math.min(RESUME_OLDER_ITEM_CAP, Math.round(rows * 40)))
 }
 
-/** Bytes of one persisted session's durable log (`session.jsonl.zstd`, or the
- *  plain `session.jsonl`), best-effort — the banner shows it so the user can
- *  tell "big log" from "small log" BEFORE the wait. */
+/** Bytes of one persisted session's durable log (the HIGHEST generation present:
+ *  `session.vN.jsonl[.zstd]`, falling back to the v0 name), best-effort — the
+ *  banner shows it so the user can tell "big log" from "small log" BEFORE the wait. */
 function sessionLogBytes(cwd: string, id: string): number | undefined {
   try {
-    const dir = sessionDir(cwd, SessionId(id))
-    for (const name of ['session.jsonl.zstd', 'session.jsonl']) {
-      try {
-        return statSync(join(dir, name)).size
-      } catch { /* try the next candidate */ }
-    }
+    const path = resolveSessionLogPath(sessionDir(cwd, SessionId(id)))
+    if (path !== undefined) return statSync(path).size
   } catch { /* unreadable -> no size in the banner */ }
   return undefined
 }

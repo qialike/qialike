@@ -38,6 +38,14 @@ export interface HostEvent {
   data?: unknown
 }
 
+/** One live model-delta frame: the harness's `agent/assistant-stream` `chunk`
+ *  publication, reduced to what the transcript needs (the delta itself). */
+export interface HostAssistantFrame {
+  turn?: number
+  step?: number
+  chunk?: { type?: string; text?: string }
+}
+
 /** The host's answer to `attach`/`new`: the session it now serves plus the fold
  *  plan the client should render. */
 export interface HostAttached {
@@ -102,6 +110,11 @@ export interface HostClient {
   /** Subscribe to the host's live `session/event` batches. `sessionId` lets the
    *  client drop a straggler from a session it just switched away from. */
   onEvents(handler: (batch: HostEvent[], sessionId?: string) => void): void
+  /** Subscribe to the host's live model-delta frames (`agent/assistant-stream`).
+   *  Harness 0.1.5 stopped emitting per-delta `assistant/chunk` events, so this
+   *  is the channel that keeps tokens streaming; the settled message still
+   *  arrives through `session/event`. */
+  onAssistantFrame(handler: (frame: HostAssistantFrame) => void): void
   /** Subscribe to the host's turn-status beats (`agent/status`). */
   onStatus(handler: (status: 'idle' | 'running') => void): void
   /** Subscribe to host-side asks (approvals, user questions) this process must
@@ -160,6 +173,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
   const pending = new Map<number, Pending>()
   const eventHandlers = new Set<(batch: HostEvent[], sessionId?: string) => void>()
   const statusHandlers = new Set<(status: 'idle' | 'running') => void>()
+  const assistantFrameHandlers = new Set<(frame: HostAssistantFrame) => void>()
   const askHandlers = new Set<(ask: HostAsk) => void>()
   const askCancelledHandlers = new Set<(requestId: number) => void>()
   const exitHandlers = new Set<(reason: string) => void>()
@@ -209,6 +223,11 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
       case 'agent-status': {
         const status = message.status as 'idle' | 'running' | undefined
         if (status !== undefined) for (const handler of statusHandlers) handler(status)
+        return
+      }
+      case 'assistant-frame': {
+        const frame = message.frame as HostAssistantFrame | undefined
+        if (frame !== undefined) for (const handler of assistantFrameHandlers) handler(frame)
         return
       }
       case 'ask': {
@@ -354,6 +373,7 @@ export function spawnHostClient(options: { workspace: string; resume?: string; m
     prompt: (blocks: readonly unknown[]) => request<void>({ type: 'prompt', blocks }),
     cancel: () => request<void>({ type: 'cancel' }),
       onEvents: (handler: (batch: HostEvent[], sessionId?: string) => void) => { eventHandlers.add(handler) },
+    onAssistantFrame: (handler: (frame: HostAssistantFrame) => void) => { assistantFrameHandlers.add(handler) },
     onStatus: (handler: (status: 'idle' | 'running') => void) => { statusHandlers.add(handler) },
     onAsk: (handler: (ask: HostAsk) => void) => { askHandlers.add(handler) },
     onAskCancelled: (handler: (requestId: number) => void) => { askCancelledHandlers.add(handler) },

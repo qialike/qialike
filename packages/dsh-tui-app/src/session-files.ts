@@ -16,6 +16,7 @@
  * @module @yourname/dsh-tui-app/session-files
  */
 
+import { readdirSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
@@ -95,4 +96,55 @@ export function sessionDir(cwd: string, id: SessionId): string {
  */
 export async function deleteSession(cwd: string, id: SessionId): Promise<void> {
   await rm(sessionDir(cwd, id), { recursive: true, force: true })
+}
+
+/**
+ * The harness's canonical log filename: `session.jsonl[.zstd]` is generation 0,
+ * `session.vN.jsonl[.zstd]` is generation N (N ≥ 1). Harness 0.1.5 writes the
+ * CURRENT generation (`session.v3.jsonl.zstd`) and never moves or deletes the
+ * older ones, so a reader that hardcodes `session.jsonl.zstd` silently shows a
+ * STALE transcript (and, for a session written only by the new harness, the
+ * wrong file entirely).
+ */
+const SESSION_LOG_NAME = /^session(?:\.v([1-9][0-9]*))?\.jsonl(\.zstd)?$/
+
+/**
+ * The log file the harness itself would read out of `dir`: the numerically
+ * highest generation present, preferring `.zstd` when both encodings of that
+ * generation exist. Unreadable directories and directories without a canonical
+ * log yield undefined.
+ * @param dir - one session's directory.
+ * @returns the absolute path, or undefined when no generation exists.
+ */
+export function resolveSessionLogPath(dir: string): string | undefined {
+  let names: readonly string[]
+  try {
+    names = readdirSync(dir)
+  } catch {
+    return undefined
+  }
+  let best: { name: string; version: number; zstd: number } | undefined
+  for (const name of names) {
+    const match = SESSION_LOG_NAME.exec(name)
+    if (match === null) continue
+    const version = match[1] === undefined ? 0 : Number(match[1])
+    const zstd = match[2] === '.zstd' ? 1 : 0
+    if (best === undefined || version > best.version || (version === best.version && zstd > best.zstd)) {
+      best = { name, version, zstd }
+    }
+  }
+  return best === undefined ? undefined : join(dir, best.name)
+}
+
+/**
+ * The path a reader should open for one session, falling back to the v0 name
+ * when the directory holds no log yet (a session that exists only in memory,
+ * e.g. immediately after `/new`).
+ * @param cwd - the session's working directory (header cwd).
+ * @param id - the session id.
+ * @returns the absolute log path (may not exist).
+ */
+export function sessionLogPath(cwd: string, id: SessionId): string {
+  const dir = sessionDir(cwd, id)
+  return resolveSessionLogPath(dir) ?? join(dir, 'session.jsonl.zstd')
 }

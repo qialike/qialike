@@ -177,6 +177,48 @@ describe('session log reader', () => {
     expect(inside.map((e) => (e.data as { chunk?: { text?: string } }).chunk?.text)).toEqual(['a', 'b', 'c'])
   })
 
+  test('a CURRENT (v3) log is one event per row and needs no decoding', async () => {
+    // The 0.1.5 writer stores one event per line (header version 3) with no
+    // packed runs at all, so the same frame table / bisection serves it — the
+    // reader must not depend on the removed `chunk-rows` vocabulary.
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-log-frames-v3-'))
+    const path = join(dir, 'session.v3.jsonl.zstd')
+    const head = { type: 'session', version: 3, id: 'session-v3', createdAt: 1, cwd: '/tmp' }
+    const row = (seq: number): Record<string, unknown> => ({
+      type: 'user/message',
+      seq,
+      time: 3000 + seq,
+      data: { role: 'user', content: [{ type: 'text', text: `v3 row ${seq}` }] },
+    })
+    const parts = [frame([head, row(0), row(1)]), frame([row(2), row(3)])]
+    writeFileSync(path, Buffer.concat(parts.map((p) => Buffer.from(p))))
+    const reader = new SessionLogReader(path)
+    expect(await reader.totalEvents()).toBe(4)
+    expect((await reader.read(1, 3)).map((e) => e.seq)).toEqual([1, 2])
+    expect((await reader.read(0, 4)).map((e) => e.type)).toEqual([
+      'user/message', 'user/message', 'user/message', 'user/message',
+    ])
+    expect((await reader.readTail(50)).startSeq).toBe(0)
+  })
+
+  test('a MALFORMED packed row is dropped instead of surfacing a half run', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-log-frames-badpack-'))
+    const path = join(dir, 'session.jsonl.zstd')
+    const head = { type: 'session', version: 0, id: 'session-badpack', createdAt: 1, cwd: '/tmp' }
+    const bad = {
+      type: 'text-chunks',
+      seq0: 1,
+      time0: 2000,
+      // three members but only one gap: the row is corrupt storage.
+      data: { turn: 1, step: 1, index: 0, dt: [1], texts: ['a', 'b', 'c'] },
+    }
+    const parts = [frame([head, eventRow(0, 'before')]), frame([bad]), frame([eventRow(1, 'after')])]
+    writeFileSync(path, Buffer.concat(parts.map((p) => Buffer.from(p))))
+    const reader = new SessionLogReader(path)
+    expect(await reader.totalEvents()).toBe(2)
+    expect((await reader.read(0, 5)).map((e) => e.seq)).toEqual([0, 1])
+  })
+
   test('an empty/foreign file reads as empty instead of throwing', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'dsh-log-frames-empty-'))
     const path = join(dir, 'session.jsonl.zstd')

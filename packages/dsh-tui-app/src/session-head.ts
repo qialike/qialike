@@ -24,8 +24,7 @@
  */
 
 import { closeSync, openSync, readSync, statSync } from 'node:fs'
-import { join } from 'node:path'
-import { sessionDir } from './session-files.ts'
+import { resolveSessionLogPath, sessionDir } from './session-files.ts'
 
 /** Bytes read from the head of a log (the harness probes 1 KB; a zstd frame can
  *  be larger, so we read more and then cut at the first COMPLETE frame). */
@@ -100,34 +99,35 @@ export function firstZstdFrameEnd(buf: Uint8Array): number | undefined {
  *  @returns the facts, or undefined when the log cannot be read/decoded. */
 export function probeSessionHead(cwd: string, id: string, maxBytes = HEAD_PROBE_BYTES): SessionHeadFacts | undefined {
   try {
-    const dir = sessionDir(cwd, id as never)
-    for (const name of ['session.jsonl.zstd', 'session.jsonl'] as const) {
-      const path = join(dir, name)
-      let size = 0
-      try {
-        size = statSync(path).size
-      } catch {
-        continue
-      }
-      const take = Math.min(size, maxBytes)
-      const buf = Buffer.allocUnsafe(take)
-      const fd = openSync(path, 'r')
-      let read = 0
-      try {
-        read = readSync(fd, buf, 0, take, 0)
-      } finally {
-        closeSync(fd)
-      }
-      const head = buf.subarray(0, read)
-      if (name.endsWith('.zstd')) {
-        const end = firstZstdFrameEnd(head)
-        if (end === undefined) return undefined // no complete frame in the head
-        const jsonl = zstdDecompress(head.subarray(0, end))
-        if (jsonl === undefined) return undefined
-        return foldSessionHead(jsonl, end >= size)
-      }
-      return foldSessionHead(head.toString('utf8'), read >= size)
+    // The HIGHEST generation present, exactly as the harness picks it: 0.1.5
+    // writes `session.vN.jsonl[.zstd]` beside the older generations, so probing
+    // the v0 name alone would show a stale head.
+    const path = resolveSessionLogPath(sessionDir(cwd, id as never))
+    if (path === undefined) return undefined
+    let size = 0
+    try {
+      size = statSync(path).size
+    } catch {
+      return undefined
     }
+    const take = Math.min(size, maxBytes)
+    const buf = Buffer.allocUnsafe(take)
+    const fd = openSync(path, 'r')
+    let read = 0
+    try {
+      read = readSync(fd, buf, 0, take, 0)
+    } finally {
+      closeSync(fd)
+    }
+    const head = buf.subarray(0, read)
+    if (path.endsWith('.zstd')) {
+      const end = firstZstdFrameEnd(head)
+      if (end === undefined) return undefined // no complete frame in the head
+      const jsonl = zstdDecompress(head.subarray(0, end))
+      if (jsonl === undefined) return undefined
+      return foldSessionHead(jsonl, end >= size)
+    }
+    return foldSessionHead(head.toString('utf8'), read >= size)
   } catch {
     /* unreadable log → caller falls back to a full inspection */
   }

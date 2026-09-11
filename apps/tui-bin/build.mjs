@@ -47,7 +47,7 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/dsh-tui-app/src/harness-versio
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.1.2-rc.1'
+const HARNESS_VERSION_MAX = '0.1.5-rc.2'
 
 /** Cross-compile targets (`name` -> `bun build --compile --target` value). */
 const ALL_TARGETS = [
@@ -65,6 +65,7 @@ const NATIVE_PACKAGES = new Set([
   '@deepseek-ai/dsh-pwsh-sandbox',
   '@deepseek-ai/node-addon-landlock-run',
   '@deepseek-ai/dsh-sandbox-windows-acl',
+  '@deepseek-ai/dsh-win32-process',
 ])
 
 /**
@@ -97,6 +98,62 @@ const NATIVE_STUB_SOURCE = {
     'export const workspaceWriteSid = ""',
     '',
   ].join('\n'),
+  // The Win32 Job/process ABI (`subprocess-local`'s Windows runner). Its `ffi.ts`
+  // asserts Koffi's `STARTUPINFOW`/`PROCESS_INFORMATION` layouts at MODULE LOAD,
+  // and the bun:ffi-backed koffi shim computes no size for them — so merely
+  // importing the Linux-capable `subprocess-local` crashed the binary with
+  // `STARTUPINFOW layout mismatch: koffi computed undefined, expected 104`.
+  // Every export here backs a `process.platform === 'win32'` branch, so a stub
+  // that keeps them importable (and throws if a Windows path ever runs) is
+  // enough on Linux/macOS — same rule as the Windows ACL entry above.
+  '@deepseek-ai/dsh-win32-process': [
+    'export class Win32Error extends Error {}',
+    'export const loadWin32ProcessBindings = () => { throw new Error("win32 process bindings are not available in dsh-tui") }',
+    'export const probeCurrentTokenJobSupport = () => ({ supported: false })',
+    'export const spawnCurrentTokenJobProcess = () => { throw new Error("win32 process spawning is not available in dsh-tui") }',
+    'export const closeHandleChecked = () => {}',
+    'export const isJobEmpty = () => true',
+    'export const pollProcessExit = () => undefined',
+    'export const terminateJob = () => {}',
+    '',
+  ].join('\n'),
+}
+
+/**
+ * Subpath-aware stubs for a consolidated native-addon package: harness 0.1.5
+ * folded the per-addon packages (`node-addon-landlock-run`, …) into
+ * `@deepseek-ai/node-addon-system`, whose consumers import **subpaths**
+ * (`/landlock-run`, `/flock`). A subpath import resolves through the package's
+ * own `exports` map, so the stub directory below is written with one file per
+ * subpath and an `exports` map generated from the same keys — a plain
+ * `main`-only stub (what {@link NATIVE_STUB_SOURCE} installs) cannot satisfy it.
+ *
+ * `/flock`'s `tryLockExclusive` grants immediately, mirroring the harness's own
+ * single-process worker replacement
+ * (`packages/experimental/webworker-runtime/src/node/external_packages/node-addon-system-flock.ts`):
+ * the JSONL backend's in-process write claim already excludes every writer, and
+ * the kernel lease is new in 0.1.5 — 0.1.2-rc.1 had no lock at all — so a TUI
+ * host that never takes it is not losing a protection it previously had. Two
+ * `dsh-tui` hosts on the SAME session are consequently no longer kept apart by
+ * a kernel lock; nothing else changes (a single host still serializes writes).
+ */
+const NATIVE_SUBPATH_STUB_SOURCE = {
+  '@deepseek-ai/node-addon-system': {
+    './landlock-run': [
+      'export const LAUNCHER_BIN = "landlock-run"',
+      'export const LAUNCHER_FAILURE_EXIT = 125',
+      'export const launcherPath = () => ""',
+      'export const grantArgs = () => []',
+      'export const probe = () => "unusable"',
+      'export default ""',
+      '',
+    ].join('\n'),
+    './flock': [
+      'export async function tryLockExclusive(_fd) { return undefined }',
+      'export default { tryLockExclusive }',
+      '',
+    ].join('\n'),
+  },
 }
 
 /**
@@ -492,12 +549,15 @@ function createResolveFarm() {
   }
   link('@yourname/dsh-tui-app', join(ROOT, 'packages/dsh-tui-app'))
 
-  // `@deepseek-ai/node-addon-landlock-run` lives under the harness's `native/`
-  // tree, which scanPackages() does not walk, so the link loop above never
-  // re-created it (the `rmSync(@deepseek-ai)` drop wiped the mirror's copy).
-  // Install its custom stub explicitly so the un-stubbed `dsh-sandbox-local`
-  // bundle can import it; it reports landlock `unusable`, pushing the Linux
-  // sandbox to the bwrap rung.
+  // Two native-addon stubs live under the harness's `native/` tree, which
+  // scanPackages() does not walk, so the link loop above never re-created them
+  // (the `rmSync(@deepseek-ai)` drop wiped the mirror's copy). Install them
+  // explicitly so the un-stubbed `dsh-sandbox-local` / `session-persistence-jsonl`
+  // bundles can import them. Both are installed unconditionally: which one the
+  // build actually imports depends on the harness version the gate let through
+  // (≤0.1.2-rc.1 imports `node-addon-landlock-run`; ≥0.1.5 imports the
+  // `node-addon-system` subpaths), and an unused stub directory is inert.
+  // The landlock stub reports `unusable`, pushing the Linux sandbox to bwrap.
   {
     const stubName = '@deepseek-ai/node-addon-landlock-run'
     const stubSrc = NATIVE_STUB_SOURCE[stubName]
@@ -513,6 +573,24 @@ function createResolveFarm() {
       symlinkSync(dir, target, 'dir')
       console.log('dsh-tui: stubbed native ' + stubName)
     }
+  }
+  for (const [stubName, subpaths] of Object.entries(NATIVE_SUBPATH_STUB_SOURCE)) {
+    const dir = join(ROOT, 'apps/tui-bin/stub-native', `pkg-${stubName.replace(/[^A-Za-z0-9_-]/g, '_')}`)
+    rmSync(dir, { recursive: true, force: true })
+    mkdirSync(dir, { recursive: true })
+    const exportsMap = { '.': './index.js' }
+    for (const [subpath, source] of Object.entries(subpaths)) {
+      const file = `${subpath.slice(2)}.js`
+      writeFileSync(join(dir, file), source)
+      exportsMap[subpath] = `./${file}`
+    }
+    writeFileSync(join(dir, 'index.js'), 'export {}\n')
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: stubName, type: 'module', exports: exportsMap }, null, 2))
+    const target = join(nm, ...stubName.split('/'))
+    rmSync(target, { recursive: true, force: true })
+    mkdirSync(dirname(target), { recursive: true })
+    symlinkSync(dir, target, 'dir')
+    console.log(`dsh-tui: stubbed native ${stubName} (${Object.keys(subpaths).join(', ')})`)
   }
 
   // On Windows, pnpm creates directory symlinks with relative targets (e.g.
@@ -537,6 +615,130 @@ function createResolveFarm() {
     fixShadowLinks(join(ROOT, 'apps/tui-bin/node_modules/@yourname'))
     fixShadowLinks(join(ROOT, 'packages/dsh-tui-app/node_modules'))
   }
+
+  // Bun gaps in the Node builtins the bundled harness uses (see the function).
+  patchBunNodeUtilGaps()
+  patchBunSeaWorkerEntries()
+}
+
+/**
+ * Patch the BUNDLED COPIES of harness packages for Node builtins Bun does not
+ * implement.
+ *
+ * `@deepseek-ai/dsh-subprocess-local` statically imports `getSystemErrorMessage`
+ * from `node:util` (Node ≥ 22.10). Bun 1.3.14 exports `getSystemErrorName` but
+ * NOT `getSystemErrorMessage`, and a missing named export of a builtin fails the
+ * whole single-file bundle at LOAD time — the binary died with
+ * `SyntaxError: Export named 'getSystemErrorMessage' not found in module
+ * 'node:util'` before printing even `--version`. The name only feeds one
+ * diagnostic string, so the fix is to drop it from the import and define a local
+ * fallback that degrades to the errno's symbolic name.
+ *
+ * This edits `apps/tui-bin/x/**` (our transform of the harness's compiled
+ * `lib/`), never the harness checkout — the same rule as the Ink patches.
+ */
+function patchBunNodeUtilGaps() {
+  const farm = join(ROOT, 'apps/tui-bin/x')
+  if (!existsSync(farm)) return
+  const files = []
+  const collect = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) collect(path)
+      else if (entry.name.endsWith('.js')) files.push(path)
+    }
+  }
+  collect(farm)
+  let patched = 0
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8')
+    if (!text.includes('getSystemErrorMessage')) continue
+    let next = text.replace(
+      /import\s*\{([^}]*)\}\s*from\s*(["'])node:util\2;?/g,
+      (match, names) => {
+        const kept = String(names)
+          .split(',')
+          .map((name) => name.trim())
+          .filter((name) => name !== '' && name !== 'getSystemErrorMessage')
+        return kept.length > 0 ? `import { ${kept.join(', ')} } from "node:util";` : ''
+      },
+    )
+    if (!next.includes('const getSystemErrorMessage')) {
+      // The try/catch also swallows a missing `getSystemErrorName` binding, so a
+      // file that imported only the absent name still degrades gracefully.
+      next += '\nconst getSystemErrorMessage = (uvError) => {\n'
+        + '  try { return String(getSystemErrorName(uvError)).toLowerCase() } catch { return `error ${uvError}` }\n'
+        + '}\n'
+    }
+    writeFileSync(file, next)
+    patched += 1
+  }
+  if (patched > 0) console.log(`dsh-tui: patched Bun node:util gaps in ${patched} bundled file(s)`)
+}
+
+/**
+ * Run the JSONL migration verifier in-process instead of in a Worker Thread.
+ *
+ * Harness 0.1.5 verifies a migrated or competing current generation through
+ * `new Worker(new URL('./worker.cjs', import.meta.url))`
+ * (`session-persistence-jsonl/src/migration-verifier.ts:77`). Inside a Bun
+ * single-file executable that URL resolves to `/$bunfs/root/worker.cjs`, which
+ * is not part of the blob, so a **read open of any historical (v0/v1/v2) log**
+ * failed with
+ * `stored log is corrupt: Error: BuildMessage: ModuleNotFound resolving
+ *  "/$bunfs/root/worker.cjs" (entry point)`
+ * — the host could not attach a legacy session at all, while the transcript was
+ * already on screen from the file reader.
+ *
+ * The worker is a thin wrapper around `verifyJsonlCurrentGeneration`, which the
+ * same bundled file already exposes as `defaultGenerationRuntime.verify`; the
+ * patch replaces `runVerificationWorker`'s body with that inline call, so the
+ * SAME code, validation and failure surface run, just not on a second thread.
+ * The harness itself replaces this worker's sibling native addon (`/flock`) the
+ * same way for single-process runtimes — see the `node-addon-system` stub.
+ *
+ * Applied to `apps/tui-bin/x/**` (our transform of the harness's compiled
+ * `lib/`), never to the harness checkout.
+ */
+function patchBunSeaWorkerEntries() {
+  const farm = join(ROOT, 'apps/tui-bin/x')
+  if (!existsSync(farm)) return
+  const files = []
+  const collect = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) collect(path)
+      else if (entry.name.endsWith('.js')) files.push(path)
+    }
+  }
+  collect(farm)
+  let patched = 0
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8')
+    if (!text.includes('worker.cjs')) continue
+    const start = text.indexOf('function runVerificationWorker(')
+    if (start < 0) continue
+    // The compiled file is pretty-printed with one top-level function per
+    // block, so the next top-level `function` keyword bounds this one; the
+    // JSDoc that follows belongs to the NEXT symbol and is left in place.
+    let end = -1
+    for (const marker of ['\nfunction ', '\nasync function ']) {
+      const at = text.indexOf(marker, start)
+      if (at >= 0 && (end < 0 || at < end)) end = at
+    }
+    if (end < 0) continue
+    const replacement = [
+      'function runVerificationWorker(path, compression, expectedId, expectedEventCount, expectedPrefix, signal) {',
+      '\tsignal?.throwIfAborted();',
+      '\t/* dsh-tui patch: verify in-process; the SEA has no worker entry (see build.mjs). */',
+      '\treturn defaultGenerationRuntime.verify(path, compression, expectedId, expectedEventCount, expectedPrefix);',
+      '}',
+      '',
+    ].join('\n')
+    writeFileSync(file, text.slice(0, start) + replacement + text.slice(end + 1))
+    patched += 1
+  }
+  if (patched > 0) console.log(`dsh-tui: patched Bun SEA worker entry in ${patched} bundled file(s)`)
 }
 
 /** Symlink every entry of the harness virtual-store `node_modules` we don't own. */

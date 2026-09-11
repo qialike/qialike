@@ -20,16 +20,10 @@
  * @module dsh-tui-app/log-frames
  */
 
-import { decodeStorageRecord } from '@deepseek-ai/dsh-session/chunk-rows'
+import { decodeLogLine } from './log-row-codec.ts'
+import type { DurableEvent } from './log-row-codec.ts'
 
-/** One durable event, as the log stores it (shape is the harness's). */
-export interface DurableEvent {
-  type: string
-  seq: number
-  time?: number
-  data?: unknown
-  [key: string]: unknown
-}
+export type { DurableEvent }
 
 /** Bun is not in the typecheck project's lib set; declare only the surface this
  *  module uses (the build bundles Bun's real implementation). */
@@ -132,28 +126,23 @@ function parseRun(text: string): DurableEvent[] {
 }
 
 /**
- * Decode one stored line into the events it represents, using the harness's OWN
- * row codec.
+ * Decode one stored line into the events it represents — the reader's only
+ * format-dependent step, delegated to {@link decodeLogLine}.
  *
- * The log stores delta-chunk RUNS as packed rows (`text-chunks` /
- * `reasoning-chunks` / `tool-call-chunks`) anchored on `seq0`, and those rows are
- * "an encoding vocabulary, NOT session events": they never appear in
- * `snapshotEvents()`, and one row expands to N events with seqs `seq0..seq0+N-1`.
- * Hand-rolling the parse silently drops every packed row (measured: half the
- * events of a real log, and empty reads for ranges that happen to sit inside a
- * run), so the codec is reused instead of reimplemented.
+ * Two layouts exist on disk and the dispatch is by CONTENT, not by the header's
+ * version (so a mixed directory and a mid-upgrade session both read):
+ * - current writer (v2/v3): one row per event, carrying its own dense `seq`;
+ * - historical writer (v0/v1): delta-chunk RUNS packed into `text-chunks` /
+ *   `reasoning-chunks` / `tool-call-chunks` rows anchored on `seq0`, where one
+ *   row expands to N events with seqs `seq0..seq0+N-1`.
+ * A windowed reader must expand the packed runs itself (measured before the
+ * frozen decoder existed: hand-parsing for `seq` dropped half the events of a
+ * real log and emptied every range that sat inside a run).
  * @param line - one JSONL record.
  * @returns the events (empty for a torn line or a metadata line without events).
  */
 function parseLine(line: string): DurableEvent[] {
-  try {
-    // The codec also passes through non-event records verbatim (the header line,
-    // metadata): keep only what actually occupies the seq space.
-    return (decodeStorageRecord(JSON.parse(line)) as unknown as DurableEvent[])
-      .filter((event) => typeof event.seq === 'number')
-  } catch {
-    return []
-  }
+  return decodeLogLine(line)
 }
 
 /**
