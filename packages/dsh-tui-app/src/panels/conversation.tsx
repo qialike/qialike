@@ -473,6 +473,9 @@ function runCommandAt(index: number, tui: TuiService): void {
 
 const measuredHeights = new Map<string, number>()
 let lastLayoutWidth = -1 // last width the row-height cache was computed for
+/** Last {@link Store.assistantSettleEpoch} the layout has re-parsed for: a
+ *  change forces the settled row's markdown height to be parsed exactly once. */
+let lastSettleEpoch = -1
 const lastMeasuredNotify = new Map<string, number>()
 
 /** Minimum gap between measured-height writes for one row (ms). Kept short
@@ -482,19 +485,80 @@ const lastMeasuredNotify = new Map<string, number>()
  *  per-delta notify storm never re-lays the whole transcript every frame. */
 const MEASURE_THROTTLE_MS = 100
 
-function setMeasuredHeight(key: string, rows: number): void {
+/** Record one painted row height and re-lay the transcript when it really
+ *  changed.
+ *
+ *  The measured value is the TRUTH for the layout (the markdown estimate is
+ *  only a placeholder for rows that were never painted), so any real change
+ *  must be stored — including a change of exactly one row. The earlier rule
+ *  ("ignore |Δ| ≤ 1") silently dropped the LAST row of growth of a long
+ *  streamed answer: the cached height stayed one row short, `content` (hence
+ *  `maxScroll`) stayed one row short, and with follow-tail the newest wrapped
+ *  line fell below the viewport — the "answer's tail never shows up, End does
+ *  not help" report (see dsh-tui-development §2.5.51).
+ *
+ *  Two safeguards replace that tolerance:
+ *   · a reading more than one row BELOW the markdown estimate is the documented
+ *     diff-render collapse (a row measuring 1 instead of 3), never a real
+ *     height → ignored, so it can neither poison the cache nor shrink the view;
+ *   · `force` marks a measurement taken while the row's text has been stable
+ *     (the effect's 400/900 ms samples): those are authoritative and bypass the
+ *     ±1 noise tolerance that still applies to a mid-commit reading.
+ * @param key - transcript row key.
+ * @param rows - measured painted height (content rows, margins excluded).
+ * @param est - the row's markdown estimate (sanity floor for the reading).
+ * @param opts.force - text-stable (authoritative) measurement.
+ * @param opts.throttled - apply {@link MEASURE_THROTTLE_MS} (immediate path). */
+function setMeasuredHeight(
+  key: string,
+  rows: number,
+  est: number,
+  opts: { force?: boolean; throttled?: boolean } = {},
+): void {
   const prev = measuredHeights.get(key)
-  if (prev !== undefined && Math.abs(prev - rows) <= 1) return
-  const now = Date.now()
-  const last = lastMeasuredNotify.get(key)
-  if (last !== undefined && now - last < MEASURE_THROTTLE_MS) return
-  lastMeasuredNotify.set(key, now)
+  if (!shouldStoreMeasured(rows, prev, est, opts.force === true)) return
+  if (opts.throttled === true) {
+    const now = Date.now()
+    const last = lastMeasuredNotify.get(key)
+    if (last !== undefined && now - last < MEASURE_THROTTLE_MS) return
+    lastMeasuredNotify.set(key, now)
+  }
   measuredHeights.set(key, rows)
+  if (debugTail) {
+    logErrorFileOnly('tail',
+      `measure key=${key} rows=${rows} prev=${prev ?? -1} est=${est} force=${opts.force === true}`)
+  }
   // Row heights changed: the layout memo must recompute. The dedicated epoch
   // (not the generic render `version`) is what invalidates it, so typing and
   // phase/hover churn never re-lay the whole transcript.
   store.bumpMeasure()
   store.touch()
+}
+
+/** Whether a fresh reading replaces the stored row height (exported for the
+ *  regression test; the rules are the whole point of §2.5.51):
+ *   · a reading more than one row BELOW the estimate is a diff-render collapse
+ *     (a row momentarily measuring 1 instead of 3) — never a real height;
+ *   · an unchanged reading is a no-op;
+ *   · anything else is real growth/shrink and MUST be stored, even by one row:
+ *     dropping it leaves the transcript's predicted content one row short, and
+ *     with follow-tail the newest wrapped line lands below the viewport.
+ *     Only a non-authoritative (`force === false`) mid-commit reading keeps the
+ *     ±1 tolerance that suppresses diff-render noise.
+ *  @param rows - the fresh measured height.
+ *  @param stored - the height already cached for this row (undefined if none).
+ *  @param est - the row's markdown height estimate.
+ *  @param force - the row's text was stable when this reading was taken. */
+export function shouldStoreMeasured(
+  rows: number,
+  stored: number | undefined,
+  est: number,
+  force: boolean,
+): boolean {
+  if (rows + 1 < est) return false
+  if (stored === rows) return false
+  if (!force && stored !== undefined && Math.abs(stored - rows) <= 1) return false
+  return true
 }
 
 function rowHeight(key: string, fallback: number): number {
@@ -696,35 +760,39 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
     const key = String(props.item.key)
-    // Measure immediately (setMeasuredHeight is throttled, so a per-delta
-    // notify storm is avoided) so the very next frame lays out with the
-    // current height and no content overlaps. Ink can finish laying out a
-    // frame AFTER React commits, so also re-measure at 60/400/900 ms through
-    // the UN-throttled path: without it a stale (smaller) height would linger
-    // in the cache and drift the scroll — the clip boundary lands one row off
-    // and a block/heading separator row gets cut (heading looks flush).
-    if (ref.current) setMeasuredHeight(key, measureElement(ref.current).height)
-    const sample = (): void => {
-      if (!ref.current) return
-      const rows = measureElement(ref.current).height
-      const prev = measuredHeights.get(key)
-      if (prev === undefined || Math.abs(prev - rows) > 1) {
-        measuredHeights.set(key, rows)
-        // bumpMeasure too, not just touch(): the layout memo must recompute
-        // against the refreshed measured height. touch() alone re-renders but
-        // leaves the memoized layout (deps unchanged) serving the OLD height —
-        // with the debounced markdown estimate that stale height would keep
-        // clipping the streaming tail until some unrelated deps change.
-        store.bumpMeasure()
-        store.touch()
-      }
+    // The row's markdown estimate is the sanity floor for every reading below
+    // (a diff-rendered row measures a collapsed height — see setMeasuredHeight).
+    const est = estItemLines(props.item, props.usable, props.expandReasoning)
+    // Measure immediately (throttled, so a per-delta notify storm is avoided)
+    // so the very next frame lays out with the current height and no content
+    // overlaps. Ink can finish laying out a frame AFTER React commits, so also
+    // re-measure at 60/400/900 ms: those samples are authoritative (`force`,
+    // un-throttled) because this effect re-runs on every text change and clears
+    // its timers — a timer that fires therefore proves the text has been stable
+    // for that long. Without the forced final sample a last one-row growth was
+    // dropped, leaving the cached height one row short and clipping the tail of
+    // the answer below the transcript viewport (dsh-tui-development §2.5.51).
+    if (ref.current) {
+      setMeasuredHeight(key, measureElement(ref.current).height, est, { force: true, throttled: true })
     }
-    const timers = [setTimeout(sample, 60), setTimeout(sample, 400), setTimeout(sample, 900)]
+    const sample = (force: boolean) => (): void => {
+      if (!ref.current) return
+      setMeasuredHeight(key, measureElement(ref.current).height, est, { force })
+    }
+    const timers = [
+      setTimeout(sample(false), 60),
+      setTimeout(sample(true), 400),
+      setTimeout(sample(true), 900),
+    ]
     return () => { for (const t of timers) clearTimeout(t) }
     // Re-measure when an expansion toggle changes this row's rendered height
     // (the item text itself is unchanged, so [props.item.text] alone would
-    // skip it and leave the measured cache stale).
-  }, [props.item.text, props.expandReasoning, props.toolExpanded, props.compactionExpanded])
+    // skip it and leave the measured cache stale), and when the wrap width
+    // changes: the layout drops every cached height on a width change, and
+    // without this dep the mounted rows would never be re-measured — they would
+    // keep whatever stale estimate the layout filled in (measured: 97 vs the
+    // real 115 rows, clipping 17 lines off the answer's tail).
+  }, [props.item.text, props.usable, props.expandReasoning, props.toolExpanded, props.compactionExpanded])
   return (
     <Box ref={ref} flexDirection="column">
       {itemContent(props.item, props.expandReasoning, props.toolExpanded, props.compactionExpanded, props.hovered, props.usable, props.toolLive, props.reasoningLive)}
@@ -762,7 +830,11 @@ class RowErrorBoundary extends React.Component<{ children: React.ReactNode }, { 
 function StepsRow(props: { steps: readonly StepItem[] }): React.JSX.Element {
   const ref = React.useRef<DOMElement>(null)
   React.useEffect(() => {
-    if (ref.current) setMeasuredHeight('steps', measureElement(ref.current).height)
+    // Rare row (one per plan write), so no throttle: the authoritative height
+    // must land on the very pass that follows a steps change.
+    if (ref.current) {
+      setMeasuredHeight('steps', measureElement(ref.current).height, stepsBlockHeight(props.steps.length), { force: true })
+    }
   }, [props.steps])
   return <Box ref={ref} flexDirection="column"><StepsBlock steps={props.steps} /></Box>
 }
@@ -1058,6 +1130,16 @@ const legacyEstimate = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_LEGACY_EST 
  *  row key instead. */
 const estCache = new WeakMap<TranscriptItem, Map<string, number>>()
 
+/** Invalidates every entry of {@link estCache} at once. The per-item map is
+ *  keyed by wrap width, so an entry computed for an older wrap width would be
+ *  reused verbatim when the width comes back (a resize round trip) — measured:
+ *  the layout fell back to the stale 97-row estimate of a 115-row answer and
+ *  clipped 17 lines off its tail. Bumped on a wrap-width change and on every
+ *  assistant settlement (the settled text must be parsed exactly, not debounced).
+ *  WeakMap entries cannot be cleared, so the generation rides in the cache key
+ *  instead and old entries simply stop matching. */
+let estGeneration = 0
+
 /** How many characters a streaming row may grow past its last markdown-height
  *  parse before the estimate is recomputed. Between parses the painted
  *  measured height (updated at ~100 ms cadence + 60/400/900 ms resamples,
@@ -1144,7 +1226,7 @@ function estItemLines(item: TranscriptItem, usable: number, expandReasoning: boo
   // serving the collapsed entry (1 line) would clip the body away after a click.
   const compactionExpanded = item.kind === 'compaction' && item.compaction?.summary !== undefined
     && store.isToolExpanded(item.key)
-  const cacheKey = `${usable}|${expandReasoning ? 1 : 0}|${toolExpanded ? 1 : 0}|${compactionExpanded ? 1 : 0}`
+  const cacheKey = `${estGeneration}|${usable}|${expandReasoning ? 1 : 0}|${toolExpanded ? 1 : 0}|${compactionExpanded ? 1 : 0}`
   let byItem = estCache.get(item)
   if (byItem === undefined) {
     byItem = new Map()
@@ -1240,6 +1322,15 @@ function wrapRows(text: string, usable: number): string[] {
  *  specific pathological row (a giant tool body) instead of guessed at. Off by
  *  default: the per-item `Date.now()` pairs are only paid when debugging. */
 const debugLayout = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_LAYOUT ?? '')
+/** Tail-geometry probe (`DSH_TUI_DEBUG_TAIL=1`, diagnosis only): one line per
+ *  render pass with the window geometry and the TAIL row's estimate/measured
+ *  height, so "the answer's last line never shows up" can be told apart from a
+ *  stale frame. Off by default. */
+const debugTail = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_TAIL ?? '')
+/** Tail row's measured-height cache entry as seen at the START of the last
+ *  layout pass: lets the probe contrast "what the layout trusted" with the
+ *  estimate it used (-1 = no measurement, estimate only). See {@link debugTail}. */
+let preTailMeas = -1
 
 /** Aggregate frame-cost meter (gated by the same switch): the per-item probe
  *  only fires on a >200 ms wedge, which never happens on a big session — so a
@@ -2118,44 +2209,56 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     let mdMs = 0
     let mdCalls = 0
     // A width change invalidates every cached row height (wrap counts differ);
-    // drop the cache so the next pass re-estimates before anything is measured.
+    // drop the caches and bump the estimate generation so no entry computed for
+    // the previous width can be served again (the mounted rows re-measure right
+    // away: the measure effect depends on `usable`).
     if (usable !== lastLayoutWidth) {
+      if (debugTail) {
+        logErrorFileOnly('tail', `width change ${lastLayoutWidth} -> ${usable}: cleared ${measuredHeights.size} measured heights`)
+      }
       measuredHeights.clear()
       clearMarkdownHeightCache()
+      estGeneration += 1
       lastLayoutWidth = usable
     }
+    // A settled assistant message replaces the streamed copy with authoritative
+    // text: re-parse its markdown height exactly once (the streaming estimate is
+    // deliberately debounced, so it can be several rows short — and a short
+    // height is what clips the answer's last wrapped line off the viewport).
+    if (store.assistantSettleEpoch !== lastSettleEpoch) {
+      lastSettleEpoch = store.assistantSettleEpoch
+      clearMarkdownHeightCache()
+      estGeneration += 1
+    }
+    if (debugTail) {
+      // Snapshot the TAIL row's cache entry BEFORE this pass reads it, so the
+      // true measurement and the estimate used by the window can be compared
+      // for the same text.
+      const tr = rows.length > 0 ? rows[rows.length - 1] : undefined
+      preTailMeas = tr?.type === 'item' ? (measuredHeights.get(String(tr.item.key)) ?? -1) : -1
+    }
     // Row heights come from the measured cache first; a row that has not been
-    // painted yet (scrolled out / long history) gets ONE estimated pass that
-    // is cached in place, so later notify cycles only walk the cache instead
-    // of re-estimating every row's wrapped-line count (O(total chars) each
-    // render on long sessions).
+    // painted yet (scrolled out / long history) is ESTIMATED and that estimate
+    // stays in estCache — it is never written into the measured map, because a
+    // cache entry there is treated as painted truth (and a stale estimate in
+    // that slot is what leaves the window one row short of the real content).
     const heightOf = (r: Row): number => {
-      // Content rows first (estimated; the measured cache only overrides when
-      // it stays within 1 of the estimate — a wildly-off reading is a scroll
-      // artifact), then the row's layout margins add their rows so starts[]
-      // tracks the real rendered extent (content + spacing).
+      // Content rows first, then the row's layout margins add their rows so
+      // starts[] tracks the real rendered extent (content + spacing).
       const content = r.type === 'steps'
         ? rowHeight('steps', stepsBlockHeight(steps.length))
         : (() => {
           const key = String(r.item.key)
-          // The ESTIMATE is deterministic and correct; the measureElement height
-          // is flaky during scroll (a diff-rendered item can measure a collapsed
-          // height, e.g. 1 instead of 3). Use the measured value only when it
-          // stays within 1 of the estimate — a wildly-off reading is a scroll
-          // artifact, so fall back to the estimate to keep every gap stable.
+          // The estimate is a placeholder for a row that has not been painted
+          // (or only returned a collapsed, implausible reading — see
+          // resolveRowHeight); a real measurement always wins.
           const tEst = debugLayout ? Date.now() : 0
           const est = estItemLines(r.item, usable, reasoningExpandedFor(r.item))
           if (debugLayout && (r.item.kind === 'assistant' || r.item.kind === 'plan' || r.item.kind === 'compaction')) {
             mdCalls += 1
             mdMs += Date.now() - tEst
           }
-          const measured = measuredHeights.get(key)
-          // Cache the estimate for an unpainted row, and for a reading that is
-          // implausibly small (a diff-rendered row can read a collapsed height);
-          // otherwise the measured painted height is the truth (see
-          // resolveRowHeight) and keeps the streaming tail from being clipped.
-          if (measured === undefined || measured + 1 < est) measuredHeights.set(key, est)
-          return resolveRowHeight(est, measured)
+          return resolveRowHeight(est, measuredHeights.get(key))
         })()
       return content + r.top + r.bottom
     }
@@ -2177,7 +2280,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     let s = 0
     for (let i = 0; i < hts.length; i++) { starts.push(s); s += hts[i]! }
     return { hts, starts, content: s }
-  }, [rows, usable, steps, store.measureEpoch, store.expansionEpoch, store.loadGeneration])
+  }, [rows, usable, steps, store.measureEpoch, store.expansionEpoch, store.loadGeneration, store.assistantSettleEpoch])
   const maxScroll = Math.max(0, layout.content - viewportLines)
   const effectiveScroll = store.followTail ? maxScroll : Math.max(0, Math.min(store.scroll, maxScroll))
   const topRow = 2
@@ -2215,6 +2318,21 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   while (last >= 0 && layout.starts[last] >= effectiveScroll + viewportLines) last--
   if (first > last) first = Math.max(0, last)
   const shift = first < rows.length ? effectiveScroll - layout.starts[first] : 0
+  if (debugTail) {
+    const tailRow = last >= 0 && last < rows.length ? rows[last] : undefined
+    const tailItem = tailRow?.type === 'item' ? tailRow.item : undefined
+    const tailKey = tailItem !== undefined ? String(tailItem.key) : ''
+    logErrorFileOnly('tail',
+      `usable=${usable} items=${items.length} rows=${rows.length} V=${viewportLines} content=${layout.content} `
+      + `max=${maxScroll} eff=${effectiveScroll} follow=${store.followTail} first=${first} last=${last} shift=${shift} `
+      + `tail=${tailItem?.kind ?? tailRow?.type ?? '-'} textLen=${tailItem?.text.length ?? 0} `
+      + `est=${tailItem !== undefined ? estItemLines(tailItem, usable, reasoningExpandedFor(tailItem)) : -1} `
+      + `preMeas=${preTailMeas} `
+      + `meas=${tailItem !== undefined ? (measuredHeights.get(tailKey) ?? -1) : -1} `
+      + `hts=${last >= 0 ? layout.hts[last] : -1} top=${tailRow !== undefined ? tailRow.top : -1} `
+      + `bottom=${tailRow !== undefined ? tailRow.bottom : -1} gen=${estGeneration} `
+      + `settle=${store.assistantSettleEpoch}`)
+  }
   const sel = store.selection
   const selRange = sel !== null ? composerSelectionRange(sel) : null
 

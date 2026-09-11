@@ -631,6 +631,12 @@ export class Store {
    *  IDLENESS (nothing changed, so Ink paints nothing). */
   private _lastMutationAt = 0
   get lastMutationAt(): number { return this._lastMutationAt }
+  /** Settlement counter for the transcript's height model: bumped by
+   *  {@link settleAssistantText} so the panel knows an authoritative assistant
+   *  text landed and its debounced markdown-height estimate must be re-parsed
+   *  (see the why there). Read by the conversation panel's layout memo. */
+  private _assistantSettleEpoch = 0
+  get assistantSettleEpoch(): number { return this._assistantSettleEpoch }
 
   private notify(): void {
     this._lastMutationAt = Date.now()
@@ -1059,6 +1065,14 @@ export class Store {
    *  after resume). Settling on `assistant/message` makes live byte-identical to
    *  resume. Falls back to appending when there is no assistant item. */
   settleAssistantText(text: string): void {
+    // Bumped on EVERY settlement, before the no-op early return: the transcript
+    // panel reads it to re-parse that row's markdown height exactly once. The
+    // streamed copy's height estimate is deliberately debounced (优化1), so the
+    // settled row would otherwise keep an estimate measured for a shorter text —
+    // and a short estimate is exactly what clips the last wrapped line of the
+    // answer off the bottom of the transcript (follow-tail pins the window
+    // bottom to the estimated content height).
+    this._assistantSettleEpoch += 1
     let idx = -1
     for (let i = this.items.length - 1; i >= 0; i--) {
       if (this.items[i]?.kind === 'assistant') { idx = i; break }
