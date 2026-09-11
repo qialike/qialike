@@ -29,6 +29,7 @@ import { GoalError } from '@deepseek-ai/dsh-goal'
 import type { HostCommand, HostCommandResult } from './host-command.ts'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { effectiveProfile, modelReasoning, PROVIDER_TEMPLATES } from './llm.ts'
 import type { Session } from '@deepseek-ai/dsh-session'
 import type { ModelSelection, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
 import type { ApprovalOutcome } from '@deepseek-ai/dsh-user-approval'
@@ -163,7 +164,7 @@ export async function startHost(
     send({ type: 'error', code: 'not-ready', message: 'agents/agentDefaultModel service missing' })
     return
   }
-  const selection: ModelSelection | undefined = defaultModel.currentSelection()
+  const selection: ModelSelection | undefined = withoutUnsupportedEffort(defaultModel.currentSelection())
   if (selection === undefined) {
     send({ type: 'error', code: 'no-model', message: 'agentDefaultModel has no selection' })
     return
@@ -397,7 +398,7 @@ export async function startHost(
       send({ id: requestId, type: 'error', code: 'bad-model', message: 'model selection must be {provider, model}' })
       return
     }
-    selected.current = selection as ModelSelection
+    selected.current = withoutUnsupportedEffort(selection as ModelSelection) as ModelSelection
     // Persist the default HERE as well: in host mode the client's profile may not
     // mount `agentDefaultModel` at all (M4.4), so the child that owns the harness
     // is the one that can write the settings section future launches read.
@@ -413,6 +414,38 @@ export async function startHost(
   /** The in-flight manual compaction, so Esc can abort it and a session switch
    *  can never leave one running against a session we no longer serve. */
   let compactAbort: AbortController | undefined
+
+/**
+ * Drop a saved reasoning effort the selected model does not declare.
+ *
+ * Harness 0.1.5 makes the llm adapter's OWN model metadata authoritative and
+ * fails the whole turn BEFORE network I/O when a request carries an effort the
+ * resolved model does not advertise (`UNSUPPORTED_REASONING_EFFORT`). Measured
+ * with the new default model `deepseek-flash` (which our catalog does not list)
+ * plus a saved `high`:
+ * `provider "deepseek-official" model "deepseek-flash" does not support reasoning effort "high"`
+ * — every turn ended at `turn/end` with that error and produced no answer. The
+ * harness has no "clamp to the nearest supported level" behavior, so the only
+ * safe rule is: install an effort only for a model we can positively confirm
+ * declares one. Routes we cannot resolve statically are left untouched.
+ * @param selection - the persisted/selected provider+model+effort triple.
+ * @returns the selection, with an unsupported `reasoningEffort` removed.
+ */
+function withoutUnsupportedEffort(selection: ModelSelection | undefined): ModelSelection | undefined {
+  const effort = selection?.reasoningEffort
+  if (selection === undefined || effort === undefined) return selection
+  try {
+    const profile = effectiveProfile(selection.provider, undefined, PROVIDER_TEMPLATES)
+    if (profile === undefined) return selection
+    if (modelReasoning(profile, selection.provider, String(selection.model)) !== undefined) return selection
+  } catch {
+    return selection
+  }
+  logErrorFileOnly('host',
+    `model ${selection.provider}/${selection.model} declares no reasoning effort; ignoring saved "${String(effort)}"`)
+  const { reasoningEffort: _ignored, ...rest } = selection
+  return rest as ModelSelection
+}
 
   /**
    * `/compact`: run the harness's manual compaction on the LIVE agent here.
