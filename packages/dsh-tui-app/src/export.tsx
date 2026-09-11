@@ -11,19 +11,24 @@
  *   /export --output <name>     → custom file name (extension added; may
  *                                 include subdirectories, e.g. notes/summary)
  *
- * Data comes from the harness persisted-session store (`inspect` returns the
- * immutable event log), folded into user/assistant/tool messages.
+ * Data comes from the session's durable LOG FILE, read with the same
+ * generation-aware seekable reader the transcript uses (`SessionLogReader`):
+ * in host mode the persistence service lives in the host child, so asking the
+ * client context for it only ever produced `export: service unavailable`.
  *
  * @module @yourname/dsh-tui-app/export
  */
 
 import { Box, Text } from 'ink'
 import React from 'react'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { TuiService, Store } from './index.tsx'
+import { SessionLogReader, type DurableEvent } from './log-frames.ts'
+import { encodeSegment, resolveSessionLogPath, sessionLogPath } from './session-files.ts'
 import { theme } from './theme.ts'
 import type { RawKey } from './stdin.ts'
 
@@ -88,11 +93,11 @@ function flattenToolResult(content: unknown): string {
 
 /** Fold the harness event log into user/assistant/tool messages (call/result
  *  paired by order — the single-agent loop executes tools sequentially). */
-function foldEvents(events: readonly { type: string; data?: Record<string, unknown> }[]): ExportMessage[] {
+function foldEvents(events: readonly { type: string; data?: unknown }[]): ExportMessage[] {
   const out: ExportMessage[] = []
   const open: ExportMessage[] = []
   for (const event of events) {
-    const data = event.data ?? {}
+    const data = (event.data ?? {}) as Record<string, unknown>
     switch (event.type) {
       case 'user/message': {
         // The event data IS the message (top-level content/source).
@@ -203,19 +208,47 @@ export function resolveExportDestination(
   return { ok: true, file }
 }
 
-/** One export run: inspect the session, fold, render, write to the workspace. */
-function doExport(ctx: Context, sessionId: string, opts: { markdown: boolean; sanitize: boolean; output?: string }): void {
-  const persistence = ctx.get('sessionPersistence') as {
-    inspect?(id: SessionId, signal?: AbortSignal): Promise<{ events: readonly { type: string; data?: Record<string, unknown> }[] }>
-  } | undefined
-  if (persistence?.inspect === undefined) {
-    store.append('status', 'export: service unavailable', true)
-    return
+/** Where one session's log lives, searching every project directory when the
+ *  current workspace does not hold it (a session id is unique across the home,
+ *  and `/export <id>` may name a session from another workspace). */
+function findSessionLog(cwd: string, sessionId: string, id: SessionId): string | undefined {
+  const direct = sessionLogPath(cwd, id)
+  if (existsSync(direct)) return direct
+  try {
+    const root = dshHomePath('sessions')
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue
+      const candidate = resolveSessionLogPath(join(root, entry.name, encodeSegment(id)))
+      if (candidate !== undefined) return candidate
+    }
+  } catch { /* unreadable home: fall through to undefined */ }
+  return undefined
+}
+
+/** Read a session's whole durable log with the file-backed reader (highest
+ *  generation present, both historical packed rows and current rows decoded).
+ *  Windowed so a giant log never lands in one slice burst; the export renders
+ *  every message, so the full event list is the point. */
+async function readSessionLog(cwd: string, sessionId: string): Promise<DurableEvent[]> {
+  const id = SessionId(sessionId)
+  const path = findSessionLog(cwd, sessionId, id)
+  if (path === undefined) throw new Error(`no persisted log for ${sessionId}`)
+  const reader = new SessionLogReader(path)
+  const total = await reader.totalEvents()
+  const out: DurableEvent[] = []
+  const window = 100_000
+  for (let from = 0; from < total; from += window) {
+    for (const event of await reader.read(from, Math.min(from + window, total))) out.push(event)
   }
-  void persistence.inspect(SessionId(sessionId)).then((inspection) => {
+  return out
+}
+
+/** One export run: read the session log, fold, render, write to the workspace. */
+function doExport(sessionId: string, opts: { markdown: boolean; sanitize: boolean; output?: string }): void {
+  void readSessionLog(store.workspace, sessionId).then((events) => {
     const doc: ExportDoc = {
       session: { id: sessionId, cwd: store.workspace, exportedAt: new Date().toISOString() },
-      messages: foldEvents(inspection.events),
+      messages: foldEvents(events),
     }
     const body = opts.markdown
       ? renderMarkdown(doc, opts.sanitize)
@@ -321,7 +354,7 @@ function exportKey(k: RawKey): void {
       store.append('status', 'export: no session to export', true)
       return
     }
-    doExport(ctxRef, String(sessionId), {
+    doExport(String(sessionId), {
       markdown: store.exportFormat === 'markdown',
       sanitize: store.exportSanitize,
       output: store.exportName,
@@ -392,7 +425,7 @@ export function apply(ctx: Context): void {
         store.append('status', 'export: no session to export', true)
         return
       }
-      doExport(ctx, String(sessionId), { markdown, sanitize, output })
+      doExport(String(sessionId), { markdown, sanitize, output })
     },
   })
 }
