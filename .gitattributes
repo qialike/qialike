@@ -1,0 +1,13 @@
+# ---------------------------------------------------------------------------
+# Release-archive filters — `git archive` honors `export-ignore`.
+#
+# The files below are dev-only reproduction / verification harnesses: they stay
+# in the repository (they are how real defects get reproduced) but they are not
+# part of a source release, because they write into the developer's scratch
+# directories and reference nothing the shipped build needs.
+#
+# release-archive.sh archives with `--worktree-attributes`, so these rules also
+# apply when packaging an older tag whose tree predates this file.
+# ---------------------------------------------------------------------------
+/packages/dsh-tui-app/repro-*.mjs       export-ignore
+/packages/dsh-tui-app/verify-fixes.mjs  export-ignore
