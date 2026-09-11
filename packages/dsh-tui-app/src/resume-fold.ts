@@ -90,59 +90,21 @@ export function safeBoundaries(events: readonly PlanEvent[]): readonly number[] 
 }
 
 /**
- * Where a slice fetched from a SOURCE may safely begin (P4c M6.1b).
- *
- * The in-process planner cuts at `safeBoundaries` over the whole log; a
- * file-backed source cannot (that is the O(n) pass it exists to avoid), so it
- * looks at a bounded window around the request instead: the first safe boundary
- * at or after `from` — a slice that begins mid-turn would render a `tool/result`
- * with no call above it, or split one Think row in two at the seam.
- * @param look - the window read around the request.
- * @param lookStart - the seq of `look[0]` (absolute).
- * @param from - the requested start.
- * @param to - the requested end (a cut may not move past it).
- * @returns the absolute seq the slice should start at (`from` when the window
- *   holds no boundary — a bounded miss is better than an unbounded read).
- */
-export function localCut(
-  look: readonly PlanEvent[],
-  lookStart: number,
-  from: number,
-  to: number,
-): number {
-  // The beginning of the log is safe by definition, and it is the one position a
-  // window can never prove (nothing precedes it): keep it, or the oldest events
-  // would never be folded at all.
-  if (from === 0 && lookStart === 0) return 0
-  // Strictly AFTER `from`: a window that starts at the request cannot certify the
-  // request itself, and the caller tracks the starts it has already cut.
-  for (const boundary of safeBoundaries(look)) {
-    const absolute = lookStart + boundary
-    if (absolute > from && absolute <= to) return absolute
-  }
-  return from
-}
-
-/**
  * The events folded SYNCHRONOUSLY as the tail (the first painted frame).
  *
- * In-process, `events` is the whole log and the plan's `tailStart` is an absolute
- * index into it. With a paged source the caller holds ONLY the tail page, so the
- * page itself is the tail — slicing it with the absolute index yields [] and the
- * transcript silently ends `tailStart` events in the past (measured on a
- * 1.48 M-event session: the newest ~20 k events never appeared).
+ * `events` is the whole log and the plan's `tailStart` is an absolute index into
+ * it, so the tail is everything from `tailStart` on. A `fast` plan paints the
+ * whole log in one pass and needs no slice.
  * @param plan - the fold plan.
- * @param events - the whole log, or the tail page when `paged`.
- * @param paged - true when `events` is only the tail page.
+ * @param events - the whole log.
  * @returns the events to fold into the first frame.
  */
 export function tailSlice<T extends PlanEvent>(
   plan: ResumeFoldPlan,
   events: readonly T[],
-  paged: boolean,
 ): readonly T[] {
   if (plan.mode !== 'chunked') return events
-  return paged ? events : events.slice(plan.tailStart)
+  return events.slice(plan.tailStart)
 }
 
 export interface ResumeFoldOptions {

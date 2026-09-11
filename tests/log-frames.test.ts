@@ -1,5 +1,5 @@
 /**
- * Unit tests for the file-backed session reader (P4c M6): a synthetic log is
+ * Unit tests for the file-backed session reader: a synthetic log is
  * written the way the harness writes one — a header frame, then one frame per
  * append flush — and the reader must find frames, address events by seq, and
  * read a tail whose cost follows the viewport rather than the file.

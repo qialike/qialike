@@ -314,11 +314,10 @@ export function apply(ctx: Context): void {
       store.refreshSessionsDialog(hideUnselectedBlanks(rows, store.session?.id))
     }
     if (persistence?.list === undefined) {
-      // HOST MODE (and any composition without a local persistence service):
-      // the service lives in the host child, so the picker asks the FILE SYSTEM
+      // No local persistence service in this composition: ask the FILE SYSTEM
       // instead — the same generation-aware reader the transcript and /export
-      // use. Without this the list was always empty, which also made Ctrl+R
-      // rename and Ctrl+D delete unreachable.
+      // use. Without this fallback the list is always empty, which also makes
+      // Ctrl+R rename and Ctrl+D delete unreachable.
       const filePersistence: SessionTitlesPersistence = {
         inspect: async (id) => ({ events: await readSessionEvents(store.workspace, id) }),
       }

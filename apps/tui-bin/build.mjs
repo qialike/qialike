@@ -1288,9 +1288,9 @@ export function patchInkWideChar(nm) {
     '                    // glyph paints 2) needs its reserved second cell to be a REAL space so',
     '                    // the cursor actually advances two columns — otherwise every later cell',
     '                    // of the row (the sidebar border included) prints one column LEFT.',
-    '                    // ⚠️ / 🏷️ arrive as base + U+FE0F: keep the base narrow so the VS16 cell (a',
+    '                    // ⚠️ / 🏷️ / ☀️ arrive as base + U+FE0F: keep the base narrow so the VS16 cell (a',
     '                    // space here) carries the glyph\'s second column; never a third cell.',
-    "                    const __pw = (typeof globalThis !== 'undefined' && globalThis.__dshPaintWide instanceof Set) ? globalThis.__dshPaintWide : new Set([0x26a0, 0x1f3f7, 0x1f6e0]);",
+    "                    const __pw = (typeof globalThis !== 'undefined' && globalThis.__dshPaintWide instanceof Set) ? globalThis.__dshPaintWide : new Set([0x23f8, 0x2600, 0x26a0, 0x1f3f7, 0x1f6e0]);",
     "                    const __cw = (typeof globalThis !== 'undefined' && globalThis.__dshCharWidths instanceof Map) ? globalThis.__dshCharWidths : null;",
     '                    const __padFlags = [];',
     '                    for (let __i = 0; __i < characters.length; __i++) {',
@@ -1325,7 +1325,7 @@ export function patchInkWideChar(nm) {
     // Idempotent: skip only when the current fallback set is already in place
     // (a stale patch — e.g. a narrower PAINT_WIDE list — MUST be re-applied so
     // newly paint-wide glyphs get their reserved second cell too).
-    if (text.includes('const __padFlags = [];') && text.includes('0x1f6e0')) continue
+    if (text.includes('const __padFlags = [];') && text.includes('0x2600')) continue
     if (!regionRe.test(text)) {
       throw new Error(`dsh-tui: cannot patch Ink wide-char placement in ${outputJs} (Ink internals changed?)`)
     }
@@ -1384,10 +1384,15 @@ const widths = () => (typeof globalThis !== 'undefined' && globalThis.__dshCharW
 // one; string-width reports 1 for the bare base and only 2 once a U+FE0F
 // variation selector forces emoji presentation). Without the reservation the
 // painted second column pushes the row's right border one cell left.
+// 0x23f8 (U+23F8) and 0x2600 (U+2600): EAW-N/A BMP emoji that the color-emoji
+// font paints two cells wide while the cursor advances ONE -- the padding rows'
+// CPR cache measured advance 1 for both. Unreserved they show as a Paused
+// badge crammed against the pictograph, and as a markdown-table row whose later
+// cells (the sidebar divider included) print one column LEFT.
 // The astral members of this set are additionally probed by charwidth.ts's
 // scan (PAINT_WIDE_ASTRAL) so the advance-based pad decision stays terminal
 // specific; on CPR-less runs the default here pads them like ⚠.
-const PAINT_WIDE = new Set([0x26a0, 0x1f3f7, 0x1f6e0]);
+const PAINT_WIDE = new Set([0x23f8, 0x2600, 0x26a0, 0x1f3f7, 0x1f6e0]);
 
 export default function stringWidth(string, options = {}) {
 	if (typeof string !== 'string' || string.length === 0) {

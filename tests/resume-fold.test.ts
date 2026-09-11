@@ -19,7 +19,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   describeResumeFailure,
   isCorruptLogMessage,
-  localCut,
   planResumeFold,
   safeBoundaries,
   tailSlice,
@@ -197,62 +196,14 @@ describe('tailSlice: which events form the first painted frame', () => {
   const log = Array.from({ length: 100 }, (_, i) => ({ type: 'assistant/chunk', seq: i }))
   const plan = { mode: 'chunked', tailStart: 70, olderRanges: [[0, 70]] } as const
 
-  test('in-process the whole log is cut at the plan tailStart', () => {
-    expect(tailSlice(plan, log, false).map((e) => (e as { seq: number }).seq)).toEqual(
+  test('the whole log is cut at the plan tailStart', () => {
+    expect(tailSlice(plan, log).map((e) => (e as { seq: number }).seq)).toEqual(
       Array.from({ length: 30 }, (_, i) => 70 + i),
     )
   })
 
-  test('with a paged source the PAGE is the tail — never an empty slice', () => {
-    // Regression: the page is already the tail, and slicing it with the plan's
-    // ABSOLUTE tailStart hid the newest ~20k events on a 1.48M-event session.
-    const page = log.slice(90)
-    expect(tailSlice(plan, page, true)).toHaveLength(10)
-    expect((tailSlice(plan, page, true)[0] as { seq: number }).seq).toBe(90)
-  })
-
   test('a fast plan has no tail cut at all', () => {
-    expect(tailSlice({ mode: 'fast' }, log, false)).toHaveLength(100)
+    expect(tailSlice({ mode: 'fast' }, log)).toHaveLength(100)
   })
 })
 
-describe('localCut: a file-backed slice may not begin mid-turn (M6.1b)', () => {
-  // one turn: user message, a tool pair, then a reasoning run and the message
-  // that settles it (reasoning deltas are `assistant/chunk` events whose chunk is
-  // a `reasoning-delta`, which is what `isReasoningDelta` looks for)
-  const reasoning = { type: 'assistant/chunk', data: { chunk: { type: 'reasoning-delta', text: 'x' } } }
-  const log = [
-    { type: 'user/message' },        // 0  safe before
-    { type: 'tool/call' },           // 1  opens a tool
-    { type: 'tool/result' },         // 2  closes it  -> 3 is safe
-    { type: 'user/message' },        // 3  -> 4 is safe
-    reasoning,                       // 4  opens reasoning
-    reasoning,                       // 5
-    { type: 'assistant/message' },   // 6  settles it -> 7 is safe
-    { type: 'assistant/chunk', data: { chunk: { type: 'text-delta', text: 'y' } } }, // 7
-  ]
-
-  test('moves the cut forward to the first safe boundary after `from`', () => {
-    // starting at 1 (inside the tool pair) must land where the pair closes
-    expect(localCut(log, 0, 1, 7)).toBe(3)
-    // starting inside the reasoning run must land after the message that settles it
-    expect(localCut(log, 0, 5, 8)).toBe(7)
-    // a start that is already a boundary still moves one step (a window cannot
-    // certify its own first event) — the older slice then covers what it skipped
-    expect(localCut(log, 0, 3, 7)).toBe(4)
-  })
-
-  test('keeps the log start, and never cuts past `to`', () => {
-    // seq 0 is safe by definition: the oldest events must never be skipped
-    expect(localCut(log, 0, 0, 7)).toBe(0)
-    // a window with no boundary after `from` keeps the request as-is
-    expect(localCut([{ type: 'tool/call' }], 0, 0, 1)).toBe(0)
-    // a request inside the reasoning run is not assumed safe
-    expect(localCut(log, 0, 5, 8)).toBe(7)
-  })
-
-  test('the returned seq is ABSOLUTE (the look window starts wherever it starts)', () => {
-    // the same log read as a window that begins at seq 1000
-    expect(localCut(log, 1000, 1001, 1007)).toBe(1003)
-  })
-})

@@ -172,10 +172,10 @@ export function findSessionLogPath(cwd: string, id: SessionId): string | undefin
  * Read one session's whole durable log through the file-backed reader (highest
  * generation present, historical packed rows and current rows both decoded).
  *
- * This is the client's stand-in for `persistence.inspect` when the harness's
- * persistence service is out of reach — in host mode it lives in the host child.
- * Windowed so a giant log never lands in one slice burst; callers that want the
- * whole transcript (export, title folding) hold the result on purpose.
+ * This is the stand-in for `persistence.inspect` when this composition has no
+ * local persistence service. Windowed so a giant log never lands in one slice
+ * burst; callers that want the whole transcript (export, title folding) hold the
+ * result on purpose.
  * @param cwd - the session's working directory (project key).
  * @param id - the session id.
  * @returns every event of the session, in log order.
@@ -198,11 +198,11 @@ export async function readSessionEvents(cwd: string, id: SessionId): Promise<Dur
  * List this workspace's persisted sessions straight from disk, by reading frame
  * 0 (the header) of each session directory's log.
  *
- * The `/sessions` dialog used to ask the harness for the list, which is empty in
- * host mode — the persistence service is in the host child — so the picker (and
- * with it rename/delete) could never see a session. A project directory holds
- * one header read per session, which is bounded and cheap even for a directory
- * of giant logs.
+ * The `/sessions` dialog normally asks the harness for the list; this file-backed
+ * listing is the fallback for a composition with no local persistence service, so
+ * the picker (and with it rename/delete) is never blind to the sessions on disk.
+ * A project directory holds one header read per session, which is bounded and
+ * cheap even for a directory of giant logs.
  * @param cwd - the workspace whose project directory to scan.
  * @returns header-shaped rows, in directory order (the dialog sorts them).
  */

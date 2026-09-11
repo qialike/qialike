@@ -3,9 +3,9 @@
  *
  * Harness 0.1.5 removed the durable `assistant/chunk` events a transcript used
  * to stream from: token deltas now arrive as `agent/assistant-stream` frames,
- * and only the settled `assistant/message` reaches the session log. The P4c
- * host used to own that subscription and forward the chunks to the client; with
- * the two-process split removed the subscription has to live in the client
+ * and only the settled `assistant/message` reaches the session log. The old
+ * host/client two-process split owned that subscription and forwarded the chunks
+ * to the client; with the split removed the subscription has to live in this
  * process or every turn would appear at once, at the end, with no streaming.
  *
  * Source-level, because the wiring is a cordis subscription inside `start()`

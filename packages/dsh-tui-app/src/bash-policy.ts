@@ -1,16 +1,13 @@
 /**
- * The read-only sandbox's bash rule, shared by BOTH sides of P4c host mode.
+ * The read-only sandbox's bash rule: the pure decision the tool pre-execute
+ * waterfall consults before a shell command runs.
  *
- * In host mode the harness (and therefore the `tools/pre-execute` waterfall)
- * lives in the child process while the permission chip the user cycles with Tab
- * is drawn by the client. The rule below therefore cannot live in the Ink
- * plugin alone: a divergence would silently drop the fence whenever the user
- * switched to `read-only`. One module, imported by both, is what makes the
- * mirrored mode safe.
- *
- * It also keeps the fence OFF the wire: the host answers every tool execution
- * locally from the mirrored mode, because a per-tool round trip would make tool
- * execution wait on the client's render loop — the very coupling P4c removes.
+ * It lives in its own module instead of inline in the Ink plugin because it is
+ * a security boundary — the effective mode comes from the session's durable
+ * `sandbox/mode` event and the decision must run before every tool execution —
+ * and because a pure function is independently testable. The decision is local
+ * by construction: no round trip per execution, so a tool never waits on the
+ * render loop.
  *
  * @module dsh-tui-app/bash-policy
  */
@@ -78,9 +75,8 @@ function commandOf(exec: { readonly arguments?: unknown }): string {
  *
  * The durable mode is what the harness's own filesystem/bash backends enforce,
  * so the chip the user sees must show THIS (not a fresh default) — otherwise the
- * UI and the real boundary disagree after a resume. Shared: the host reads it
- * from the materialized log it already holds and ships it with `attached`; the
- * in-process client scans the snapshot it folded.
+ * UI and the real boundary disagree after a resume. The caller scans the
+ * snapshot it already folded, so no extra read is needed.
  * @param events - durable session events (oldest first).
  * @returns the mode, or `undefined` when the session never recorded one.
  */
@@ -102,7 +98,8 @@ export function lastSandboxMode(events: readonly { type?: string; data?: unknown
  * the `[sandbox: …]` marker AND the escalation hint the model surfaces for a
  * `sandbox_permissions` escalation, which then routes to the approval answerer.
  * @param exec - the tool execution under decision (`name` + `arguments`).
- * @param permission - the effective sandbox mode (mirrored to the host in host mode).
+ * @param permission - the effective sandbox mode from the session's durable
+ *   `sandbox/mode` event (the mode the composer chip shows).
  * @returns the deny decision, or `undefined` to delegate down the chain.
  */
 export function readOnlyBashDecision(

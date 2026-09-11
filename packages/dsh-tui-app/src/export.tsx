@@ -13,8 +13,8 @@
  *
  * Data comes from the session's durable LOG FILE, read with the same
  * generation-aware seekable reader the transcript uses (`SessionLogReader`):
- * in host mode the persistence service lives in the host child, so asking the
- * client context for it only ever produced `export: service unavailable`.
+ * a client context without a local persistence service would otherwise answer
+ * `export: service unavailable`, so the export never depends on that service.
  *
  * @module @yourname/dsh-tui-app/export
  */

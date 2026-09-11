@@ -59,7 +59,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry, type ResumeFoldPlan } from './resume-fold.ts'
+import { describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -4139,9 +4139,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // `assistant/chunk` events the transcript used to stream from: the deltas now
   // arrive as `agent/assistant-stream` frames (start/chunk/end, attempt id and
   // dense index) and only the settled `assistant/message`/`assistant/attempt`
-  // reaches the session log. The P4c host used to subscribe here and forward
-  // each chunk to the client; with the split gone the subscription lives in the
-  // client process, filtered to the session being shown (the same filter the
+  // reaches the session log. The old host/client two-process split subscribed
+  // here and forwarded each chunk to the client; with that split removed the
+  // subscription lives in this process, filtered to the session being shown (the same filter the
   // `agent/status` subscription above uses), so the transcript still streams
   // token by token and the "preparing the request…" label clears on the first
   // delta.
@@ -5038,7 +5038,9 @@ function abortResumeFold(): void {
  *  original single-pass fold; large logs paint the recent tail synchronously
  *  (fast), then continue folding older ranges in the background.
  *  @param store - the transcript store.
- *  @param session - the resumed agent session (durable log snapshot source). */
+ *  @param session - the resumed agent session (durable log snapshot source).
+ *  @param preloaded - the snapshot the caller already took (it also answers the
+ *  title/blank questions), so the events are never materialized twice. */
 /** Event count above which the FULL stats pass is skipped (P2①, user call A):
  *  a 1.4M-event session would spend seconds scanning every event for numbers the
  *  status bar shows in one line — the loaded window answers well enough, and the
@@ -5049,26 +5051,17 @@ function resumeHistoryIntoStore(
   store: Store,
   session: { id: string; snapshotEvents(): readonly SessionEvent[] },
   preloaded?: readonly SessionEvent[],
-  /** P4c host mode: when the log is too big to hold locally, the client folds
-   *  the tail page and then walks the host's OWN fold plan slice by slice
-   *  (`readRange`), so nothing here ever materializes the whole session. */
-  source?: { plan: ResumeFoldPlan; total: number; readRange(from: number, to: number): Promise<readonly SessionEvent[]> },
 ): void {
   // P2①: the caller usually already holds the snapshot (it folds title/blank
   // from it); taking it again would materialize a second 1.4M-event array.
-  const events = source === undefined ? (preloaded ?? session.snapshotEvents()) : (preloaded ?? [])
-  // Paged mode: the count that matters (stats hint, `/compact` suggestion) is
-  // the session's TOTAL, not the page we happen to hold.
-  sessionEventCount = source === undefined ? events.length : source.total
+  const events = preloaded ?? session.snapshotEvents()
+  sessionEventCount = events.length
   const t0 = Date.now()
-  const plan = source === undefined ? planResumeFold(events) : source.plan
-  const planTotal = source === undefined ? events.length : source.total
-  const planTail = plan.mode === 'chunked' && source === undefined
-    ? events.length - plan.tailStart
-    : events.length // paged mode: `events` IS the tail page
+  const plan = planResumeFold(events)
+  const planTail = plan.mode === 'chunked' ? events.length - plan.tailStart : events.length
   logErrorFileOnly('resume',
-    `fold mode=${plan.mode} events=${planTotal}${plan.mode === 'chunked' ? ` tail=${planTail} olderRanges=${plan.olderRanges.length}${source === undefined ? '' : ' paged=host'}` : ''}`)
-  if (source === undefined && plan.mode === 'fast') {
+    `fold mode=${plan.mode} events=${events.length}${plan.mode === 'chunked' ? ` tail=${planTail} olderRanges=${plan.olderRanges.length}` : ''}`)
+  if (plan.mode === 'fast') {
     // Small history: the original one-pass fold + full stats, exactly as
     // before this change.
     const replay = foldSessionReplay(events)
@@ -5077,15 +5070,15 @@ function resumeHistoryIntoStore(
     logErrorFileOnly('resume', `fast session=${session.id} events=${events.length} items=${replay.items.length} ms=${Date.now() - t0}`)
     return
   }
-  // The host hands us a chunked plan by construction; a fast plan with a paged
-  // source would mean nothing to page, so treat it as "nothing older".
+  // A `fast` plan paints everything in one pass, so reaching here means the
+  // plan is `chunked` and there IS older history to fold.
   if (plan.mode !== 'chunked') return
   abortResumeFold()
   const abort = new AbortController()
   resumeFoldAbort = abort
   // The synchronous first frame: fold only the newest tail (already cut at a
   // safe boundary), show it with a leading "loading older history" marker.
-  const tail = foldHistoryEvents(tailSlice(plan, events, source !== undefined))
+  const tail = foldHistoryEvents(tailSlice(plan, events))
   store.beginHistory(tail.items, tail.steps, plan.tailStart)
   // Steps: the tail usually carries the newest todo/write, but a recent tail
   // may contain none — then the latest step list lives in the newest OLDER
@@ -5138,9 +5131,7 @@ function resumeHistoryIntoStore(
         // Window stats (P2①, mode A): the slices we fold anyway are observed
         // here, so an oversized session pays ONE bounded pass per slice instead
         // of a full 1.4M-event scan up front.
-        // Paged (host) mode: the slice arrives over the wire, so it may need an
-        // await — the driver yields between slices anyway.
-        const slice = source === undefined ? events.slice(from, to) : await source.readRange(from, to)
+        const slice = events.slice(from, to)
         if (!statsFullScan) for (const event of slice) stats.observe(event)
         noteActivity(`fold slice ${from}-${to} events=${to - from}`)
         const chunk = foldHistoryEvents(slice)

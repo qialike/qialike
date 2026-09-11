@@ -6,8 +6,9 @@
  *
  * Anchors:
  *  - the rule itself (mutation detection + the `[sandbox: …]` denial marker);
- *  - the mirror source: cycling the mode notifies through the SHARED store, not
- *    a module export (the panel bundles each get their own module copies).
+ *  - the single source of truth: cycling the mode notifies through the SHARED
+ *    store, not a module export (the panel bundles each get their own module
+ *    copies).
  *
  * Run with `bun test tests/host-bash-policy.test.ts`.
  *
@@ -86,7 +87,7 @@ describe('the fence is shared, not duplicated', () => {
     expect(client).not.toMatch(/function bashMutates/)
   })
 
-  test('cycling the mode notifies through the SHARED store (host mirror)', () => {
+  test('cycling the mode notifies through the SHARED store (not a module copy)', () => {
     const store = new Store()
     const seen: string[] = []
     store.onPermissionChange = (mode) => { seen.push(mode) }
