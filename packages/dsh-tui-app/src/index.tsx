@@ -3128,13 +3128,30 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // when the first tick after a block runs it records the gap in
   // ~/.dsh/dsh-tui.log ([stall]) for diagnosis. Armed BEFORE the launch
   // create/resume so a boot-time wedge is captured too.
+  //
+  // `DSH_TUI_STALL_MS` lowers the threshold for measurement runs (default 4 s):
+  // the default hides a few-hundred-ms boot block, and `[frame] slow gap` cannot
+  // stand in for this — it is computed from layout-memo intervals, so an idle
+  // screen logs a "gap" too, while a genuine block inside a single long task is
+  // only visible here (session/optimization-plan.md §8.8). The beat INTERVAL has
+  // to shrink with the threshold (the gap between two ticks is the interval
+  // itself), so the threshold is kept at least twice the interval.
+  const stallMs = (() => {
+    const n = Number(process.env.DSH_TUI_STALL_MS ?? Number.NaN)
+    return Number.isFinite(n) && n > 0 ? n : 4000
+  })()
+  const beatMs = Math.min(1000, Math.max(50, Math.floor(stallMs / 2)))
+  const stallThreshold = Math.max(stallMs, beatMs * 2)
   let lastBeat = Date.now()
   const heartbeat = setInterval(() => {
     const now = Date.now()
     const gap = now - lastBeat
-    if (gap > 4000) logErrorFileOnly('stall', `main loop blocked for ${Math.round(gap / 1000)}s (no timer callback for ${gap}ms)`)
+    if (gap > stallThreshold) {
+      const shown = gap < 1000 ? `${gap}ms` : `${(gap / 1000).toFixed(1)}s`
+      logErrorFileOnly('stall', `main loop blocked for ${shown} (no timer callback for ${gap}ms)`)
+    }
     lastBeat = now
-  }, 1000)
+  }, beatMs)
   heartbeat.unref?.()
   await ctx.get('loader')?.await()
   // The loader activates entries in service-availability waves, and

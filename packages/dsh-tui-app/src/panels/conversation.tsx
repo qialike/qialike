@@ -1481,12 +1481,34 @@ let lastHeapMb = 0
 function frameGapProbe(items: number, scroll: number, followTail: boolean): void {
   if (!debugLayout) return
   const now = Date.now()
-  const gap = lastFrameAt === 0 ? 0 : now - lastFrameAt
-  // A gap only means STALL when a mutation was waiting for a frame: an idle app
-  // deliberately paints nothing (Ink writes only on change), and reporting that
-  // silence as a freeze was a false positive (see dsh-tui-development §2.5.31).
+  const memoGap = lastFrameAt === 0 ? 0 : now - lastFrameAt
+  // The frame writer stamps `__dshTuiLastFlushAt` on every ACTUAL write (the
+  // calibration flush included), so that stamp — not the memo interval — is the
+  // evidence a paint happened. `lastFrameAt` only moves when the rows/items
+  // memos recompute, and an idle app neither recomputes nor paints: measured
+  // right after the first frame, keystroke→repaint was 51 ms while this probe
+  // claimed 1030 ms (`activity=idle`), and the same false positive showed 39 s
+  // on a session left alone (session/optimization-plan.md §8.8). Use the timer
+  // beat (`[stall]`, DSH_TUI_STALL_MS) for genuine main-thread wedges.
+  const frameGlobals = globalThis as unknown as { __dshTuiLastFlushAt?: number }
+  const paintedAt = typeof frameGlobals.__dshTuiLastFlushAt === 'number' ? frameGlobals.__dshTuiLastFlushAt : 0
+  const gap = paintedAt > 0 ? now - paintedAt : memoGap
+  const base = paintedAt > 0 ? paintedAt : lastFrameAt
+  // A gap only means a screen that failed to update when a mutation was waiting
+  // for a frame and there was something to paint: an idle app deliberately
+  // paints nothing (Ink writes only on change), and state changes that render
+  // identically also leave `lastMutationAt` behind the last paint. `idle=1`
+  // marks exactly those cases — the field that a reader (and a previous
+  // investigation) mistook for a freeze: measured right after the first frame,
+  // keystroke→repaint was 51 ms while this line said 1030 ms with activity=idle
+  // (session/optimization-plan.md §8.8). It is NOT dropped when idle, because a
+  // real failure to paint can also happen while no agent is running (output
+  // backpressure, a blocked writer) — use `[stall]`/`DSH_TUI_STALL_MS` for
+  // main-thread wedges.
   const pendingSince = store.lastMutationAt
-  const stalled = gap > 1000 && pendingSince > lastFrameAt - 1 && pendingSince !== 0
+  const activity = describeActivity()
+  const idle = activity === 'idle'
+  const stalled = gap > 1000 && pendingSince > base - 1 && pendingSince !== 0
   lastFrameAt = now
   if (stalled) {
     // `heap` before/after a gap is the cheap GC discriminator: a major GC pause
@@ -1494,8 +1516,8 @@ function frameGapProbe(items: number, scroll: number, followTail: boolean): void
     const heap = Math.round(process.memoryUsage().heapUsed / 1048576)
     const drop = lastHeapMb === 0 ? 0 : lastHeapMb - heap
     logErrorFileOnly('frame',
-      `slow gap=${gap}ms items=${items} scroll=${scroll} followTail=${followTail} `
-      + `heap=${heap}MB heapDrop=${drop}MB activity=${describeActivity()}`)
+      `paint gap=${gap}ms memoGap=${memoGap}ms idle=${idle ? 1 : 0} items=${items} scroll=${scroll} `
+      + `followTail=${followTail} heap=${heap}MB heapDrop=${drop}MB activity=${activity}`)
     lastHeapMb = heap
   } else {
     lastHeapMb = Math.round(process.memoryUsage().heapUsed / 1048576)
