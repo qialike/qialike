@@ -689,7 +689,7 @@ export class Store {
   lastEscTime = 0
   /** Last model selection, for panel commands (e.g. /models initial index);
    *  `reasoningEffort` is the saved effort id when one was chosen. */
-  currentModel: { provider: string; model: string; reasoningEffort?: string } = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
+  currentModel: { provider: string; model: string; reasoningEffort?: string } = { provider: 'deepseek-official', model: 'deepseek-flash' }
   modelsSaveAction: (provider: string, model: string, effort?: string) => void = () => {}
   /** Cycle the current model's reasoning effort (Ctrl+T / Alt+T). */
   cycleEffort: () => void = () => {}
@@ -2847,6 +2847,7 @@ function buildProviderEntries(providers: readonly ModelsProviderOption[]): Provi
 /** Map a provider model id to a friendly display name (display only). */
 function modelDisplayName(model: string): string {
   const known: Record<string, string> = {
+    'deepseek-flash': 'DeepSeek-V41-Flash',
     'deepseek-v4-flash': 'DeepSeek V4 Flash',
     'deepseek-v4': 'DeepSeek V4',
     'deepseek-v4-pro': 'DeepSeek V4 Pro',
@@ -3818,7 +3819,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       const fallback = visible.find((p) => p.provider === 'deepseek-official') ?? visible[0]
       store.modelsSaveAction(
         fallback.provider,
-        fallback.models[0]?.id ?? 'deepseek-v4-flash',
+        fallback.models[0]?.id ?? 'deepseek-flash',
       )
     }).catch(() => { /* best-effort: the /models dialog shows the current provider until the user picks */ })
   }
@@ -4379,7 +4380,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // selection away so "current:" never points at a hidden provider (and
         // later requests do not target a keyless route).
         const provider = fallback?.provider ?? 'deepseek-official'
-        const model = fallback?.models[0]?.model ?? 'deepseek-v4-flash'
+        const model = fallback?.models[0]?.model ?? 'deepseek-flash'
         store.modelsSaveAction(provider, model)
         const modelName = fallback?.models[0]?.label ?? modelDisplayName(model)
         const fallbackName = fallback?.name ?? 'DeepSeek'

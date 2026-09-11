@@ -5,6 +5,7 @@
   "providers": {
     "deepseek": {
       "models": {
+        "deepseek-flash": { "effort": [null, "low", "high", "max"] },
         "deepseek-v4-flash": { "effort": [null, "low", "high", "max"] },
         "deepseek-v4-pro": { "effort": [null, "low", "high", "max"] },
         "deepseek-v4-flash-vision-exp": { "effort": [null, "low", "high", "max"] }

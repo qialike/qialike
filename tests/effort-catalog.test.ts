@@ -18,7 +18,7 @@ import {
   validateEffortCatalog,
   type EffortCatalogFile,
 } from '../packages/dsh-tui-app/src/effort-catalog.ts'
-import { REASONING_EFFORTS, modelReasoning, serializeRequestOpenAI, validateProviderTemplates } from '../packages/dsh-tui-app/src/llm.ts'
+import { REASONING_EFFORTS, effectiveProfile, modelReasoning, serializeRequestOpenAI, validateProviderTemplates } from '../packages/dsh-tui-app/src/llm.ts'
 import fileData from '../packages/dsh-tui-app/src/effort-catalog.json' with { type: 'json' }
 
 /** A synthetic snapshot shaped like the models.dev reasoning_options subset. */
@@ -136,6 +136,33 @@ describe('effortsFor precedence and gate', () => {
 
 test('bundled snapshot ships deepseek official values', () => {
   expect(EFFORT_CATALOG.providers.deepseek.models['deepseek-v4-flash']?.effort).toEqual([null, 'low', 'high', 'max'])
+  // V4.1 (`deepseek-flash`) must be in the bundled snapshot too.
+  expect(EFFORT_CATALOG.providers.deepseek.models['deepseek-flash']?.effort).toEqual([null, 'low', 'high', 'max'])
+})
+
+test('deepseek-official catalog leads with V4.1 and mirrors the harness row', () => {
+  const profile = effectiveProfile('deepseek-official', undefined, [])
+  const models = profile?.models ?? []
+  // Order mirrors the harness (llm-deepseek) DEFAULT_MODELS: V4.1 first.
+  expect(models[0]?.id).toBe('deepseek-flash')
+  expect(models[0]?.name).toBe('DeepSeek-V41-Flash')
+  // contextWindow mirrors the harness DEFAULT_CONTEXT_WINDOW (1_000_000) on every official row.
+  expect(models.map((m) => m.contextWindow)).toEqual([1000000, 1000000, 1000000, 1000000])
+  // V4.1 declares image input, so the attachment gate admits images for it.
+  expect(models[0]?.inputModalities).toEqual(['text', 'image'])
+  // The vision model carries the same declaration (it used to be missing, so the gate
+  // rejected images for the one row whose name says vision).
+  expect(models.find((m) => m.id === 'deepseek-v4-flash-vision-exp')?.inputModalities).toEqual(['text', 'image'])
+  // The plain V4 text models stay text-only (no image declaration).
+  expect(models.find((m) => m.id === 'deepseek-v4-flash')?.inputModalities).toBeUndefined()
+  expect(models.find((m) => m.id === 'deepseek-v4-pro')?.inputModalities).toBeUndefined()
+  // The V4 rows are kept (the harness still serves them).
+  expect(models.map((m) => m.id)).toEqual([
+    'deepseek-flash',
+    'deepseek-v4-flash',
+    'deepseek-v4-pro',
+    'deepseek-v4-flash-vision-exp',
+  ])
 })
 
 describe('validateEffortCatalog (effort-catalog.json)', () => {

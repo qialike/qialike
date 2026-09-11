@@ -222,9 +222,16 @@ const DEEPSEEK_OFFICIAL: TuiProviderProfile = {
   baseURL: 'https://api.deepseek.com',
   apiKeyEnv: 'DEEPSEEK_API_KEY',
   models: [
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 128000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 128000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
-    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', contextWindow: 128000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
+    // `deepseek-flash` is DeepSeek's V4.1 Flash weights and is first in the harness
+    // (llm-deepseek) DEFAULT_MODELS order; it declares image input, so the TUI-side
+    // attachment gate admits images for it. `deepseek-v4-flash-vision-exp` carries the
+    // same declaration as the harness row (without it the gate rejected images for a
+    // model whose whole point is vision). `contextWindow` mirrors the harness's
+    // DEFAULT_CONTEXT_WINDOW (1_000_000) — all four official rows are kept in sync with it.
+    { id: 'deepseek-flash', name: 'DeepSeek-V41-Flash', contextWindow: 1000000, maxTokens: 256000, inputModalities: ['text', 'image'], reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1000000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1000000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', contextWindow: 1000000, maxTokens: 256000, inputModalities: ['text', 'image'], reasoningEfforts: REASONING_EFFORTS },
   ],
 }
 

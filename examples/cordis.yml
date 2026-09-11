@@ -4,11 +4,11 @@
 # See packages/dsh-tui-app/cordis.patch.yml for the shared TUI shape; this file
 # only pins deployment-specific values.
 
-# Pin the default model for the single interactive session.
+# Pin the default model for the single interactive session (DeepSeek V4.1 Flash).
 - id: agent-default-model
   config:
     provider: deepseek-official
-    model: deepseek-v4-flash
+    model: deepseek-flash
 
 # Pin the workspace for this deployment (overrides --workspace when unset).
 # Replace with an absolute path on your machine, e.g. /home/you/projects.

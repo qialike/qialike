@@ -42,7 +42,7 @@ pnpm typecheck
 dist/dsh-tui                              # 继续当前目录下最近一次会话，无则开启新会话
 dist/dsh-tui --workspace ~/proj           # 继续 ~/proj 下最近一次会话
 dist/dsh-tui --resume <sessionId>         # 恢复指定持久化会话
-dist/dsh-tui --model deepseek-v4-flash    # 选择模型
+dist/dsh-tui --model deepseek-flash    # 选择模型（DeepSeek V4.1 Flash）
 dist/dsh-tui --help
 ```
 

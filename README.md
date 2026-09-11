@@ -43,7 +43,7 @@ third-party deps from the harness pnpm store, then `bun build --compile`s `apps/
 dist/dsh-tui                              # continue the newest session in this directory, or start fresh
 dist/dsh-tui --workspace ~/proj           # continue the newest session in ~/proj
 dist/dsh-tui --resume <sessionId>         # resume a specific persisted session
-dist/dsh-tui --model deepseek-v4-flash    # pick a model
+dist/dsh-tui --model deepseek-flash    # pick a model (DeepSeek V4.1 Flash)
 dist/dsh-tui --help
 ```
 
