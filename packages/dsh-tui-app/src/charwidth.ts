@@ -253,6 +253,11 @@ async function fingerprint(): Promise<boolean> {
     return true
   })
   if (!ok) return false
+  // The terminal answers CPR: calibration is live from here on. `persist()`
+  // and `scan()` are both gated on `supported`, so this has to happen before
+  // them (the flag stays false while the probe runs — see
+  // `initCharWidthCalibration`).
+  supported = true
   const file = cacheFile()
   if (existsSync(file)) {
     try {
@@ -281,25 +286,36 @@ export function initCharWidthCalibration(opts: CharWidthHooks): void {
   const term = process.env.TERM ?? ''
   if (term === '' || term === 'dumb') return
   hooks = opts
-  supported = true
-  if (!scanRegistered) {
-    scanRegistered = true
-    GLOBAL.__dshCharScan = (lines) => { scan(lines) }
-  }
-  // Sentinel fingerprint first (font-change detection + cache reuse), then
-  // process whatever the first frames already showed. A terminal that never
-  // answers CPR disables calibration: pure EAW semantics stay in effect.
+  // NOTHING is enabled before the terminal proves it answers CPR.
+  //
+  // The frame writer calls `__dshCharScan` for a frame the moment the hook
+  // exists, and `scan()` walks EVERY CHARACTER of EVERY line of that frame
+  // (`codePointAt` + three Set/Map lookups per code point — the giant session's
+  // first frame is 5103 rows × 133 cols ≈ 680k of them). On a terminal that
+  // never answers `ESC[6n` that work provably cannot pay off, and it used to run
+  // BEFORE the probe could disable it: measured in GNOME Terminal/VTE, the main
+  // loop was blocked for 1470 ms right after the first frame appeared
+  // (`[frame] slow gap=1470ms … activity=idle`, session/optimization-plan.md §8.7).
+  // Registering the hook only after a successful fingerprint makes an
+  // unsupported terminal skip the scan entirely; a supported one loses at most
+  // the frames that were written during the probe (all of them get rescanned on
+  // the next write, and every later frame is measured as before).
   void (async () => {
     let ok = false
     try { ok = await fingerprint() } catch { /* keep pure EAW on any probe failure */ }
     if (!ok) {
-      supported = false
-      // FILE ONLY: stderr is the tty the alternate screen lives on, so this
-      // diagnostic used to be printed over the first frame and then wiped by it
-      // — a flash of raw text on every start of a terminal that does not answer
-      // CPR. It is a diagnostic for the log, not a message for the user.
+      // `supported` was never raised, so no scan ran and `persist()` never wrote
+      // a half-measured cache. FILE ONLY: stderr is the tty the alternate screen
+      // lives on, so this diagnostic used to be printed over the first frame and
+      // then wiped by it — a flash of raw text on every start of a terminal that
+      // does not answer CPR. It is a diagnostic for the log, not a message for
+      // the user.
       logErrorFileOnly('charwidth', 'terminal does not answer CPR — keeping East-Asian-width semantics')
       return
+    }
+    if (!scanRegistered) {
+      scanRegistered = true
+      GLOBAL.__dshCharScan = (lines) => { scan(lines) }
     }
     kick()
     pollTimer = setInterval(() => { if (pending.size > 0) kick() }, 1500)
