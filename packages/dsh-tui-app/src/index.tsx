@@ -4864,7 +4864,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // surface replaces (the transcript scrolls in-app; dsh-tui draws its own
   // selection). Restored in the exit handler below.
   if (process.stdout.isTTY) {
-    process.stdout.write('\x1b[?1006h\x1b[?1003h') // SGR + any-motion (hover + drag)
+    // SGR + any-motion (hover + drag), plus BRACKETED PASTE: the composer's
+    // image-drag-in path listens for `k.paste` (stdin.ts parses `ESC[200~ …
+    // ESC[201~`), and a terminal only emits those markers after the app asks
+    // for them — without `?2004h` a dragged image arrives as plain text and the
+    // attachment never triggers.
+    process.stdout.write('\x1b[?1006h\x1b[?1003h\x1b[?2004h')
   }
 
   // Live terminal width: Bun/Node emit 'resize' on process.stdout and update
@@ -4910,7 +4915,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
       process.stdin.setRawMode(false)
     }
-    if (process.stdout.isTTY) process.stdout.write('\x1b[?1006l\x1b[?1003l') // disable mouse tracking
+    if (process.stdout.isTTY) process.stdout.write('\x1b[?1006l\x1b[?1003l\x1b[?2004l') // disable mouse tracking + bracketed paste
     process.stdout.off('resize', onResize)
     process.stdin.off('data', onStdin)
     void app.unmount()

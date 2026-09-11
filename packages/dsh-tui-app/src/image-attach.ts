@@ -79,7 +79,15 @@ export function apply(ctx: Context): void {
       store.setComposerImage({ ref, name, mediaType })
       return ref
     } catch (error) {
-      store.append('status', `attach image failed: ${error instanceof Error ? error.message : String(error)}`, true)
+      const message = error instanceof Error ? error.message : String(error)
+      // Every single-file build stubs `sharp` (a native addon that cannot be
+      // embedded), and sharp is the decoder this store admits images with, so an
+      // INVALID_IMAGE rejection here means "no native image support in this
+      // build", not that the user's file is malformed. Say so.
+      const hint = /unsupported or malformed image data/i.test(message)
+        ? ' — this build has no native image support (sharp is stubbed), so image attachments are unavailable'
+        : ''
+      store.append('status', `attach image failed: ${message}${hint}`, true)
       return undefined
     }
   }
