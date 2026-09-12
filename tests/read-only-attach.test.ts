@@ -90,6 +90,27 @@ describe('Store read-only phase (S2-2b)', () => {
       expect(ATTACH_DEFERRED_COMMANDS.has(name)).toBe(false)
     }
   })
+
+  test('a Tab permission choice made while read-only is remembered, not dropped', () => {
+    const store = new Store()
+    // Outside the read-only view the flag stays false (no behaviour change).
+    store.cyclePermission()
+    expect(store.readOnlyPermissionPicked).toBe(false)
+
+    store.beginReadOnlySession('session-abc')
+    const picked = store.cyclePermission()
+    expect(store.readOnlyPermissionPicked).toBe(true)
+    expect(store.permission).toBe(picked)
+
+    // The attach consumes the choice exactly once; the chip keeps the mode.
+    store.settleReadOnlyPermission()
+    expect(store.readOnlyPermissionPicked).toBe(false)
+    expect(store.permission).toBe(picked)
+
+    // Entering a (new) read-only session starts clean.
+    store.beginReadOnlySession('session-def')
+    expect(store.readOnlyPermissionPicked).toBe(false)
+  })
 })
 
 describe('start() read-only wiring (S2-2b)', () => {
@@ -128,6 +149,15 @@ describe('start() read-only wiring (S2-2b)', () => {
 
   test('the conversation panel consults the deferral hook before running a command', () => {
     expect(conversation).toContain('store.beforeCommand?.(chosen.name, text) !== false')
+  })
+
+  test('the attach stamps a read-only permission choice instead of overwriting it', () => {
+    const from = source.indexOf('if (store.readOnlyPermissionPicked)')
+    expect(from).toBeGreaterThan(0)
+    const block = source.slice(from, from + 400)
+    expect(block).toContain('setSandboxMode(agent.session, store.permission)')
+    expect(block).toContain('store.adoptPermission(lastSandboxMode(launchSnapshot))')
+    expect(block).toContain('store.settleReadOnlyPermission()')
   })
 
   test('the read-only hint is honest about the unpaid attach', () => {

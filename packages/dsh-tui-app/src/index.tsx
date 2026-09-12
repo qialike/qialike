@@ -549,6 +549,8 @@ export class Store {
   private _width = process.stdout.columns ?? 80
   private _rows = process.stdout.rows ?? 24
   private _permission: SandboxMode = 'workspace-write'
+  /** S2-2b: the user cycled the sandbox chip while the read-only view was up. */
+  private _readOnlyPermissionPicked = false
   private _modelLabel = ''
   private _modelEffortName = ''
   private _session: Session | undefined
@@ -1391,6 +1393,7 @@ export class Store {
   beginReadOnlySession(id: string): void {
     if (this._readOnlySessionId === id) return
     this._readOnlySessionId = id
+    this._readOnlyPermissionPicked = false
     this.notify()
   }
 
@@ -2114,10 +2117,22 @@ export class Store {
   cyclePermission(): SandboxMode {
     const i = SANDBOX_CYCLE.indexOf(this._permission)
     this._permission = SANDBOX_CYCLE[(i + 1) % SANDBOX_CYCLE.length] ?? 'workspace-write'
+    // S2-2b: while the session is READ-ONLY there is no live session to record
+    // the choice on (the panel's Tab handler stamps `store.session`, which is a
+    // stub then), so remember that the user picked a mode explicitly. The attach
+    // must then stamp THIS mode durably instead of adopting the log's and
+    // silently throwing the choice away.
+    if (this._readOnlySessionId !== undefined) this._readOnlyPermissionPicked = true
     this.onPermissionChange(this._permission)
     this.notify()
     return this._permission
   }
+  /** Whether the user cycled the sandbox permission while the read-only view was
+   *  up (S2-2b) — the attach uses this to decide between stamping the choice and
+   *  adopting the session's durable mode. */
+  get readOnlyPermissionPicked(): boolean { return this._readOnlyPermissionPicked }
+  /** Consume the read-only permission choice (called once the attach settled). */
+  settleReadOnlyPermission(): void { this._readOnlyPermissionPicked = false }
   /** Adopt the SESSION's durable mode (its last `sandbox/mode`) when a session is
    *  opened or switched to. No `onPermissionChange`: the session is the source of
    *  this value, so pushing it back would be a no-op write. */
@@ -3692,12 +3707,28 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // giant logs paint the recent tail first and fold the older ranges in the
     // background (see resumeHistoryIntoStore) — the launch must never block
     // its first frame on a very long durable log.
+    // S2-2c attribution (`DSH_TUI_DEBUG_RESUME=1`): all of this runs
+    // SYNCHRONOUSLY right after the attach returns, on the submit path since
+    // S2-2b, and every step scans the FULL stored log. `[resume] attach-sync`
+    // splits the block so the next fix targets the real term, not a guess.
+    const tSync = Date.now()
     const launchSnapshot = agent.session.snapshotEvents()
+    const tSnap = Date.now()
     // The chip shows the session's DURABLE mode (what the harness's own backends
     // enforce), not a fresh default: otherwise a resumed read-only session would
-    // claim "Workspace Write" while every write is refused.
-    store.adoptPermission(lastSandboxMode(launchSnapshot))
+    // claim "Workspace Write" while every write is refused. S2-2b exception: if
+    // the user cycled the chip while READ-ONLY, the session did not exist to
+    // record it on (the panel stamps `store.session`, a stub then) — stamp that
+    // explicit choice durably here instead of overwriting it with the log's.
+    if (store.readOnlyPermissionPicked) {
+      try { setSandboxMode(agent.session, store.permission) } catch { /* best-effort */ }
+    } else {
+      store.adoptPermission(lastSandboxMode(launchSnapshot))
+    }
+    store.settleReadOnlyPermission()
+    const tPerm = Date.now()
     resumeHistoryIntoStore(store, agent.session, launchSnapshot, paintedTailStart)
+    const tFold = Date.now()
     // Backfill the sidebar title from the in-memory log: the launch session
     // may predate this process (its session/title event never reached a live
     // listener here) and the disk-cache prewarm runs on a delay. The SAME
@@ -3705,7 +3736,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // launch reuses the workspace's blank session rather than creating one).
     const snapshot = launchSnapshot
     rememberFoldedTitle(sessionId, snapshot)
+    const tTitle = Date.now()
     rememberBlank(sessionId, foldSessionBlank(snapshot))
+    const tBlank = Date.now()
+    if (debugResumeFold) {
+      logErrorFileOnly('resume',
+        `attach-sync snapshot=${tSnap - tSync}ms permission=${tPerm - tSnap}ms foldSync=${tFold - tPerm}ms `
+        + `title=${tTitle - tFold}ms blank=${tBlank - tTitle}ms total=${tBlank - tSync}ms events=${snapshot.length}`)
+    }
     // Oversized session: recommend the harness's OWN compaction (suggestion
     // only — the TUI never compacts behind the user's back). Appended AFTER
     // the fold, because `beginHistory` replaces the item list wholesale.
