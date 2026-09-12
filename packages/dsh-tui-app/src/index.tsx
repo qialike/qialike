@@ -5337,12 +5337,17 @@ function formatMemoryMb(mb: number): string {
 
 /** One line shown (synchronously, splash-style) before opening a large session.
  *  Pure so it is unit-tested. The memory figure is the measured model above —
- *  the number the user actually pays, which the raw log size does not show. */
+ *  the number the user actually pays, which the raw log size does not show.
+ *
+ *  The cure named here is `/new` only: measured, `agents.resume()` costs
+ *  ~0.16 ms per STORED event and compaction only APPENDS (a real log with 47
+ *  `compaction/summary` events still carries `seq:0`), so `/compact` does not
+ *  make opening faster — it shrinks what the model is sent, not this log. */
 export function oversizedResumeNotice(bytes: number): string {
   const size = formatByteSize(bytes)
   const memory = formatMemoryMb(estimatedSessionHeapMb(bytes))
   return `dsh-tui: resuming a large session (${size} log, ~${memory} memory) — opening it can take a while; `
-    + 'consider /compact (with a configured model) or /new to continue in a fresh session'
+    + '/new continues in a fresh, small log (/compact shrinks the model context, not this log)'
 }
 
 /** The warning to show for a durable log of `bytes` (undefined when the log is
@@ -5454,10 +5459,14 @@ export function compactionRowHeader(facts: CompactionRowFacts, expanded: boolean
 }
 
 /** One-line suggestion shown for an oversized session (transcript + status
- *  bar). Pure so it is unit-tested. */
+ *  bar). Pure so it is unit-tested.
+ *
+ *  Both cures are named WITH their real effect (measured, §8.11): `/compact`
+ *  shrinks the assembled context (turns), `/new` starts a fresh, small log
+ *  (which is what makes opening fast again — compaction only appends). */
 export function compactHintText(events: number): string {
   const millions = events >= 1_000_000 ? `${(events / 1_000_000).toFixed(1)}M` : `${Math.round(events / 1000)}k`
-  return `Large session (${millions} events) — /compact is recommended to keep resume and turns fast`
+  return `Large session (${millions} events) — /compact keeps turns fast; /new starts a fresh, small log`
 }
 
 /** One step's assembly timeline (S0 probe). Timestamps are `Date.now()` marks

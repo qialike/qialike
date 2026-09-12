@@ -217,9 +217,9 @@ describe('status-bar phase line + immediate docked view', () => {
 })
 
 describe('oversized-session compaction hint (suggestion only)', () => {
-  test('wording scales with the event count and names the cure', () => {
-    expect(compactHintText(1_431_912)).toBe('Large session (1.4M events) — /compact is recommended to keep resume and turns fast')
-    expect(compactHintText(250_000)).toBe('Large session (250k events) — /compact is recommended to keep resume and turns fast')
+  test('wording scales with the event count and names each cure with its effect', () => {
+    expect(compactHintText(1_431_912)).toBe('Large session (1.4M events) — /compact keeps turns fast; /new starts a fresh, small log')
+    expect(compactHintText(250_000)).toBe('Large session (250k events) — /compact keeps turns fast; /new starts a fresh, small log')
     // Recalibrated from the measured model (§8.11): 200 000 was dead — that is
     // multi-GB of retained heap, so the hint could only fire after an OOM.
     expect(COMPACT_HINT_EVENTS).toBe(25_000)
@@ -270,8 +270,11 @@ describe('oversized resume notice (P2③ follow-up)', () => {
     const notice = oversizedResumeNotice(28_067_145)
     expect(notice).toContain('resuming a large session (26.8 MB log')  // MiB scale
     expect(notice).toContain('memory)')                                 // the measured cost
-    expect(notice).toContain('/compact')
-    expect(notice).toContain('/new')
+    // Measured: compaction only APPENDS, so it cannot make opening faster —
+    // `/new` (a fresh log) is the cure for the open, and the notice says what
+    // `/compact` actually buys (a smaller model context).
+    expect(notice).toContain('/new continues in a fresh, small log')
+    expect(notice).toContain('/compact shrinks the model context, not this log')
   })
 
   test('the memory estimate is pinned to the three measured sessions (§8.11)', () => {
