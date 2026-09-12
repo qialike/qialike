@@ -3275,8 +3275,16 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   void start(ctx, config, io).catch((error: unknown) => {
-    logError('start', error)
-    store.append('status', `TUI load failure: ${error instanceof Error ? error.message : String(error)}`, false)
+    const message = error instanceof Error ? error.message : String(error)
+    // FILE ONLY: the terminal gets ONE clean line below. The stderr mirror would
+    // otherwise put the stack in front of it, and a launch that cannot honour
+    // the requested session is a user-facing error, not a crash to debug (F4/F5).
+    logErrorFileOnly('start', error)
+    // The reason ALWAYS reaches the terminal: a launch failure can happen before
+    // Ink ever mounts (no transcript to append to), and a launch that cannot
+    // honour the requested session must not be silent (F4).
+    process.stderr.write(`dsh-tui: ${message}\n`)
+    store.append('status', `TUI load failure: ${message}`, false)
     requestExit(io, 1)
   })
 }
@@ -3369,10 +3377,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // transient gap, so the establish attempt retries with a bounded window.
   let handle: AgentHandle | undefined
   let resumed = false
-  /** Why the launch resume failed (null when none) — the launch then falls
-   *  back to a fresh session instead of dying on a log that another process
-   *  wrote concurrently (see the catch below). */
-  let resumeFailure: string | null = null
   /** Wall-clock when the launch began. In the S2-2b read-only path the attach
    *  is DEFERRED until the user's first submit, so `now - openT0` is "launch →
    *  attached" (it includes the whole read period) and must NOT be read as the
@@ -3387,8 +3391,8 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (resumeId !== undefined) {
       try {
         // A session that another process is appending to often false-positives
-        // as "corrupt" (torn record on a zstd frame seam); retry briefly
-        // before the launch falls back to a fresh session.
+        // as "corrupt" (torn record on a zstd frame seam); retry briefly so a
+        // TRANSIENT failure is absorbed instead of reported.
         announceOversizedResume(config.workspace, resumeId)
         nextHandle = await withResumeCorruptRetry(
           () => agents.resume({ resumeSessionId: SessionId(resumeId), agentOptions, setup }),
@@ -3396,20 +3400,28 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         )
         nextResumed = true
       } catch (error) {
-        // A failed resume (e.g. "corrupt session log": the durable log was
-        // written concurrently by another process) must not brick the launch —
-        // record why and continue to a fresh session below.
-        resumeFailure = error instanceof Error ? error.message : String(error)
+        // A requested resume that still fails after the retries is FATAL: the
+        // launch must never hand the user a fresh session they did not ask for
+        // (they would type into it believing they had continued the old one).
+        // The reason is printed on the plain terminal by the caller.
+        throw new Error(describeResumeFailure(error instanceof Error ? error.message : String(error)))
       }
     } else if (config.resumeNewest === true || resolveResumeLast()) {
-      // `dsh-tui resume` (or the resume_last opt-in): continue the newest
-      // session WITH CONTENT → the launch lands directly in the conversation
-      // view (docked), never on the hero.
+      // `dsh-tui resume` (explicit mode) or the `resume_last` opt-in: continue
+      // the newest session WITH CONTENT → the launch lands directly in the
+      // conversation view (docked), never on the hero.
       try {
         nextHandle = await autoResumeNewest(ctx, agents, config.workspace, agentOptions, setup)
         nextResumed = nextHandle !== undefined
+        // The EXPLICIT mode is a request, not a preference: with nothing to
+        // resume it must say so instead of quietly starting fresh. The opt-in
+        // keeps falling back to the hero (that is what "resume_last" means).
+        if (!nextResumed && config.resumeNewest === true) {
+          throw new Error(`resume: no session with content in ${config.workspace} — nothing to resume (\`dsh-tui\` starts a new one)`)
+        }
       } catch (error) {
-        resumeFailure = error instanceof Error ? error.message : String(error)
+        const message = error instanceof Error ? error.message : String(error)
+        throw new Error(message.startsWith('resume:') ? message : describeResumeFailure(message))
       }
     }
     // A requested resume that FAILED must fall back to a genuinely fresh
@@ -3702,6 +3714,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     store.flashStatus('Attaching session…', 8_000)
     void attachNow()
   }
+  // A requested `--resume <id>` whose log is not there cannot be honoured, and
+  // the launch must SAY SO rather than quietly starting a fresh session (F4).
+  // Checked BEFORE the UI mounts, so the reason lands on the plain terminal.
+  if (resumeId !== undefined && sessionLogBytes(config.workspace, resumeId) === undefined) {
+    process.stderr.write(`dsh-tui: session "${resumeId}" not found in ${config.workspace}`
+      + ' (no readable session log) — nothing to resume; run `dsh-tui` for a new session\n')
+    requestExit(io, 1)
+    return
+  }
   if (fastFirstScreen && fileFirstId !== undefined) {
     // The sidebar is painted in this phase too, and its footer's last line is
     // the workspace path: without this it rendered EMPTY until the attach
@@ -3899,12 +3920,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }
 
   store.append('status', `Session ${sessionId} in ${config.workspace}${resumed ? ' (resumed)' : ''}`, true)
-  // The launch resume failed (corrupt log, concurrent writer…): surface why in
-  // the transcript AND in the log, after the fresh-session line above.
-  if (!resumed && resumeFailure !== null) {
-    logErrorFileOnly('resume', `launch resume failed; started a fresh session instead: ${resumeFailure}`)
-    store.append('status', `${describeResumeFailure(resumeFailure)} — started a fresh session instead.`, true)
-  }
 
   // Warm the title cache shortly after launch so the first /sessions open
   // already has every title (no visible folding delay).
