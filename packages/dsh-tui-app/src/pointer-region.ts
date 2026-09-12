@@ -182,3 +182,114 @@ export function surfaceRegion(row: number, col: number, g: SurfaceGeometry): Sur
 export function sidebarContentBand(width: number, messageRight: number): { left: number; right: number } {
   return { left: messageRight + 2, right: width - 3 }
 }
+
+/** Rows the bottom status bar occupies (mirrors conversation.tsx). */
+export const SIDEBAR_STATUS_BAR_ROWS = 3
+
+/** Rows of one sidebar Text at `contentWidth` columns, using the SAME wrapper
+ *  Ink's `<Text wrap="wrap">` uses (see composerWrap) so the budget below can
+ *  never disagree with what is laid out. */
+function sidebarWrappedRows(text: string, contentWidth: number): number {
+  if (text === '') return 1
+  return wrapAnsi(text, Math.max(1, contentWidth), { trim: false, hard: true }).split('\n').length
+}
+
+/** How many Steps the sidebar may render, and how many it must hide.
+ *
+ *  Why a budget exists at all: Ink 4 has NO `overflow`, so a `flexDirection:
+ *  column` box whose children need more rows than the box has does not clip —
+ *  Yoga lays the extra rows out BELOW the box and Ink paints them there. On a
+ *  short (or narrow, which wraps the footer) terminal the Steps sidebar's
+ *  content outgrew its box and its FOOTER was painted onto the composer card's
+ *  bottom-border row — the version lines appeared to sit inside the input box.
+ *  Measured on a real pty: 80×20 and 60×24 overflow with an EMPTY draft (the
+ *  draft's line count is irrelevant; 80×24 and 133×37 are fine).
+ *
+ *  Mirrors the sidebar render exactly (borderStyle round + paddingX 1 +
+ *  paddingTop 1 + gap 1 over five children: heading, steps, session block,
+ *  spacer, footer) and reserves the fixed rows first, so the footer and the
+ *  session id stay visible and only the STEPS list gives way. Pure; unit-tested.
+ *
+ *  @param rows - terminal rows (store.rows).
+ *  @param width - terminal columns (store.width).
+ *  @param steps - one rendered step text per step, in order (`${icon} ${content}`).
+ *  @param sessionTitle - display title, or undefined when there is none.
+ *  @param sessionId - the session id shown wrapped under the title, if any.
+ *  @param footerLines - the sidebar footer's version lines (harness, dsh-tui);
+ *    the workspace path line below them is always counted as one row.
+ *  Priority when space runs out: the heading and footer are reserved first (small,
+ *  bounded, and they carry the step COUNT and the versions/workspace), then the
+ *  STEPS take the slack, then the session block gets what is left over.
+ *  `showSession` is false when the block does not fit — dropping it whole is
+ *  honest and predictable, whereas truncating the id mid-way would look like a
+ *  different id.
+ *
+ *  @returns `visible` = how many leading steps to render; `hidden` = how many
+ *    are dropped; `rows`/`capacity` = the rows this plan will occupy and the
+ *    rows the box actually has (`rows <= capacity` is the no-overflow invariant
+ *    the unit test sweeps); `showMore` = whether the `… +hidden more` row fits
+ *    (the caller renders it ONLY when this is true — that row costs a row, and
+ *    forgetting to budget it overflowed a 120×18 sidebar again); `showSession`
+ *    = whether to render the session block. */
+export function sidebarStepPlan(input: {
+  rows: number
+  width: number
+  steps: readonly string[]
+  sessionTitle?: string
+  sessionId?: string
+  footerLines: readonly string[]
+}): { visible: number; hidden: number; showMore: boolean; showSession: boolean; rows: number; capacity: number } {
+  const { steps } = input
+  const sidebarWidth = Math.max(20, Math.round(input.width * 0.3))
+  const contentWidth = Math.max(1, sidebarWidth - 4) // round border (2) + paddingX (1 each side)
+  const inner = Math.max(0, input.rows - SIDEBAR_STATUS_BAR_ROWS - 2 /* border */ - 1 /* paddingTop */)
+  const gaps = 4 // gap 1 between the five children
+  const heading = 1 // 'Steps n/m'
+  const footer = 3 // two version lines + the workspace path, all wrap="truncate"
+  const slack = Math.max(0, inner - gaps - heading - footer)
+  // STEPS ARE THE PRIMARY CONTENT: they get the slack first, then the session
+  // block takes whatever is left. (Reserving the session block first made the
+  // visible step count NON-monotone in the terminal height — one extra row let
+  // the block back in and pushed steps out again.)
+  let used = 0
+  let visible = 0
+  for (const step of steps) {
+    const need = sidebarWrappedRows(step, contentWidth)
+    if (used + need > slack) break
+    used += need
+    visible += 1
+  }
+  let hidden = steps.length - visible
+  let showMore = false
+  if (hidden > 0) {
+    // The `… +hidden more` marker costs one more row. Make room for it by
+    // dropping steps (the marker says more than the extra step would), and only
+    // show it when it actually fits.
+    while (visible > 0 && used + 1 > slack) {
+      visible -= 1
+      hidden += 1
+      used -= sidebarWrappedRows(steps[visible]!, contentWidth)
+    }
+    showMore = used + 1 <= slack
+  }
+  const sessionNeeds = 1 // 'Session' heading
+    + (input.sessionTitle === undefined ? 0 : 1)
+    + (input.sessionId === undefined ? 0 : sidebarWrappedRows(input.sessionId, contentWidth))
+  const leftover = slack - used - (showMore ? 1 : 0)
+  const showSession = input.sessionId !== undefined && leftover >= sessionNeeds
+  const sessionRows = showSession ? sessionNeeds : 0
+  const total = gaps + heading + sessionRows + used + (showMore ? 1 : 0) + footer
+  return { visible, hidden, showMore, showSession, rows: total, capacity: inner }
+}
+
+/** Whether the sidebar's MINIMUM content fits in `rows` terminal rows.
+ *
+ *  The minimum is: status bar (3) + round border (2) + paddingTop (1) + the four
+ *  `gap 1` rows + the `Steps` heading (1) + the three footer rows (each kept to
+ *  one row by `wrap="truncate"`, so they can never grow). Below that the sidebar
+ *  cannot be drawn without overflowing its box (Ink 4 has no `overflow`), so the
+ *  renderer hides it entirely instead of painting over the composer. */
+export function sidebarFits(rows: number): boolean {
+  const inner = rows - SIDEBAR_STATUS_BAR_ROWS - 2 /* border */ - 1 /* paddingTop */
+  return inner >= 4 /* gaps */ + 1 /* heading */ + 3 /* footer */
+}

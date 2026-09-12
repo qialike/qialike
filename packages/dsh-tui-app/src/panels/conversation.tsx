@@ -53,7 +53,7 @@ import {
   heroMarkRows,
   type HeroMarkKind,
 } from '../hero-layout.ts'
-import { surfaceRegion, sidebarContentBand, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
+import { surfaceRegion, sidebarContentBand, sidebarFits, sidebarStepPlan, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
 import { formatSessionStatsParts } from '../session-stats.ts'
 import { sessionDisplayTitle } from '../session-titles.ts'
 import { logError, logErrorFileOnly } from '../log.ts'
@@ -986,6 +986,14 @@ function heroMarkFor(rows: number, width: number): HeroMarkKind {
   })
 }
 
+/** Whether the Steps sidebar is drawn at `width` AND `rows`: the width rule
+ *  ({@link sidebarVisibleFor}) plus the height floor ({@link sidebarFits}).
+ *  Everything that assumes the sidebar's columns must use THIS, or the composer
+ *  would reserve space for a sidebar that was never drawn (or vice versa). */
+function sidebarShown(width: number, rows: number): boolean {
+  return sidebarVisibleFor(width) && sidebarFits(rows)
+}
+
 /** Whether the Steps sidebar is drawn at `width`: the manual store override
  *  (`on`/`off`) wins; `auto` follows the width threshold. Every geometry helper
  *  consults this so the transcript/composer widths always match the sidebar
@@ -1676,7 +1684,7 @@ function composerCaretGlobalRow(input: string, cursor: number, usable: number): 
 function mainSurfaceGeometry(): SurfaceGeometry {
   const width = store.width
   const rows = store.rows
-  const showSidebar = sidebarVisibleFor(width)
+  const showSidebar = sidebarShown(width, store.rows)
   const messageRight = showSidebar ? width - sidebarWidthFor(width) : width
   const composerH = composerHeight(width, store.input, composerMinHeight())
   const boxH = composerH + (store.composerImage !== null ? 1 : 0)
@@ -1805,7 +1813,7 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   const height = process.stdout.rows ?? 24
   const input = store.input
   const band = composerBand(width, height)
-  const usable = convUsableWidth(width, sidebarVisibleFor(width))
+  const usable = convUsableWidth(width, sidebarShown(width, store.rows))
   const flatItems = store.getItems()
   const tRows = debugLayout ? Date.now() : 0
   const rows = buildTranscriptRows(flatItems, usable)
@@ -2000,7 +2008,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   if (k.end) { store.moveCursorToLineEnd(); return }
   // A left-click on the Steps sidebar's TITLE band toggles the sidebar
   // (auto → on → off → auto). Only reachable while the sidebar is drawn.
-  if (k.mousePress && sidebarVisibleFor(store.width) && k.mousePress.row <= 4
+  if (k.mousePress && sidebarShown(store.width, store.rows) && k.mousePress.row <= 4
       && k.mousePress.col > store.width - sidebarWidthFor(store.width)) {
     const mode = store.cycleSidebarMode()
     store.flashStatus(mode === 'auto' ? 'Steps: auto (follows width)' : mode === 'on' ? 'Steps: shown' : 'Steps: hidden')
@@ -2279,7 +2287,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const modelBaseLabel = effortName === '' || !modelLabel.endsWith(` · ${effortName}`)
     ? modelLabel
     : modelLabel.slice(0, Math.max(0, modelLabel.length - effortName.length - 3))
-  const showSidebar = sidebarVisibleFor(width)
+  const showSidebar = sidebarShown(width, store.rows)
 
   const heroActive = store.hero
   // Hero content box: the padded hero area starts at column 1 (0-based) and
@@ -2388,6 +2396,23 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // the layout math, flipping the wrap width by ±1 column and churning the
   // measured row heights (sidebar width jump / re-layout feedback).
   const sidebarWidth = showSidebar ? Math.max(20, Math.round(width * 0.3)) : 0
+  // Ink 4 has no `overflow`: a sidebar whose content needs more rows than its box
+  // has paints the extra rows BELOW the box — on a short (or narrow, which wraps
+  // the footer) terminal the version lines landed on the composer card's bottom
+  // border, i.e. inside the input box (measured: 80×20 and 60×24 overflow with an
+  // EMPTY draft, so the draft's line count is not the trigger). Reserve the fixed
+  // rows first — heading, session block, footer, borders, padding, gaps — and let
+  // only the STEPS list give way; the planner is pure and unit-tested.
+  const sidebarPlan = sidebarStepPlan({
+    rows: store.rows,
+    width,
+    steps: steps.map((step) => `${STEP_ICON[step.status]} ${stripTerminalControls(step.content)}`),
+    ...(store.session === undefined ? {} : {
+      sessionTitle: sessionDisplayTitle(store.session.id),
+      sessionId: String(store.session.id),
+    }),
+    footerLines: [`deepseek-harness: ${HARNESS_VERSION}`, `dsh-tui: ${APP_VERSION}${BETA_FOOTER_SUFFIX}`],
+  })
   const viewportLines = convViewportLines(composerH, 0, modalH)
   const rows = useMemo(() => {
     const t0 = debugLayout ? Date.now() : 0
@@ -2935,7 +2960,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
           {steps.length === 0
             ? <Text color={mutedReadable()}>no plan yet</Text>
-            : <StepRows steps={steps} />}
+            : (
+              <Box flexDirection="column">
+                <StepRows steps={steps.slice(0, sidebarPlan.visible)} />
+                {sidebarPlan.showMore && (
+                  <Text color={mutedReadable()}>… +{sidebarPlan.hidden} more</Text>
+                )}
+              </Box>
+            )}
           {/* Right-sidebar session block: heading styled like the sibling
               "Steps" heading, the session display title (user rename wins
               over the auto title) directly under it in the REGULAR font and
@@ -2945,6 +2977,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               gap) inside this inner column; the outer sidebar gap still
               separates the block from the Steps list and the footer. An
               untitled session keeps the heading + id rows (no title row). */}
+          {sidebarPlan.showSession && (
           <Box flexDirection="column">
             <Text color={theme.accent} bold>Session</Text>
             {store.session !== undefined && (() => {
@@ -2955,6 +2988,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               ? <Text color={mutedReadable()} wrap="wrap">{String(store.session.id)}</Text>
               : null}
           </Box>
+          )}
           <Box flexGrow={1} />
           {/* Sidebar footer: the two version lines (harness above dsh-tui) and
               the workspace path form ONE flush 3-row column (gap 0) hugging
@@ -2966,8 +3000,8 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               message-box Think color as the composer's reasoning-effort chip
               ("High"), WITHOUT bold — matching its muted weight exactly. */}
           <Box flexDirection="column">
-            <Text color={theme.text}>deepseek-harness: <Text color={mutedReadable()}>{HARNESS_VERSION}</Text></Text>
-            <Text color={theme.text}>dsh-tui: <Text color={mutedReadable()}>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
+            <Text color={theme.text} wrap="truncate">deepseek-harness: <Text color={mutedReadable()}>{HARNESS_VERSION}</Text></Text>
+            <Text color={theme.text} wrap="truncate">dsh-tui: <Text color={mutedReadable()}>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
             <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
           </Box>
         </Box>
@@ -3121,7 +3155,7 @@ export function apply(ctx: Context): void {
   store.setFrameSelectionGuard((sel) => {
     const width = store.width
     const rows = store.rows
-    const showSidebar = sidebarVisibleFor(width)
+    const showSidebar = sidebarShown(width, store.rows)
     const usable = convUsableWidth(width, showSidebar)
     const composerTop = composerBand(width, rows).top
     const y1 = Math.max(0, Math.min(sel.aRow, sel.cRow) - 1)
