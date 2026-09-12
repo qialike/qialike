@@ -26,6 +26,22 @@ function fakeDeps(overrides?: {
 }
 
 describe('selftest in-process checks', () => {
+  test('a phase-pending command is reported, not called missing (read-only /compact)', () => {
+    // Read-only: `/compact` is registered only after the attach. It used to make
+    // the whole battery report 7/8 with `missing: compact` (measured on a real
+    // terminal) — a self-test crying wolf about the documented phase split.
+    const deps = fakeDeps({ commands: ['help', 'think', 'clear', 'exit', 'models', 'sessions', 'export', 'new', 'goal', 'plan', 'theme', 'selftest'] })
+    const readonly = syncChecks({ ...deps, pendingCommands: ['compact'] })
+    const registry = readonly.find((c) => c.name === 'command registry')
+    expect(registry?.ok).toBe(true)
+    expect(registry?.detail).toContain('not yet registered: compact')
+    // ...but without the phase hint the same registry still fails.
+    expect(syncChecks(deps).find((c) => c.name === 'command registry')?.ok).toBe(false)
+    // ...and a command missing for any OTHER reason still fails.
+    const broken = fakeDeps({ commands: ['think', 'compact', 'clear', 'exit', 'models', 'sessions', 'export', 'new', 'goal', 'plan', 'theme', 'selftest'] })
+    expect(syncChecks({ ...broken, pendingCommands: ['compact'] }).find((c) => c.name === 'command registry')?.ok).toBe(false)
+  })
+
   test('full battery passes against real registries', () => {
     const checks = syncChecks(fakeDeps())
     const failed = checks.filter((c) => !c.ok)

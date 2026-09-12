@@ -43,6 +43,15 @@ export interface CheckResult {
 export interface SyncCheckDeps {
   commands?: { list(): readonly { name: string }[] }
   panels?: { byId(id: string): unknown }
+  /** Required commands that are legitimately NOT registered yet in this phase.
+   *  `/compact` needs a live agent, so it is registered only after the session
+   *  attaches (`ATTACH_DEFERRED_COMMANDS`'s other members are registered early
+   *  and merely defer the *invocation*). Reporting it as MISSING made the
+   *  read-only `/selftest` cry wolf: 7/8 with `missing: compact` while nothing
+   *  was wrong. Such a command is reported as "not yet registered" and does not
+   *  fail the check; a required command that is absent for any OTHER reason
+   *  still fails. */
+  pendingCommands?: readonly string[]
 }
 
 const REQUIRED_PANELS = ['conversation', 'approval', 'question', 'connect', 'sessions', 'export', 'help', 'themes'] as const
@@ -131,10 +140,15 @@ export function syncChecks(deps: SyncCheckDeps): CheckResult[] {
     check('command registry', false, 'tui.commands service unavailable')
   } else {
     const names = deps.commands.list().map((c) => c.name)
-    const missingCommands = REQUIRED_COMMANDS.filter((n) => !names.includes(n))
+    const pending = deps.pendingCommands ?? []
+    const pendingAbsent = pending.filter((n) => !names.includes(n))
+    const missingCommands = REQUIRED_COMMANDS.filter((n) => !names.includes(n) && !pendingAbsent.includes(n))
     const hasSelftest = names.includes('selftest')
     check('command registry', missingCommands.length === 0 && hasSelftest,
-      `${names.length} commands` + (missingCommands.length > 0 ? ` · missing: ${missingCommands.join(', ')}` : '') + (hasSelftest ? '' : ' · selftest missing'))
+      `${names.length} commands`
+      + (missingCommands.length > 0 ? ` · missing: ${missingCommands.join(', ')}` : '')
+      + (pendingAbsent.length > 0 ? ` · not yet registered: ${pendingAbsent.join(', ')}` : '')
+      + (hasSelftest ? '' : ' · selftest missing'))
   }
 
   return out
@@ -212,6 +226,11 @@ export function apply(ctx: Context): void {
       const checks = syncChecks({
         commands: (ctx.get('tui') as { commands?: { list(): readonly { name: string }[] } } | undefined)?.commands,
         panels: (ctx.get('tui') as { panels?: { byId(id: string): unknown } } | undefined)?.panels,
+        // In the read-only phase (S2-2b) `/compact` is not registered yet BY
+        // DESIGN, so the battery must not call its absence a failure.
+        pendingCommands: (ctx.get('tuiStore') as { readOnlySessionId?: string } | undefined)?.readOnlySessionId === undefined
+          ? []
+          : ['compact'],
       })
       const report = formatReport(checks)
       const passed = checks.filter((c) => c.ok).length
