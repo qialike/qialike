@@ -50,6 +50,26 @@ describe('formatByteSize', () => {
   })
 })
 
+describe('store workspace', () => {
+  test('is empty until set, readable, and idempotent', () => {
+    // The read-only sidebar's footer prints it, so the launch workspace must be
+    // set BEFORE the file-first paint — and the later attach-time call must be
+    // free (no notify, no extra frame).
+    const store = new Store()
+    expect(store.workspace).toBe('')
+    store.setWorkspace('/home/pipo/deepseek')
+    expect(store.workspace).toBe('/home/pipo/deepseek')
+    let notified = 0
+    const original = store.notify.bind(store)
+    store.notify = () => { notified += 1; original() }
+    store.setWorkspace('/home/pipo/deepseek') // unchanged
+    expect(notified).toBe(0)
+    store.setWorkspace('/tmp/other')
+    expect(notified).toBe(1)
+    expect(store.workspace).toBe('/tmp/other')
+  })
+})
+
 describe('store session-loading state', () => {
   test('begin / tick / end drive the banner and the key suppression flag', () => {
     const store = new Store()

@@ -2747,7 +2747,15 @@ export class Store {
   /** In-place switch to a persisted session (injected by start()). */
   resumeSessionAction: (id: string) => void = () => {}
   get workspace(): string { return this._workspace }
-  setWorkspace(workspace: string): void { this._workspace = workspace; this.notify() }
+  /** The launch workspace. Known BEFORE any session is open (it comes from the
+   *  CLI/config), and the read-only sidebar's footer prints it — so it is set
+   *  before the file-first paint, not only when a session opens. Idempotent, so
+   *  the later attach-time call costs nothing. */
+  setWorkspace(workspace: string): void {
+    if (this._workspace === workspace) return
+    this._workspace = workspace
+    this.notify()
+  }
   get running(): boolean { return this._running }
   setRunning(running: boolean): void {
     if (running === this._running) return
@@ -3688,6 +3696,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     void attachNow()
   }
   if (fastFirstScreen && fileFirstId !== undefined) {
+    // The sidebar is painted in this phase too, and its footer's last line is
+    // the workspace path: without this it rendered EMPTY until the attach
+    // (measured: `dsh-tui resume` showed only the two version lines in the
+    // read-only view; `/sessions` → switch made the path appear).
+    store.setWorkspace(config.workspace)
     store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
     // Leaves the hero (a plain launch's placeholder) and paints the docked
     // chrome with the load banner: the transcript has somewhere to appear.
