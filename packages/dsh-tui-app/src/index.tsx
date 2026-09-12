@@ -932,16 +932,15 @@ export class Store {
         (s.label).toLowerCase().includes(filter)
         || String(s.id).toLowerCase().includes(filter)
         || (s.cwd ?? '').toLowerCase().includes(filter))
-    // Pinned sessions sort to the top; within each group, newest first. The
-    // /sessions day grouping (sessions.tsx dayLabel) requires chronological
-    // order — without it the same day label recurs non-contiguously, producing
-    // duplicate group-header React keys whose reconciliation corrupts the
-    // dialog (a doubled filter line / garbled rows). Sort by createdAt DESC.
+    // Pinned sessions sort to the top; within each group, most recently USED
+    // first. The /sessions day grouping (sessions.tsx dayLabel) needs one
+    // chronological value — without it the same day label recurs
+    // non-contiguously, producing duplicate group-header React keys whose
+    // reconciliation corrupts the dialog (a doubled filter line / garbled rows).
+    // The sort key and the row label are both `activityAt ?? createdAt` (F9), so
+    // the order and the clocks can never contradict each other.
     return [...base].sort((a, b) =>
       (isPinned(b.id) ? 1 : 0) - (isPinned(a.id) ? 1 : 0)
-      // Most recently USED first (F9): the day grouping below reads the same
-      // value, so a repeated day label cannot appear (which is why this sort
-      // used to fall back to createdAt and silently discard the MRU order).
       || (b.activityAt ?? b.createdAt ?? 0) - (a.activityAt ?? a.createdAt ?? 0))
   }
   get secret() { return this._secret }
@@ -3644,6 +3643,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       } catch { /* ignore */ }
       process.stdout.off('resize', onResize)
       process.stdin.off('data', onStdin)
+      // Ink's own final frame (unmount's onRender) must not be queued behind the
+      // synchronous leave below: on a Windows TTY (and on a POSIX pipe) stdout
+      // writes are async, so that frame would be overtaken and left as residue on
+      // the restored normal screen. The patched frame writer honours this hook by
+      // writing synchronously; only frames from here on (i.e. the unmount one) take
+      // that path, so ordinary rendering keeps its queued writes.
+      ;(globalThis as { __dshTuiSyncFrameWriter?: (frame: string) => void }).__dshTuiSyncFrameWriter =
+        (frame: string): void => { writeSync(1, frame) }
       void app.unmount()
       try { writeSync(1, '\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
     })

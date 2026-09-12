@@ -71,3 +71,21 @@ test('exiting dsh-tui writes nothing visible after the alternate-screen leave', 
   expect(exitedAt, 'the exit log line must be written').toBeGreaterThan(-1)
   expect(exitedAt, 'the exit log line must precede the leave (it is discarded with the alt buffer)').toBeLessThan(lastLeave)
 }, 60_000)
+
+// The Windows-only ordering hazard — Ink's last frame is a QUEUED stdout write
+// there, and the synchronous leave could overtake it and leave the frame as
+// residue on the restored screen — cannot be observed on a POSIX TTY, where both
+// writes are synchronous. So both halves of its mitigation are pinned at the
+// source instead: the exit handler installs a synchronous frame writer before
+// unmounting, and the patched Ink frame writer honours it.
+test('the exit path makes Ink\'s last frame write synchronously', () => {
+  const app = readFileSync(join(ROOT, 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
+  const hook = app.indexOf('__dshTuiSyncFrameWriter')
+  const unmount = app.indexOf('void app.unmount()')
+  expect(hook, 'the exit handler must install the synchronous frame writer').toBeGreaterThan(-1)
+  expect(unmount, 'unmount must still be called').toBeGreaterThan(-1)
+  expect(hook, 'the writer must be installed BEFORE unmount paints the last frame').toBeLessThan(unmount)
+
+  const build = readFileSync(join(ROOT, 'apps/tui-bin/build.mjs'), 'utf8')
+  expect(build, 'the patched Ink frame writer must honour that hook').toContain('globalThis.__dshTuiSyncFrameWriter')
+})

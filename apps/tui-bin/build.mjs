@@ -1069,7 +1069,19 @@ const writeFullScreenFrame = (stdout, output) => {
     writeFullScreenFrame._prev = lines;
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
     if (suffix) frame += suffix;
-    if (frame !== '') stdout.write(frame);
+    // Exit phase (__dshTuiSyncFrameWriter): the app installs a SYNCHRONOUS writer
+    // right before it unmounts, so the last frame Ink paints cannot be overtaken by
+    // the synchronous leave sequence on a platform whose stdout writes are queued
+    // (a Windows TTY; also a POSIX pipe). There the leave would go out first and the
+    // frame would land on the restored normal screen as residue.
+    if (frame !== '') {
+        const syncWrite = typeof globalThis !== 'undefined' ? globalThis.__dshTuiSyncFrameWriter : undefined;
+        if (typeof syncWrite === 'function') {
+            try { syncWrite(frame); } catch { stdout.write(frame); }
+        } else {
+            stdout.write(frame);
+        }
+    }
     if (typeof globalThis !== 'undefined' && typeof globalThis.__dshCharScan === 'function' && changedLines.length > 0) {
         globalThis.__dshCharScan(changedLines);
     }

@@ -4,13 +4,14 @@
  * module). It resolves the cheap, self-contained invocations before the
  * ~111-module plugin graph (`generated/plugins.ts` → every embedded harness +
  * TUI plugin) loads, so `--version` and a lone `--help` return in tens of
- * milliseconds instead of a full Loader boot. Every other invocation falls
- * through to a deferred `import()` of {@link ./bin.ts}; Bun keeps that static
- * graph out of startup behind the dynamic import, and bin.ts re-checks its own
- * launcher flags (`uninstall`, `web`, version) before booting, so nothing is
- * lost in the handoff.
+ * milliseconds instead of a full Loader boot. Every other invocation is parsed
+ * once here with the same command definition (see below) and then handed to a
+ * deferred `import()` of {@link ./bin.ts}; Bun keeps that static graph out of
+ * startup behind the dynamic import, and bin.ts re-checks its own launcher flags
+ * (`uninstall`, `web`, version) before booting, so nothing is lost in the
+ * handoff.
  *
- * Fast-path output must stay byte-identical to the full boot's:
+ * Byte-parity with the full boot is promised for the two LONE forms only:
  *  - `--version` / `-V` / `-v` → `${NAME} ${version}\n`, the same condition
  *    and bytes bin.ts writes (version wins over every other argument).
  *  - a lone `--help` / `-h` → the alternate-screen enter (`\x1b[?1049h`) the
@@ -19,9 +20,15 @@
  *    wrap width and addHelpText byte-identical — then exit 0. The full boot
  *    renders help only after the app mounts, which disarms its pre-mount
  *    leave backstop, so its help output carries no leave either; this path
- *    registers no exit-time writer at all. Mixed argument sets fall through to
- *    the full boot: commander rejects unknown options before showing help, and
- *    only the real startup plugin can reproduce that ordering.
+ *    registers no exit-time writer at all.
+ *
+ * A help request MIXED with other flags is deliberately NOT byte-identical: it
+ * takes this module's own parse (so the wording, and the rejection order for
+ * unknown options, still cannot drift from the full boot), but that parse runs
+ * before the launcher's `!interactiveLaunch` branch (bin.ts) would have written
+ * the enter — so the same commander text is printed without it. Only the lone
+ * `--help` shape carries the enter; narrowing the promise here beats claiming a
+ * parity the mixed shape does not have.
  *
  * @module @yourname/dsh-tui/main
  */
