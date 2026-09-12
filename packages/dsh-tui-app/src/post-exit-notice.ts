@@ -15,9 +15,19 @@
  * leave guarantees the notice reaches the terminal AFTER the leave — on the
  * restored normal screen, where it stays above the prompt.
  *
- * The write is synchronous (`writeSync`) because only POSIX TTYs are synchronous
- * in that phase: an async write this late can be dropped on Windows and on
- * POSIX pipes, i.e. exactly when the message is the only thing the user gets.
+ * Its users are the FATAL paths whose reason a user must read: `start()`'s
+ * top-level catch (a resume that cannot be honoured) and the
+ * `uncaughtException` handler. Non-fatal diagnostics stay with `logError`: their
+ * stderr mirror is invisible while the UI is mounted, but they do not exit, and
+ * a notice would only be printed at exit — stale by then. The file log is their
+ * record.
+ *
+ * The write is synchronous (`writeSync`), and so is the leave write in the exit
+ * handler that precedes it: only POSIX TTYs are synchronous in that phase, so an
+ * async write there can be dropped (Windows TTY, POSIX pipes) — and a sync
+ * notice overtaking an async leave would land inside the alternate buffer and be
+ * discarded after all. Ordered sync writes are what makes the guarantee hold on
+ * every platform.
  *
  * @module @yourname/dsh-tui-app/post-exit-notice
  */

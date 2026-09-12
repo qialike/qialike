@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { statSync } from 'node:fs'
+import { statSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { render, Box, Text } from 'ink'
 import React from 'react'
@@ -3201,9 +3201,19 @@ export function apply(ctx: Context, config: Config): void {
   // `~/.dsh/dsh-tui.log` (and stderr). Best-effort; never throws.
   initErrorLog()
   process.on('uncaughtException', (error) => {
-    logError('uncaughtException', error)
+    // The FILE keeps the stack; the terminal gets ONE line, queued through the
+    // notice channel so it survives the alternate screen. `logError`'s stderr
+    // mirror is not enough here: this handler runs with the UI mounted, so the
+    // mirror lands in the buffer and is discarded on the way out — the same
+    // silent disappearance P2 fixed for the resume path.
+    logErrorFileOnly('uncaughtException', error)
+    postExitNotice(`dsh-tui: uncaught exception: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exit(1)
   })
+  // NON-fatal by design (the process keeps running), so it stays out of the
+  // notice channel: a notice is only written at exit, and a deferred message
+  // about a recovered rejection would be stale by then. The file log is its
+  // record; the stderr mirror is best-effort and invisible while mounted.
   process.on('unhandledRejection', (reason) => {
     logError('unhandledRejection', reason)
   })
@@ -3620,11 +3630,18 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
         process.stdin.setRawMode(false)
       }
-      if (process.stdout.isTTY) process.stdout.write('\x1b[?1006l\x1b[?1003l\x1b[?2004l') // disable mouse tracking + bracketed paste
+      // BOTH terminal-restore writes are synchronous. The exit phase only
+      // guarantees ordering for sync writes (a Windows TTY is async, and so is a
+      // POSIX pipe), and `post-exit-notice` writes the notice synchronously: a
+      // sync notice would otherwise be able to overtake an async leave and vanish
+      // with the alternate buffer — exactly the P2 failure it exists to prevent.
+      try {
+        if (process.stdout.isTTY) writeSync(1, '\x1b[?1006l\x1b[?1003l\x1b[?2004l') // disable mouse tracking + bracketed paste
+      } catch { /* ignore */ }
       process.stdout.off('resize', onResize)
       process.stdin.off('data', onStdin)
       void app.unmount()
-      try { process.stdout.write('\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
+      try { writeSync(1, '\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
     })
     // Registered AFTER the leave writer above, so every notice queued through
     // the channel is written once the alternate screen is gone — the only place

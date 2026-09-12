@@ -74,12 +74,27 @@ describe('post-exit notices', () => {
 
 describe('the wiring in index.tsx', () => {
   const appSource = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf8')
+  const noticesSource = readFileSync(
+    new URL('../packages/dsh-tui-app/src/post-exit-notice.ts', import.meta.url), 'utf8',
+  )
 
-  test('the channel is armed immediately after the leave write', () => {
-    const leave = appSource.indexOf('\\x1b[?1049l')
+  test('the channel is armed immediately after the leave WRITE', () => {
+    // Anchor on the write expression, never on the first mention of the escape:
+    // `\x1b[?1049l` also appears in the P2 comment above (line ~3287), so an
+    // `indexOf` of the bare escape finds the comment and the guard would pass
+    // even if the real write wandered after the arm.
+    const leaveWrite = appSource.indexOf("writeSync(1, '\\x1b[0 q\\x1b[?25h\\x1b[?1049l')")
     const armed = appSource.indexOf('armPostExitNotices(flushPostExitNotices)')
-    expect(leave).toBeGreaterThan(-1)
-    expect(armed).toBeGreaterThan(leave)
+    expect(leaveWrite).toBeGreaterThan(-1)
+    expect(armed).toBeGreaterThan(leaveWrite)
+  })
+
+  test('both the leave and the notice are written synchronously', () => {
+    // The order only holds because BOTH writes are sync: an async leave (a
+    // Windows TTY, a POSIX pipe) could be overtaken by the sync notice.
+    expect(appSource).toContain("writeSync(1, '\\x1b[0 q\\x1b[?25h\\x1b[?1049l')")
+    expect(appSource).not.toContain("process.stdout.write('\\x1b[0 q\\x1b[?25h\\x1b[?1049l')")
+    expect(noticesSource).toContain('writeSync(2, text)')
   })
 
   test('the fatal start path queues the notice instead of writing stderr directly', () => {
@@ -87,5 +102,15 @@ describe('the wiring in index.tsx', () => {
     // that line lands in the alternate buffer and is discarded with it.
     expect(appSource).toContain('postExitNotice(`dsh-tui: ${message}\\n`)')
     expect(appSource).not.toContain('process.stderr.write(`dsh-tui: ${message}\\n`)')
+  })
+
+  test('the hard-crash handler queues its one line too, and keeps the stack in the file', () => {
+    const from = appSource.indexOf("process.on('uncaughtException'")
+    const to = appSource.indexOf("process.on('unhandledRejection'", from)
+    const handler = appSource.slice(from, to)
+    expect(from).toBeGreaterThan(-1)
+    expect(handler).toContain('postExitNotice(')
+    expect(handler).toContain("logErrorFileOnly('uncaughtException'")
+    expect(handler).not.toContain("logError('uncaughtException'")
   })
 })
