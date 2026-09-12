@@ -1532,6 +1532,37 @@ export class Store {
     return this._historyMarkerKey >= 0 && !this._historySettled
   }
 
+  /** Which line owns the status bar's LEFT slot — the single source of truth for
+   *  the render, so the priority order cannot drift from what is tested.
+   *
+   *  Order and why:
+   *   - `loading`/`compaction`/`preparing`: the user just took an action and
+   *     these carry live numbers (or the request-assembly clock) — nothing may
+   *     hide them;
+   *   - `flash`: a transient confirmation of the user's own action. It MUST
+   *     outrank the fold, because in the read-only phase (S2-2b) the fold's
+   *     marker is set and no driver ever settles it, so `historyLoadingVisible`
+   *     is true for as long as the user only reads — anything ranked below it
+   *     can never be seen (measured: `/sidebar` and Ctrl+Y copy gave no feedback
+   *     at all before this order was fixed). The flash expires by itself, so the
+   *     fold text comes back on its own;
+   *   - `error`: a failed load stays until the next attempt or `/clear`, and it
+   *     is the only line that explains why the user's action did not work, so it
+   *     also outranks the fold. Safe to rank above `history`: any new load
+   *     clears `loadError` first, so a stale error can never hide a live fold;
+   *   - `history`: the long older-history fold's progress + counts (also row 0
+   *     of the transcript, so it is never lost);
+   *   - `busy`: the idle/running indicator. */
+  get statusBarLeft(): 'loading' | 'compaction' | 'preparing' | 'flash' | 'error' | 'history' | 'busy' {
+    if (this._sessionLoading !== null) return 'loading'
+    if (this._compaction !== null) return 'compaction'
+    if (this._preparingRequest) return 'preparing'
+    if (this._statusFlash !== null) return 'flash'
+    if (this._loadError !== null) return 'error'
+    if (this.historyLoadingVisible) return 'history'
+    return 'busy'
+  }
+
   /** The leading marker's text (progress bar + counts) — reused by the status
    *  bar so the long older-history fold is visible without scrolling up. */
   get historyProgressText(): string {

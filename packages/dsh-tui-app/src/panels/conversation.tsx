@@ -2984,34 +2984,40 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             left while a transient status message (e.g. "copied: …") flashes —
             so the confirmation takes the Idle slot for ~2.5s, then Idle returns.
             NOT a transcript row, so it cannot re-layout the transcript or slide
-            the selection highlight. */}
-        {/* While the resumed session's OLDER history is still folding, the
-            left slot carries its real progress bar + counts: that fold is the
-            one long phase of a switch whose numbers exist, and it runs while
-            the transcript is already usable — so it belongs here (always
-            visible, never blocks input) rather than in a modal. The transcript
-            marker keeps the same text for anyone scrolled to the top. */}
-        {store.sessionLoading !== null
-          ? <Text color={theme.accent} wrap="truncate">{sessionLoadingStatusText(store.sessionLoading, Date.now(), store.sessionLoadingTicked)}</Text>
-          : store.compaction !== null
-            // A manual `/compact` outranks the fold progress: it is the action
-            // the user just took, and it runs while the transcript is otherwise
-            // usable (Esc cancels it).
-            ? <Text color={theme.accent} wrap="truncate">{compactionStatusText(store.compaction, Date.now(), store.compactionTicked)}</Text>
-            : store.preparingRequest
+            the selection highlight.
+
+            The ORDER lives in `store.statusBarLeft` (one source of truth, unit
+            tested) instead of in this JSX: the ranking is behaviour, not
+            presentation, and the read-only phase (S2-2b) makes it load-bearing
+            — its fold marker never settles, so anything ranked below the fold
+            text is invisible for as long as the user only reads. Each label's
+            own reasoning sits with its helper:
+              loading      → sessionLoadingStatusText (live clock)
+              compaction   → a manual `/compact` outranks the fold; Esc cancels
+              preparing    → assembly clock, shown only once a tick proves the
+                             loop is free (`[stall]` otherwise)
+              flash        → the user's own action, expires by itself
+              history      → the long older-history fold's progress + counts
+              error        → a failed load stays until retry / `/clear`
+              busy         → Idle / Working */}
+        {store.statusBarLeft === 'loading'
+          ? <Text color={theme.accent} wrap="truncate">{sessionLoadingStatusText(store.sessionLoading!, Date.now(), store.sessionLoadingTicked)}</Text>
+          : store.statusBarLeft === 'compaction'
+            ? <Text color={theme.accent} wrap="truncate">{compactionStatusText(store.compaction!, Date.now(), store.compactionTicked)}</Text>
+            : store.statusBarLeft === 'preparing'
               // The harness assembles this step's request on this thread right
               // after `step/start` (4-6 s on a giant session, `[stall]` in the
               // log): the frame carrying this label is flushed BEFORE that block,
               // so the clock stays hidden until a tick proves the loop is free.
               ? <Text color={theme.accent} wrap="truncate">{preparingRequestStatusText(store.preparingRequestStartedAt, Date.now(), store.preparingRequestTicked)}</Text>
-              : store.historyLoadingVisible
+              : store.statusBarLeft === 'flash'
+            ? <Text color={theme.success} wrap="truncate">{store.statusFlash!.text}</Text>
+            : store.statusBarLeft === 'history'
             ? <Text color={theme.accent} wrap="truncate">{store.historyProgressText}</Text>
-            : store.statusFlash
-              ? <Text color={theme.success} wrap="truncate">{store.statusFlash.text}</Text>
-              : store.loadError !== null
+              : store.statusBarLeft === 'error'
                 // A failed load stays visible until the next attempt / `/clear`:
                 // the user must be able to read why the session did not open.
-                ? <Text color={theme.error} wrap="truncate">{store.loadError}</Text>
+                ? <Text color={theme.error} wrap="truncate">{store.loadError!}</Text>
                 : <BusyIndicator animate={store.running} paused={store.paused} />}
         {/* The steps/turns · tokens stats are pinned to the RIGHT edge of the
             status bar regardless of the busy indicator's width: an explicit

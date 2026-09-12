@@ -305,6 +305,19 @@ export function apply(ctx: Context): void {
     render: () => <SessionsDialog />,
     handleKey: (k) => { sessionsKey(k, reload); return true },
   })
+  /** One place for "the session list did not load": a line in the error log for
+   *  diagnosis, plus a transcript row the user can actually read. The dialog
+   *  itself has nowhere to put a message, and the status bar may be carrying
+   *  another phase's text — a transcript row is never masked. Every promise in
+   *  this file's load path MUST end here: a bare rejection becomes an
+   *  `unhandledRejection`, and the harness's fail-loud hook answers that with
+   *  `process.exit(1)` — the whole TUI dies while the user was only opening the
+   *  session list (measured: a `chmod 000` log did exactly that). */
+  const reportLoadFailure = (what: string, error: unknown): void => {
+    const message = error instanceof Error ? error.message : String(error)
+    logErrorFileOnly('sessions', `${what} failed: ${message}`)
+    store.append('status', `sessions: ${message}`, true)
+  }
   // Shared list load: the `/sessions` command opens it; deletion refreshes it.
   const reload = (): void => {
     const persistence = ctx.get('sessionPersistence') as (SessionTitlesPersistence & { list?: (signal?: AbortSignal) => Promise<SessionHeaderLike[]> }) | undefined
@@ -313,11 +326,13 @@ export function apply(ctx: Context): void {
     const publish = (rows: SessionSummary[]): void => {
       store.refreshSessionsDialog(hideUnselectedBlanks(rows, store.session?.id))
     }
-    if (persistence?.list === undefined) {
-      // No local persistence service in this composition: ask the FILE SYSTEM
-      // instead — the same generation-aware reader the transcript and /export
-      // use. Without this fallback the list is always empty, which also makes
-      // Ctrl+R rename and Ctrl+D delete unreachable.
+    // Ask the FILE SYSTEM instead of the persistence service — the same
+    // generation-aware reader the transcript and /export use. Without it the
+    // list is always empty, which also makes Ctrl+R rename and Ctrl+D delete
+    // unreachable. It is defensive per session (`listSessionFiles` drops an
+    // unreadable log instead of failing), which is exactly what makes it the
+    // right fallback when the service's `list()` rejects.
+    const loadFromFiles = (): void => {
       const filePersistence: SessionTitlesPersistence = {
         inspect: async (id) => ({ events: await readSessionEvents(store.workspace, id) }),
       }
@@ -329,9 +344,10 @@ export function apply(ctx: Context): void {
         const rows = await listWithTitles(filePersistence, headers, publish)
         logErrorFileOnly('sessions', `file-backed rows: ${rows.length} after title merge`)
         publish(rows)
-      })().catch((error: unknown) => {
-        store.append('status', `sessions: ${error instanceof Error ? error.message : String(error)}`, true)
-      })
+      })().catch((error: unknown) => { reportLoadFailure('file-backed list', error) })
+    }
+    if (persistence?.list === undefined) {
+      loadFromFiles()
       return
     }
     void persistence.list().then((list) => {
@@ -345,6 +361,14 @@ export function apply(ctx: Context): void {
       // Render from the title cache immediately; fold missing titles in the
       // background and refresh the dialog in place (keeps filter/highlight).
       void listWithTitles(persistence, sameDir, publish).then(publish)
+        .catch((error: unknown) => { reportLoadFailure('title fold', error) })
+    }).catch((error: unknown) => {
+      // The harness reads every log's generation header here, so ONE unreadable
+      // or torn session log made the whole list reject. Say so, then still show
+      // the sessions we CAN read — the list is where a user goes to get away
+      // from a broken session.
+      reportLoadFailure('harness list', error)
+      loadFromFiles()
     })
   }
   tui.commands.register({
