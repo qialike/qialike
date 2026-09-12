@@ -349,10 +349,16 @@ const SESSION_LOAD_LABELS: Record<SessionLoadPhase, string> = {
 }
 
 /** S2-2b: transcript status row appended when phase 1's file-first screen
- *  becomes the interactive read-only view (attach still pending). */
+ *  becomes the interactive read-only view (attach still pending).
+ *
+ *  Claims only what actually works before the attach: scrolling (PgUp/PgDn,
+ *  wheel, Home/End), mouse drag-select + Ctrl+Y copy, and `/export`. There is
+ *  NO transcript search in this TUI — an earlier revision of this string said
+ *  "search", which was simply false (caught 2026-09-12). Anything that needs the
+ *  agent (`/sessions` `/new` `/compact` `/goal` `/plan` `/models`) attaches first. */
 export const READ_ONLY_HINT =
   'Read-only view from the session log — the session attaches on your first message; '
-  + 'scrolling, search and /export work now.'
+  + 'scrolling, drag-select + Ctrl+Y copy and /export work now.'
 
 /** S2-2b: the leading "older history" marker while the read-only view is up and
  *  no fold driver is running (the real fold starts with the attach). */
@@ -5297,7 +5303,7 @@ export function eventRateTick(): void {
  *  retained heap, so the hint could only fire after the process had already run
  *  out of memory. The line now sits at the heaviest session actually measured:
  *  26 126 events / 20.9 MiB compressed / **~726 MB heap / 1.3 GB peak RSS /
- *  4.1–6.2 s open**. 25 000 events ≈ 17–21 MiB on these logs. */
+ *  ~4.3 s open**. 25 000 events ≈ 17–21 MiB on these logs. */
 export const COMPACT_HINT_EVENTS = 25_000
 
 /** Durable log size above which `resume` warns BEFORE opening (the harness
@@ -5317,8 +5323,13 @@ export const OVERSIZED_LOG_BYTES = 5 * 1024 * 1024
  *  plugin-side (measured, §8.11).
  *
  *  Used ONLY to make the size warnings quantitative — never to gate behaviour.
- *  Deliberately NO time estimate: the measured open time varied 2.0–7.8 s for
- *  the SAME log size (GC / page cache), so a seconds figure would lie. */
+ *  Deliberately NO time estimate: attach is ~0.16 ms per STORED EVENT (measured
+ *  0.151–0.166 ms across the three logs), but only the compressed byte size is
+ *  at hand here, and bytes-per-event varied 0.57–0.82 KiB across them — a
+ *  byte→seconds conversion would carry that ~1.4x spread. (An earlier note in
+ *  this file claimed the open time varied 2.0–7.8 s for one log size; that
+ *  spread was a timing bug — the bracket started at launch and swallowed the
+ *  S2-2b read-only window — fixed in `attachNow`.) */
 export const DECODED_PER_COMPRESSED = 5
 export const HEAP_MB_PER_DECODED_MB = 6
 export const HEAP_FLOOR_MB = 100
