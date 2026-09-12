@@ -61,6 +61,7 @@ import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
 import { describeResumeFailure, isCorruptLogMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
+import { armPostExitNotices, flushPostExitNotices, postExitNotice } from './post-exit-notice.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
 /** Stable Cordis plugin name. */
@@ -3280,10 +3281,13 @@ export function apply(ctx: Context, config: Config): void {
     // otherwise put the stack in front of it, and a launch that cannot honour
     // the requested session is a user-facing error, not a crash to debug (F4/F5).
     logErrorFileOnly('start', error)
-    // The reason ALWAYS reaches the terminal: a launch failure can happen before
-    // Ink ever mounts (no transcript to append to), and a launch that cannot
-    // honour the requested session must not be silent (F4).
-    process.stderr.write(`dsh-tui: ${message}\n`)
+    // The reason must reach the terminal in BOTH shapes of this failure. Before
+    // Ink mounts there is no alternate screen, so a direct write is visible; once
+    // the read-only first screen has painted, the buffer IS up, and anything
+    // written before the exit handler's `\x1b[?1049l` is discarded with it (P2:
+    // an attach-stage failure used to vanish exactly like that). The channel
+    // queues the notice and the exit sequence writes it after the leave.
+    postExitNotice(`dsh-tui: ${message}\n`)
     store.append('status', `TUI load failure: ${message}`, false)
     requestExit(io, 1)
   })
@@ -3622,6 +3626,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       void app.unmount()
       try { process.stdout.write('\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
     })
+    // Registered AFTER the leave writer above, so every notice queued through
+    // the channel is written once the alternate screen is gone — the only place
+    // a fatal reason can still be read (P2; see `post-exit-notice.ts`).
+    armPostExitNotices(flushPostExitNotices)
     return app
   }
 
