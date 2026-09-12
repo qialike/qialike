@@ -185,6 +185,39 @@ export async function withResumeCorruptRetry<T>(
  *    (≥ `tailEvents` events long, cut at a safe boundary) and `olderRanges`
  *    splits everything before it into ascending safe slices of at most
  *    `sliceEvents` events. */
+/**
+ * Ascending SAFE cuts covering `[0, tailStart)`, each span at most
+ * `sliceEvents` — the background driver's work list.
+ *
+ * Extracted from {@link planResumeFold} because the file-first launch (S2 phase
+ * 1) already painted the tail from the durable log, so it needs the older-range
+ * list for an ALREADY-PAINTED tail without a fold plan of its own.
+ * @param safe - ascending safe boundaries (see {@link safeBoundaries}).
+ * @param tailStart - first event of the already-painted tail.
+ * @param sliceEvents - maximum events per slice.
+ * @returns the ranges, ascending (oldest first), covering `[0, tailStart)`.
+ */
+export function planOlderRanges(
+  safe: readonly number[],
+  tailStart: number,
+  sliceEvents: number = HISTORY_SLICE_EVENTS,
+): Array<readonly [number, number]> {
+  const olderRanges: Array<readonly [number, number]> = []
+  let cursor = 0
+  while (cursor < tailStart) {
+    const target = Math.min(cursor + sliceEvents, tailStart)
+    let next = tailStart
+    for (const b of safe) {
+      if (b >= target) { next = b; break }
+    }
+    if (next <= cursor) next = cursor + 1 // safety: always progress
+    if (next > tailStart) next = tailStart
+    olderRanges.push([cursor, next])
+    cursor = next
+  }
+  return olderRanges
+}
+
 export function planResumeFold(
   events: readonly PlanEvent[],
   options: ResumeFoldOptions = {},
@@ -211,19 +244,5 @@ export function planResumeFold(
     // rather than paint an empty first frame.
     return { mode: 'fast' }
   }
-  // Ascending safe cuts covering [0, tailStart), each span ≤ sliceEvents.
-  const olderRanges: Array<readonly [number, number]> = []
-  let cursor = 0
-  while (cursor < tailStart) {
-    const target = Math.min(cursor + sliceEvents, tailStart)
-    let next = tailStart
-    for (const b of safe) {
-      if (b >= target) { next = b; break }
-    }
-    if (next <= cursor) next = cursor + 1 // safety: always progress
-    if (next > tailStart) next = tailStart
-    olderRanges.push([cursor, next])
-    cursor = next
-  }
-  return { mode: 'chunked', tailStart, olderRanges }
+  return { mode: 'chunked', tailStart, olderRanges: planOlderRanges(safe, tailStart, sliceEvents) }
 }

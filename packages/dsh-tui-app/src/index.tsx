@@ -59,7 +59,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
-import { describeResumeFailure, isCorruptLogMessage, planResumeFold, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
+import { describeResumeFailure, isCorruptLogMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
@@ -3334,6 +3334,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }
   const fastFirstScreen = fastFirstEnabled && fileFirstId !== undefined
   let earlyApp: ReturnType<typeof render> | undefined
+  /** First event of the tail phase 1 painted from the durable log; the attach's
+   *  fold keeps those rows instead of rebuilding the transcript (S2-2a). */
+  let paintedTailStart: number | undefined
   if (fastFirstScreen && fileFirstId !== undefined) {
     store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
     // Leaves the hero (a plain launch's placeholder) and paints the docked
@@ -3343,6 +3346,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (process.stdout.isTTY) process.stdout.write('\x1b[?1006h\x1b[?1003h\x1b[?2004h')
     const painted = await paintFileFirstScreen(store, config.workspace, fileFirstId)
     if (painted !== null) {
+      paintedTailStart = painted.tailStart
       logErrorFileOnly('boot', `phases: file-first screen painted ms=${painted.ms} (attach still pending)`)
       await waitForFirstPaint()
     }
@@ -3412,7 +3416,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // enforce), not a fresh default: otherwise a resumed read-only session would
     // claim "Workspace Write" while every write is refused.
     store.adoptPermission(lastSandboxMode(launchSnapshot))
-    resumeHistoryIntoStore(store, agent.session, launchSnapshot)
+    resumeHistoryIntoStore(store, agent.session, launchSnapshot, paintedTailStart)
     // Backfill the sidebar title from the in-memory log: the launch session
     // may predate this process (its session/title event never reached a live
     // listener here) and the disk-cache prewarm runs on a delay. The SAME
@@ -5252,7 +5256,7 @@ const FIRST_SCREEN_EVENTS = Number(process.env.DSH_TUI_FIRST_SCREEN_EVENTS ?? 1_
  * @param id - the session id to resume.
  * @returns the event/item counts and elapsed ms, or null when nothing was painted.
  */
-async function paintFileFirstScreen(store: Store, cwd: string, id: string): Promise<{ events: number; items: number; ms: number } | null> {
+async function paintFileFirstScreen(store: Store, cwd: string, id: string): Promise<{ events: number; items: number; ms: number; tailStart: number } | null> {
   const t0 = Date.now()
   try {
     const path = resolveSessionLogPath(sessionDir(cwd, SessionId(id)))
@@ -5271,7 +5275,7 @@ async function paintFileFirstScreen(store: Store, cwd: string, id: string): Prom
     const ms = Date.now() - t0
     logErrorFileOnly('resume',
       `first screen from file: events=${tail.events.length} startSeq=${tail.startSeq} items=${folded.items.length} ms=${ms}`)
-    return { events: tail.events.length, items: folded.items.length, ms }
+    return { events: tail.events.length, items: folded.items.length, ms, tailStart: tail.startSeq }
   } catch (error) {
     // Best-effort: the launch falls back to the attach-first path below.
     logErrorFileOnly('resume', `first screen from file failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -5316,13 +5320,22 @@ function resumeHistoryIntoStore(
   store: Store,
   session: { id: string; snapshotEvents(): readonly SessionEvent[] },
   preloaded?: readonly SessionEvent[],
+  paintedTailStart?: number,
 ): void {
   // P2①: the caller usually already holds the snapshot (it folds title/blank
   // from it); taking it again would materialize a second 1.4M-event array.
   const events = preloaded ?? session.snapshotEvents()
   sessionEventCount = events.length
   const t0 = Date.now()
-  const plan = planResumeFold(events)
+  // S2-2a: when the launch painted this session's tail STRAIGHT FROM THE LOG
+  // (phase 1), that tail is already on screen. Rebuilding the transcript from
+  // the harness snapshot would replace ~5 100 rows in one Ink commit — measured
+  // 1.2 s of blocked main loop after the attach — so keep those rows and fold
+  // the older events in yielded slices below, exactly like the giant-log path.
+  const keepPaintedTail = paintedTailStart !== undefined && paintedTailStart > 0 && paintedTailStart <= events.length
+  const plan = keepPaintedTail
+    ? { mode: 'chunked' as const, tailStart: paintedTailStart, olderRanges: planOlderRanges(safeBoundaries(events), paintedTailStart) }
+    : planResumeFold(events)
   const planTail = plan.mode === 'chunked' ? events.length - plan.tailStart : events.length
   logErrorFileOnly('resume',
     `fold mode=${plan.mode} events=${events.length}${plan.mode === 'chunked' ? ` tail=${planTail} olderRanges=${plan.olderRanges.length}` : ''}`)
@@ -5342,13 +5355,21 @@ function resumeHistoryIntoStore(
   const abort = new AbortController()
   resumeFoldAbort = abort
   // The synchronous first frame: fold only the newest tail (already cut at a
-  // safe boundary), show it with a leading "loading older history" marker.
-  const tail = foldHistoryEvents(tailSlice(plan, events))
-  store.beginHistory(tail.items, tail.steps, plan.tailStart)
-  // Steps: the tail usually carries the newest todo/write, but a recent tail
-  // may contain none — then the latest step list lives in the newest OLDER
-  // slice (the first one processed below).
-  let bestSteps = tail.steps
+  // safe boundary), show it with a leading "loading older history" marker. A
+  // painted tail (S2-2a) is skipped: those rows — and the marker — are already
+  // in the store, and re-folding them only to throw them away is what cost 1.2 s.
+  let bestSteps: StepItem[] = []
+  if (keepPaintedTail) {
+    logErrorFileOnly('resume',
+      `painted tail kept: tailStart=${plan.tailStart} olderRanges=${plan.olderRanges.length} (no transcript rebuild)`)
+  } else {
+    const tail = foldHistoryEvents(tailSlice(plan, events))
+    store.beginHistory(tail.items, tail.steps, plan.tailStart)
+    // Steps: the tail usually carries the newest todo/write, but a recent tail
+    // may contain none — then the latest step list lives in the newest OLDER
+    // slice (the first one processed below).
+    bestSteps = tail.steps
+  }
   const t1 = Date.now()
   void (async (): Promise<void> => {
     try {
