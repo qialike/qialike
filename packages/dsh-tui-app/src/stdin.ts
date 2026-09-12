@@ -115,7 +115,15 @@ export class StdinDecoder {
           this.buf.splice(0, term.length)
           const text = Buffer.from(this.paste).toString('utf8')
           this.paste = null
-          out.push({ paste: text })
+          // Normalize the paste's line endings AT THE SOURCE: a paste is TEXT,
+          // so a CR is content, never a keystroke. A CRLF clipboard (Windows
+          // apps, browsers, chat UIs) otherwise reached the draft verbatim, and
+          // a row of text ending in CR is WIPED when it is written to the
+          // terminal (the CR returns the cursor to column 0 and the row's own
+          // padding then overwrites it) — measured: pasting two CRLF lines left
+          // an empty first row and only the second line visible, which reads as
+          // "the sidebar footer ran into the input box".
+          out.push({ paste: text.replace(/\r\n?/g, '\n') })
           continue
         }
         this.paste.push(this.buf.shift()!)

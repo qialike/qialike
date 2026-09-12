@@ -176,6 +176,16 @@ test('bracketed paste is assembled into one paste event', () => {
   expect(d.push(Buffer.from('\x1b[201~'))).toEqual([{ paste: '/tmp/photo.png' }])
 })
 
+test('bracketed paste normalizes CRLF / CR line endings to LF', () => {
+  // A CRLF clipboard used to reach the draft verbatim and the CR WIPED the row
+  // it ended (cursor to column 0, then the row's padding overwrote the text):
+  // pasting two CRLF lines showed an empty first row and only the second line.
+  const d = new StdinDecoder()
+  expect(d.push(Buffer.from('\x1b[200~one\r\ntwo\x1b[201~'))).toEqual([{ paste: 'one\ntwo' }])
+  const e = new StdinDecoder()
+  expect(e.push(Buffer.from('\x1b[200~a\rb\x1b[201~'))).toEqual([{ paste: 'a\nb' }])
+})
+
 test('bracketed paste splits cleanly around surrounding text', () => {
   const d = new StdinDecoder()
   expect(d.push(Buffer.from('a\x1b[200~/x/y.png\x1b[201~b')))

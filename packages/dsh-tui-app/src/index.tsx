@@ -1726,8 +1726,13 @@ export class Store {
     this.setCursor(this._lineEnd(this._cursor))
   }
   insertAtCursor(text: string): void {
-    this._input = this._input.slice(0, this._cursor) + text + this._input.slice(this._cursor)
-    this._cursor += text.length
+    // Belt and braces for the same defect the paste path normalizes: a CR in the
+    // buffer is invisible at best and erases its own row on screen at worst, so
+    // it must never get in (CRLF -> LF, a lone CR -> LF). Typed input cannot
+    // contain one — Enter is handled as its own key and inserts '\n'.
+    const clean = text.replace(/\r\n?/g, '\n')
+    this._input = this._input.slice(0, this._cursor) + clean + this._input.slice(this._cursor)
+    this._cursor += clean.length
     this.notify()
   }
   backspaceAtCursor(): void {
