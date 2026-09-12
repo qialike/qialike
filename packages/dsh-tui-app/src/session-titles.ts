@@ -247,6 +247,15 @@ export function forgetTitle(id: SessionId): void {
   if (shared.map.delete(String(id))) persistDiskCache()
 }
 
+/** Drop a deleted session's PIN too: `forgetTitle`/`forgetActivity` were called
+ *  on delete but the pin set was not, so `dsh-tui-pinned.json` kept the id of a
+ *  session that no longer exists — an entry that can never match again (ids are
+ *  UUIDs) and only grows the file. */
+export function forgetPin(id: SessionId): void {
+  ensurePinnedLoaded()
+  if (shared.pinSet.delete(String(id))) persistPinned()
+}
+
 // ── blank ("New Session") sessions — web parity ──────────────────────────────
 
 /** The message-producing event types: the conversation itself. */

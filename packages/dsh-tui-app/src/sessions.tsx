@@ -22,7 +22,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { TuiService, Store, SessionSummary } from './index.tsx'
 import { truncateWide } from './markdown.tsx'
 import { deleteSession, listSessionFiles, readSessionEvents } from './session-files.ts'
-import { forgetTitle, hideUnselectedBlanks, isPinned, listRowHeaders, listWithTitles, renameTitle, togglePin, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
+import { forgetPin, forgetTitle, hideUnselectedBlanks, isPinned, listRowHeaders, listWithTitles, renameTitle, togglePin, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { forgetActivity } from './session-activity.ts'
 import { logErrorFileOnly } from './log.ts'
 import { theme } from './theme.ts'
@@ -263,6 +263,7 @@ function sessionsKey(k: RawKey, reload: () => void): void {
           await deleteSession(row.cwd ?? store.workspace, row.id)
           forgetTitle(row.id)
           forgetActivity(row.id)
+          forgetPin(row.id)
           store.setSessionsNotice(`deleted ${String(row.id).slice(-8)}`)
         } catch (error) {
           store.setSessionsNotice(`delete failed: ${error instanceof Error ? error.message : String(error)}`)
