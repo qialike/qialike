@@ -27,6 +27,7 @@ import {
   READ_ONLY_HINT,
   READ_ONLY_OLDER_HISTORY,
   Store,
+  oversizedResumeWarning,
 } from '../packages/dsh-tui-app/src/index.tsx'
 
 const source = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
@@ -132,5 +133,22 @@ describe('start() read-only wiring (S2-2b)', () => {
   test('the read-only hint is honest about the unpaid attach', () => {
     expect(READ_ONLY_HINT).toContain('attaches on your first message')
     expect(source).toContain("store.append('status', READ_ONLY_HINT, true)")
+  })
+
+  test('the oversize warning survives on the read-only path', () => {
+    // Phase 1 mounts Ink, which silences announceOversizedResume (a raw `\n`
+    // would scroll the frame) — so the warning must be surfaced as a transcript
+    // row, right where the user is about to pay the measured 2–4 s open.
+    const from = source.indexOf('store.beginReadOnlySession(fileFirstId)')
+    const to = source.indexOf('store.submitMessage = (text) => { deferForAttach')
+    expect(from).toBeGreaterThan(0)
+    expect(to).toBeGreaterThan(from)
+    const block = source.slice(from, to)
+    expect(block).toContain('oversizedResumeWarning(sessionLogBytes(config.workspace, fileFirstId))')
+    expect(block).toContain("store.append('status', oversize, true)")
+    // The predicate really fires for the measured oversized sessions (8.5 MB /
+    // 21.9 MB compressed) and stays quiet for a small one.
+    expect(oversizedResumeWarning(8 * 1024 * 1024)).toContain('resuming a large session')
+    expect(oversizedResumeWarning(1024)).toBeUndefined()
   })
 })

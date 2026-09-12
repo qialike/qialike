@@ -3621,6 +3621,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       store.setReadOnlyHistoryMarker(true)
       readOnly = true
       store.append('status', READ_ONLY_HINT, true)
+      // The oversize warning rides stdout BEFORE Ink mounts on the attach-first
+      // path (see announceOversizedResume); phase 1 already mounted, and a raw
+      // `\n` would scroll the frame, so the warning is silenced there. Surface
+      // it as a transcript row instead — otherwise S2-2b would hide the one
+      // hint that explains the multi-second freeze the first submit is about to
+      // pay (measured: attach ≈ 1.9 s fixed + ~45 ms per decoded MB).
+      const oversize = oversizedResumeWarning(sessionLogBytes(config.workspace, fileFirstId))
+      if (oversize !== undefined) store.append('status', oversize, true)
       // First submit / agent-dependent command → pay the attach now and replay
       // the input through the normal Enter path afterwards.
       store.submitMessage = (text) => { deferForAttach(text) }
