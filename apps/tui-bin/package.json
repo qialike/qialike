@@ -1,6 +1,6 @@
 {
   "name": "@yourname/dsh-tui-bin",
-  "version": "0.4.10-beta",
+  "version": "0.4.11-beta",
   "private": true,
   "type": "module",
   "license": "MIT",
