@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { PREPARING_REQUEST_LABEL, COMPACT_HINT_EVENTS, OVERSIZED_LOG_BYTES, STATS_FULL_SCAN_MAX, Store, oversizedResumeNotice, oversizedResumeWarning, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
+import { PREPARING_REQUEST_LABEL, COMPACT_HINT_EVENTS, OVERSIZED_LOG_BYTES, STATS_FULL_SCAN_MAX, Store, oversizedResumeNotice, oversizedResumeWarning, estimatedSessionHeapMb, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
 import type { SessionLoadingState } from '../packages/dsh-tui-app/src/index.tsx'
 
 const BASE: SessionLoadingState = { id: 'session-3c1c6602-1ddc-40ee-a295-f34348c87153', title: 'fix the tests', bytes: 19_300_000, startedAt: 1_000 }
@@ -220,7 +220,9 @@ describe('oversized-session compaction hint (suggestion only)', () => {
   test('wording scales with the event count and names the cure', () => {
     expect(compactHintText(1_431_912)).toBe('Large session (1.4M events) — /compact is recommended to keep resume and turns fast')
     expect(compactHintText(250_000)).toBe('Large session (250k events) — /compact is recommended to keep resume and turns fast')
-    expect(COMPACT_HINT_EVENTS).toBe(200_000)
+    // Recalibrated from the measured model (§8.11): 200 000 was dead — that is
+    // multi-GB of retained heap, so the hint could only fire after an OOM.
+    expect(COMPACT_HINT_EVENTS).toBe(25_000)
   })
 })
 
@@ -266,9 +268,25 @@ describe('oversized resume notice (P2③ follow-up)', () => {
   test('warns with the real log size and the two ways out', () => {
     expect(OVERSIZED_LOG_BYTES).toBe(5 * 1024 * 1024)
     const notice = oversizedResumeNotice(28_067_145)
-    expect(notice).toContain('resuming a large session (26.8 MB log)')  // MiB scale
+    expect(notice).toContain('resuming a large session (26.8 MB log')  // MiB scale
+    expect(notice).toContain('memory)')                                 // the measured cost
     expect(notice).toContain('/compact')
     expect(notice).toContain('/new')
+  })
+
+  test('the memory estimate is pinned to the three measured sessions (§8.11)', () => {
+    // compressed bytes → measured total heap with that session loaded:
+    // 866 900 → 125–126 MB (900 events), 8 461 342 → 353–362 MB (12 560),
+    // 21 897 128 → 725–726 MB (26 126). Tolerance ±10 %.
+    expect(estimatedSessionHeapMb(866_900)).toBeGreaterThan(110)
+    expect(estimatedSessionHeapMb(866_900)).toBeLessThan(140)
+    expect(estimatedSessionHeapMb(8_461_342)).toBeGreaterThan(320)
+    expect(estimatedSessionHeapMb(8_461_342)).toBeLessThan(400)
+    expect(estimatedSessionHeapMb(21_897_128)).toBeGreaterThan(650)
+    expect(estimatedSessionHeapMb(21_897_128)).toBeLessThan(800)
+    // Monotonic and never below the app floor.
+    expect(estimatedSessionHeapMb(0)).toBe(100)
+    expect(estimatedSessionHeapMb(2_000_000)).toBeGreaterThan(estimatedSessionHeapMb(1_000_000))
   })
 
   test('only a known log at/over the threshold produces a warning', () => {

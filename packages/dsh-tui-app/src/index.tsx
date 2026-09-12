@@ -5282,21 +5282,58 @@ export function eventRateTick(): void {
 }
 
 /** Largest session size (events) for which the TUI still recommends running
- *  `/compact`: a 1.4M-event log makes every resume open decode tens of MB and
- *  every full pass expensive, and the harness's own compaction is the intended
- *  cure (the TUI only SUGGESTS it — never runs it behind the user's back). */
-export const COMPACT_HINT_EVENTS = 200_000
+ *  `/compact` (the TUI only SUGGESTS it — never runs it behind the user's back).
+ *
+ *  Recalibrated 2026-09-12 from the measured cost model (session/optimization-
+ *  plan.md §8.11): the old 200 000 was DEAD — by the model that is multi-GB of
+ *  retained heap, so the hint could only fire after the process had already run
+ *  out of memory. The line now sits at the heaviest session actually measured:
+ *  26 126 events / 20.9 MiB compressed / **~726 MB heap / 1.3 GB peak RSS /
+ *  4.1–6.2 s open**. 25 000 events ≈ 17–21 MiB on these logs. */
+export const COMPACT_HINT_EVENTS = 25_000
 
 /** Durable log size above which `resume` warns BEFORE opening (the harness
  *  decodes the whole log synchronously inside `agents.resume`, so the user
- *  otherwise stares at the splash for ~10s with no idea why). */
+ *  otherwise stares at the splash for seconds with no idea why). */
 export const OVERSIZED_LOG_BYTES = 5 * 1024 * 1024
 
+/** ── measured session cost model (session/optimization-plan.md §8.11) ────────
+ *  Three real sessions, compressed → decoded JSON → retained heap:
+ *    0.83 MiB →  3 MiB →  ~126 MB total  (900 events)
+ *    8.07 MiB → 45 MiB →  353–362 MB     (12 560 events)   [delta +258 MB]
+ *   20.88 MiB → 92 MiB →  725–726 MB     (26 126 events)   [delta +601 MB]
+ *  Fits `heap ≈ 6 × decoded MB + 100 MB` within ~6 %, with decoded ≈ compressed
+ *  × 5 (the measured ratio spans 3.6–5.6). The retained heap is the HARNESS's
+ *  deep-frozen `this.log` — `snapshotEvents()` shares the event objects, so the
+ *  plugin side only holds an array shell; these numbers cannot be improved
+ *  plugin-side (measured, §8.11).
+ *
+ *  Used ONLY to make the size warnings quantitative — never to gate behaviour.
+ *  Deliberately NO time estimate: the measured open time varied 2.0–7.8 s for
+ *  the SAME log size (GC / page cache), so a seconds figure would lie. */
+export const DECODED_PER_COMPRESSED = 5
+export const HEAP_MB_PER_DECODED_MB = 6
+export const HEAP_FLOOR_MB = 100
+
+/** Retained-heap estimate (MB) for opening a session whose durable log is
+ *  `logBytes` compressed. Pure so the measured points are pinned by tests. */
+export function estimatedSessionHeapMb(logBytes: number): number {
+  const decodedMb = (logBytes / 1048576) * DECODED_PER_COMPRESSED
+  return Math.round(HEAP_MB_PER_DECODED_MB * decodedMb + HEAP_FLOOR_MB)
+}
+
+/** `342 MB` / `1.4 GB` — the memory half of the size warning. */
+function formatMemoryMb(mb: number): string {
+  return mb >= 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb} MB`
+}
+
 /** One line shown (synchronously, splash-style) before opening a large session.
- *  Pure so it is unit-tested. */
+ *  Pure so it is unit-tested. The memory figure is the measured model above —
+ *  the number the user actually pays, which the raw log size does not show. */
 export function oversizedResumeNotice(bytes: number): string {
   const size = formatByteSize(bytes)
-  return `dsh-tui: resuming a large session (${size} log) — opening it can take a while; `
+  const memory = formatMemoryMb(estimatedSessionHeapMb(bytes))
+  return `dsh-tui: resuming a large session (${size} log, ~${memory} memory) — opening it can take a while; `
     + 'consider /compact (with a configured model) or /new to continue in a fresh session'
 }
 
