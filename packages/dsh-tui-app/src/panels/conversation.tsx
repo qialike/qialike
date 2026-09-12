@@ -1950,7 +1950,10 @@ function conversationKey(k: RawKey, tui: TuiService): void {
       // the args AFTER the command name — without the offset the last letter
       // of the command was included ("/export" → arg "t").
       const remainder = text.slice(chosen.name.length + 1).trim()
-      chosen.run(remainder)
+      // S2-2b: while the harness attach is still pending, a command that needs
+      // the live agent is deferred rather than run against a session that does
+      // not exist yet. The hook queues the full input and returns false.
+      if (store.beforeCommand?.(chosen.name, text) !== false) chosen.run(remainder)
     } else {
       store.submitMessage(text)
     }

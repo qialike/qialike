@@ -348,6 +348,24 @@ const SESSION_LOAD_LABELS: Record<SessionLoadPhase, string> = {
   ready: 'Ready',
 }
 
+/** S2-2b: transcript status row appended when phase 1's file-first screen
+ *  becomes the interactive read-only view (attach still pending). */
+export const READ_ONLY_HINT =
+  'Read-only view from the session log — the session attaches on your first message; '
+  + 'scrolling, search and /export work now.'
+
+/** S2-2b: the leading "older history" marker while the read-only view is up and
+ *  no fold driver is running (the real fold starts with the attach). */
+export const READ_ONLY_OLDER_HISTORY =
+  'Older history:  not loaded yet — the full log is folded once the session attaches (send a message to attach now)'
+
+/** S2-2b: slash commands that need the live harness agent and are therefore
+ *  DEFERRED (queued + replayed through the normal Enter path) while the
+ *  read-only view is up. Read-only commands (`/export`, `/sidebar`, `/theme`,
+ *  `/help`-class dialogs) run immediately. */
+export const ATTACH_DEFERRED_COMMANDS: ReadonlySet<string> =
+  new Set(['new', 'sessions', 'compact', 'goal', 'plan', 'models'])
+
 /** Percent (0–100, clamped) of a step's real counts. */
 export function sessionLoadPercent(progress: { done: number; total: number }): number {
   if (!Number.isFinite(progress.done) || !Number.isFinite(progress.total) || progress.total <= 0) return 0
@@ -534,6 +552,12 @@ export class Store {
   private _modelLabel = ''
   private _modelEffortName = ''
   private _session: Session | undefined
+  /** S2-2b: id of the session whose log was painted READ-ONLY (phase 1) while
+   *  the harness attach is still pending. It keeps the docked chrome up (the
+   *  hero would hide the painted transcript) without pretending a load is in
+   *  flight, and it answers the few read-only consumers that need a session id
+   *  (`/export`, the footer) before `setSession` lands. */
+  private _readOnlySessionId: string | undefined
   private _workspace = ''
   private _running = false
   private _paused = false
@@ -727,6 +751,11 @@ export class Store {
   keyDialogSubmit: (provider: string, name: string, key: string) => void = () => {}
   providerFormSubmit: (input: AddProviderInput) => void = () => {}
   submitMessage: (text: string) => void = () => {}
+  /** S2-2b hook consulted BEFORE a slash command runs (injected by `start()`
+   *  while the harness attach is still pending): returns false when the command
+   *  was deferred until the session is attached — the caller then does NOT run
+   *  it. Undefined once the setup is complete, so commands run directly. */
+  beforeCommand: ((name: string, text: string) => boolean) | undefined = undefined
   cancelAction: () => void = () => {}
   pauseAgent: () => void = () => {}
   /** Abort the whole task when the user cancels an ask_user_question from the
@@ -1353,6 +1382,29 @@ export class Store {
     this.notify()
   }
 
+  /** Enter the S2-2b READ-ONLY view: phase 1 folded this session's tail from
+   *  the durable log and the harness attach is deliberately still pending, so
+   *  the user can scroll/search/export without paying the ~2 s open. Keeps the
+   *  docked chrome up (the hero would hide the painted transcript) and answers
+   *  the id for read-only consumers; NOT a load state, so input stays live.
+   *  @param id - the session whose log was painted. */
+  beginReadOnlySession(id: string): void {
+    if (this._readOnlySessionId === id) return
+    this._readOnlySessionId = id
+    this.notify()
+  }
+
+  /** Leave the read-only view (the attach has landed and `setSession` took
+   *  over), or drop it when the launch fell back to attach-first. */
+  endReadOnlySession(): void {
+    if (this._readOnlySessionId === undefined) return
+    this._readOnlySessionId = undefined
+    this.notify()
+  }
+
+  /** The session id of the read-only phase, or undefined when not in it. */
+  get readOnlySessionId(): string | undefined { return this._readOnlySessionId }
+
   /** Whether a request is being assembled (see {@link PREPARING_REQUEST_LABEL}). */
   get preparingRequest(): boolean { return this._preparingRequest }
 
@@ -1538,6 +1590,24 @@ export class Store {
     this._historyProgressMax = shown
     this._historyTotal = total
     this.items = [{ ...marker, text: Store.historyMarkerText(shown, total, this._historyHolding) }, ...this.items.slice(1)]
+    this.notify()
+  }
+
+  /** S2-2b: while the READ-ONLY view is up (phase 1 painted the tail, the
+   *  harness attach is deliberately still pending) no fold driver is running,
+   *  so the leading marker must not show a progress bar that cannot advance —
+   *  rewrite it to say what is true. The attach's driver overwrites it with
+   *  real progress through {@link setHistoryProgress}, so this is undone simply
+   *  by calling it with `false` (or by the first fold slice). */
+  setReadOnlyHistoryMarker(readOnly: boolean): void {
+    if (this._historyMarkerKey < 0 || this.items.length === 0) return
+    const marker = this.items[0]!
+    if (marker.key !== this._historyMarkerKey) return
+    const text = readOnly
+      ? READ_ONLY_OLDER_HISTORY
+      : Store.historyMarkerText(this._historyProgressMax, this._historyTotal, this._historyHolding)
+    if (marker.text === text) return
+    this.items = [{ ...marker, text }, ...this.items.slice(1)]
     this.notify()
   }
 
@@ -2063,9 +2133,18 @@ export class Store {
    *  effort part separately (warning color, as a variant chip). */
   get modelEffortName(): string { return this._modelEffortName }
   setModelLabel(label: string, effortName = ''): void { this._modelLabel = label; this._modelEffortName = effortName; this.notify() }
-  get session(): Session | undefined { return this._session }
+  /** The live harness session, or — while S2-2b's read-only phase is up — a
+   *  minimal stand-in carrying only the id. Read-only consumers (`/export`, the
+   *  footer) need the id; anything that would CALL into the session is gated by
+   *  the attach itself (`store.session` is replaced by the real one there). */
+  get session(): Session | undefined {
+    if (this._session !== undefined) return this._session
+    if (this._readOnlySessionId !== undefined) return { id: SessionId(this._readOnlySessionId) } as unknown as Session
+    return undefined
+  }
   setSession(session: Session): void {
     this._session = session
+    this._readOnlySessionId = undefined
     coldNextRequest = true // S0 probe: the next LLM request pays a cold derive+freeze
     // A session switch (launch / /new / /sessions) starts a fresh hero state.
     this._promptAttempted = false
@@ -2093,6 +2172,9 @@ export class Store {
     // session (`keepHero`) is the exception: `dsh-tui` must START on the hero,
     // not flash the conversation view while the session opens.
     if (this._sessionLoading !== null && this._sessionLoading.keepHero !== true) return false
+    // S2-2b read-only view: phase 1 painted a real transcript from the durable
+    // log, so the hero must not replace it while the attach is still pending.
+    if (this._readOnlySessionId !== undefined) return false
     // A FAILED load keeps the docked view up too: the hero has neither a status
     // bar nor transcript rows, so an error shown there would be invisible.
     if (this._loadError !== null) return false
@@ -3333,54 +3415,245 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       ?? heads?.[0])?.header.id
   }
   const fastFirstScreen = fastFirstEnabled && fileFirstId !== undefined
-  let earlyApp: ReturnType<typeof render> | undefined
   /** First event of the tail phase 1 painted from the durable log; the attach's
    *  fold keeps those rows instead of rebuilding the transcript (S2-2a). */
   let paintedTailStart: number | undefined
+
+  // ── S2-2b: mount the UI and take input BEFORE the blocking attach ──────────
+  // `agents.resume()` decodes the whole durable log on this one thread and
+  // cannot be interrupted. Phase 1 (S2-1) already paints the newest events
+  // straight from the log; S2-2b additionally keeps the app INTERACTIVE in the
+  // window between that first screen and the attach, so scrolling, search,
+  // export and selection work while the harness open is still unpaid. The
+  // attach is then triggered ON DEMAND — the first submit, an agent-dependent
+  // slash command, or (opt-in) an idle window — and only that trigger pays the
+  // ~2 s. A user who only reads never pays it (session/optimization-plan.md
+  // §2 S2 ③). The whole block is inert when the file-first screen did not paint
+  // (a bare launch, a failed probe, the kill switch): the attach then runs
+  // first, exactly as before.
+  let mountedApp: ReturnType<typeof render> | undefined
+  // Live terminal width: Bun/Node emit 'resize' on process.stdout and update
+  // `columns`; Ink only re-renders the DOM, so we drive a reactive Store size.
+  const onResize = (): void => {
+    store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
+    if (process.env.DSH_TUI_DEBUG_WIDTH === '1') {
+      process.stderr.write(`[dsh-tui] width ${process.stdout.columns ?? 80}\n`)
+    }
+  }
+  // Alt+Enter (`\x1b\r`) and Home/End (`\x1b[H`/`\x1b[F`) are swallowed by
+  // Ink's key parser, so all keyboard input is read raw and dispatched by
+  // `handleKey` (panels + conversation composer).
+  const decoder = new StdinDecoder()
+  let escTimer: ReturnType<typeof setTimeout> | undefined
+  const onStdin = (chunk: Buffer | string): void => {
+    if (escTimer !== undefined) { clearTimeout(escTimer); escTimer = undefined }
+    const keys = decoder.push(chunk)
+    for (const key of keys) handleKey(key)
+    // A lone ESC could be a pending escape sequence prefix or the Esc key
+    // itself; if nothing followed it shortly, treat it as Esc.
+    if (decoder.pendingEscape) {
+      escTimer = setTimeout(() => {
+        for (const key of decoder.flushEsc()) handleKey(key)
+      }, 80)
+    }
+  }
+  /** Mount Ink, enable raw mode / mouse tracking, and take over resize + stdin
+   *  EXACTLY ONCE. Phase 1 calls it before painting the file-first screen (Ink
+   *  must exist before a frame can be produced); the attach-first path calls it
+   *  at the same point as before, after the session is open. */
+  const mountUi = (): ReturnType<typeof render> => {
+    if (mountedApp !== undefined) return mountedApp
+    const app = render(<App />)
+    mountedApp = app
+    inkMounted = true
+    // Enable raw mode so the terminal owns no input processing.
+    if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
+      process.stdin.setRawMode(true)
+    }
+    // Enable SGR mouse tracking so the terminal sends press/drag/release/wheel
+    // events to the app. The stdin decoder turns wheel bytes (64/65) into
+    // wheelUp/wheelDown → `store.scrollLines` (rolls the transcript), and
+    // press/drag/release into the in-app selection handlers. This takes over
+    // the terminal's NATIVE selection and wheel scrollback, which the
+    // full-screen surface replaces (the transcript scrolls in-app; dsh-tui
+    // draws its own selection). Restored in the exit handler below.
+    if (process.stdout.isTTY) {
+      // SGR + any-motion (hover + drag), plus BRACKETED PASTE: the composer's
+      // image-drag-in path listens for `k.paste` (stdin.ts parses `ESC[200~ …
+      // ESC[201~`), and a terminal only emits those markers after the app asks
+      // for them — without `?2004h` a dragged image arrives as plain text and
+      // the attachment never triggers.
+      process.stdout.write('\x1b[?1006h\x1b[?1003h\x1b[?2004h')
+    }
+    process.stdout.on('resize', onResize)
+    process.stdin.on('data', onStdin)
+    // Calibrate ambiguous glyph widths against the real terminal (CPR/ESC[6n)
+    // so rows align for THIS terminal's fonts: measure while idle, re-layout
+    // once a width lands. Deferred whenever the agent is busy so probing never
+    // contends with streaming frames or typed input.
+    initCharWidthCalibration({
+      isBusy: () => store.running || store.paused,
+      onWidthsChanged: () => store.bumpWidths(),
+    })
+    // Restore the terminal on exit. This handler is registered after every
+    // other exit-time writer (log.ts's stderr mirror of `dsh-tui exited`, Ink's
+    // signal-exit unmount frame), so writing the leave sequence here makes it
+    // the process's LAST visible terminal output: everything written before it
+    // lands in the alternate screen buffer and is discarded when the buffer is
+    // switched back, leaving no dsh-tui residue above the shell prompt. (One
+    // harmless `\x1b[?25h` cursor-show may still follow: restore-cursor
+    // registers an afterexit hook that unconditionally re-shows the cursor —
+    // invisible by design, and the cursor being visible is the correct end
+    // state anyway.)
+    process.once('exit', () => {
+      if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
+        process.stdin.setRawMode(false)
+      }
+      if (process.stdout.isTTY) process.stdout.write('\x1b[?1006l\x1b[?1003l\x1b[?2004l') // disable mouse tracking + bracketed paste
+      process.stdout.off('resize', onResize)
+      process.stdin.off('data', onStdin)
+      void app.unmount()
+      try { process.stdout.write('\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
+    })
+    return app
+  }
+
+  /** True while phase 1's log-backed view is on screen and the harness attach
+   *  has not been paid for yet. Input stays LIVE in this state. */
+  let readOnly = false
+  /** Full inputs (messages or `/command` lines) the user handed us while the
+   *  read-only view was up; replayed through the normal Enter path once the
+   *  setup is complete (see the replay at the end of `start()`). */
+  const pendingInputs: string[] = []
+  let attachAttempt: Promise<void> | undefined
+  /** Opened by the first trigger that pays the attach, so the read-only path can
+   *  suspend `start()` until then (and no longer). Rejects with the attach's own
+   *  error so a failed open surfaces instead of hanging the boot. */
+  let releaseAttachGate: (() => void) | undefined
+  let failAttachGate: ((error: unknown) => void) | undefined
+  const attachGate = new Promise<void>((resolve, reject) => {
+    releaseAttachGate = resolve
+    failAttachGate = reject
+  })
+  // On the attach-first path nobody awaits the gate, but `attachNow` still
+  // rejects it on a failed open — keep that from surfacing as an unhandled
+  // rejection (the read-only path's own gate await still sees it).
+  void attachGate.catch(() => { /* surfaced by the read-only awaiter when present */ })
+  /** Trigger the (synchronous, blocking) harness open. Idempotent: the first
+   *  caller pays it, every later caller awaits the same promise. */
+  const attachNow = (): Promise<void> => {
+    attachAttempt ??= (async (): Promise<void> => {
+      if (readOnly) {
+        // This IS the moment the user pays for the open, so say so — and make
+        // sure the labelled frame reached the terminal before the thread is
+        // taken (the banner's seconds would otherwise freeze at 0.0s).
+        store.setReadOnlyHistoryMarker(false)
+        store.beginSessionLoading({ id: fileFirstId ?? '', startedAt: Date.now() })
+        store.beginSessionLoadStep('attaching', 0)
+        await paintBeforeBlock()
+      }
+      // The launch create/resume must tolerate the registry's factory
+      // registration landing a moment after the loader reports quiescence:
+      // create/resume throws "no agent factory registered" before any side
+      // effect when it has not landed yet (see `establish` above).
+      for (;;) {
+        try {
+          const result = await establish()
+          handle = result.handle
+          resumed = result.resumed
+          // dsh-tui and the web share the session store under
+          // ~/.dsh/sessions/<cwd-encoded>/, but the web groups sessions by
+          // workspaceId. A dsh-tui session is created with `meta.cwd` only, so
+          // the harness never attaches it and the web lists it under
+          // "Ungrouped". Attach this session to the workspace that owns
+          // `config.workspace` (when one exists — e.g. the web-created
+          // "deepseek" workspace) so it groups under the SAME workspace instead
+          // of Ungrouped. Best-effort: a path or registry mismatch must never
+          // break the TUI boot.
+          if (handle !== undefined) {
+            void attachSessionToWorkspace(ctx, config.workspace, handle.agent.session.id)
+          }
+          break
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          if (!NO_FACTORY.test(message) || Date.now() >= factoryRetryDeadline) throw error
+          await new Promise<void>((resolve) => { setTimeout(resolve, 25) })
+        }
+      }
+      // The retry loop above either assigns `handle` (then breaks) or throws
+      // once the factory deadline passes; TypeScript cannot see past the
+      // try/catch, so assert the assignment here instead of reaching for a
+      // non-null assertion.
+      if (handle === undefined) {
+        throw new Error('tui-runtime: agent handle was not established')
+      }
+      logErrorFileOnly('boot', `phases: session open (decode+attach) ms=${Date.now() - openT0} resumed=${resumed}`)
+    })()
+    attachAttempt.then(() => releaseAttachGate?.(), (error) => failAttachGate?.(error))
+    return attachAttempt
+  }
+  /** Defer one full input (message or `/command` line) until the attach lands:
+   *  queue it, tell the user, and pay the open now. */
+  const deferForAttach = (text: string): void => {
+    pendingInputs.push(text)
+    store.append('status',
+      `Attaching session — this will be sent as soon as it is ready: ${text.length > 80 ? `${text.slice(0, 80)}…` : text}`, true)
+    store.flashStatus('Attaching session…', 8_000)
+    void attachNow()
+  }
   if (fastFirstScreen && fileFirstId !== undefined) {
     store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
     // Leaves the hero (a plain launch's placeholder) and paints the docked
     // chrome with the load banner: the transcript has somewhere to appear.
     store.beginSessionLoading({ id: fileFirstId, startedAt: Date.now() })
-    earlyApp = render(<App />)
-    if (process.stdout.isTTY) process.stdout.write('\x1b[?1006h\x1b[?1003h\x1b[?2004h')
+    mountUi()
     const painted = await paintFileFirstScreen(store, config.workspace, fileFirstId)
     if (painted !== null) {
       paintedTailStart = painted.tailStart
       logErrorFileOnly('boot', `phases: file-first screen painted ms=${painted.ms} (attach still pending)`)
       await waitForFirstPaint()
-    }
-  }
-  for (;;) {
-    try {
-      const result = await establish()
-      handle = result.handle
-      resumed = result.resumed
-      // dsh-tui and the web share the session store under
-      // ~/.dsh/sessions/<cwd-encoded>/, but the web groups sessions by
-      // workspaceId. A dsh-tui session is created with `meta.cwd` only, so the
-      // harness never attaches it and the web lists it under "Ungrouped".
-      // Attach this session to the workspace that owns `config.workspace` (when
-      // one exists — e.g. the web-created "deepseek" workspace) so it groups
-      // under the SAME workspace instead of Ungrouped. Best-effort: a path or
-      // registry mismatch must never break the TUI boot.
-      if (handle !== undefined) {
-        void attachSessionToWorkspace(ctx, config.workspace, handle.agent.session.id)
+      // S2-2b: the transcript is on screen and the open is still unpaid. Leave
+      // the load state (which suppresses every key) and enter the read-only
+      // phase: the docked chrome stays, input is live, the attach happens on
+      // the first trigger.
+      store.endSessionLoading()
+      store.beginReadOnlySession(fileFirstId)
+      store.setReadOnlyHistoryMarker(true)
+      readOnly = true
+      store.append('status', READ_ONLY_HINT, true)
+      // First submit / agent-dependent command → pay the attach now and replay
+      // the input through the normal Enter path afterwards.
+      store.submitMessage = (text) => { deferForAttach(text) }
+      store.beforeCommand = (name, text) => {
+        if (!ATTACH_DEFERRED_COMMANDS.has(name)) return true
+        deferForAttach(text)
+        return false
       }
-      break
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      if (!NO_FACTORY.test(message) || Date.now() >= factoryRetryDeadline) throw error
-      await new Promise<void>((resolve) => { setTimeout(resolve, 25) })
+      // Optional idle-window warm-up (`DSH_TUI_ATTACH_IDLE_MS`): pay the open
+      // while the user is reading and not typing, so a later submit is instant.
+      // OFF by default — the S2 goal is that a user who only reads never pays
+      // (session/optimization-plan.md §2 S2 ③).
+      const idleMs = Number(process.env.DSH_TUI_ATTACH_IDLE_MS ?? Number.NaN)
+      if (Number.isFinite(idleMs) && idleMs > 0) {
+        const timer = setTimeout(() => { void attachNow() }, idleMs)
+        timer.unref?.()
+      }
     }
   }
-  // The retry loop above either assigns `handle` (then breaks) or throws once
-  // the factory deadline passes; TypeScript cannot see past the try/catch, so
-  // assert the assignment here instead of reaching for a non-null assertion.
+  if (readOnly) {
+    // The read-only view is up: the setup below (and the harness open it
+    // assumes) must NOT run until the user asks for it. `attachNow` is
+    // reachable only through the triggers installed above, so this waits for
+    // the first one — and a user who only reads never fires it.
+    await attachGate
+  } else {
+    await attachNow()
+  }
+  // `attachNow()` either assigned `handle` or threw; TypeScript cannot see
+  // through the closure, so re-assert the assignment to narrow the type here.
   if (handle === undefined) {
     throw new Error('tui-runtime: agent handle was not established')
   }
-  logErrorFileOnly('boot', `phases: session open (decode+attach) ms=${Date.now() - openT0} resumed=${resumed}`)
   // `handle` / `agent` / `sessionId` are reassigned by `newSessionAction` when
   // `/new` switches to a fresh session; every closure below reads them through
   // the `let` bindings, so the listeners and slots track the live session.
@@ -4337,97 +4610,25 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }, 1000)
   watchdog.unref?.()
 
-  // Enable raw mode so the terminal owns no input processing.
-  if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
-    process.stdin.setRawMode(true)
-  }
-
-  // Calibrate ambiguous glyph widths against the real terminal (CPR/ESC[6n) so
-  // rows align for THIS terminal's fonts: measure while idle, re-layout once a
-  // width lands. Deferred whenever the agent is busy so probing never contends
-  // with streaming frames or typed input.
-  initCharWidthCalibration({
-    isBusy: () => store.running || store.paused,
-    onWidthsChanged: () => store.bumpWidths(),
-  })
-
-  // Park the REAL terminal cursor at the composer caret after every full-screen
-  // frame, and keep it visible. Ink hides the terminal cursor and (previously)
-  // drew its own blinking block; macOS Terminal anchors the IME composition/
-  // candidate window to the real cursor position, so a hidden or wandering
-  // cursor makes the candidate window jump on every redraw while typing
-  // Chinese. The patched Ink frame writer (apps/tui-bin/build.mjs) appends the
-  // suffix after all line updates, so the position is never overwritten by the
-  // next frame.
   // S2: phase 1 may already have mounted the UI to paint the file-first screen
-  // (see the boot block above) — never mount a second Ink root.
-  const app = earlyApp ?? render(<App />)
+  // (see the boot block above) — `mountUi` is idempotent, so this never mounts a
+  // second Ink root; on the attach-first path it is where the app comes up.
+  mountUi()
 
-  // Enable SGR mouse tracking so the terminal sends press/drag/release/wheel
-  // events to the app. The stdin decoder turns wheel bytes (64/65) into
-  // wheelUp/wheelDown → `store.scrollLines` (rolls the transcript), and
-  // press/drag/release into the in-app selection handlers. This takes over the
-  // terminal's NATIVE selection and wheel scrollback, which the full-screen
-  // surface replaces (the transcript scrolls in-app; dsh-tui draws its own
-  // selection). Restored in the exit handler below.
-  if (process.stdout.isTTY) {
-    // SGR + any-motion (hover + drag), plus BRACKETED PASTE: the composer's
-    // image-drag-in path listens for `k.paste` (stdin.ts parses `ESC[200~ …
-    // ESC[201~`), and a terminal only emits those markers after the app asks
-    // for them — without `?2004h` a dragged image arrives as plain text and the
-    // attachment never triggers.
-    process.stdout.write('\x1b[?1006h\x1b[?1003h\x1b[?2004h')
-  }
-
-  // Live terminal width: Bun/Node emit 'resize' on process.stdout and update
-  // `columns`; Ink only re-renders the DOM, so we drive a reactive Store size.
-  const onResize = (): void => {
-    store.setSize(process.stdout.columns ?? 80, process.stdout.rows ?? 24)
-    if (process.env.DSH_TUI_DEBUG_WIDTH === '1') {
-      process.stderr.write(`[dsh-tui] width ${process.stdout.columns ?? 80}\n`)
+  // S2-2b: the session is attached and the full command set is registered, so
+  // replay whatever the user handed us while the read-only view was up —
+  // through the NORMAL Enter path, so a queued `/compact` runs as the command
+  // it is instead of being sent as text. `beforeCommand` goes away with the
+  // read-only phase (a later session switch has its own load gate).
+  store.beforeCommand = undefined
+  if (pendingInputs.length > 0) {
+    const replay = pendingInputs.splice(0, pendingInputs.length)
+    for (const text of replay) {
+      store.setInput(text)
+      handleKey({ return: true })
     }
+    store.setInput('')
   }
-  process.stdout.on('resize', onResize)
-
-  // Alt+Enter (`\x1b\r`) and Home/End (`\x1b[H`/`\x1b[F`) are swallowed by
-  // Ink's key parser, so all keyboard input is read raw and dispatched by
-  // `handleKey` (panels + conversation composer).
-  const decoder = new StdinDecoder()
-  let escTimer: ReturnType<typeof setTimeout> | undefined
-  const onStdin = (chunk: Buffer | string): void => {
-    if (escTimer !== undefined) { clearTimeout(escTimer); escTimer = undefined }
-    const keys = decoder.push(chunk)
-    for (const key of keys) handleKey(key)
-    // A lone ESC could be a pending escape sequence prefix or the Esc key
-    // itself; if nothing followed it shortly, treat it as Esc.
-    if (decoder.pendingEscape) {
-      escTimer = setTimeout(() => {
-        for (const key of decoder.flushEsc()) handleKey(key)
-      }, 80)
-    }
-  }
-  process.stdin.on('data', onStdin)
-
-
-  // Restore the terminal on exit. This handler is registered after every other
-  // exit-time writer (log.ts's stderr mirror of `dsh-tui exited`, Ink's
-  // signal-exit unmount frame), so writing the leave sequence here makes it the
-  // process's LAST visible terminal output: everything written before it lands
-  // in the alternate screen buffer and is discarded when the buffer is switched
-  // back, leaving no dsh-tui residue above the shell prompt. (One harmless
-  // `\x1b[?25h` cursor-show may still follow: restore-cursor registers an
-  // afterexit hook that unconditionally re-shows the cursor — invisible by
-  // design, and the cursor being visible is the correct end state anyway.)
-  process.once('exit', () => {
-    if (typeof process.stdin.setRawMode === 'function' && process.stdin.isTTY) {
-      process.stdin.setRawMode(false)
-    }
-    if (process.stdout.isTTY) process.stdout.write('\x1b[?1006l\x1b[?1003l\x1b[?2004l') // disable mouse tracking + bracketed paste
-    process.stdout.off('resize', onResize)
-    process.stdin.off('data', onStdin)
-    void app.unmount()
-    try { process.stdout.write('\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
-  })
   await agent.whenIdle()
 }
 
@@ -5064,6 +5265,12 @@ export function oversizedResumeWarning(bytes: number | undefined): string | unde
  *  (auto-resume retries) cannot print the same warning twice. */
 const announcedOversized = new Set<string>()
 
+/** True once Ink owns the screen. S2-2b can mount the UI before the attach
+ *  (the read-only view), so a raw stdout line written afterwards would scroll
+ *  the painted frame out of place — the boot-time stdout warnings stand down
+ *  and the load banner carries the information instead. */
+let inkMounted = false
+
 /** Warn (once per session) on the tty BEFORE a session is opened, when its
  *  durable log is big enough that the harness's synchronous decode will hold
  *  the thread for seconds.
@@ -5080,6 +5287,9 @@ function announceOversizedResume(cwd: string, id: SessionId | string): void {
   if (announcedOversized.has(key)) return
   announcedOversized.add(key)
   if (process.stdout.isTTY !== true) return
+  // With the UI already mounted (S2-2b read-only view) a raw `\n`-terminated
+  // line would scroll Ink's frame; the load banner states the size instead.
+  if (inkMounted) return
   const warning = oversizedResumeWarning(sessionLogBytes(cwd, key))
   if (warning === undefined) return
   try {
