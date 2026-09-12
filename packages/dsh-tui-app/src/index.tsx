@@ -3210,12 +3210,16 @@ export function apply(ctx: Context, config: Config): void {
     postExitNotice(`dsh-tui: uncaught exception: ${error instanceof Error ? error.message : String(error)}\n`)
     process.exit(1)
   })
-  // NON-fatal by design (the process keeps running), so it stays out of the
-  // notice channel: a notice is only written at exit, and a deferred message
-  // about a recovered rejection would be stale by then. The file log is its
-  // record; the stderr mirror is best-effort and invisible while mounted.
+  // FATAL in THIS launcher, despite not exiting here: bin.ts installs the
+  // harness's fail-loud handler, which writes the stack to stderr and then exits
+  // on the first unhandled rejection (the F1 root cause, documented in the test
+  // plan). Both that write and logError's mirror land in the alternate screen and
+  // are discarded, so the reason must be queued like any other fatal one; the
+  // stack stays in the file. Should a future host NOT exit, the queued line is
+  // simply written at the next exit — late, never lost.
   process.on('unhandledRejection', (reason) => {
-    logError('unhandledRejection', reason)
+    logErrorFileOnly('unhandledRejection', reason)
+    postExitNotice(`dsh-tui: unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}\n`)
   })
   // Capture console.error (React/Ink warnings such as "Maximum update depth
   // exceeded") into the log; install before render. Avoid recursion (we never

@@ -113,4 +113,17 @@ describe('the wiring in index.tsx', () => {
     expect(handler).toContain("logErrorFileOnly('uncaughtException'")
     expect(handler).not.toContain("logError('uncaughtException'")
   })
+
+  test('the unhandled-rejection handler queues its line too (fatal in this launcher)', () => {
+    // Our own handler does not exit, but bin.ts installs the harness's fail-loud
+    // handler, which does — so this is a fatal path in this launcher, and the
+    // line has to survive the alternate screen like any other.
+    const from = appSource.indexOf("process.on('unhandledRejection'")
+    const to = appSource.indexOf('// Capture console.error', from)
+    const handler = appSource.slice(from, to)
+    expect(from).toBeGreaterThan(-1)
+    expect(handler).toContain('postExitNotice(')
+    expect(handler).toContain("logErrorFileOnly('unhandledRejection'")
+    expect(handler).not.toContain("logError('unhandledRejection'")
+  })
 })
