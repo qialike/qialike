@@ -3316,10 +3316,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
    *  back to a fresh session instead of dying on a log that another process
    *  wrote concurrently (see the catch below). */
   let resumeFailure: string | null = null
-  /** Wall-clock when the first session-open attempt started: the bracket from
-   *  here to a settled handle covers the harness's synchronous decode+parse of
-   *  the whole durable log — on a giant log this is where the boot `[stall]`
-   *  gaps land (before the attach/[resume] markers). */
+  /** Wall-clock when the launch began. In the S2-2b read-only path the attach
+   *  is DEFERRED until the user's first submit, so `now - openT0` is "launch →
+   *  attached" (it includes the whole read period) and must NOT be read as the
+   *  attach duration — that is `attachT0` inside {@link attachNow}. Measured
+   *  mistake (2026-09-12): using this as the attach number produced a bogus
+   *  "1.9 s fixed + 45 ms/decoded MB" model. */
   const openT0 = Date.now()
   const resumeId = config.resume
   const establish = async (): Promise<{ handle?: AgentHandle; resumed: boolean }> => {
@@ -3571,6 +3573,10 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // registration landing a moment after the loader reports quiescence:
       // create/resume throws "no agent factory registered" before any side
       // effect when it has not landed yet (see `establish` above).
+      // The real attach bracket: opened AFTER the banner frame was flushed, so
+      // it measures the harness decode+parse (`[stall]`) and not the deferred
+      // read-only window. See `openT0`.
+      const attachT0 = Date.now()
       for (;;) {
         try {
           const result = await establish()
@@ -3602,7 +3608,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       if (handle === undefined) {
         throw new Error('tui-runtime: agent handle was not established')
       }
-      logErrorFileOnly('boot', `phases: session open (decode+attach) ms=${Date.now() - openT0} resumed=${resumed}`)
+      logErrorFileOnly('boot',
+        `phases: session open (decode+attach) ms=${Date.now() - attachT0} resumed=${resumed} `
+        + `sinceLaunch=${Date.now() - openT0}ms`)
     })()
     attachAttempt.then(() => releaseAttachGate?.(), (error) => failAttachGate?.(error))
     return attachAttempt
