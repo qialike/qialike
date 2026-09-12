@@ -1015,6 +1015,20 @@ const __dshEnterAlt = () => {
     writeFullScreenFrame._alt = true;
     return '\\x1b[?1049h\\x1b[2J\\x1b[H';
 };
+// The ONE write path for every full-screen frame. The exit phase installs
+// __dshTuiSyncFrameWriter, and honouring it here — rather than only in the Ink
+// render path — keeps "every frame painted during exit is written synchronously"
+// true for the calibration flush and the watchdog repaint as well: either of them
+// painting a frame during exit would otherwise still be a QUEUED stdout write on a
+// Windows TTY (or a POSIX pipe) and could be overtaken by the synchronous leave,
+// landing as residue on the restored normal screen.
+const __dshWriteFrame = (stdout, frame) => {
+    const syncWrite = typeof globalThis !== 'undefined' ? globalThis.__dshTuiSyncFrameWriter : undefined;
+    if (typeof syncWrite === 'function') {
+        try { syncWrite(frame); return; } catch { /* fall through to the queued write */ }
+    }
+    stdout.write(frame);
+};
 // Whether a frame carries any visible text (background fills and SGR-only rows
 // do not count). Used to hold back the first, empty frames — see below.
 const __dshFrameHasText = (lines) => {
@@ -1069,19 +1083,7 @@ const writeFullScreenFrame = (stdout, output) => {
     writeFullScreenFrame._prev = lines;
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
     if (suffix) frame += suffix;
-    // Exit phase (__dshTuiSyncFrameWriter): the app installs a SYNCHRONOUS writer
-    // right before it unmounts, so the last frame Ink paints cannot be overtaken by
-    // the synchronous leave sequence on a platform whose stdout writes are queued
-    // (a Windows TTY; also a POSIX pipe). There the leave would go out first and the
-    // frame would land on the restored normal screen as residue.
-    if (frame !== '') {
-        const syncWrite = typeof globalThis !== 'undefined' ? globalThis.__dshTuiSyncFrameWriter : undefined;
-        if (typeof syncWrite === 'function') {
-            try { syncWrite(frame); } catch { stdout.write(frame); }
-        } else {
-            stdout.write(frame);
-        }
-    }
+    if (frame !== '') __dshWriteFrame(stdout, frame);
     if (typeof globalThis !== 'undefined' && typeof globalThis.__dshCharScan === 'function' && changedLines.length > 0) {
         globalThis.__dshCharScan(changedLines);
     }
@@ -1100,7 +1102,7 @@ globalThis.__dshCalibrationFlush = () => {
     if (pending.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J';
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
     if (suffix) frame += suffix;
-    if (frame !== '') process.stdout.write(frame);
+    if (frame !== '') __dshWriteFrame(process.stdout, frame);
     writeFullScreenFrame._prev = pending;
     if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
     if (typeof globalThis !== 'undefined' && typeof globalThis.__dshCharScan === 'function') {
@@ -1123,7 +1125,7 @@ globalThis.__dshTuiRepaintLastFrame = () => {
     if (prevLines.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J';
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
     if (suffix) frame += suffix;
-    if (frame !== '') process.stdout.write(frame);
+    if (frame !== '') __dshWriteFrame(process.stdout, frame);
     if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
 };
 `

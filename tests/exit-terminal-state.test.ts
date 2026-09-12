@@ -88,4 +88,10 @@ test('the exit path makes Ink\'s last frame write synchronously', () => {
 
   const build = readFileSync(join(ROOT, 'apps/tui-bin/build.mjs'), 'utf8')
   expect(build, 'the patched Ink frame writer must honour that hook').toContain('globalThis.__dshTuiSyncFrameWriter')
+  // …and EVERY frame write point must share that path, not just the Ink render
+  // one: the CPR calibration flush and the watchdog repaint can paint a frame too,
+  // and either would still be a queued write (and thus overtakable) otherwise.
+  expect(build.match(/__dshWriteFrame\(/g) ?? [], 'all three frame write points use the shared writer')
+    .toHaveLength(3)
+  expect(build, 'no frame write may bypass the shared writer').not.toContain('process.stdout.write(frame)')
 })
