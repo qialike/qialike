@@ -3442,6 +3442,27 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
    *  fold keeps those rows instead of rebuilding the transcript (S2-2a). */
   let paintedTailStart: number | undefined
 
+  // ── agent-independent core commands, registered BEFORE the attach ──────────
+  // These four + the /help panel touch only our Store/panels — never the agent
+  // — so they must exist in the READ-ONLY view too. Registering them after the
+  // attach (as they used to be) meant an unregistered command fell through
+  // `filteredCommands` to `store.submitMessage`, so typing `/exit` or `/help`
+  // while read-only paid the whole 1.9–4.3 s attach before doing anything.
+  // `/compact` (needs the live agent) stays in the post-attach block.
+  tui.panels.register({
+    id: 'help',
+    mode: 'fullscreen',
+    render: () => <HelpDialog />,
+    handleKey: (k) => {
+      if (k.escape || k.mouseRightPress || (k.ctrl && (k.char ?? '') === 'c')) store.cancelHelp()
+      return true
+    },
+  })
+  tui.commands.register({ name: 'help', hint: 'show this help', run: () => { store.openHelp() } })
+  tui.commands.register({ name: 'think', hint: 'show/hide details under Think and tool rows (reasoning + tool output)', run: () => { store.toggleAllDetail() } })
+  tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { abortResumeFold(); store.clear() } })
+  tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
+
   // ── S2-2b: mount the UI and take input BEFORE the blocking attach ──────────
   // `agents.resume()` decodes the whole durable log on this one thread and
   // cannot be interrupted. Phase 1 (S2-1) already paints the newest events
@@ -4081,19 +4102,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
 
   store.append('status', 'Ready. Enter to send · Ctrl+C clears the input · /exit quits.', true)
 
-  // Wire the slash commands (built after the agent exists). Core commands
-  // only; `/models` and `/sessions` register from their panel plugins.
-  tui.panels.register({
-    id: 'help',
-    mode: 'fullscreen',
-    render: () => <HelpDialog />,
-    handleKey: (k) => {
-      if (k.escape || k.mouseRightPress || (k.ctrl && (k.char ?? '') === 'c')) store.cancelHelp()
-      return true
-    },
-  })
-  tui.commands.register({ name: 'help', hint: 'show this help', run: () => { store.openHelp() } })
-  tui.commands.register({ name: 'think', hint: 'show/hide details under Think and tool rows (reasoning + tool output)', run: () => { store.toggleAllDetail() } })
+  // `/compact` needs the live agent (registered here, after the attach); the
+  // agent-INDEPENDENT core commands were registered before the read-only branch
+  // (see `registerAgentFreeCommands`) so that in the read-only view `/exit`,
+  // `/help`, `/think` and `/clear` run instead of falling through to
+  // `submitMessage` — which would pay the whole attach just to quit or read help.
   tui.commands.register({
     name: 'compact',
     hint: 'compact the session history',
@@ -4106,8 +4119,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       void compact(ctx, agent)
     },
   })
-  tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { abortResumeFold(); store.clear() } })
-  tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
 
   store.submitMessage = (text) => {
     // P0 instrumentation (submit-path stall): the harness's prompt assembly and

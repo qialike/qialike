@@ -151,6 +151,30 @@ describe('start() read-only wiring (S2-2b)', () => {
     expect(conversation).toContain('store.beforeCommand?.(chosen.name, text) !== false')
   })
 
+  test('agent-independent core commands are registered BEFORE the read-only branch', () => {
+    // Otherwise `/help` `/exit` `/think` `/clear` are unknown in the read-only
+    // view, fall through to `submitMessage`, and pay the whole attach just to
+    // read help or quit (verified end-to-end by .scan/s2b-readonly-commands.py).
+    const readOnlyBranch = source.indexOf('if (fastFirstScreen && fileFirstId !== undefined)')
+    expect(readOnlyBranch).toBeGreaterThan(0)
+    for (const nm of ['help', 'think', 'clear', 'exit']) {
+      const at = source.indexOf(`name: '${nm}'`, source.indexOf('async function start('))
+      expect(at).toBeGreaterThan(0)
+      expect(at).toBeLessThan(readOnlyBranch)
+    }
+    // `/compact` needs the live agent and must stay in the post-attach block.
+    const compactAt = source.indexOf("name: 'compact'", source.indexOf('async function start('))
+    expect(compactAt).toBeGreaterThan(readOnlyBranch)
+  })
+
+  test('the composer Tab does not stamp a durable mode while read-only', () => {
+    // The read-only stand-in has no methods, so the old code relied on it
+    // throwing into `catch{}`; the skip is now explicit and the choice is
+    // stamped at attach (store.readOnlyPermissionPicked).
+    expect(conversation).toContain('store.readOnlySessionId === undefined')
+    expect(conversation).toContain('readOnlyPermissionPicked')
+  })
+
   test('the attach stamps a read-only permission choice instead of overwriting it', () => {
     const from = source.indexOf('if (store.readOnlyPermissionPicked)')
     expect(from).toBeGreaterThan(0)

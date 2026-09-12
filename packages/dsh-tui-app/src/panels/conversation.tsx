@@ -2183,7 +2183,12 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     // `cyclePermission` notifies through the shared store (importing a hook from
     // index.tsx would hit a second module copy).
     const session = store.session
-    if (session !== undefined) {
+    // While the session is READ-ONLY there is no live session to stamp — the
+    // stand-in would only throw — so the durable write is skipped here and the
+    // choice is remembered on the Store instead (`readOnlyPermissionPicked`),
+    // then stamped when the attach lands. Explicit, rather than relying on the
+    // stub throwing into the catch below.
+    if (session !== undefined && store.readOnlySessionId === undefined) {
       // The sandbox mode and the approval policy are INDEPENDENT (review F2:
       // dsh-tui-security.md). Cycling to danger-full-access raises the file
       // boundary alone — it must NOT silently flip the approval policy to
