@@ -1161,6 +1161,22 @@ export class Store {
    *  replay) and continue keying from the loaded items, so live appends never
    *  collide with replayed keys. */
   loadHistory(items: readonly TranscriptItem[], steps: readonly StepItem[]): void {
+    // This REPLACES the item list wholesale, so any chunked-resume marker goes
+    // with it. Leaving `_historyMarkerKey` pointing into a list that no longer
+    // holds that marker kept `historyLoadingVisible` true forever, and the status
+    // bar's left slot then rendered `historyProgressText` — which is
+    // `items[0].text`, i.e. the first transcript row — instead of the run-phase
+    // indicator (`⠿ Idle` / `Working · Esc to pause`). That is exactly what a
+    // file-first launch hit: `beginHistory` (S2 phase 1) is followed by the
+    // attach's own `loadHistory`, so the marker was gone while the flag stayed.
+    this._historyMarkerKey = -1
+    this._historyTotal = 0
+    this._historyProgressMax = 0
+    this._historyHolding = false
+    // Same convention as `clear()`: no marker means nothing is settled or
+    // pending (the flag is only consulted while a marker exists).
+    this._historySettled = false
+    this._loadedOlder = 0
     this.items = [...items]
     this.key = items.length
     this._steps = [...steps]

@@ -1523,6 +1523,36 @@ function frameGapProbe(items: number, scroll: number, followTail: boolean): void
     lastHeapMb = Math.round(process.memoryUsage().heapUsed / 1048576)
   }
 }
+/** Which LEFT-SLOT branch the status bar takes (`DSH_TUI_DEBUG_STATUS=1`),
+ *  logged once per change. The slot is a priority chain (load > compaction >
+ *  preparing > older-history > flash > error > busy indicator); when something
+ *  higher up never clears, the run-phase indicator silently disappears — the
+ *  symptom is visible on screen but the branch that caused it is not, so the
+ *  chain reports itself. */
+const debugStatus = /^(1|true|yes|on)$/i.test(process.env.DSH_TUI_DEBUG_STATUS ?? '')
+let lastStatusBranch = ''
+function noteStatusBranch(store: Store): null {
+  if (!debugStatus) return null
+  const branch = store.sessionLoading !== null
+    ? `loading(${store.sessionLoading.steps[store.sessionLoading.steps.length - 1]?.phase ?? '-'})`
+    : store.compaction !== null
+      ? 'compaction'
+      : store.preparingRequest
+        ? 'preparing'
+        : store.historyLoadingVisible
+          ? 'history'
+          : store.statusFlash !== null
+            ? `flash(${store.statusFlash.text.slice(0, 24)})`
+            : store.loadError !== null
+              ? 'error'
+              : `busy(running=${store.running},paused=${store.paused})`
+  if (branch !== lastStatusBranch) {
+    lastStatusBranch = branch
+    logErrorFileOnly('status', `left slot -> ${branch} hero=${store.hero} session=${store.session === undefined ? '-' : String(store.session.id).slice(0, 12)}`)
+  }
+  return null
+}
+
 function perfTick(which: 'rows' | 'items', ms: number, items: number, heapMb: number): void {
   if (!debugLayout) return
   eventRateTick()
@@ -2941,6 +2971,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           layout mirror below reserves no status rows either). */}
       {!heroActive && (
       <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} height={STATUS_BAR_HEIGHT}>
+        {noteStatusBranch(store)}
         {/* The busy indicator (Working/Paused/Idle + icon) is REPLACED on the
             left while a transient status message (e.g. "copied: …") flashes —
             so the confirmation takes the Idle slot for ~2.5s, then Idle returns.
