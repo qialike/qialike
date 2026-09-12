@@ -21,3 +21,8 @@ build.log
 /REPORT.md
 /software-testing-guide.md
 /testing-frameworks.md
+
+# Scratch left by the release harness (`../.scan/bt/drive-tag.sh` creates nested
+# git worktrees here). It contains its own `.git`, so an unignored `git add -A`
+# in the release scripts would try to commit a 2 MB foreign repository.
+/.scan/
