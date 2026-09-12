@@ -38,6 +38,7 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generated/config-embed.js'
 import { PLUGIN_BUILTINS } from '../generated/plugins.js'
 import pkg from '../../../package.json' with { type: 'json' }
+import { UNINSTALL_MODE, WEB_MODE } from './launcher-modes.ts'
 
 const NAME = 'dsh-tui'
 
@@ -57,7 +58,10 @@ const SPLASH_DELAY_MS = Number(process.env.DSH_TUI_SPLASH_MS ?? 1200)
 
 /** Which `dsh` the web forwarder will launch (`$DSH_TUI_DSH` overrides PATH). */
 function webDshCommand(): string {
-  return process.env.DSH_TUI_DSH ?? 'dsh'
+  // `||`, not `??`: an EMPTY override (`DSH_TUI_DSH= dsh-tui web`) means "unset".
+  // spawnSync('') throws a TypeError, so `??` surfaced a stack trace instead of
+  // the documented "install the CLI" guidance and its 127 exit code.
+  return process.env.DSH_TUI_DSH || 'dsh'
 }
 
 /** Windows needs the shell to resolve npm `.cmd`/`.bat` shims — both when the
@@ -259,6 +263,23 @@ function canClearHome(dir: string): boolean {
 }
 
 /**
+ * What `dsh-tui uninstall --help` explains instead of removing anything.
+ *
+ * `uninstall` ignores the rest of the line (that is what makes it safe to run
+ * from an installer), so `--help` has to be answered before the removal: asking
+ * what a destructive command does must never be the thing that runs it.
+ */
+const UNINSTALL_HELP = `${NAME} uninstall — remove dsh-tui and the state it created
+
+Clears the harness home ($DSH_HOME, default ~/.dsh): settings, sessions,
+attachments, exports, caches, custom themes, and ~/.dsh/bin. Removes the PATH
+line the installer appended to ~/.bashrc / ~/.zshrc. The dsh-tui checkout is
+never touched, and every cleared item is regenerated on the next run.
+
+usage: dsh-tui uninstall [--help]
+`
+
+/**
  * Uninstall dsh-tui completely: clear the entire harness home
  * (`$DSH_HOME`, default `~/.dsh`) — every dsh-tui-owned file (config, logs,
  * title/activity/pinned caches, custom themes) **and** the harness/dsh shared
@@ -378,7 +399,7 @@ function uninstallSelf(): number {
  * files, per-client plugin bundles, the static dist), so this terminal
  * launcher delegates instead of re-implementing the surface. The `dsh` binary
  * must therefore be on PATH (or pointed to by `$DSH_TUI_DSH`).
- * @param args - the full invocation arguments (`args[0] === 'web'`), forwarded
+ * @param args - the full invocation arguments ({@link WEB_MODE} first), forwarded
  * verbatim: `dsh-tui web --port 8080 --no-open` runs `dsh web --port 8080 --no-open`.
  * @returns the child process exit code.
  */
@@ -422,9 +443,18 @@ function runWeb(args: string[]): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  // Launcher flags are handled before the app owns the command line.
+  // Launcher flags are handled before the app owns the command line. Their
+  // names live in `launcher-modes.ts` because `main.ts` (the thin entry) must
+  // hand these positionals over before it validates the mode — see that module.
   const args = process.argv.slice(2)
-  if (args[0] === 'uninstall') {
+  if (args[0] === UNINSTALL_MODE) {
+    // Destructive, and (by design) it ignores the rest of the line — so `--help`
+    // is answered here. Falling through would mean "tell me what this does"
+    // wipes the harness home.
+    if (args.some((arg) => arg === '--help' || arg === '-h')) {
+      process.stdout.write(UNINSTALL_HELP)
+      process.exit(0)
+    }
     process.exit(uninstallSelf())
   }
   if (args.includes('--version') || args.includes('-V') || args.includes('-v')) {
@@ -436,7 +466,7 @@ async function main(): Promise<void> {
   // screen buffer. Remaining arguments go to `dsh` verbatim. A preflight
   // guides the user when the harness CLI is missing or its version does not
   // match the embedded one.
-  if (args[0] === 'web') {
+  if (args[0] === WEB_MODE) {
     const pre = preflightWebDsh()
     if (pre === 'missing') process.exit(127)
     if (pre === 'mismatch') process.exit(1) // version differs: warn, do NOT start web

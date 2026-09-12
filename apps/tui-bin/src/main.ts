@@ -28,6 +28,7 @@
 
 import pkg from '../../../package.json' with { type: 'json' }
 import { tuiCommand } from '@yourname/dsh-tui-app/src/startup.ts'
+import { isLauncherMode } from './launcher-modes.ts'
 
 const NAME = 'dsh-tui'
 
@@ -74,6 +75,17 @@ async function main(): Promise<void> {
       throw error
     }
     process.exit(0) // defensive: a lone --help always exits through the throw
+  }
+
+  // Launcher modes own their ENTIRE command line, so they hand over before the
+  // positional check below — twice over: that check would reject the mode
+  // itself (F5's regression made `dsh-tui web` read like a typo), and
+  // `tuiCommand()` does not declare `web`'s options, so parsing would reject
+  // `--host` before the check ever ran. `bin.ts` runs `uninstall` itself and
+  // forwards `web` (with its own flags) to the `dsh` CLI.
+  if (isLauncherMode(args[0])) {
+    await import('./bin.ts')
+    return
   }
 
   // A positional MODE other than `resume` is a typo and must read like one. It
