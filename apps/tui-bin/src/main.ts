@@ -76,6 +76,36 @@ async function main(): Promise<void> {
     process.exit(0) // defensive: a lone --help always exits through the throw
   }
 
+  // A positional MODE other than `resume` is a typo and must read like one. It
+  // used to be validated inside the `tui-startup` plugin, i.e. while the plugin
+  // tree was loading, so `dsh-tui frobnicate` surfaced as
+  //   dsh-tui: Error: dsh-tui: plugin tree failed to load: … failed to apply
+  //   loader entry tui-startup (@yourname/dsh-tui-app/startup): unknown argument
+  //   "frobnicate" — did you mean "resume"? (see --help)
+  // plus a Bun stack trace (F5) — the right hint, framed as a crash. Validating
+  // HERE, with the SAME commander program the full boot parses with, keeps the
+  // wording and the value-taking options (e.g. `--workspace <dir>`) in lockstep
+  // and prints one clean line like an unknown flag already does.
+  {
+    const program = tuiCommand()
+    program.exitOverride().configureOutput({
+      writeOut: (text: string) => void process.stdout.write(text),
+      writeErr: (text: string) => void process.stderr.write(text),
+    })
+    try {
+      program.parse(args, { from: 'user' })
+    } catch (error) {
+      // Commander already printed the reason (unknown flag, missing value, …).
+      if (isCommanderExit(error)) process.exit(error.exitCode)
+      throw error
+    }
+    const mode = program.processedArgs[0]
+    if (typeof mode === 'string' && mode !== 'resume') {
+      process.stderr.write(`error: unknown argument "${mode}" — did you mean "resume"? (see --help)\n`)
+      process.exit(1)
+    }
+  }
+
   // Full boot: the interactive TUI, `uninstall`, `web`, or any mixed argument
   // set. Deferred so the fast paths above never load the plugin graph.
   await import('./bin.ts')
