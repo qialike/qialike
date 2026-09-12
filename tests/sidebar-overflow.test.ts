@@ -88,6 +88,25 @@ describe('sidebarStepPlan', () => {
     expect(sidebarFits(13)).toBe(false)
   })
 
+  test('a session with NO steps still budgets its `no plan yet` row', () => {
+    // The case the first version of this fix missed: with `steps: []` the sidebar
+    // renders `no plan yet` — a real child with one row. Leaving it out put the
+    // plan one row over capacity, so Yoga compressed the sidebar's own children:
+    // the two footer lines landed on ONE row and the `Session` heading vanished
+    // (measured on the user's step-less session at 100x18).
+    for (const cols of [80, 100, 120, 133, 160]) {
+      for (let rows = 14; rows <= 30; rows++) {
+        const p = plan(rows, cols, [])
+        expect(p.rows, `${cols}x${rows}`).toBeLessThanOrEqual(p.capacity)
+      }
+    }
+    // Roomy: the placeholder is shown. Cramped: a real session id outranks the
+    // filler row, so the placeholder is the first thing to go.
+    expect(plan(37, 133, []).showEmpty).toBe(true)
+    expect(plan(18, 100, []).showEmpty).toBe(false)
+    expect(plan(18, 100, []).showSession).toBe(true)
+  })
+
   test('the session block yields before the steps do', () => {
     // Same rows, same width: more steps ⇒ less leftover ⇒ the block goes first.
     const few = plan(24, 80, STEPS.slice(0, 1))

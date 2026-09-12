@@ -2959,7 +2959,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingTop={1} gap={1}>
           <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
           {steps.length === 0
-            ? <Text color={mutedReadable()}>no plan yet</Text>
+            ? (sidebarPlan.showEmpty ? <Text color={mutedReadable()}>no plan yet</Text> : <Box />)
             : (
               <Box flexDirection="column">
                 <StepRows steps={steps.slice(0, sidebarPlan.visible)} />

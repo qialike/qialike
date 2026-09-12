@@ -225,7 +225,8 @@ function sidebarWrappedRows(text: string, contentWidth: number): number {
  *  different id.
  *
  *  @returns `visible` = how many leading steps to render; `hidden` = how many
- *    are dropped; `rows`/`capacity` = the rows this plan will occupy and the
+ *    are dropped; `showEmpty` = render the `no plan yet` row (only when it
+ *    fits); `rows`/`capacity` = the rows this plan will occupy and the
  *    rows the box actually has (`rows <= capacity` is the no-overflow invariant
  *    the unit test sweeps); `showMore` = whether the `… +hidden more` row fits
  *    (the caller renders it ONLY when this is true — that row costs a row, and
@@ -238,7 +239,7 @@ export function sidebarStepPlan(input: {
   sessionTitle?: string
   sessionId?: string
   footerLines: readonly string[]
-}): { visible: number; hidden: number; showMore: boolean; showSession: boolean; rows: number; capacity: number } {
+}): { visible: number; hidden: number; showMore: boolean; showSession: boolean; showEmpty: boolean; rows: number; capacity: number } {
   const { steps } = input
   const sidebarWidth = Math.max(20, Math.round(input.width * 0.3))
   const contentWidth = Math.max(1, sidebarWidth - 4) // round border (2) + paddingX (1 each side)
@@ -275,11 +276,19 @@ export function sidebarStepPlan(input: {
   const sessionNeeds = 1 // 'Session' heading
     + (input.sessionTitle === undefined ? 0 : 1)
     + (input.sessionId === undefined ? 0 : sidebarWrappedRows(input.sessionId, contentWidth))
-  const leftover = slack - used - (showMore ? 1 : 0)
-  const showSession = input.sessionId !== undefined && leftover >= sessionNeeds
+  const afterSteps = slack - used - (showMore ? 1 : 0)
+  const showSession = input.sessionId !== undefined && afterSteps >= sessionNeeds
   const sessionRows = showSession ? sessionNeeds : 0
-  const total = gaps + heading + sessionRows + used + (showMore ? 1 : 0) + footer
-  return { visible, hidden, showMore, showSession, rows: total, capacity: inner }
+  // The `no plan yet` placeholder is a REAL child with its own row — leaving it
+  // out of the budget under-counted the sidebar by one row, and a session with
+  // no plan at all then compressed its own children (the two footer lines landed
+  // on ONE row and the `Session` heading vanished; measured on the user's
+  // step-less session at 100x18). It is the LOWEST priority though: a real
+  // session id is worth more than a filler row, so it only takes what is left.
+  const showEmpty = steps.length === 0 && afterSteps - sessionRows >= 1
+  const emptyRows = showEmpty ? 1 : 0
+  const total = gaps + heading + sessionRows + used + (showMore ? 1 : 0) + emptyRows + footer
+  return { visible, hidden, showMore, showSession, showEmpty, rows: total, capacity: inner }
 }
 
 /** Whether the sidebar's MINIMUM content fits in `rows` terminal rows.
