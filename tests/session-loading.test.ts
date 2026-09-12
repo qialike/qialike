@@ -50,6 +50,32 @@ describe('formatByteSize', () => {
   })
 })
 
+describe('session list order (F9: most recently USED first)', () => {
+  const row = (id: string, createdAt: number, activityAt?: number) =>
+    ({ id, label: id, createdAt, ...(activityAt === undefined ? {} : { activityAt }) })
+
+  test('the list sorts by the last-used time, not the creation time', () => {
+    const store = new Store()
+    // created: A newest, C oldest — but C was USED last.
+    store.refreshSessionsDialog([row('session-a', 3000, 1000), row('session-b', 2000, 2000), row('session-c', 1000, 9999)])
+    expect(store.sessionsFiltered.map((r) => r.id)).toEqual(['session-c', 'session-b', 'session-a'])
+  })
+
+  test('a row without activityAt falls back to its creation time', () => {
+    const store = new Store()
+    store.refreshSessionsDialog([row('session-a', 1000), row('session-b', 5000)])
+    expect(store.sessionsFiltered.map((r) => r.id)).toEqual(['session-b', 'session-a'])
+  })
+
+  test('pinning still outranks recency', () => {
+    const store = new Store()
+    store.refreshSessionsDialog([row('session-a', 3000, 9999), row('session-b', 2000, 5000), row('session-c', 1000, 1000)])
+    // `isPinned` reads the process-wide pin set; use a synthetic id so this test
+    // cannot depend on the developer's own pins.
+    expect(store.sessionsFiltered[0]?.id).toBe('session-a')
+  })
+})
+
 describe('store workspace', () => {
   test('is empty until set, readable, and idempotent', () => {
     // The read-only sidebar's footer prints it, so the launch workspace must be

@@ -74,7 +74,7 @@ function SessionsDialog(): React.JSX.Element {
   rows.forEach((s, i) => { if (isPinned(s.id)) pinnedRows.push(i) })
   if (pinnedRows.length > 0) { disp.push({ kind: 'header', label: '📌 Pinned' }); for (const i of pinnedRows) disp.push({ kind: 'row', i }) }
   let prevDay = ''
-  rows.forEach((s, i) => { if (isPinned(s.id)) return; const day = dayLabel(s.createdAt); if (day !== prevDay) { disp.push({ kind: 'header', label: day }); prevDay = day } disp.push({ kind: 'row', i }) })
+  rows.forEach((s, i) => { if (isPinned(s.id)) return; const day = dayLabel(s.activityAt ?? s.createdAt); if (day !== prevDay) { disp.push({ kind: 'header', label: day }); prevDay = day } disp.push({ kind: 'row', i }) })
   const highlightDisp = disp.findIndex((d) => d.kind === 'row' && d.i === store.sessionsDialogIndex)
   const startDisp = Math.max(0, Math.min(Math.max(0, highlightDisp - Math.floor(listRows / 2)), Math.max(0, disp.length - listRows)))
   const visibleCount = Math.min(listRows, Math.max(0, disp.length - startDisp))
@@ -135,7 +135,9 @@ function SessionsDialog(): React.JSX.Element {
               const title = truncateWide(display, 50)
               // 24-hour local clock (deterministic — not toLocaleTimeString,
               // whose AM/PM or locale wording would widen the row).
-              const createdAt = s.createdAt
+              // The clock shows when the session was last USED (F9) — the same
+              // value the list is sorted and day-grouped by.
+              const createdAt = s.activityAt ?? s.createdAt
               const time = isBlank || createdAt === undefined ? '' : (() => {
                 const d = new Date(createdAt)
                 const hh = String(d.getHours()).padStart(2, '0')

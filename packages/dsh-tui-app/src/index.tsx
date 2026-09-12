@@ -220,8 +220,12 @@ export interface SessionSummary {
   readonly title?: string
   readonly label: string
   readonly cwd?: string
-  /** Creation timestamp (local epoch ms), used for time-grouped display. */
+  /** Creation timestamp (local epoch ms). */
   readonly createdAt?: number
+  /** Last-used timestamp (local epoch ms) when known, else `createdAt`. The
+   *  dialog SORTS, GROUPS and LABELS by this one value (F9) — sorting by it and
+   *  labelling by `createdAt` is what made the order look wrong. */
+  readonly activityAt?: number
   /** Unused "New Session" placeholder (no turn/start yet) — web parity: the
    *  workspace browser shows only the SELECTED blank entry and New Session
    *  reuses an existing blank instead of minting a new id. */
@@ -934,7 +938,10 @@ export class Store {
     // dialog (a doubled filter line / garbled rows). Sort by createdAt DESC.
     return [...base].sort((a, b) =>
       (isPinned(b.id) ? 1 : 0) - (isPinned(a.id) ? 1 : 0)
-      || (b.createdAt ?? 0) - (a.createdAt ?? 0))
+      // Most recently USED first (F9): the day grouping below reads the same
+      // value, so a repeated day label cannot appear (which is why this sort
+      // used to fall back to createdAt and silently discard the MRU order).
+      || (b.activityAt ?? b.createdAt ?? 0) - (a.activityAt ?? a.createdAt ?? 0))
   }
   get secret() { return this._secret }
 

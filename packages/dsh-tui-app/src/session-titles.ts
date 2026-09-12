@@ -367,10 +367,21 @@ export function sessionDisplayTitle(id: SessionId): string | undefined {
   ensureDiskLoaded()
   return titleOf(id)
 }
+/** The timestamp a row is SORTED, GROUPED and LABELLED by: the last time the
+ *  session was used (`dsh-tui-activity.json`, written on every switch/resume),
+ *  falling back to its creation time. F9: the /sessions list used to sort by
+ *  `lastActivity` in `buildRows` and then be re-sorted by `createdAt` in
+ *  `Store.sessionsFiltered`, so "most recently used" never reached the screen
+ *  and the labels disagreed with the order. ONE value now feeds all three. */
+export function activityAt(id: SessionId, createdAt?: number): number | undefined {
+  return lastActivity(id) ?? createdAt
+}
+
 
 /** Label for one session: `标题 · @时间`, or just `@时间` when untitled. */
 function labelOf(header: SessionHeaderLike, title: string | undefined): string {
-  const time = header.createdAt === undefined ? '' : `@${new Date(header.createdAt).toLocaleString()}`
+  const at = activityAt(header.id, header.createdAt)
+  const time = at === undefined ? '' : `@${new Date(at).toLocaleString()}`
   const trimmed = title?.trim()
   if (trimmed === undefined || trimmed === '') return time
   return time === '' ? trimmed : `${trimmed} · ${time}`
@@ -389,14 +400,15 @@ function buildRows(
       label: labelOf(header, titleOf(header.id)),
       cwd: header.cwd,
       createdAt: header.createdAt,
+      activityAt: activityAt(header.id, header.createdAt),
       blank: sessionBlank(header.id) === true,
     },
     createdAt: header.createdAt,
   }))
   rows.sort((a, b) => {
-    const activityA = lastActivity(a.summary.id) ?? 0
-    const activityB = lastActivity(b.summary.id) ?? 0
-    if (activityA !== activityB) return activityB - activityA
+    const atA = a.summary.activityAt ?? a.createdAt ?? 0
+    const atB = b.summary.activityAt ?? b.createdAt ?? 0
+    if (atA !== atB) return atB - atA
     return (b.createdAt ?? 0) - (a.createdAt ?? 0)
   })
   return rows.map(({ summary }) => summary)
