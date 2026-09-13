@@ -78,11 +78,12 @@ export const HERO_COMPOSER_INPUT_ROWS = 2
  *  row (`textArea = composerH − 4`), so one more input row is +1 box row. */
 export const HERO_COMPOSER_EXTRA_ROWS = HERO_COMPOSER_INPUT_ROWS - 1
 
-/** Placeholder of the empty hero composer — verbatim web `conversation`
- *  `placeholder.hero` (EN dictionary; the TUI uses the EN strings from the
- *  harness client elsewhere too, e.g. the tool-row titles). The zh twin is
- *  '描述你想要构建的内容… / 调用指令 @ 文件或对话'. */
-export const HERO_PLACEHOLDER = 'Describe what you want to build... / commands, @ files or sessions'
+/** Placeholder of the empty hero composer (user call): web `conversation`
+ *  `placeholder.hero` cut down to the two affordances the hero actually offers
+ *  — `/` for commands and `@` for file references — separated from the prompt
+ *  sentence by a double space so the eye reads them as a key legend. The zh twin
+ *  is '描述你想要构建的内容… / 调用指令 @ 文件'. */
+export const HERO_PLACEHOLDER = 'Describe what you want to build...  / commands, @ files'
 
 /** Terminal columns the centered composer card keeps clear on each side. */
 export const HERO_COMPOSER_SIDE_CLEARANCE = 2
@@ -349,6 +350,35 @@ export function heroHintLine(providerReady: boolean | undefined): string | undef
   return providerReady
     ? 'Use /sessions to restore a historical session'
     : 'No provider yet — use /models to add one'
+}
+
+/** The glyph that OPENS the hint line (user call: an eye-catching marker at the
+ *  line's start). U+1F4A1 is Extended_Pictographic, so every width table (and
+ *  `string-width`) measures it as exactly two columns — the row therefore stays
+ *  centered even though the mark is not ASCII. */
+export const HERO_HINT_ICON = '💡'
+
+/** The label painted next to {@link HERO_HINT_ICON}, in the accent colour and
+ *  bold: it names the line ("this is a tip, not an error"). */
+export const HERO_HINT_LABEL = 'Tip'
+
+/** Blank columns between {@link HERO_HINT_LABEL} and the hint sentence. */
+export const HERO_HINT_LABEL_GAP = 2
+
+/**
+ * The hint line as ONE paintable string: `<icon> <label><gap><sentence>`.
+ *
+ * Pure so the renderer, the row count (`heroHintRowCount`) and the centering
+ * pad all derive from a single builder — the colored `<Text>` parts in the
+ * panel must concatenate back to exactly this string, or the centered row would
+ * drift from the model (the same class of bug as the caret drift).
+ * @param providerReady - `Store.providerReady`.
+ * @returns the display line, or `undefined` when nothing should be drawn.
+ */
+export function heroHintText(providerReady: boolean | undefined): string | undefined {
+  const line = heroHintLine(providerReady)
+  if (line === undefined) return undefined
+  return `${HERO_HINT_ICON} ${HERO_HINT_LABEL}${' '.repeat(HERO_HINT_LABEL_GAP)}${line}`
 }
 
 /** Rows a mark occupies in the hero stack (0 for `none`). */

@@ -20,6 +20,9 @@ import {
   HERO_TITLE_ZH,
   HERO_COMPOSER_INPUT_ROWS,
   HERO_PLACEHOLDER,
+  HERO_HINT_ICON,
+  HERO_HINT_LABEL,
+  HERO_HINT_LABEL_GAP,
   HERO_STATUS_BAR_HEIGHT,
   HERO_WORDMARK,
   heroComposerLeft,
@@ -27,6 +30,7 @@ import {
   HERO_TITLE_CARD_GAP,
   heroLayout,
   heroHintLine,
+  heroHintText,
   heroWordmarkFits,
 } from '../packages/dsh-tui-app/src/hero-layout.ts'
 import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
@@ -207,9 +211,12 @@ describe('size gates and hero copy', () => {
     expect(visualWidth(HERO_TITLE)).toBe(HERO_TITLE.length) // ASCII: centers exactly
   })
 
-  test('placeholder is web\'s hero copy, verbatim and static', () => {
-    expect(HERO_PLACEHOLDER).toBe('Describe what you want to build... / commands, @ files or sessions')
+  test('placeholder names both affordances (commands + file refs), and is static', () => {
+    expect(HERO_PLACEHOLDER).toBe('Describe what you want to build...  / commands, @ files')
     expect(visualWidth(HERO_PLACEHOLDER)).toBe(HERO_PLACEHOLDER.length)
+    expect(HERO_PLACEHOLDER).toMatch(/\/ commands, @ files$/)
+    expect(HERO_PLACEHOLDER, 'the prompt sentence stays the leading, greppable prefix')
+      .toMatch(/^Describe what you want to build/)
   })
 })
 
@@ -237,6 +244,44 @@ describe('hero hint line (under the card)', () => {
   test('identifies the command to type', () => {
     for (const line of [heroHintLine(false)!, heroHintLine(true)!]) {
       expect(line).toMatch(/\/(models|sessions)/)
+    }
+  })
+
+  test('the painted line opens with the eye-catching icon + Tip label', () => {
+    expect(heroHintText(undefined)).toBeUndefined()
+    for (const ready of [false, true] as const) {
+      const full = heroHintText(ready)!
+      expect(full.startsWith(`${HERO_HINT_ICON} ${HERO_HINT_LABEL}`), 'icon+label lead the line').toBe(true)
+      // Exactly the three parts the panel paints, in order: the colored
+      // icon/label `<Text>`, its gap, then the muted sentence.
+      expect(full).toBe(
+        `${HERO_HINT_ICON} ${HERO_HINT_LABEL}${' '.repeat(HERO_HINT_LABEL_GAP)}${heroHintLine(ready)}`,
+      )
+      expect(full.endsWith(heroHintLine(ready)!)).toBe(true)
+    }
+    // The sentence itself is unchanged — the probes and the `/sessions` hint
+    // substring assertions keep working.
+    expect(heroHintText(true)).toContain('Use /sessions to restore a historical session')
+  })
+
+  test('the icon is measured two columns wide, so the centered row stays centered', () => {
+    // U+1F4A1 is Extended_Pictographic: every width table (and the terminal)
+    // advances it two columns. If it were ambiguous-width the pad computed from
+    // `heroHintText` would disagree with the paint by one column.
+    expect(visualWidth(HERO_HINT_ICON)).toBe(2)
+    for (const ready of [false, true] as const) {
+      const full = heroHintText(ready)!
+      expect(visualWidth(full)).toBe(
+        visualWidth(HERO_HINT_ICON) + 1 + HERO_HINT_LABEL.length + HERO_HINT_LABEL_GAP + heroHintLine(ready)!.length,
+      )
+    }
+  })
+
+  test('the prefixed line still fits the widest card untruncated', () => {
+    // WIDEST card (76 cols → 72 usable): the whole tip must fit, icon included.
+    const widest = heroComposerWidth(200) - 4
+    for (const ready of [false, true] as const) {
+      expect(visualWidth(heroHintText(ready)!)).toBeLessThanOrEqual(widest)
     }
   })
 })

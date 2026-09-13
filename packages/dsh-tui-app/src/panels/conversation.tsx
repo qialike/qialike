@@ -41,6 +41,9 @@ import {
   HERO_AREA_PADDING_Y,
   HERO_COMPOSER_EXTRA_ROWS,
   HERO_GAP,
+  HERO_HINT_ICON,
+  HERO_HINT_LABEL,
+  HERO_HINT_LABEL_GAP,
   HERO_PLACEHOLDER,
   HERO_TITLE_CARD_GAP,
   HERO_TITLE,
@@ -53,6 +56,7 @@ import {
   heroComposerWidth,
   heroLayout,
   heroHintLine,
+  heroHintText,
   heroMarkRows,
   type HeroMarkKind,
 } from '../hero-layout.ts'
@@ -2354,6 +2358,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   /** Center one hero line by VISUAL width (CJK counts 2 columns). */
   const centerInHero = (text: string): string =>
     ' '.repeat(Math.max(0, Math.floor((heroUsable - visualWidth(text)) / 2))) + text
+  // The hint line is painted as THREE colored parts (icon+label in accent/bold,
+  // the sentence muted), so it cannot go through `centerInHero` — but its pad
+  // must be computed from the concatenation of exactly those parts, or the
+  // colored row would sit off-center against the art/title/card above it.
+  const heroHintFull = heroHintText(store.providerReady)
+  const heroHintPad = heroHintFull === undefined
+    ? 0
+    : Math.max(0, Math.floor((heroUsable - visualWidth(heroHintFull)) / 2))
   // The hero headline is the dsh-tui VERSION, verbatim (e.g. `0.3.1-beta`); the
   // "-beta" prerelease segment already marks a preview build, so no extra badge.
   const heroTitleLine = `${APP_VERSION}`
@@ -2939,12 +2951,20 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           {store.olderLoading
             ? <Text color={theme.accent} wrap="truncate">{centerInHero(store.historyProgressText)}</Text>
             : null}
-          {/* Provider/session hint UNDER the card (user call): with no provider
-              ready the only useful next step is `/models`; once one is ready the
-              useful one is `/sessions`. `undefined` = probe not settled yet. */}
+          {/* Provider/session hint UNDER the card (user call): opened by the
+              eye-catching 💡 + bold accent `Tip` label, then the sentence.
+              With no provider ready the only useful next step is `/models`;
+              once one is ready the useful one is `/sessions`. `undefined` =
+              probe not settled yet (no wrong-instruction flash). */}
           {heroHint !== undefined ? <Box flexShrink={0} height={1} /> : null}
           {heroHint !== undefined
-            ? <Text color={mutedReadable()} wrap="truncate">{centerInHero(heroHint)}</Text>
+            ? (
+              <Text wrap="truncate">
+                {' '.repeat(heroHintPad)}
+                <Text color={theme.accent} bold>{`${HERO_HINT_ICON} ${HERO_HINT_LABEL}`}</Text>
+                <Text color={mutedReadable()}>{`${' '.repeat(HERO_HINT_LABEL_GAP)}${heroHint}`}</Text>
+              </Text>
+            )
             : null}
           <Box flexShrink={0} height={hero?.bottomSpacer ?? 0} />
           {renderPalette(hero?.paletteBottomMargin ?? 0)}
