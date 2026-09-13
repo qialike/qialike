@@ -4537,6 +4537,14 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // persists every session durably (write-behind on session/event), so the
     // old one stays reachable from /sessions / --resume after it is torn
     // down here.
+    // Leaving the hero belongs to the COMMAND, not to the switch below: the
+    // session `/new` lands on is blank (the reused empty one, or a fresh id),
+    // and blankness is exactly what the hero predicate keys on — without this
+    // the command answered with the hero screen the user had just asked to
+    // leave, and its early return for an already-blank session switched nothing
+    // at all. `resumeSessionAction` has always called it; the `leaveHero` doc
+    // names `/new` for the same reason.
+    store.leaveHero()
     abortResumeFold() // a chunked resume filling the old transcript is moot now
     if (store.running) {
       try { agent.cancel({ kind: 'user' }, { keepInbox: true }) } catch { /* best-effort */ }

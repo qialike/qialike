@@ -186,3 +186,26 @@ describe('orderResumeCandidates (what `dsh-tui resume` continues)', () => {
     expect(input.map((c) => c.id)).toEqual(['a', 'b'])
   })
 })
+
+describe('the /new wiring', () => {
+  const appSource = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf8')
+
+  test('`/new` leaves the hero before it can land on a blank session', () => {
+    // The hero predicate keys on a BLANK session, and `/new` always lands on one
+    // (the reused empty session or a fresh id) — so the COMMAND must latch the
+    // docked view. Without this call the command answered with the hero the user
+    // had just asked to leave, and the early return for an already-blank session
+    // switched nothing at all (both reported from the hero AND from the docked
+    // view). The store-level semantics are covered above; what was missing was
+    // this wire, which is why the guard is source-level.
+    const from = appSource.indexOf('store.newSessionAction = () => {')
+    const to = appSource.indexOf('store.resumeSessionAction =', from)
+    expect(from, 'the /new action must exist').toBeGreaterThan(-1)
+    const action = appSource.slice(from, to)
+    expect(action, '/new must call store.leaveHero()').toContain('store.leaveHero()')
+    const earlyReturn = action.indexOf('already on a new (unused) session')
+    expect(earlyReturn, 'the already-blank early return must still exist').toBeGreaterThan(-1)
+    expect(action.indexOf('store.leaveHero()'), 'the hero must be left even on the early-return path')
+      .toBeLessThan(earlyReturn)
+  })
+})
