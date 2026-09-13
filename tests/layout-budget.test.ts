@@ -63,7 +63,7 @@ describe('docked minimum height (conversation view)', () => {
   })
 
   test('both views use ONE notice builder (no divergent copy)', () => {
-    expect(tooSmallNotice(14)).toBe('Terminal too small — resize to at least 14 rows')
+    expect(tooSmallNotice(14)).toBe('Terminal too small — resize to at least 14 rows (keys paused; Ctrl+C quits)')
     expect(tooSmallNotice(DOCKED_MIN_ROWS)).toBe(tooSmallNotice(DOCKED_MIN_ROWS))
     // The hero's own minimum is 14 as well, so the two screens say the same thing.
     expect(heroTooSmallText(COMPOSER_MIN_HEIGHT)).toBe(tooSmallNotice(DOCKED_MIN_ROWS))

@@ -479,6 +479,10 @@ export function preparingRequestStatusText(startedAt: number | null, now: number
  *  switch / new) because a fresh Session+Agent instance has to derive and
  *  deep-freeze the whole context on its first request (the 4-6 s class). */
 let coldNextRequest = true
+/** Quit action used by the suppressed-input escape hatch (Ctrl+C while the
+ *  conversation surface is replaced by the "terminal too small" notice). Set by
+ *  `apply` — the module-level `handleKey` cannot reach the launcher's `io`. */
+let requestQuit: (() => void) | null = null
 
 export class Store {
   private items: TranscriptItem[] = []
@@ -660,6 +664,20 @@ export class Store {
   private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number } | null) | null = null
   setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number } | null): void {
     this._frameGuard = fn
+  }
+
+  /** True when the CONVERSATION surface cannot be laid out honestly at the
+   *  current terminal height (see `layout-budget.ts`) and the panel paints the
+   *  one-row notice instead. Published by the conversation panel during render
+   *  (notify-free: it never affects a frame) because that panel is the only
+   *  place that knows exactly what it painted. `handleKey` reads it to STOP
+   *  dispatching keys: the notice replaced the docks/composer, but `store.panel`
+   *  still routes keys to them — with an approval pending, Enter would settle the
+   *  DEFAULT choice ("Allow once") on a prompt the user cannot see. */
+  private _surfaceTooSmall = false
+  get surfaceTooSmall(): boolean { return this._surfaceTooSmall }
+  setSurfaceTooSmall(value: boolean): void {
+    this._surfaceTooSmall = value
   }
 
   /** Render-coalescing window (ms): store mutations schedule AT MOST one
@@ -3123,6 +3141,27 @@ function handleKey(k: RawKey): void {
     store.cancelCompaction()
     return
   }
+  // ── TERMINAL TOO SMALL: the conversation surface is a one-row notice, so
+  //    NOTHING that belongs to it may act. Without this gate the panel was
+  //    invisible but live: `store.panel` still routed keys to a hidden approval
+  //    dock, whose default choice is "Allow once" — so Enter approved a
+  //    permission prompt the user could not see (measured: `settle(2)` on Enter),
+  //    and on the hero a blind Enter submitted a real (paid) turn while `/export`
+  //    could write a file. Fullscreen dialogs (/help, /sessions, /models, …) are
+  //    genuinely VISIBLE at any height, so their keys stay live — only the
+  //    conversation surface and the overlay docks it embeds are gated.
+  const activePanel = tui.panels.byId(store.panel)
+  const onConversationSurface = activePanel === undefined
+    || activePanel.mode !== 'fullscreen'
+    || store.panel === 'conversation'
+  if (onConversationSurface && store.surfaceTooSmall) {
+    // ONE escape hatch, since /exit needs typing and typing is what we just took
+    // away: Ctrl+C quits while the surface is suppressed. Everything else —
+    // keys, mouse, wheel, bracketed paste — is dropped here, before any panel
+    // sees it, so no dialog can act on input the user cannot see.
+    if (k.ctrl === true && (k.char ?? '') === 'c') { requestQuit?.(); return }
+    return
+  }
   const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
   def?.handleKey?.(k, store)
 }
@@ -3553,6 +3592,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   tui.commands.register({ name: 'think', hint: 'show/hide details under Think and tool rows (reasoning + tool output)', run: () => { store.toggleAllDetail() } })
   tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { abortResumeFold(); store.clear() } })
   tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
+  requestQuit = () => { requestExit(io, 0) }   // escape hatch for the too-small notice (Ctrl+C)
 
   // ── S2-2b: mount the UI and take input BEFORE the blocking attach ──────────
   // `agents.resume()` decodes the whole durable log on this one thread and

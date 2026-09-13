@@ -160,7 +160,7 @@ describe('hero budget (the card cannot outgrow the area)', () => {
     const at = (rows: number) => heroBudget({ rows, brandLines: 1, hintLines: 1, minBoxH: MIN_BOX, prefMaxBoxH: rows - 8 })
     // The notice names the real number (derived, so it cannot go stale).
     expect(heroMinRows(MIN_BOX)).toBe(HERO_MIN_ROWS)
-    expect(heroTooSmallText(MIN_BOX)).toBe('Terminal too small — resize to at least 14 rows')
+    expect(heroTooSmallText(MIN_BOX)).toBe('Terminal too small — resize to at least 14 rows (keys paused; Ctrl+C quits)')
     expect(heroTooSmallText(MIN_BOX)).toContain(String(heroMinRows(MIN_BOX)))
     expect(at(13).fits).toBe(false)
     expect(at(HERO_MIN_ROWS).fits).toBe(true)

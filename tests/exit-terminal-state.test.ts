@@ -38,9 +38,16 @@ test('exiting dsh-tui writes nothing visible after the alternate-screen leave', 
   if (!existsSync(bin)) throw new Error(`missing ${bin}; run \`pnpm run build\` first`)
 
   const out = join(tmpdir(), `dsh-tui-exit-${process.pid}.typescript`)
+  // Declare a NORMAL pty size inside the session: with stdin piped, script(1)
+  // hands the child a 0x0 tty (measured `stty size` → "0 0"), and dsh-tui PAUSES
+  // every key below the 14-row minimum (the "terminal too small" notice keeps
+  // only Ctrl+C) — so `/exit` would never arrive and this test would die on its
+  // timeout. The size is irrelevant to what this test asserts (the exit byte
+  // sequence); it only has to be a usable one.
+  const sized = `stty rows 30 cols 100 2>/dev/null; exec ${bin}`
   const scriptArgs = process.platform === 'darwin'
-    ? ['-q', out, bin] // BSD script: `script [-q] [file [command ...]]`
-    : ['-qec', bin, out] // util-linux: `script [-q] -e -c command [file]`
+    ? ['-q', out, 'sh', '-c', sized] // BSD script: `script [-q] [file [command ...]]`
+    : ['-qec', sized, out] // util-linux: `script [-q] -e -c command [file]`
   let spawnFailed = false
   const child = spawn('script', scriptArgs, { stdio: ['pipe', 'ignore', 'ignore'] })
   child.on('error', () => { spawnFailed = true }) // script not installed: skip

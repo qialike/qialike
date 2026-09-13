@@ -84,10 +84,14 @@ export function dockedTranscriptRows(rows: number, cardH: number): number {
 
 /**
  * The one-row notice painted INSTEAD of a view that cannot be laid out honestly.
- * ONE builder for both views (hero and docked), so the copy cannot diverge.
+ * ONE builder for both views (hero and docked), so the copy cannot diverge, and
+ * the ONE place that names the escape hatch the input gate leaves open.
  * @param minRows - the minimum the view needs (derived by the caller).
  * @returns the notice text.
  */
 export function tooSmallNotice(minRows: number): string {
-  return `Terminal too small — resize to at least ${minRows} rows`
+  // The parenthetical is load-bearing: every key is dropped while this notice is
+  // up (see the gate in `handleKey`), so the user must be told why typing does
+  // nothing — and how to get out (Ctrl+C quits; `/exit` needs typing).
+  return `Terminal too small — resize to at least ${minRows} rows (keys paused; Ctrl+C quits)`
 }

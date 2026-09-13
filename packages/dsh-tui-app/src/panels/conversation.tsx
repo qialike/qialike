@@ -2396,6 +2396,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const hero = heroActive && heroB?.fits
     ? heroLayout({ rows: store.rows, boxH: heroBoxH, brandLines: heroB.brandLines, titleGap: heroB.titleGap, hintLines: heroB.hintLines })
     : null
+  // Publish what this frame actually painted, for the KEY DISPATCH (`handleKey`):
+  // when this is true the surface below is a one-row notice, so no key may reach
+  // the (invisible) composer or the overlay docks — see the gate in `index.tsx`.
+  // Notify-free on purpose: it never affects the frame, and a notify here would
+  // re-enter the render.
+  store.setSurfaceTooSmall(heroActive ? heroB?.fits === false : !dockedFits(store.rows))
   // Static web-parity placeholder while the hero composer is empty (no
   // rotation: web's `placeholder.hero` is one fixed sentence).
   const heroPlaceholderShown = heroActive && input === '' && store.composerImage === null
