@@ -23,10 +23,17 @@ import {
   HERO_HINT_ICON,
   HERO_HINT_LABEL,
   HERO_HINT_LABEL_GAP,
+  HERO_MIN_ROWS,
   HERO_STATUS_BAR_HEIGHT,
   HERO_WORDMARK,
+  heroAreaRows,
+  heroBudget,
   heroComposerLeft,
   heroComposerWidth,
+  heroHintRows,
+  heroMinRows,
+  heroStackRows,
+  heroTooSmallText,
   HERO_TITLE_CARD_GAP,
   heroLayout,
   heroHintLine,
@@ -88,6 +95,116 @@ describe('heroLayout centering', () => {
     expect(l.topSpacer).toBe(0)
     expect(l.bottomSpacer).toBe(0)
     expect(l.composerTopRow).toBeGreaterThanOrEqual(2)
+  })
+})
+
+describe('hero budget (the card cannot outgrow the area)', () => {
+  const MIN_BOX = 5 // COMPOSER_MIN_HEIGHT: chrome + one input row
+  const budgetFor = (rows: number, brandLines = 1, hintLines = 1) =>
+    heroBudget({ rows, brandLines, hintLines, minBoxH: MIN_BOX, prefMaxBoxH: rows - 8 })
+
+  test('the invariant holds for EVERY terminal height (the old cap broke it)', () => {
+    // This is the sweep the old code had no guard for: its cap ended in
+    // `Math.max(min, …)`, which re-raised the bound above the area on short
+    // terminals. Measured on the real binary at 133 columns: the hero caret sat
+    // one row BELOW the draft on rows 8/9/10/11, with the card's bottom edge and
+    // the tip row clipped at 8/10.
+    for (let rows = 3; rows <= 60; rows++) {
+      for (const brandLines of [0, 1, 6, 7]) {
+        for (const hintLines of [0, 1, 2]) {
+          const b = budgetFor(rows, brandLines, hintLines)
+          if (!b.fits) continue
+          const l = heroLayout({ rows, boxH: b.boxH, brandLines: b.brandLines, titleGap: b.titleGap, hintLines: b.hintLines })
+          expect(l.areaRows, `rows=${rows}`).toBe(b.areaRows)
+          expect(l.stackRows, `rows=${rows} brand=${brandLines} hint=${hintLines}`).toBe(b.stackRows)
+          expect(l.stackRows, `rows=${rows} brand=${brandLines} hint=${hintLines}`).toBeLessThanOrEqual(b.areaRows)
+          expect(b.free, `rows=${rows}`).toBeGreaterThanOrEqual(0)
+          // The paint and the model must agree on where the card ends, too: the
+          // palette lift is derived from the same numbers.
+          expect(l.paletteBottomMargin).toBe(
+            (b.hintLines > 0 ? 1 + b.hintLines : 0) + l.bottomSpacer,
+          )
+        }
+      }
+    }
+  })
+
+  test('the hero is ALL OR NOTHING: nothing is dropped, it just is not drawn', () => {
+    // User call (2026-09-13): the minimum hero height is 14 rows — the smallest
+    // window where the COMPLETE hero fits (brand block + title gap + the
+    // two-line card + the tip row = 11 content rows + 2 padding rows). Below it
+    // the app says the terminal is too small instead of drawing a mutilated
+    // hero, so there is no degradation chain left to keep in sync with the paint.
+    const at = (rows: number) => heroBudget({ rows, brandLines: 1, hintLines: 1, minBoxH: MIN_BOX, prefMaxBoxH: rows - 8 })
+    expect(HERO_MIN_ROWS).toBe(14)
+    for (const rows of [14, 15, 16, 20, 24, 37]) {
+      const b = at(rows)
+      expect(b.fits, `rows=${rows}`).toBe(true)
+      expect(b.hintLines, `rows=${rows}: the tip row survives`).toBe(1)
+      expect(b.brandLines, `rows=${rows}: the brand block survives`).toBe(1)
+      expect(b.titleGap, `rows=${rows}: the title gap survives`).toBe(HERO_TITLE_CARD_GAP)
+      expect(b.stackRows).toBeLessThanOrEqual(b.areaRows)
+    }
+    // The smallest drawn hero really is the complete one.
+    const min = at(HERO_MIN_ROWS)
+    expect(min.stackRows).toBe(1 + HERO_TITLE_CARD_GAP + min.boxH + 1 + 1)
+    // ...and it carries the hero's two input rows (the card cap reaches 6).
+    expect(min.boxH).toBe(6)
+    // One row below the minimum nothing is drawn at all.
+    for (const rows of [13, 12, 11, 10, 8, 7, 6, 5, 3]) {
+      expect(at(rows).fits, `rows=${rows}`).toBe(false)
+    }
+  })
+
+  test('below the minimum height the notice takes over', () => {
+    const at = (rows: number) => heroBudget({ rows, brandLines: 1, hintLines: 1, minBoxH: MIN_BOX, prefMaxBoxH: rows - 8 })
+    // The notice names the real number (derived, so it cannot go stale).
+    expect(heroMinRows(MIN_BOX)).toBe(HERO_MIN_ROWS)
+    expect(heroTooSmallText(MIN_BOX)).toBe('Terminal too small — resize to at least 14 rows')
+    expect(heroTooSmallText(MIN_BOX)).toContain(String(heroMinRows(MIN_BOX)))
+    expect(at(13).fits).toBe(false)
+    expect(at(HERO_MIN_ROWS).fits).toBe(true)
+    // `heroMinRows` also honours a card minimum that would need MORE than the
+    // product minimum (the belt that keeps the invariant unconditional).
+    expect(heroMinRows(20)).toBe(22)
+    // `heroAreaRows` tells the truth on a tiny window (the old floor claimed 6).
+    expect(heroAreaRows(12)).toBe(10)
+    expect(heroAreaRows(7)).toBe(5)
+    expect(heroAreaRows(4)).toBe(2)
+    expect(heroAreaRows(2)).toBe(0)
+  })
+
+  test('an over-tall brand block is refused instead of overflowing (belt ②)', () => {
+    // The art is only drawn from 23 rows up, so this cannot happen today — but
+    // the arithmetic clause is what keeps `stackRows <= areaRows` true even if a
+    // future gate let a 7-row brand block into a 15-row window.
+    const b = heroBudget({ rows: 15, brandLines: 7, hintLines: 1, minBoxH: MIN_BOX, prefMaxBoxH: 7 })
+    expect(b.fits).toBe(false)
+    const ok = heroBudget({ rows: 23, brandLines: 7, hintLines: 2, minBoxH: MIN_BOX, prefMaxBoxH: 15 })
+    expect(ok.fits).toBe(true)
+    expect(ok.stackRows).toBeLessThanOrEqual(ok.areaRows)
+  })
+
+  test('heroStackRows is the single formula the layout uses', () => {
+    const boxH = 6
+    const brandLines = 7
+    // Two hint rows cost ONE gap plus two lines — the paint must not give each
+    // row its own gap box (that made the paint 1 row taller than the model).
+    expect(heroStackRows({ brandLines, boxH, hintLines: 2 })).toBe(brandLines + HERO_TITLE_CARD_GAP + boxH + 1 + 2)
+    expect(heroStackRows({ brandLines, boxH, hintLines: 0 })).toBe(brandLines + HERO_TITLE_CARD_GAP + boxH)
+    expect(heroStackRows({ brandLines, boxH, hintLines: 1, titleGap: 0 })).toBe(brandLines + boxH + 1 + 1)
+    const l = heroLayout({ rows: 37, boxH, brandLines, hintLines: 2 })
+    expect(l.stackRows).toBe(heroStackRows({ brandLines, boxH, hintLines: 2 }))
+    expect(l.paletteBottomMargin).toBe(1 + 2 + l.bottomSpacer)
+  })
+
+  test('the row count under the card is one pure function (0/1/2)', () => {
+    expect(heroHintRows(false, undefined)).toBe(0)
+    expect(heroHintRows(false, true)).toBe(1)
+    expect(heroHintRows(false, false)).toBe(1)
+    expect(heroHintRows(true, undefined)).toBe(1)
+    expect(heroHintRows(true, true)).toBe(2)
+    expect(heroHintRows(true, false)).toBe(2)
   })
 })
 
@@ -195,9 +312,11 @@ describe('size gates and hero copy', () => {
     expect(heroWordmarkFits(30, 70)).toBe(false)
   })
 
-  test('the hero draws NO hint line: hintLines 0 keeps the palette math honest', () => {
-    // The hint line under the card was removed (user call): the hero passes
-    // hintLines 0, so nothing below the card but the palette lift.
+  test('with NO hint rows the palette lift is just the bottom spacer', () => {
+    // The hero line under the card exists again (83c92aa), but the layout must
+    // still handle hintLines 0 — an unsettled provider probe, or the budget
+    // dropping the row on a short terminal. Then nothing sits below the card but
+    // the palette lift, and the stack shrinks by the whole hint block.
     const noHint = heroLayout({ ...BASE, hintLines: 0 })
     expect(noHint.paletteBottomMargin).toBe(noHint.bottomSpacer)
     expect(noHint.stackRows).toBe(BASE.brandLines + HERO_TITLE_CARD_GAP + BASE.boxH)

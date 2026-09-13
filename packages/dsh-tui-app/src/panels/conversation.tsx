@@ -54,10 +54,14 @@ import {
   heroArtMode,
   heroComposerLeft,
   heroComposerWidth,
+  heroBudget,
+  heroHintRows,
   heroLayout,
   heroHintLine,
   heroHintText,
   heroMarkRows,
+  heroTooSmallText,
+  type HeroBudget,
   type HeroMarkKind,
 } from '../hero-layout.ts'
 import { surfaceRegion, sidebarContentBand, sidebarFits, sidebarStepPlan, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
@@ -100,9 +104,30 @@ function composerMinHeight(): number {
  *  line and the provider/session hint. ONE source for the layout model and the
  *  paint — the caret, the click mapping and the palette lift all read the model,
  *  so a row counted in one place and not the other is exactly how the hardware
- *  caret drifts out of the card. */
+ *  caret drifts out of the card. The formula itself lives in `hero-layout.ts`
+ *  (`heroHintRows`) so it can be unit-tested on its own. */
 function heroHintRowCount(): number {
-  return (store.olderLoading ? 1 : 0) + (heroHintLine(store.providerReady) === undefined ? 0 : 1)
+  return heroHintRows(store.olderLoading, store.providerReady)
+}
+
+/** The hero's row budget for THIS frame, resolved once by `heroBudget`: the
+ *  brand block, the title gap, the hint rows and the card height the paint and
+ *  the caret must both use. Called from `composerHeight`, `composerBand` and the
+ *  render — the old code repeated the `area − brand − gap − hint` expression
+ *  (and the `rows − 8` preference) in all three, which is how the cap and the
+ *  paint could disagree; now there is exactly one expression. */
+function heroBudgetNow(rows: number, width: number): HeroBudget {
+  return heroBudget({
+    rows,
+    brandLines: heroMarkRows(heroMarkFor(rows, width)) + 1,
+    hintLines: heroHintRowCount(),
+    // `minBoxH` is the hard floor the card may shrink to (chrome + one input
+    // row) — near the minimum height the shared `rows − 8` preference can ask
+    // for less than the hero's preferred two-line card, and this is what keeps
+    // that from producing a card the caret math could not describe.
+    minBoxH: COMPOSER_MIN_HEIGHT,
+    prefMaxBoxH: rows - 8,
+  })
 }
 
 /** Theme-aware muted text: bright on DARK backgrounds (the terminal's own
@@ -1094,33 +1119,27 @@ function composerWindow(input: string, usable: number, caretRow: number, textAre
 function composerHeight(width: number, input: string, min: number): number {
   const usable = composerUsable(width)
   const wrapped = input.split('\n').reduce((sum, seg) => sum + composerWrap(seg, usable).length, 0)
-  // The composer grows with the draft (pushing the message area upward) up to
-  // a height cap tied to the TERMINAL HEIGHT: cap = rows − 8 (never more than
-  // min when the terminal is tiny). Its text window is composerH − 4, so the
-  // draft's max VISIBLE rows scale with the screen (rows − 12 on normal
+  if (store.hero) {
+    // HERO budget: the stack (brand block + title gap + card + hint block) must
+    // FIT the hero area, and the hero is ALL OR NOTHING (user call: minimum 14
+    // rows) — `heroBudget` reports `fits` and hands back the card cap that keeps
+    // `heroLayout().free >= 0`; below the minimum the render paints the notice
+    // instead. The old cap floored itself at `min`, which re-raised the bound
+    // above the area on short terminals and brought the +1-row caret drift back
+    // (measured at 133 columns: drift on rows 8/9/10/11, card bottom edge and
+    // tip row clipped at 8/10).
+    return Math.min(min + wrapped - 1, heroBudgetNow(store.rows, width).boxH)
+  }
+  // Docked: the composer grows with the draft (pushing the message area upward)
+  // up to a height cap tied to the TERMINAL HEIGHT: cap = rows − 8 (never more
+  // than min when the terminal is tiny). Its text window is composerH − 4, so
+  // the draft's max VISIBLE rows scale with the screen (rows − 12 on normal
   // terminals): a short draft is fully shown, and once the draft wraps past
   // that the composer stops growing and scrolls INSIDE a caret-following
   // window (see the render + caret math) instead of overflowing its box over
   // the footer/status rows. The rows−8 floor guard also keeps a ≥3-row
   // message viewport on small terminals.
-  let cap = Math.max(min, store.rows - 8)
-  if (store.hero) {
-    // HERO extra cap: the stack (brand block + title gap + card + hint row) must
-    // FIT the hero area. Without this the flex layout compresses the explicit gap
-    // boxes once the stack overflows and paints the card a row above what
-    // `heroLayout()` models — and the caret, the click→index mapping and the
-    // palette lift all read that model, so the caret drifts by exactly that row
-    // (measured: 0 rows of drift while the stack fits, +1 row once it does not).
-    // Capping here instead means the draft scrolls INSIDE its window, which is
-    // what a growing input should do, and keeps the card's lower rows (chip,
-    // bottom edge) on screen.
-    const areaRows = Math.max(6, store.rows - HERO_AREA_PADDING_Y * 2)
-    const brandLines = heroMarkRows(heroMarkFor(store.rows, width)) + 1
-    const hintRows = heroHintRowCount()
-    const hintBlock = hintRows > 0 ? HERO_GAP + hintRows : 0
-    cap = Math.max(min, Math.min(cap, areaRows - brandLines - HERO_TITLE_CARD_GAP - hintBlock))
-  }
-  return Math.min(min + wrapped - 1, cap)
+  return Math.min(min + wrapped - 1, Math.max(min, store.rows - 8))
 }
 
 /** Where the composer card actually sits: its FIRST painted row, its leftmost
@@ -1138,13 +1157,18 @@ function composerBand(width: number, rows: number): { top: number; left: number;
   const height = composerHeight(width, store.input, composerMinHeight())
     + (store.composerImage !== null ? 1 : 0)
   if (store.hero) {
+    // The SAME budget the paint and `composerHeight` used, so the card's top row
+    // cannot be computed from a different brand/gap/hint combination. On a
+    // terminal too short for even the bare card (`fits === false`) no stack is
+    // painted: the notice row sits at the top of the hero area.
+    const b = heroBudgetNow(rows, width)
+    if (!b.fits) return { top: 1 + HERO_AREA_PADDING_Y, left: 1, height: 1 }
     const hero = heroLayout({
       rows,
       boxH: height,
-      brandLines: heroMarkRows(heroMarkFor(rows, width)) + 1,
-      // No hint line (removed on user call); the row is reused by the
-      // older-history progress line while a resumed session folds.
-      hintLines: heroHintRowCount(),
+      brandLines: b.brandLines,
+      titleGap: b.titleGap,
+      hintLines: b.hintLines,
     })
     return { top: hero.composerTopRow, left: heroComposerLeft(width), height }
   }
@@ -2328,14 +2352,18 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // sit one column left of the true center on even widths.
   const heroUsable = Math.max(20, width - 2)
   const heroBoxH = composerHeight(width, input, composerMinHeight()) + (store.composerImage !== null ? 1 : 0)
+  const heroB = heroActive ? heroBudgetNow(store.rows, width) : null
   const heroHint = heroHintLine(store.providerReady)
-  const heroMark = heroActive ? heroMarkFor(store.rows, width) : 'none'
-  const heroBrandLines = heroMarkRows(heroMark) + 1
+  // Below the hero minimum (`heroB.fits === false`) no stack is painted at all,
+  // so the mark is not drawn either.
+  const heroMark = heroActive && (heroB?.fits ?? false) ? heroMarkFor(store.rows, width) : 'none'
+  const heroBrandLines = heroB?.brandLines ?? 0
+  const heroTitleGap = heroB?.titleGap ?? HERO_TITLE_CARD_GAP
   // Brand art colors follow the theme (theme.text blended toward theme.bg), so
   // a colorscheme switch restyles the mark with the rest of the chrome.
   const heroArtInk = heroMark === 'blocks' ? heroArtInkColors(theme.text, theme.bg) : []
-  const hero = heroActive
-    ? heroLayout({ rows: store.rows, boxH: heroBoxH, brandLines: heroBrandLines, hintLines: heroHintRowCount() })
+  const hero = heroActive && heroB?.fits
+    ? heroLayout({ rows: store.rows, boxH: heroBoxH, brandLines: heroB.brandLines, titleGap: heroB.titleGap, hintLines: heroB.hintLines })
     : null
   // Static web-parity placeholder while the hero composer is empty (no
   // rotation: web's `placeholder.hero` is one fixed sentence).
@@ -2366,6 +2394,35 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const heroHintPad = heroHintFull === undefined
     ? 0
     : Math.max(0, Math.floor((heroUsable - visualWidth(heroHintFull)) / 2))
+  // The rows painted UNDER the card, in the ORDER the model counts them:
+  // older-history progress first, the tip last. Slicing to `heroB.hintLines`
+  // keeps the paint and `heroStackRows()` in lockstep by construction: the
+  // budget asks for the full count whenever `fits`, so this never truncates
+  // today — it is the guard that stops a future change from painting a row the
+  // model did not count.
+  const heroHintPaint: React.ReactNode[] = []
+  if (heroB !== null && heroB.hintLines > 0) {
+    if (store.olderLoading) {
+      heroHintPaint.push(
+        <Text key="hero-older" color={theme.accent} wrap="truncate">{centerInHero(store.historyProgressText)}</Text>,
+      )
+    }
+    // Provider/session hint (user call): opened by the eye-catching 💡 + bold
+    // accent `Tip` label, then the sentence. With no provider ready the only
+    // useful next step is `/models`; once one is ready the useful one is
+    // `/sessions`. `undefined` = probe not settled yet (no wrong-instruction
+    // flash).
+    if (heroHint !== undefined) {
+      heroHintPaint.push(
+        <Text key="hero-tip" wrap="truncate">
+          {' '.repeat(heroHintPad)}
+          <Text color={theme.accent} bold>{`${HERO_HINT_ICON} ${HERO_HINT_LABEL}`}</Text>
+          <Text color={mutedReadable()}>{`${' '.repeat(HERO_HINT_LABEL_GAP)}${heroHint}`}</Text>
+        </Text>,
+      )
+    }
+    heroHintPaint.splice(Math.max(0, heroB.hintLines))
+  }
   // The hero headline is the dsh-tui VERSION, verbatim (e.g. `0.3.1-beta`); the
   // "-beta" prerelease segment already marks a preview build, so no extra badge.
   const heroTitleLine = `${APP_VERSION}`
@@ -2905,6 +2962,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           {
         heroActive ? (
         <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1}>
+          {heroB !== null && !heroB.fits ? (
+            /* Even a bare `COMPOSER_MIN_HEIGHT` card cannot fit this window, so
+               there is NO honest position for the stack: painting it anyway put
+               the hardware cursor off screen (measured: cursor row 6 on a 5-row
+               terminal). Say what is wrong in one row instead. */
+            <Text color={theme.accent} wrap="truncate">{centerInHero(heroTooSmallText(COMPOSER_MIN_HEIGHT))}</Text>
+          ) : (
+          <>
           <Box flexShrink={0} height={hero?.topSpacer ?? 0} />
           {heroMark === 'blocks' ? (
             <Box flexDirection="column" flexShrink={0}>
@@ -2937,9 +3002,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             </Box>
           ) : null}
           {/* Version caption: PLAIN (no accent color / no emphasis) — it reads as
-              a neutral label under the brand art instead of competing with it. */}
-          <Text wrap="truncate">{centerInHero(heroTitleLine)}</Text>
-          <Box flexShrink={0} height={HERO_TITLE_CARD_GAP} />
+              a neutral label under the brand art instead of competing with it.
+              Nothing drops it: below the hero minimum the whole stack is replaced
+              by the notice. */}
+          {heroBrandLines > 0
+            ? <Text wrap="truncate">{centerInHero(heroTitleLine)}</Text>
+            : null}
+          <Box flexShrink={0} height={heroTitleGap} />
           {/* The hero card is a CENTERED, NARROW column (web parity), not the
               full window: the wrapper centers it and pins the exact width the
               composer's own wrap/height/caret math already assumed
@@ -2947,27 +3016,19 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           <Box flexDirection="row" flexShrink={0} width="100%" paddingLeft={heroCardPad}>
             <Box flexDirection="column" width={heroComposerWidth(width)}>{composerNode}</Box>
           </Box>
-          {store.olderLoading ? <Box flexShrink={0} height={1} /> : null}
-          {store.olderLoading
-            ? <Text color={theme.accent} wrap="truncate">{centerInHero(store.historyProgressText)}</Text>
-            : null}
-          {/* Provider/session hint UNDER the card (user call): opened by the
-              eye-catching 💡 + bold accent `Tip` label, then the sentence.
-              With no provider ready the only useful next step is `/models`;
-              once one is ready the useful one is `/sessions`. `undefined` =
-              probe not settled yet (no wrong-instruction flash). */}
-          {heroHint !== undefined ? <Box flexShrink={0} height={1} /> : null}
-          {heroHint !== undefined
-            ? (
-              <Text wrap="truncate">
-                {' '.repeat(heroHintPad)}
-                <Text color={theme.accent} bold>{`${HERO_HINT_ICON} ${HERO_HINT_LABEL}`}</Text>
-                <Text color={mutedReadable()}>{`${' '.repeat(HERO_HINT_LABEL_GAP)}${heroHint}`}</Text>
-              </Text>
-            )
-            : null}
+          {/* Rows UNDER the card: older-history progress first, then the tip —
+              drawn inside ONE gap box for the whole block, because that is what
+              `heroStackRows()` counts (`HERO_GAP + hintLines`). Giving each row
+              its own gap box made the paint 1 row taller than the model whenever
+              both were present. The budget asks for the full count whenever the
+              hero is drawn (all-or-nothing), so the slice below is a belt, not a
+              degradation path. */}
+          {heroHintPaint.length > 0 ? <Box flexShrink={0} height={HERO_GAP} /> : null}
+          {heroHintPaint}
           <Box flexShrink={0} height={hero?.bottomSpacer ?? 0} />
           {renderPalette(hero?.paletteBottomMargin ?? 0)}
+          </>
+          )}
         </Box>
         ) : (
           <>
@@ -3186,6 +3247,13 @@ export function installFrameSuffix(): void {
     // HIDDEN, otherwise the block caret blinks through the popup's text. In
     // the docked phase the palette floats ABOVE the card and the caret stays
     // visible in the draft, so nothing changes there.
+    if (store.hero && !heroBudgetNow(store.rows, store.width).fits) {
+      // The hero cannot be positioned honestly in this window (see `heroBudget`):
+      // the notice row is painted instead of the card, so there is no caret cell
+      // to park — leaving the hardware cursor visible would place it over the
+      // notice or off screen (measured: row 6 on a 5-row terminal).
+      return '\x1b[?25l'
+    }
     if (commandPaletteOpen && store.hero) {
       return `\x1b[?25l${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
     }

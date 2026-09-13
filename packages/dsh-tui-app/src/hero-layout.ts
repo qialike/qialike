@@ -134,6 +134,10 @@ export interface HeroLayoutInput {
   brandLines: number
   /** Hint rows under the composer (the hero now passes 0: no hint line). */
   hintLines: number
+  /** Rows between the brand block and the card (default
+   *  {@link HERO_TITLE_CARD_GAP}; {@link heroBudget} drops it to 0 on a
+   *  terminal too short for it). */
+  titleGap?: number
   /** Rows of extra context above the composer (default 0: the hero shows no
    *  workspace line — the footer/status bar carries that information). */
   contextLines?: number
@@ -162,6 +166,169 @@ export interface HeroLayout {
 }
 
 /**
+ * Content rows available inside the padded hero area at `rows`.
+ *
+ * NO floor above the real number: the old `Math.max(6, …)` modelled six rows on
+ * a seven-row terminal, i.e. rows the terminal does not have — and every
+ * geometry consumer (caret, click→index, palette lift) read that model while the
+ * flex layout painted the truth (measured: the hero caret sat one row BELOW the
+ * draft on rows ≤ 11, and the card's bottom edge / tip row were clipped away).
+ * @param rows - terminal rows.
+ * @returns `max(0, rows − 2·padding)`.
+ */
+export function heroAreaRows(rows: number): number {
+  return Math.max(0, rows - HERO_AREA_PADDING_Y * 2)
+}
+
+/** Inputs of {@link heroStackRows}. */
+export interface HeroStackInput {
+  /** Brand block rows the caller draws (mark rows + the title line). */
+  brandLines: number
+  /** Composer box height in rows. */
+  boxH: number
+  /** Hint rows UNDER the card (0 when the budget or the probe dropped them). */
+  hintLines: number
+  /** Rows between the brand block and the card (default
+   *  {@link HERO_TITLE_CARD_GAP}; a short terminal drops it to 0). */
+  titleGap?: number
+  /** Rows of extra context above the composer (default 0). */
+  contextLines?: number
+}
+
+/**
+ * THE hero stack formula — the ONE place that answers "how tall is the hero".
+ *
+ * The layout, the card budget ({@link heroBudget}) and the tests all go through
+ * it, so the model cannot be computed two ways (the previous code repeated the
+ * `brand + gap + card + hintBlock` expression in the panel three times, which is
+ * how the cap and the paint drifted apart).
+ * @param input - see {@link HeroStackInput}.
+ * @returns rows occupied by everything except the top/bottom spacers and the
+ *   optional footer (whose rows are pinned at the bottom, so they are not part
+ *   of the centered stack — `heroLayout` subtracts them in `free`).
+ */
+export function heroStackRows(input: HeroStackInput): number {
+  const titleGap = input.titleGap ?? HERO_TITLE_CARD_GAP
+  const contextLines = input.contextLines ?? 0
+  const hintBlock = input.hintLines > 0 ? HERO_GAP + input.hintLines : 0
+  const contextBlock = contextLines > 0 ? HERO_GAP + contextLines + HERO_GAP : titleGap
+  return input.brandLines + contextBlock + input.boxH + hintBlock
+}
+
+/** Inputs of {@link heroBudget}. */
+export interface HeroBudgetInput {
+  /** Terminal rows. */
+  rows: number
+  /** Brand block rows the caller would like to draw (mark rows + title). */
+  brandLines: number
+  /** Hint rows the caller would like to draw (0 = probe not settled). */
+  hintLines: number
+  /** Smallest VIABLE card: chrome + one input row (`COMPOSER_MIN_HEIGHT`). */
+  minBoxH: number
+  /** Preferred upper bound from the caller (the shared `rows − 8` growth rule);
+   *  a hard budget below it always wins. */
+  prefMaxBoxH?: number
+}
+
+/** The resolved hero row budget — every number the paint and the caret share. */
+export interface HeroBudget {
+  areaRows: number
+  /** Brand rows to paint (the requested count: nothing is dropped below the
+   *  product minimum, the hero simply is not drawn). */
+  brandLines: number
+  /** Rows between the brand block and the card. */
+  titleGap: number
+  /** Hint rows to paint (the requested count). */
+  hintLines: number
+  /** Card height cap for `composerHeight`. */
+  boxH: number
+  stackRows: number
+  /** `areaRows − stackRows`; never negative while {@link HeroBudget.fits}. */
+  free: number
+  /** False below {@link HERO_MIN_ROWS} (or if the stack cannot fit the area):
+   *  the stack has no honest position, so the caller must paint
+   *  {@link heroTooSmallText} instead of the hero. */
+  fits: boolean
+}
+
+/**
+ * Resolve the hero's rows for a terminal of `rows` rows.
+ *
+ * Why this exists: the card's height cap used to be
+ * `Math.max(min, Math.min(rows − 8, area − brand − gap − hint))`, and that outer
+ * `Math.max` re-raised the bound above what the area can hold — `heroLayout`'s
+ * `free` went negative again, Yoga compressed the explicit gap box, and the
+ * caret/click/palette model disagreed with the paint by exactly one row on short
+ * terminals (measured on the REAL binary at 133 columns: drift +1 on rows
+ * 8/9/10/11, card bottom edge and tip row clipped at 8/10).
+ *
+ * The hero is now ALL OR NOTHING (user call): it is drawn only from
+ * {@link HERO_MIN_ROWS} up, i.e. only when the COMPLETE stack — brand block,
+ * title gap, the two-line card and the tip row — fits the area without giving
+ * anything up. Below that the caller paints {@link heroTooSmallText} instead of
+ * a mutilated hero, so there is no degradation chain left to keep in sync.
+ * @param input - see {@link HeroBudgetInput}.
+ * @returns the resolved budget; `free ≥ 0` whenever `fits`.
+ */
+export function heroBudget(input: HeroBudgetInput): HeroBudget {
+  const areaRows = heroAreaRows(input.rows)
+  const brandLines = Math.max(0, input.brandLines)
+  const hintLines = Math.max(0, input.hintLines)
+  const titleGap = HERO_TITLE_CARD_GAP
+  const hintBlock = hintLines > 0 ? HERO_GAP + hintLines : 0
+  // What the card may occupy at most, i.e. the hardest bound the stack can take.
+  const budget = areaRows - brandLines - titleGap - hintBlock
+  // Two clauses, both required:
+  //  ① the product minimum — below `HERO_MIN_ROWS` the hero never mutilates
+  //     itself (it would have to drop the tip row or the brand block);
+  //  ② the arithmetic invariant — the card must fit what is left of the area.
+  //     ② is not redundant: it is what keeps the invariant true for ANY brand
+  //     height (e.g. if the art gate were ever lowered so the 6-row art had to
+  //     live on a 15-row terminal), and it is the clause the old cap got wrong.
+  const fits = input.rows >= HERO_MIN_ROWS && budget >= input.minBoxH
+  // The `prefMaxBoxH` bound may sit below `minBoxH` near the minimum height (the
+  // shared `rows − 8` rule); `minBoxH ≤ budget` holds whenever `fits`, so the
+  // floor cannot push the stack past the area the way the old cap did.
+  const boxH = fits
+    ? Math.max(input.minBoxH, Math.min(input.prefMaxBoxH ?? budget, budget))
+    : input.minBoxH
+  const stackRows = heroStackRows({ brandLines, boxH, hintLines, titleGap })
+  return { areaRows, brandLines, titleGap, hintLines, boxH, stackRows, free: areaRows - stackRows, fits }
+}
+
+/**
+ * Fewest terminal rows the hero is drawn in — the smallest window where the
+ * COMPLETE hero fits: brand block (title at least) + {@link HERO_TITLE_CARD_GAP}
+ * + the two-line card + the tip row = 1 + 2 + 6 + 2 = 11 content rows, plus the
+ * area's top/bottom padding. Below this the hero would have to give something up
+ * (the tip row, the brand block, the second input row), which the product
+ * decision of 2026-09-13 rules out: it paints
+ * {@link heroTooSmallText} instead.
+ */
+export const HERO_MIN_ROWS = 14
+
+/**
+ * Rows below which the hero cannot be drawn at all, for the given card minimum:
+ * the product minimum {@link HERO_MIN_ROWS}, or the bare-card arithmetic if that
+ * is ever larger (`minBoxH` + the area padding).
+ * @param minBoxH - smallest viable card height.
+ * @returns the documented minimum, derived so the notice text cannot go stale.
+ */
+export function heroMinRows(minBoxH: number): number {
+  return Math.max(HERO_MIN_ROWS, minBoxH + HERO_AREA_PADDING_Y * 2)
+}
+
+/**
+ * The one-row notice painted INSTEAD of the hero when {@link HeroBudget.fits} is
+ * false. Derived from {@link heroMinRows}, so the number can never go stale.
+ * @param minBoxH - smallest viable card height.
+ * @returns the notice text.
+ */
+export function heroTooSmallText(minBoxH: number): string {
+  return `Terminal too small — resize to at least ${heroMinRows(minBoxH)} rows`
+}
+
+/**
  * Lay out the centered hero stack.
  * @param input - see {@link HeroLayoutInput}.
  * @returns the resolved geometry; spacers are never negative (a stack taller
@@ -172,16 +339,21 @@ export function heroLayout(input: HeroLayoutInput): HeroLayout {
   const footerLines = input.footerLines ?? 0
   // The hero draws NO status bar (chrome-free first screen), so the whole
   // window height minus the area padding belongs to the hero stack.
-  const areaRows = Math.max(6, input.rows - HERO_AREA_PADDING_Y * 2)
-  // The gap after the composer exists only when hints are drawn (the layout
-  // must match the emitted rows exactly).
-  const hintBlock = input.hintLines > 0 ? HERO_GAP + input.hintLines : 0
+  const areaRows = heroAreaRows(input.rows)
   // Rows between the brand block and the card: the title's own breathing room
   // when nothing sits in between (the hero draws no context line), else
   // gap + context + gap.
-  const contextBlock = contextLines > 0 ? HERO_GAP + contextLines + HERO_GAP : HERO_TITLE_CARD_GAP
-  const stackRows = input.brandLines + contextBlock
-    + input.boxH + hintBlock
+  const contextBlock = contextLines > 0 ? HERO_GAP + contextLines + HERO_GAP : (input.titleGap ?? HERO_TITLE_CARD_GAP)
+  const stackRows = heroStackRows({
+    brandLines: input.brandLines,
+    boxH: input.boxH,
+    hintLines: input.hintLines,
+    titleGap: input.titleGap,
+    contextLines,
+  })
+  // The gap after the composer exists only when hints are drawn (the layout must
+  // match the emitted rows exactly) — read from the SAME formula.
+  const hintBlock = input.hintLines > 0 ? HERO_GAP + input.hintLines : 0
   const free = Math.max(0, areaRows - stackRows - footerLines)
   const topSpacer = Math.floor(free / 2)
   const bottomSpacer = free - topSpacer
@@ -379,6 +551,19 @@ export function heroHintText(providerReady: boolean | undefined): string | undef
   const line = heroHintLine(providerReady)
   if (line === undefined) return undefined
   return `${HERO_HINT_ICON} ${HERO_HINT_LABEL}${' '.repeat(HERO_HINT_LABEL_GAP)}${line}`
+}
+
+/**
+ * How many rows sit UNDER the card: the older-history progress line while a
+ * resumed session folds, plus the tip line. Pure so the layout model
+ * ({@link heroBudget}), the paint and the tests count them the same way — the
+ * panel used to compute this inline with nothing asserting it.
+ * @param olderLoading - `Store.olderLoading`.
+ * @param providerReady - `Store.providerReady`.
+ * @returns 0..2 rows.
+ */
+export function heroHintRows(olderLoading: boolean, providerReady: boolean | undefined): number {
+  return (olderLoading ? 1 : 0) + (heroHintLine(providerReady) === undefined ? 0 : 1)
 }
 
 /** Rows a mark occupies in the hero stack (0 for `none`). */
