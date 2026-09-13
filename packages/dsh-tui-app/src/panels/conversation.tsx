@@ -34,6 +34,14 @@ import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, count
 import { stripTerminalControls } from '../terminal-safe.ts'
 import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
+import {
+  COMPOSER_MIN_HEIGHT,
+  DOCKED_MIN_ROWS,
+  STATUS_BAR_HEIGHT,
+  dockedComposerTop,
+  dockedFits,
+  tooSmallNotice,
+} from '../layout-budget.ts'
 import { questionDockRows } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
 import {
@@ -88,8 +96,6 @@ let commandPaletteOpen = false
 
 /** The `tui` service must be available to register panels and commands. */
 export const inject = ['tui']
-
-const COMPOSER_MIN_HEIGHT = 5
 
 /** Minimum composer BOX height: the hero card is a two-row input box
  *  (`HERO_COMPOSER_INPUT_ROWS`), the docked card keeps a single row so the
@@ -183,9 +189,6 @@ const MESSAGE_PAD_ROWS = 1
 // visually separated); these plus MESSAGE_PAD_ROWS give the user block its
 // 2 blank rows above and below (matches the legacy blank-row layout).
 const USER_PAD_ROWS = 1
-
-/** The status bar height in terminal rows (bordered single-line bar). */
-const STATUS_BAR_HEIGHT = 3
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠸', '⠴', '⠦', '⠧', '⠇', '⠏']
 
@@ -1172,7 +1175,11 @@ function composerBand(width: number, rows: number): { top: number; left: number;
     })
     return { top: hero.composerTopRow, left: heroComposerLeft(width), height }
   }
-  return { top: rows - STATUS_BAR_HEIGHT - height + 1, left: 1, height }
+  // Below the docked minimum the render paints a one-row notice instead of the
+  // conversation view, so the band is exactly that row — row 2, the message
+  // column's first content row (its paddingY 1 takes row 1). There is no card.
+  if (!dockedFits(rows)) return { top: 2, left: 1, height: 1 }
+  return { top: dockedComposerTop(rows, height), left: 1, height }
 }
 
 /** Plan-B A/B switch (diagnosis only): `DSH_TUI_LEGACY_EST=1` re-parses the
@@ -1749,11 +1756,30 @@ function mainSurfaceGeometry(): SurfaceGeometry {
   // row band (shared hero layout) and its column band (heroComposerWidth) from
   // the same numbers the render uses — never from the bottom-docked formula.
   if (store.hero) {
+    // The SAME budget the render paints from. This mirror used to rebuild the
+    // layout by hand with `hintLines: 0` (stale from before the tip row came
+    // back), which stretched the model's card band two rows PAST the painted card
+    // — covering the gap and the tip row under it, so a wheel there scrolled the
+    // DRAFT instead of the transcript (measured on the real binary; clicks are
+    // unaffected because press/drag fall through to the same handlers).
+    const b = heroBudgetNow(rows, width)
+    if (!b.fits) {
+      // The notice replaces the stack: nothing on screen is a composer.
+      return {
+        messageRight,
+        composerTop: rows + 1,
+        composerBottom: rows,
+        composerLeft: heroComposerLeft(width),
+        composerRight: heroComposerLeft(width) + heroComposerWidth(width) - 1,
+        statusTop: rows + 1,
+      }
+    }
     const hero = heroLayout({
       rows,
       boxH,
-      brandLines: heroMarkRows(heroMarkFor(rows, width)) + 1,
-      hintLines: 0, // the hero draws no hint line (removed on user call)
+      brandLines: b.brandLines,
+      titleGap: b.titleGap,
+      hintLines: b.hintLines,
     })
     return {
       messageRight,
@@ -1766,9 +1792,14 @@ function mainSurfaceGeometry(): SurfaceGeometry {
       statusTop: rows + 1,
     }
   }
+  // Below the docked minimum the render paints a one-row notice instead of the
+  // conversation view: no composer, no status bar, nothing to classify.
+  if (!dockedFits(rows)) {
+    return { messageRight, composerTop: rows + 1, composerBottom: rows, statusTop: rows + 1 }
+  }
   return {
     messageRight,
-    composerTop: rows - STATUS_BAR_HEIGHT - boxH + 1,
+    composerTop: dockedComposerTop(rows, boxH),
     composerBottom: rows - STATUS_BAR_HEIGHT,
     statusTop: rows - STATUS_BAR_HEIGHT + 1,
   }
@@ -2383,9 +2414,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     return out
   }
 
-  /** Center one hero line by VISUAL width (CJK counts 2 columns). */
-  const centerInHero = (text: string): string =>
-    ' '.repeat(Math.max(0, Math.floor((heroUsable - visualWidth(text)) / 2))) + text
+  /** Center one line by VISUAL width (CJK counts 2 columns). */
+  const centerIn = (band: number, text: string): string =>
+    ' '.repeat(Math.max(0, Math.floor((band - visualWidth(text)) / 2))) + text
+  /** The hero's own centering band (its padded content box). */
+  const centerInHero = (text: string): string => centerIn(heroUsable, text)
   // The hint line is painted as THREE colored parts (icon+label in accent/bold,
   // the sentence muted), so it cannot go through `centerInHero` — but its pad
   // must be computed from the concatenation of exactly those parts, or the
@@ -3030,6 +3063,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           </>
           )}
         </Box>
+        ) : !dockedFits(store.rows) ? (
+          /* Below the docked minimum the conversation view cannot be laid out
+             honestly (the card would be painted over the status bar and the
+             caret one row off the draft — see `layout-budget.ts`): say so in one
+             row instead. `usable` is the message column's width (the sidebar
+             needs >= 14 rows too, so it is never up here). */
+          <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1}>
+            <Text color={theme.accent} wrap="truncate">{centerIn(usable, tooSmallNotice(DOCKED_MIN_ROWS))}</Text>
+          </Box>
         ) : (
           <>
 <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1} gap={1}>
@@ -3128,7 +3170,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       {/* Hero (blank session) is CHROME-FREE: the status bar is not drawn at
           all, so the centered hero stack owns the whole window height (the
           layout mirror below reserves no status rows either). */}
-      {!heroActive && (
+      {!heroActive && dockedFits(store.rows) && (
       <Box flexShrink={0} flexDirection="row" borderStyle="round" borderColor={theme.border} paddingX={1} height={STATUS_BAR_HEIGHT}>
         {noteStatusBranch(store)}
         {/* The busy indicator (Working/Paused/Idle + icon) is REPLACED on the
@@ -3247,11 +3289,12 @@ export function installFrameSuffix(): void {
     // HIDDEN, otherwise the block caret blinks through the popup's text. In
     // the docked phase the palette floats ABOVE the card and the caret stays
     // visible in the draft, so nothing changes there.
-    if (store.hero && !heroBudgetNow(store.rows, store.width).fits) {
-      // The hero cannot be positioned honestly in this window (see `heroBudget`):
-      // the notice row is painted instead of the card, so there is no caret cell
-      // to park — leaving the hardware cursor visible would place it over the
-      // notice or off screen (measured: row 6 on a 5-row terminal).
+    if (store.hero ? !heroBudgetNow(store.rows, store.width).fits : !dockedFits(store.rows)) {
+      // Neither view can be positioned honestly in this window (see
+      // `heroBudget` / `dockedFits`): the notice row is painted instead of the
+      // card, so there is no caret cell to park — leaving the hardware cursor
+      // visible would place it over the notice or off screen (measured: row 6 on
+      // a 5-row terminal before the hero gate).
       return '\x1b[?25l'
     }
     if (commandPaletteOpen && store.hero) {

@@ -18,6 +18,7 @@ import {
   HERO_ART_WORDMARK_ROWS,
   HERO_ART_WORDMARK_TONES,
 } from './hero-art.ts'
+import { tooSmallNotice } from './layout-budget.ts'
 
 /** Composer box border rows included in `boxH` (round border top+bottom). */
 export const HERO_GAP = 1
@@ -325,7 +326,7 @@ export function heroMinRows(minBoxH: number): number {
  * @returns the notice text.
  */
 export function heroTooSmallText(minBoxH: number): string {
-  return `Terminal too small — resize to at least ${heroMinRows(minBoxH)} rows`
+  return tooSmallNotice(heroMinRows(minBoxH))
 }
 
 /**

@@ -33,6 +33,7 @@
 
 import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH } from './config.ts'
+import { COMPOSER_MIN_HEIGHT, STATUS_BAR_HEIGHT, dockedComposerTop, dockedFits } from './layout-budget.ts'
 
 /** One pointer cell's region while an in-flow dock is open. */
 export type PointerRegion = 'dock' | 'composer' | 'message' | 'none'
@@ -91,9 +92,11 @@ export function composerStripRows(
   if (rows <= 0 || width <= 0 || messageRight <= 0) return null
   // Mirrors conversation.tsx composerUsable/composerOuterWidth (the composer
   // spans the whole message column).
+  // Below the docked minimum the conversation view is replaced by a one-row
+  // notice (no composer at all), so NO cell belongs to the composer strip.
+  if (!dockedFits(rows)) return null
   const usable = Math.max(10, messageRight - 4)
-  const min = 5 // COMPOSER_MIN_HEIGHT (chrome-inclusive minimum)
-  const statusH = 3 // STATUS_BAR_HEIGHT (composer bottom sits above the status bar)
+  const min = COMPOSER_MIN_HEIGHT
   // Mirrors conversation.tsx composerHeight: rows of the wrapped draft at the
   // usable width, then min(min + wrapped − 1, cap). The card is BORDERLESS but
   // paints two half-row fill edges (▄ above, ▀ below), so this height counts
@@ -111,7 +114,10 @@ export function composerStripRows(
   // The image chip adds one rendered row to the composer box (conversation
   // renders height = composerHeight + (image ? 1 : 0)).
   const height = composerH + (hasImage ? 1 : 0)
-  const top = rows - statusH - height + 1
+  // The shared docked budget (bottom-anchored, clamped at the fixed chrome the
+  // paint cannot shrink) — the same number `conversationBand` and
+  // `mainSurfaceGeometry` use, so routing can never disagree with the paint.
+  const top = dockedComposerTop(rows, height)
   if (top < 1) return null
   return { top, height }
 }
