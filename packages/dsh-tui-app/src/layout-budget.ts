@@ -83,15 +83,21 @@ export function dockedTranscriptRows(rows: number, cardH: number): number {
 }
 
 /**
- * The one-row notice painted INSTEAD of a view that cannot be laid out honestly.
- * ONE builder for both views (hero and docked), so the copy cannot diverge, and
- * the ONE place that names the escape hatch the input gate leaves open.
+ * The notice painted INSTEAD of a view that cannot be laid out honestly: TWO
+ * rows, because one was too long for a narrow terminal — the old single line was
+ * 76 columns, so at 76 columns and below its TAIL was cut first, i.e. the user
+ * lost exactly the part that matters (measured: `… (keys paused; Ctrl+C quit…` at
+ * 76, `… (keys pau…` at 60). Split in two, both rows fit from 34 columns up.
+ *
+ * Row 1 states what is happening (input is paused), row 2 what to do about it.
+ * The rows are ONLY a notice: the caller MUST also gate its input (see the
+ * `surfaceTooSmall` gate in `handleKey`) — there is deliberately no in-app quit
+ * here, because quitting does not remove the cause: re-launching at the same
+ * height shows this notice again, so "make the terminal taller" is the only
+ * useful answer.
  * @param minRows - the minimum the view needs (derived by the caller).
- * @returns the notice text.
+ * @returns the two painted rows, in order.
  */
-export function tooSmallNotice(minRows: number): string {
-  // The parenthetical is load-bearing: every key is dropped while this notice is
-  // up (see the gate in `handleKey`), so the user must be told why typing does
-  // nothing — and how to get out (Ctrl+C quits; `/exit` needs typing).
-  return `Terminal too small — resize to at least ${minRows} rows (keys paused; Ctrl+C quits)`
+export function tooSmallNoticeLines(minRows: number): readonly [string, string] {
+  return ['Terminal too small — keys paused', `resize to at least ${minRows} rows`]
 }

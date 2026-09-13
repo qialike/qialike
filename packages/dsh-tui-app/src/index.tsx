@@ -479,10 +479,6 @@ export function preparingRequestStatusText(startedAt: number | null, now: number
  *  switch / new) because a fresh Session+Agent instance has to derive and
  *  deep-freeze the whole context on its first request (the 4-6 s class). */
 let coldNextRequest = true
-/** Quit action used by the suppressed-input escape hatch (Ctrl+C while the
- *  conversation surface is replaced by the "terminal too small" notice). Set by
- *  `apply` — the module-level `handleKey` cannot reach the launcher's `io`. */
-let requestQuit: (() => void) | null = null
 
 export class Store {
   private items: TranscriptItem[] = []
@@ -3141,8 +3137,8 @@ function handleKey(k: RawKey): void {
     store.cancelCompaction()
     return
   }
-  // ── TERMINAL TOO SMALL: the conversation surface is a one-row notice, so
-  //    NOTHING that belongs to it may act. Without this gate the panel was
+  // ── TERMINAL TOO SMALL: the conversation surface is a two-row notice, so
+  //    NOTHING that belongs to it may act (no key at all — see the note below). Without this gate the panel was
   //    invisible but live: `store.panel` still routed keys to a hidden approval
   //    dock, whose default choice is "Allow once" — so Enter approved a
   //    permission prompt the user could not see (measured: `settle(2)` on Enter),
@@ -3155,11 +3151,12 @@ function handleKey(k: RawKey): void {
     || activePanel.mode !== 'fullscreen'
     || store.panel === 'conversation'
   if (onConversationSurface && store.surfaceTooSmall) {
-    // ONE escape hatch, since /exit needs typing and typing is what we just took
-    // away: Ctrl+C quits while the surface is suppressed. Everything else —
-    // keys, mouse, wheel, bracketed paste — is dropped here, before any panel
-    // sees it, so no dialog can act on input the user cannot see.
-    if (k.ctrl === true && (k.char ?? '') === 'c') { requestQuit?.(); return }
+    // EVERYTHING is dropped here — keys, mouse, wheel, bracketed paste, and
+    // Ctrl+C too — before any panel sees it, so nothing can act on input the
+    // user cannot see. There is deliberately NO in-app escape hatch: quitting
+    // would not remove the cause (a re-launch at the same height shows this very
+    // notice again), so the notice's job is to say "make the terminal taller" —
+    // and it is the only thing on screen. (User decision, 2026-09-13.)
     return
   }
   const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
@@ -3592,7 +3589,6 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   tui.commands.register({ name: 'think', hint: 'show/hide details under Think and tool rows (reasoning + tool output)', run: () => { store.toggleAllDetail() } })
   tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { abortResumeFold(); store.clear() } })
   tui.commands.register({ name: 'exit', hint: 'quit dsh-tui', run: () => { requestExit(io, 0) } })
-  requestQuit = () => { requestExit(io, 0) }   // escape hatch for the too-small notice (Ctrl+C)
 
   // ── S2-2b: mount the UI and take input BEFORE the blocking attach ──────────
   // `agents.resume()` decodes the whole durable log on this one thread and

@@ -18,7 +18,7 @@ import {
   HERO_ART_WORDMARK_ROWS,
   HERO_ART_WORDMARK_TONES,
 } from './hero-art.ts'
-import { tooSmallNotice } from './layout-budget.ts'
+import { tooSmallNoticeLines } from './layout-budget.ts'
 
 /** Composer box border rows included in `boxH` (round border top+bottom). */
 export const HERO_GAP = 1
@@ -248,7 +248,7 @@ export interface HeroBudget {
   free: number
   /** False below {@link HERO_MIN_ROWS} (or if the stack cannot fit the area):
    *  the stack has no honest position, so the caller must paint
-   *  {@link heroTooSmallText} instead of the hero. */
+   *  {@link heroTooSmallLines} instead of the hero. */
   fits: boolean
 }
 
@@ -266,7 +266,7 @@ export interface HeroBudget {
  * The hero is now ALL OR NOTHING (user call): it is drawn only from
  * {@link HERO_MIN_ROWS} up, i.e. only when the COMPLETE stack — brand block,
  * title gap, the two-line card and the tip row — fits the area without giving
- * anything up. Below that the caller paints {@link heroTooSmallText} instead of
+ * anything up. Below that the caller paints {@link heroTooSmallLines} instead of
  * a mutilated hero, so there is no degradation chain left to keep in sync.
  * @param input - see {@link HeroBudgetInput}.
  * @returns the resolved budget; `free ≥ 0` whenever `fits`.
@@ -304,7 +304,7 @@ export function heroBudget(input: HeroBudgetInput): HeroBudget {
  * area's top/bottom padding. Below this the hero would have to give something up
  * (the tip row, the brand block, the second input row), which the product
  * decision of 2026-09-13 rules out: it paints
- * {@link heroTooSmallText} instead.
+ * {@link heroTooSmallLines} instead.
  */
 export const HERO_MIN_ROWS = 14
 
@@ -325,8 +325,8 @@ export function heroMinRows(minBoxH: number): number {
  * @param minBoxH - smallest viable card height.
  * @returns the notice text.
  */
-export function heroTooSmallText(minBoxH: number): string {
-  return tooSmallNotice(heroMinRows(minBoxH))
+export function heroTooSmallLines(minBoxH: number): readonly [string, string] {
+  return tooSmallNoticeLines(heroMinRows(minBoxH))
 }
 
 /**

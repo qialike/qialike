@@ -46,19 +46,25 @@ describe('terminal-too-small input gate', () => {
     expect(line).toContain('!dockedFits(store.rows)')
   })
 
-  test('③ handleKey gates BEFORE any panel sees the key', () => {
+  test('③ handleKey gates BEFORE any panel sees the key — with NO escape hatch', () => {
     const gate = INDEX.indexOf('if (onConversationSurface && store.surfaceTooSmall) {')
     const dispatch = INDEX.indexOf('def?.handleKey?.(k, store)')
     expect(gate, 'the gate exists').toBeGreaterThan(-1)
     expect(dispatch, 'the dispatch exists').toBeGreaterThan(-1)
     expect(gate, 'the gate must sit before the dispatch').toBeLessThan(dispatch)
-    const body = INDEX.slice(gate, dispatch)
-    // The one escape hatch, and it must actually quit (`/exit` needs typing,
-    // which is exactly what the gate removed).
-    expect(body, 'Ctrl+C is the escape hatch').toContain("(k.char ?? '') === 'c'")
-    expect(body, 'and it quits').toContain('requestQuit?.()')
-    expect(body, 'the hook is wired to the launcher exit').toBeTruthy()
-    expect(INDEX, 'requestQuit is assigned where io is in scope').toContain('requestQuit = () => { requestExit(io, 0) }')
+    // The gate's OWN body (up to its closing brace), not everything up to the
+    // dispatch — `const def = …` sits in between and would defeat endsWith.
+    const gateClose = INDEX.indexOf('\n  }\n', gate)
+    expect(gateClose, 'the gate closes').toBeGreaterThan(gate)
+    const body = INDEX.slice(gate, gateClose)
+    // NO escape hatch (user decision, 2026-09-13): quitting does not remove the
+    // cause — a re-launch at the same height shows the same notice — so every key
+    // is dropped and the notice says "make the terminal taller". Ctrl+C must NOT
+    // be special-cased, and the old `requestQuit` hook must be gone entirely.
+    expect(body, 'no Ctrl+C special case').not.toContain("(k.char ?? '') === 'c'")
+    expect(body, 'no quit hook in the gate').not.toContain('requestQuit')
+    expect(INDEX, 'the requestQuit hook is removed').not.toContain('requestQuit')
+    expect(body.trimEnd().endsWith('return'), 'the gate drops everything with a bare return').toBe(true)
     // Fullscreen dialogs stay live: only the conversation surface (and the
     // overlay docks it embeds) may be gated.
     expect(INDEX.slice(gate - 400, gate)).toContain("activePanel.mode !== 'fullscreen'")

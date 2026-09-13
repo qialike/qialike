@@ -37,10 +37,10 @@ import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import {
   COMPOSER_MIN_HEIGHT,
   DOCKED_MIN_ROWS,
+  tooSmallNoticeLines,
   STATUS_BAR_HEIGHT,
   dockedComposerTop,
   dockedFits,
-  tooSmallNotice,
 } from '../layout-budget.ts'
 import { questionDockRows } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
@@ -68,7 +68,7 @@ import {
   heroHintLine,
   heroHintText,
   heroMarkRows,
-  heroTooSmallText,
+  heroTooSmallLines,
   type HeroBudget,
   type HeroMarkKind,
 } from '../hero-layout.ts'
@@ -1175,10 +1175,10 @@ function composerBand(width: number, rows: number): { top: number; left: number;
     })
     return { top: hero.composerTopRow, left: heroComposerLeft(width), height }
   }
-  // Below the docked minimum the render paints a one-row notice instead of the
-  // conversation view, so the band is exactly that row — row 2, the message
-  // column's first content row (its paddingY 1 takes row 1). There is no card.
-  if (!dockedFits(rows)) return { top: 2, left: 1, height: 1 }
+  // Below the docked minimum the render paints the TWO-row notice instead of the
+  // conversation view, so the band is exactly those rows — rows 2-3, the message
+  // column's first content rows (its paddingY 1 takes row 1). There is no card.
+  if (!dockedFits(rows)) return { top: 2, left: 1, height: 2 }
   return { top: dockedComposerTop(rows, height), left: 1, height }
 }
 
@@ -3005,8 +3005,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             /* Even a bare `COMPOSER_MIN_HEIGHT` card cannot fit this window, so
                there is NO honest position for the stack: painting it anyway put
                the hardware cursor off screen (measured: cursor row 6 on a 5-row
-               terminal). Say what is wrong in one row instead. */
-            <Text color={theme.accent} wrap="truncate">{centerInHero(heroTooSmallText(COMPOSER_MIN_HEIGHT))}</Text>
+               terminal). Say what is wrong in TWO rows instead — one row was 76
+               columns wide, and its tail (the actionable part) was the first
+               thing a narrow terminal cut. */
+            <>
+              {heroTooSmallLines(COMPOSER_MIN_HEIGHT).map((line) => (
+                <Text key={line} color={theme.accent} wrap="truncate">{centerInHero(line)}</Text>
+              ))}
+            </>
           ) : (
           <>
           <Box flexShrink={0} height={hero?.topSpacer ?? 0} />
@@ -3072,11 +3078,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         ) : !dockedFits(store.rows) ? (
           /* Below the docked minimum the conversation view cannot be laid out
              honestly (the card would be painted over the status bar and the
-             caret one row off the draft — see `layout-budget.ts`): say so in one
-             row instead. `usable` is the message column's width (the sidebar
-             needs >= 14 rows too, so it is never up here). */
+             caret one row off the draft — see `layout-budget.ts`): say so in TWO
+             rows instead (one row was 76 columns wide and got its tail cut on
+             narrow terminals). `usable` is the message column's width (the
+             sidebar needs >= 14 rows too, so it is never up here). */
           <Box flexGrow={1} flexShrink={1} minHeight={0} flexDirection="column" paddingX={1} paddingY={1}>
-            <Text color={theme.accent} wrap="truncate">{centerIn(usable, tooSmallNotice(DOCKED_MIN_ROWS))}</Text>
+            {tooSmallNoticeLines(DOCKED_MIN_ROWS).map((line) => (
+              <Text key={line} color={theme.accent} wrap="truncate">{centerIn(usable, line)}</Text>
+            ))}
           </Box>
         ) : (
           <>

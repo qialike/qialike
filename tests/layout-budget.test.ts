@@ -8,10 +8,11 @@ import {
   dockedComposerTop,
   dockedFits,
   dockedTranscriptRows,
-  tooSmallNotice,
+  tooSmallNoticeLines,
 } from '../packages/dsh-tui-app/src/layout-budget.ts'
-import { heroTooSmallText } from '../packages/dsh-tui-app/src/hero-layout.ts'
+import { heroTooSmallLines } from '../packages/dsh-tui-app/src/hero-layout.ts'
 import { composerStripRows } from '../packages/dsh-tui-app/src/pointer-region.ts'
+import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
 
 describe('docked minimum height (conversation view)', () => {
   test('is derived, not hard-coded: card + chrome above it + status bar + transcript rows', () => {
@@ -62,11 +63,19 @@ describe('docked minimum height (conversation view)', () => {
     expect(dockedComposerTop(14, 100)).toBe(1 + DOCKED_CHROME_ABOVE_CARD)
   })
 
-  test('both views use ONE notice builder (no divergent copy)', () => {
-    expect(tooSmallNotice(14)).toBe('Terminal too small — resize to at least 14 rows (keys paused; Ctrl+C quits)')
-    expect(tooSmallNotice(DOCKED_MIN_ROWS)).toBe(tooSmallNotice(DOCKED_MIN_ROWS))
+  test('both views use ONE notice builder, and it is TWO short rows', () => {
+    // Two rows because the old single line was 76 columns wide: its tail — the
+    // actionable part — was the first thing a narrow terminal cut (measured on
+    // the real binary at 76/70/60 columns). Both rows now fit from 34 columns up.
+    expect(tooSmallNoticeLines(14)).toEqual(['Terminal too small — keys paused', 'resize to at least 14 rows'])
+    expect(tooSmallNoticeLines(DOCKED_MIN_ROWS)[1]).toContain(String(DOCKED_MIN_ROWS))
     // The hero's own minimum is 14 as well, so the two screens say the same thing.
-    expect(heroTooSmallText(COMPOSER_MIN_HEIGHT)).toBe(tooSmallNotice(DOCKED_MIN_ROWS))
+    expect(heroTooSmallLines(COMPOSER_MIN_HEIGHT)).toEqual(tooSmallNoticeLines(DOCKED_MIN_ROWS))
+    // Per-row WIDTH invariant: nothing may be long enough to need truncation on a
+    // terminal where the surface is still meaningful (34 columns = 32 usable).
+    for (const line of tooSmallNoticeLines(DOCKED_MIN_ROWS)) {
+      expect(visualWidth(line), line).toBeLessThanOrEqual(32)
+    }
   })
 
   test('the pointer mirror reads the same budget (and is empty below the minimum)', () => {
