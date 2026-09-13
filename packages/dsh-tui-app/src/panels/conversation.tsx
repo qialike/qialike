@@ -38,7 +38,9 @@ import { questionDockRows } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
 import {
   HERO_ART_CELL_GLYPH,
+  HERO_AREA_PADDING_Y,
   HERO_COMPOSER_EXTRA_ROWS,
+  HERO_GAP,
   HERO_PLACEHOLDER,
   HERO_TITLE_CARD_GAP,
   HERO_TITLE,
@@ -1097,7 +1099,23 @@ function composerHeight(width: number, input: string, min: number): number {
   // window (see the render + caret math) instead of overflowing its box over
   // the footer/status rows. The rows−8 floor guard also keeps a ≥3-row
   // message viewport on small terminals.
-  const cap = Math.max(min, store.rows - 8)
+  let cap = Math.max(min, store.rows - 8)
+  if (store.hero) {
+    // HERO extra cap: the stack (brand block + title gap + card + hint row) must
+    // FIT the hero area. Without this the flex layout compresses the explicit gap
+    // boxes once the stack overflows and paints the card a row above what
+    // `heroLayout()` models — and the caret, the click→index mapping and the
+    // palette lift all read that model, so the caret drifts by exactly that row
+    // (measured: 0 rows of drift while the stack fits, +1 row once it does not).
+    // Capping here instead means the draft scrolls INSIDE its window, which is
+    // what a growing input should do, and keeps the card's lower rows (chip,
+    // bottom edge) on screen.
+    const areaRows = Math.max(6, store.rows - HERO_AREA_PADDING_Y * 2)
+    const brandLines = heroMarkRows(heroMarkFor(store.rows, width)) + 1
+    const hintRows = heroHintRowCount()
+    const hintBlock = hintRows > 0 ? HERO_GAP + hintRows : 0
+    cap = Math.max(min, Math.min(cap, areaRows - brandLines - HERO_TITLE_CARD_GAP - hintBlock))
+  }
   return Math.min(min + wrapped - 1, cap)
 }
 
