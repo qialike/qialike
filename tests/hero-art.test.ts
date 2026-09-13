@@ -37,10 +37,12 @@ import {
 } from '../packages/dsh-tui-app/src/hero-layout.ts'
 
 describe('generated brand art table', () => {
-  test('is the 45x8 design-pixel wordmark on the 6px source grid', () => {
+  test('is the 48x12 tone grid rasterized from the 168x42 wordmark viewBox', () => {
     expect(HERO_ART_WORDMARK_TONES).toHaveLength(HERO_ART_WORDMARK_ROWS)
-    expect(HERO_ART_WORDMARK_ROWS).toBe(8)
-    expect(HERO_ART_WORDMARK_COLS).toBe(45)
+    expect(HERO_ART_WORDMARK_ROWS).toBe(12)
+    expect(HERO_ART_WORDMARK_COLS).toBe(48)
+    // 48:12 keeps the source's 168:42 (4:1) aspect, so the mark is not stretched.
+    expect(HERO_ART_WORDMARK_COLS / HERO_ART_WORDMARK_ROWS).toBe(4)
     for (const row of HERO_ART_WORDMARK_TONES) expect(row).toHaveLength(HERO_ART_WORDMARK_COLS)
   })
 
@@ -50,17 +52,27 @@ describe('generated brand art table', () => {
     for (const tone of 'BMD') expect(joined.includes(tone)).toBe(true)
   })
 
-  test('is a legible mark: blank top/bottom rows, six glyph rows in between', () => {
+  test('keeps the source top margin blank and letter gaps in every glyph row', () => {
+    // The rasterized wordmark carries the SVG's own top margin; below it every
+    // row keeps at least one empty cell, i.e. the letters stay separated.
     expect(HERO_ART_WORDMARK_TONES[0]).toBe('.'.repeat(HERO_ART_WORDMARK_COLS))
-    expect(HERO_ART_WORDMARK_TONES[HERO_ART_WORDMARK_ROWS - 1]).toBe('.'.repeat(HERO_ART_WORDMARK_COLS))
-    const glyphRows = HERO_ART_WORDMARK_TONES.slice(1, -1)
-    expect(glyphRows).toHaveLength(6)
-    for (const row of glyphRows) expect(row.includes('.')).toBe(true) // letter gaps
+    for (const row of HERO_ART_WORDMARK_TONES.slice(1)) expect(row.includes('.')).toBe(true)
+  })
+
+  test('the `q` descender is the only ink below the baseline', () => {
+    const last = HERO_ART_WORDMARK_TONES[HERO_ART_WORDMARK_ROWS - 1]!
+    const columns = [...last].flatMap((tone, index) => (tone === '.' ? [] : [index]))
+    expect(columns.length, 'there is a descender').toBeGreaterThan(0)
+    expect(columns.length, 'and it is narrow').toBeLessThanOrEqual(4)
+    expect(columns[columns.length - 1]! - columns[0]!, 'and contiguous').toBe(columns.length - 1)
+    // It hangs UNDER the mark: those columns carry ink directly above them too.
+    const above = HERO_ART_WORDMARK_TONES[HERO_ART_WORDMARK_ROWS - 2]!
+    for (const c of columns) expect(above[c]).not.toBe('.')
   })
 
   test('records its provenance (both variant SVGs + their sha256)', () => {
-    expect(HERO_ART_SOURCES.dark).toBe('svg/embedcode-dark.svg')
-    expect(HERO_ART_SOURCES.light).toBe('svg/embedcode-light.svg')
+    expect(HERO_ART_SOURCES.dark).toBe('svg/qialike-wordmark-dark.svg')
+    expect(HERO_ART_SOURCES.light).toBe('svg/qialike-wordmark-light.svg')
     expect(HERO_ART_SOURCE_SHA256.dark).toMatch(/^[0-9a-f]{64}$/)
     expect(HERO_ART_SOURCE_SHA256.light).toMatch(/^[0-9a-f]{64}$/)
   })
@@ -75,14 +87,15 @@ describe('half-block packing', () => {
     for (const line of cells) for (const cell of line) expect(' ▀▄█'.includes(cell.ch)).toBe(true)
   })
 
-  test('the ascender dots of b/d ride the first row as lower-half cells', () => {
-    const first = heroArtCells()[0]!
-    const lower = first.filter((c) => c.ch === '▄')
-    expect(lower).toHaveLength(3)
-    // `▄` paints the LOWER half only: foreground tone, no background.
-    for (const cell of lower) {
-      expect(cell.fg).toBeGreaterThanOrEqual(0)
-      expect(cell.bg).toBe(-1)
+  test('the descender rides the last cell line as a solid block', () => {
+    const line = heroArtCells()[HERO_ART_ROWS - 1]!
+    const lastRow = HERO_ART_WORDMARK_TONES[HERO_ART_WORDMARK_ROWS - 1]!
+    const columns = [...lastRow].flatMap((tone, index) => (tone === '.' ? [] : [index]))
+    expect(columns.length).toBeGreaterThan(0)
+    for (const c of columns) {
+      // The same ink on the last two tone rows packs into one solid half-block.
+      expect(line[c]!.ch).toBe('█')
+      expect(line[c]!.fg).toBeGreaterThanOrEqual(0)
     }
   })
 
@@ -155,9 +168,12 @@ describe('mark selection ladder', () => {
   })
 
   test('falls back on short or narrow terminals, then to nothing', () => {
-    // 20 rows: too short for the 21-row art AND for the 22-row ASCII mark.
-    expect(heroArtMarkKind({ rows: HERO_ART_MIN_ROWS - 1, width: 100, blockWidth: 1 })).toBe('none')
+    // 21 rows: too short for the 23-row art AND for the 22-row ASCII mark.
+    expect(heroArtMarkKind({ rows: 21, width: 100, blockWidth: 1 })).toBe('none')
     expect(heroArtMarkKind({ rows: HERO_ART_MIN_ROWS, width: 100, blockWidth: 1 })).toBe('blocks')
+    // The band between the two gates: too short for the art, but the shorter
+    // ASCII fallback still fits.
+    expect(heroArtMarkKind({ rows: 22, width: 100, blockWidth: 1 })).toBe('ascii')
     // Just below the art's width the ASCII mark cannot help either (it needs 80).
     expect(heroArtMarkKind({ rows: 30, width: HERO_ART_MIN_WIDTH - 1, blockWidth: 1 })).toBe('none')
     // Too small for even the ASCII wordmark (needs 22 rows / 80 columns).
@@ -195,6 +211,8 @@ describe('mark selection ladder', () => {
     expect(heroMarkRows('blocks')).toBe(HERO_ART_ROWS)
     expect(heroMarkRows('ascii')).toBe(HERO_WORDMARK.length)
     expect(heroMarkRows('none')).toBe(0)
-    expect(HERO_ART_ROWS).toBeLessThan(HERO_WORDMARK.length)
+    // The rasterized wordmark is TALLER than the ASCII fallback (6 vs 5 rows) —
+    // it used to be 4, which is why HERO_ART_MIN_ROWS moved 21 -> 23.
+    expect(HERO_ART_ROWS).toBeGreaterThan(HERO_WORDMARK.length)
   })
 })

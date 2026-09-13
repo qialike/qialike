@@ -208,14 +208,14 @@ export function heroWordmarkFits(rows: number, width: number): boolean {
 }
 
 /* ------------------------------------------------------------------------- *
- * Brand art (generated embedcode pixel art — see `hero-art.ts`)
+ * Brand art (generated from the `qialike` wordmark SVGs — see `hero-art.ts`)
  * ------------------------------------------------------------------------- */
 
 /**
  * The half-block glyph the brand art is drawn with. `▀` (U+2580) carries a
  * foreground color AND a background color in one cell, which is exactly two
- * stacked design pixels — so a 6px-grid square stays square on a terminal cell
- * that is about twice as tall as it is wide.
+ * stacked tone pixels — so a rasterized cell stays square on a terminal cell that
+ * is about twice as tall as it is wide.
  */
 export const HERO_ART_CELL_GLYPH = '▀'
 
@@ -233,8 +233,9 @@ export const HERO_ART_MARGIN_COLS = 4
 /** Minimum terminal width for the brand art. */
 export const HERO_ART_MIN_WIDTH = HERO_ART_WORDMARK_COLS + HERO_ART_MARGIN_COLS
 /** Minimum terminal rows for the brand art (art + title + context + composer
- *  + hints + footer + padding + status bar). */
-export const HERO_ART_MIN_ROWS = 21
+ *  + hints + footer + padding + status bar). Two rows above the 4-row art this
+ *  gate was written for: the rasterized wordmark packs SIX half-block rows. */
+export const HERO_ART_MIN_ROWS = 23
 
 /** One rendered hero-art cell: the glyph plus which ink color paints each half. */
 export interface HeroArtCell {
