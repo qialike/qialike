@@ -154,7 +154,7 @@ describe('start() read-only wiring (S2-2b)', () => {
   test('agent-independent core commands are registered BEFORE the read-only branch', () => {
     // Otherwise `/help` `/exit` `/think` `/clear` are unknown in the read-only
     // view, fall through to `submitMessage`, and pay the whole attach just to
-    // read help or quit (verified end-to-end by .scan/s2b-readonly-commands.py).
+    // read help or quit (verified end-to-end by test/probes/s2b-readonly-commands.py).
     const readOnlyBranch = source.indexOf('if (fastFirstScreen && fileFirstId !== undefined)')
     expect(readOnlyBranch).toBeGreaterThan(0)
     for (const nm of ['help', 'think', 'clear', 'exit']) {
