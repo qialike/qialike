@@ -26,6 +26,7 @@ import {
   heroComposerWidth,
   HERO_TITLE_CARD_GAP,
   heroLayout,
+  heroHintLine,
   heroWordmarkFits,
 } from '../packages/dsh-tui-app/src/hero-layout.ts'
 import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
@@ -209,5 +210,33 @@ describe('size gates and hero copy', () => {
   test('placeholder is web\'s hero copy, verbatim and static', () => {
     expect(HERO_PLACEHOLDER).toBe('Describe what you want to build... / commands, @ files or sessions')
     expect(visualWidth(HERO_PLACEHOLDER)).toBe(HERO_PLACEHOLDER.length)
+  })
+})
+
+describe('hero hint line (under the card)', () => {
+  test('points at /models with no provider, at /sessions once one is ready', () => {
+    expect(heroHintLine(undefined), 'unknown -> no line (no wrong-instruction flash)').toBeUndefined()
+    expect(heroHintLine(false)).toBe('No provider yet — use /models to add one')
+    expect(heroHintLine(true)).toBe('Use /sessions to restore a historical session')
+  })
+
+  test('the layout model reserves the row it will be painted in', () => {
+    // The caret/click/palette math all read this model, so the hint row must be
+    // counted there with the same gap the paint uses (HERO_GAP + 1 row).
+    const base = heroLayout({ rows: 37, boxH: 6, brandLines: 7, hintLines: 0 })
+    const withHint = heroLayout({ rows: 37, boxH: 6, brandLines: 7, hintLines: 1 })
+    // The stack grows by the gap + the line...
+    expect(withHint.stackRows - base.stackRows).toBe(2)
+    // ...while the palette margin grows by 1: the extra rows also shrink the
+    // centering spacers, so the card ends up one row higher and the net
+    // distance from the card's bottom to the area's bottom grows by one.
+    expect(withHint.paletteBottomMargin - base.paletteBottomMargin).toBe(1)
+    expect(base.composerTopRow - withHint.composerTopRow).toBe(1)
+  })
+
+  test('identifies the command to type', () => {
+    for (const line of [heroHintLine(false)!, heroHintLine(true)!]) {
+      expect(line).toMatch(/\/(models|sessions)/)
+    }
   })
 })

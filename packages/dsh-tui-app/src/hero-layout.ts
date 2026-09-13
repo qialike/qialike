@@ -333,6 +333,24 @@ export function heroArtMode(raw: string | undefined): HeroArtMode {
   return 'auto'
 }
 
+/**
+ * The one-line hint the hero shows UNDER its composer card.
+ *
+ * - no provider ready -> point at `/models`, the only way to add one;
+ * - a provider is ready -> point at `/sessions`, the other thing a first-run
+ *   hero cannot do by itself (restore history);
+ * - `undefined` (the launch's credential probe has not settled yet) -> no line,
+ *   so the row never flashes a wrong instruction on the first frame.
+ * @param providerReady - `Store.providerReady`.
+ * @returns the line, or `undefined` when nothing should be drawn.
+ */
+export function heroHintLine(providerReady: boolean | undefined): string | undefined {
+  if (providerReady === undefined) return undefined
+  return providerReady
+    ? 'Use /sessions to restore a historical session'
+    : 'No provider yet — use /models to add one'
+}
+
 /** Rows a mark occupies in the hero stack (0 for `none`). */
 export function heroMarkRows(kind: HeroMarkKind): number {
   if (kind === 'blocks') return HERO_ART_ROWS

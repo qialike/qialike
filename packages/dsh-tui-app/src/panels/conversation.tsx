@@ -50,6 +50,7 @@ import {
   heroComposerLeft,
   heroComposerWidth,
   heroLayout,
+  heroHintLine,
   heroMarkRows,
   type HeroMarkKind,
 } from '../hero-layout.ts'
@@ -87,6 +88,15 @@ const COMPOSER_MIN_HEIGHT = 5
  *  card can never disagree. */
 function composerMinHeight(): number {
   return COMPOSER_MIN_HEIGHT + (store.hero ? HERO_COMPOSER_EXTRA_ROWS : 0)
+}
+
+/** Rows the hero reserves for lines UNDER its card: the older-history progress
+ *  line and the provider/session hint. ONE source for the layout model and the
+ *  paint — the caret, the click mapping and the palette lift all read the model,
+ *  so a row counted in one place and not the other is exactly how the hardware
+ *  caret drifts out of the card. */
+function heroHintRowCount(): number {
+  return (store.olderLoading ? 1 : 0) + (heroHintLine(store.providerReady) === undefined ? 0 : 1)
 }
 
 /** Theme-aware muted text: bright on DARK backgrounds (the terminal's own
@@ -1112,7 +1122,7 @@ function composerBand(width: number, rows: number): { top: number; left: number;
       brandLines: heroMarkRows(heroMarkFor(rows, width)) + 1,
       // No hint line (removed on user call); the row is reused by the
       // older-history progress line while a resumed session folds.
-      hintLines: store.olderLoading ? 1 : 0,
+      hintLines: heroHintRowCount(),
     })
     return { top: hero.composerTopRow, left: heroComposerLeft(width), height }
   }
@@ -2296,13 +2306,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // sit one column left of the true center on even widths.
   const heroUsable = Math.max(20, width - 2)
   const heroBoxH = composerHeight(width, input, composerMinHeight()) + (store.composerImage !== null ? 1 : 0)
+  const heroHint = heroHintLine(store.providerReady)
   const heroMark = heroActive ? heroMarkFor(store.rows, width) : 'none'
   const heroBrandLines = heroMarkRows(heroMark) + 1
   // Brand art colors follow the theme (theme.text blended toward theme.bg), so
   // a colorscheme switch restyles the mark with the rest of the chrome.
   const heroArtInk = heroMark === 'blocks' ? heroArtInkColors(theme.text, theme.bg) : []
   const hero = heroActive
-    ? heroLayout({ rows: store.rows, boxH: heroBoxH, brandLines: heroBrandLines, hintLines: store.olderLoading ? 1 : 0 })
+    ? heroLayout({ rows: store.rows, boxH: heroBoxH, brandLines: heroBrandLines, hintLines: heroHintRowCount() })
     : null
   // Static web-parity placeholder while the hero composer is empty (no
   // rotation: web's `placeholder.hero` is one fixed sentence).
@@ -2909,6 +2920,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           {store.olderLoading ? <Box flexShrink={0} height={1} /> : null}
           {store.olderLoading
             ? <Text color={theme.accent} wrap="truncate">{centerInHero(store.historyProgressText)}</Text>
+            : null}
+          {/* Provider/session hint UNDER the card (user call): with no provider
+              ready the only useful next step is `/models`; once one is ready the
+              useful one is `/sessions`. `undefined` = probe not settled yet. */}
+          {heroHint !== undefined ? <Box flexShrink={0} height={1} /> : null}
+          {heroHint !== undefined
+            ? <Text color={mutedReadable()} wrap="truncate">{centerInHero(heroHint)}</Text>
             : null}
           <Box flexShrink={0} height={hero?.bottomSpacer ?? 0} />
           {renderPalette(hero?.paletteBottomMargin ?? 0)}

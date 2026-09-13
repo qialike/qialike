@@ -564,6 +564,10 @@ export class Store {
   private _readOnlyPermissionPicked = false
   private _modelLabel = ''
   private _modelEffortName = ''
+  /** Whether the CURRENT provider has what it needs to run (its own credential,
+   *  or none required). `undefined` until the launch's credential probe settles:
+   *  the hero hint keys off this rather than string-matching "not set". */
+  private _providerReady: boolean | undefined = undefined
   private _session: Session | undefined
   /** S2-2b: id of the session whose log was painted READ-ONLY (phase 1) while
    *  the harness attach is still pending. It keeps the docked chrome up (the
@@ -2196,7 +2200,14 @@ export class Store {
    *  `modelLabel` already embeds it as ` · <name>`; the composer renders the
    *  effort part separately (warning color, as a variant chip). */
   get modelEffortName(): string { return this._modelEffortName }
-  setModelLabel(label: string, effortName = ''): void { this._modelLabel = label; this._modelEffortName = effortName; this.notify() }
+  /** `true`/`false` once the credential probe settled, `undefined` before that. */
+  get providerReady(): boolean | undefined { return this._providerReady }
+  setModelLabel(label: string, effortName = '', providerReady: boolean | undefined = undefined): void {
+    this._modelLabel = label
+    this._modelEffortName = effortName
+    this._providerReady = providerReady
+    this.notify()
+  }
   /** The live harness session, or — while S2-2b's read-only phase is up — a
    *  minimal stand-in carrying only the id. Read-only consumers (`/export`, the
    *  footer) need the id; anything that would CALL into the session is gated by
@@ -3919,7 +3930,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   const modelLabel = hasKey
     ? `${providerDisplayName(agentOptions.provider ?? 'deepseek-official', templates())} · ${modelDisplayName(agentOptions.model)}${effortSuffix}`
     : 'not set'
-  store.setModelLabel(modelLabel, hasKey ? (savedEffort === undefined ? '' : reasoningEffortName(savedEffort)) : '')
+  store.setModelLabel(modelLabel, hasKey ? (savedEffort === undefined ? '' : reasoningEffortName(savedEffort)) : '', hasKey)
   // Keep the store's current selection in sync with the persisted default so
   // the /models dialog preselects the right provider/model/effort on open.
   store.currentModel = {
@@ -3942,7 +3953,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       if (visible.length === 0) {
         // No active (configured + visible) provider remains: show "not set"
         // rather than pointing at a dead route.
-        store.setModelLabel('not set', '')
+        store.setModelLabel('not set', '', false)
         return
       }
       // Prefer the built-in DeepSeek route over a same-brand sibling, so the
@@ -4360,7 +4371,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     const modelName = providerEntry?.models.find((m) => m.id === model)?.name ?? modelDisplayName(model)
     const effortDisplay = effort === undefined ? '' : reasoningEffortName(effort)
     const effortSuffix = effortDisplay === '' ? '' : ` · ${effortDisplay}`
-    void providerConfigured(ctx, provider).then(ok => store.setModelLabel(ok ? `${providerName} · ${modelName}${effortSuffix}` : 'not set', ok ? effortDisplay : ''))
+    void providerConfigured(ctx, provider).then(ok => store.setModelLabel(ok ? `${providerName} · ${modelName}${effortSuffix}` : 'not set', ok ? effortDisplay : '', ok))
     store.append('status', `models: ${providerName} · ${modelName}${effortSuffix}`, true)
   }
   // Ctrl+T / Alt+T: cycle the current model's reasoning effort through its
@@ -4410,7 +4421,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       if (wasCurrent && others.length === 0) {
         // No active (configured + visible) provider remains: clear the model
         // selection to "not set" instead of pointing at a dead route.
-        store.setModelLabel('not set', '')
+        store.setModelLabel('not set', '', false)
         store.setDialogNotice(
           `hidden ${name} — API key removed${envNote}; no active providers left — model not set`,
         )
