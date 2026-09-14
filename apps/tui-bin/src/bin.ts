@@ -23,7 +23,7 @@
  */
 
 import { basename, dirname, join } from 'node:path'
-import { lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { constants, homedir, tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
@@ -201,16 +201,90 @@ function mountDetail(error: unknown): string {
   return [error.message, ...branches.map((branch) => `- ${mountDetail(branch).replaceAll('\n', '\n  ')}`)].join('\n')
 }
 
-/** Materialize the embedded profile files in a fresh temp dir and return their paths. */
+/**
+ * The directory the embedded composition is materialized into: a STABLE
+ * per-user path under the harness home, not a fresh temp dir.
+ *
+ * It used to be `mkdtempSync($TMPDIR/dsh-tui-*)`, which leaked one directory per
+ * launch (the only `rmSync` calls in this file belong to `uninstall`) and could
+ * never be extended by the user. This is the harness's own profile namespace
+ * (`dsh --profile tui`), which is exactly where a user patch layer belongs — the
+ * built-in layers below are written under distinct names so they never collide
+ * with a harness-managed `package.json` / `cordis.patch.yml` in that directory.
+ */
+function profileDir(): string {
+  return join(dshHomePath(), 'profiles', 'tui')
+}
+
+/**
+ * Write `content` to `file` only when it differs. The content IS the version
+ * stamp: an upgrade rewrites the built-in layers, while a steady-state launch
+ * touches no mtime.
+ */
+function syncFile(file: string, content: string): void {
+  try {
+    if (readFileSync(file, 'utf8') === content) return
+  } catch { /* missing or unreadable: fall through and write it */ }
+  writeFileSync(file, content)
+}
+
+/**
+ * Best-effort removal of the profile dirs OLDER builds leaked into `$TMPDIR`
+ * (one per launch). Only entries older than a day are removed: a directory in
+ * use belongs to a launch of the same binary that is still running, and
+ * deleting it under that process would break its config tree.
+ */
+function sweepLegacyProfiles(): void {
+  const tmp = tmpdir()
+  try {
+    const now = Date.now()
+    for (const name of readdirSync(tmp)) {
+      if (!name.startsWith('dsh-tui-')) continue
+      const path = join(tmp, name)
+      try {
+        if (now - statSync(path).mtimeMs < 24 * 60 * 60 * 1000) continue
+        rmSync(path, { recursive: true, force: true })
+      } catch { /* a single locked entry must not stop the sweep */ }
+    }
+  } catch { /* best effort: never let cleanup break a boot */ }
+}
+
+/**
+ * Materialize the EMBEDDED composition (root config + the two built-in patch
+ * layers) into {@link profileDir} and return their absolute paths.
+ *
+ * These three files are REQUIRED layers, not optional ones — see
+ * {@link readEmbeddedLayer}; a missing file is this process's own bug and fails
+ * loud rather than booting a composition without the TUI layer.
+ */
 function materializeProfile(): { root: string; base: string; tui: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'dsh-tui-'))
+  const dir = profileDir()
+  mkdirSync(dir, { recursive: true })
   const root = join(dir, 'cordis.yml')
   const base = join(dir, 'base.cordis.patch.yml')
   const tui = join(dir, 'tui-app.cordis.patch.yml')
-  writeFileSync(root, PROFILE_ROOT)
-  writeFileSync(base, BASE_PATCH)
-  writeFileSync(tui, TUI_PATCH)
+  syncFile(root, PROFILE_ROOT)
+  syncFile(base, BASE_PATCH)
+  syncFile(tui, TUI_PATCH)
+  sweepLegacyProfiles()
   return { root, base, tui }
+}
+
+/**
+ * Read one REQUIRED embedded layer. The harness's `loadOptionalPatches` is the
+ * parser for USER overlays and reports a missing file as `undefined`; called on
+ * our own just-materialized layer that would silently degrade into "boots
+ * without this layer", so it is turned into a loud failure here.
+ * @param binName - diagnostic prefix.
+ * @param file - absolute path of the layer.
+ * @returns the parsed patch list (always an array).
+ */
+function readEmbeddedLayer(binName: string, file: string): PatchOptions[] {
+  const layer = loadOptionalPatches(binName, file)
+  if (layer === undefined) {
+    throw new Error(`${binName}: embedded layer missing after materialization: ${file}`)
+  }
+  return layer
 }
 
 /**
@@ -538,8 +612,8 @@ async function main(): Promise<void> {
   installFailLoud(NAME, process, async () => { await app.current?.fiber.dispose() })
   const { shutdown } = installShutdown(app)
 
-  const base = loadOptionalPatches(NAME, profile.base) ?? []
-  const tui = loadOptionalPatches(NAME, profile.tui) ?? []
+  const base = readEmbeddedLayer(NAME, profile.base)
+  const tui = readEmbeddedLayer(NAME, profile.tui)
   const patches = [...structuredClone(base), ...structuredClone(tui)]
 
   const ctx = await bootSea(NAME, profile.root, patches, (hostCtx) => {

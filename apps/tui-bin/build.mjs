@@ -1,5 +1,5 @@
 /**
- * Build the single-file SEA (`dist/dsh-tui`) bundle.
+ * Build the single-file executable (`dist/dsh-tui`).
  *
  * The entry (`src/bin.ts`) boots the same profile composition the npm bundle
  * ships (dsh-base + dsh-tui-app patch layers) through the Cordis Loader, but a
@@ -8,15 +8,16 @@
  *  2. reads the base + tui patch layers to find every plugin the composition
  *     references by `name`,
  *  3. emits an import manifest that statically imports exactly those modules
- *     (bundled by esbuild) and a config embed carrying the patch/root files,
- *  4. esbuild-bundles the entry to one ESM file, then
- *  5. wraps it with Node SEA (`--experimental-sea-config` + `postject`).
+ *     and a config embed carrying the patch/root files,
+ *  4. compiles the entry into ONE self-contained executable with
+ *     `bun build --compile` (see {@link compileTarget}) — the runtime embedded in
+ *     the artifact is Bun (it reports `Bun v…`, never a Node SEA blob).
  *
  * Resolution uses a symlink farm (`nodePaths`) so bare `@deepseek-ai/*` names —
  * including subpath exports — resolve through the harness's built packages and
  * then get bundled. Native-addon packages are stubbed: the TUI patch disables
  * the OS sandbox rows, so their (native) modules never activate; a stub keeps
- * esbuild from following the `.node` import.
+ * the bundler from following the `.node` import.
  *
  * @module dsh-tui/build
  */
