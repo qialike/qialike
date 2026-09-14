@@ -28,10 +28,13 @@ const count = (haystack: string, needle: string): number => haystack.split(needl
  *  patterns below are safe to reuse across calls. */
 const hits = (re: RegExp, haystack: string): number => haystack.match(re)?.length ?? 0
 
-/** An indexed or whole-length WRITE — never a comparison (`===`, `==`, `!==`,
- *  `<=`, `>=` all fail the negative lookahead). */
-const IDX_WRITE = /this\.items\[[^\]]*\]\s*=(?!=)/g
-const LEN_WRITE = /this\.items\.length\s*=(?!=)/g
+/** An indexed or whole-length WRITE — any assignment OPERATOR, never a
+ *  comparison. The operator group covers the compound forms (`+=`, `??=`, `||=`,
+ *  `&&=`, `**=`, `<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`, `%=`) as well as plain
+ *  `=`; `(?!=)` rejects `==`/`===`, and `<`/`>`/`!` alone are not in the set, so
+ *  `<=`, `>=` and `!=` stay comparisons. */
+const IDX_WRITE = /this\.items\[[^\]]*\]\s*(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?!=)/g
+const LEN_WRITE = /this\.items\.length\s*(?:[-+*/%&|^]|\*\*|<<|>>>?|&&|\|\||\?\?)?=(?!=)/g
 
 describe('in-place transcript array', () => {
   test('① every write goes through one of the three rev-bumping writers', () => {
@@ -71,6 +74,21 @@ describe('in-place transcript array', () => {
     expect(hits(IDX_WRITE, 'this.items[index] = item'), 'the real indexed write').toBe(1)
     expect(hits(IDX_WRITE, 'this.items[i] = { ...this.items[i], text }'), 'an element replace').toBe(1)
     expect(hits(LEN_WRITE, 'this.items.length = 0'), 'the real length write').toBe(1)
+  })
+
+  test('①c every compound assignment is caught too', () => {
+    // A guard that only sees `=` is not a guard on a mutable array: `items[i] +=`
+    // and `items.length -= 1` mutate in place and never bump the revision, so
+    // the render freezes — exactly the failure this file exists to prevent.
+    for (const op of ['+=', '-=', '*=', '/=', '%=', '**=', '<<=', '>>=', '>>>=', '&=', '|=', '^=', '&&=', '||=', '??=']) {
+      expect(hits(IDX_WRITE, `this.items[i] ${op} x`), `IDX_WRITE must match ${op}`).toBe(1)
+      expect(hits(LEN_WRITE, `this.items.length ${op} 1`), `LEN_WRITE must match ${op}`).toBe(1)
+    }
+    for (const cmp of ['this.items[i] <= x', 'this.items[i] >= x', 'this.items[i] != x',
+                       'this.items.length <= 1', 'this.items.length >= 1']) {
+      expect(hits(IDX_WRITE, cmp), `IDX_WRITE must not match: ${cmp}`).toBe(0)
+      expect(hits(LEN_WRITE, cmp), `LEN_WRITE must not match: ${cmp}`).toBe(0)
+    }
   })
 
   test('② the revision is published, and the array still reads as a live view', () => {

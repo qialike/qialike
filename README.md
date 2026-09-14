@@ -22,9 +22,12 @@ bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
 - bun (for `bun build --compile` in `pnpm build` and `bun test` in `pnpm test:unit`; version not pinned — install the latest, v1.3.14 is a verified reference)
 - A DeepSeek Harness checkout (`DSH_HARNESS`, default `../deepseek-harness`; needed only for `pnpm build` — running the compiled `dist/dsh-tui` needs no checkout)
 - `DEEPSEEK_API_KEY` (via the environment, `~/.dsh` settings, or `.env`) when running a real session
-- **Memory**: the compiled single-file executable needs ~**270 MB peak** to start
-  the hero (~330 MB with a very large session loaded) and settles at 150–220 MB
-  resident. Recommend **≥1 GB** of RAM; 512 MB works but is tight (no swap
+- **Memory** (measured 2026-09-14 on `0.4.15-beta`; whole process tree, 12 s
+  settle): the compiled single-file executable peaks at ~**250–290 MB** while
+  starting the hero and ~**330–345 MB** while loading a very large session, then
+  settles at ~**170 MB** (hero) to ~**225 MB** (a long conversation) resident.
+  Opening a 30 MB-compressed transcript read-only peaks near **320 MB** and
+  settles near **220 MB**. Recommend **≥1 GB** of RAM; 512 MB works but is tight (no swap
   headroom for a giant transcript), and below 512 MB is unsupported. The runtime
   is Bun/JSC, which does not return freed pages eagerly, so RSS creeps up with
   use and then plateaus — this is GC policy, not a leak (verified: with
@@ -324,6 +327,27 @@ dsh-tui plugin remove-mcp <name> [--project]
 instead of the personal one. Enabling/disabling needs no command: a row without
 `insert` that says `disabled: true` re-configures a built-in row by id.
 
+**The repository overlay is applied automatically at boot, so it has a policy of
+its own.** A repository is not you: `git clone <repo> && dsh-tui` must not be able
+to run a process or lift your sandbox in silence. Two consequences:
+
+- **Rows that spawn a process need a per-repository decision.** An MCP server row
+  starts its `command` when dsh-tui boots, so it is honoured only when that exact
+  file is trusted — `dsh-tui plugin trust-overlay` (inside the repository),
+  recorded in `<profile>/overlays.trust.json` with its content hash and harness
+  version. Any edit to the file re-asks, and `dsh-tui plugin list` shows the
+  state. Untrusted, the launch **refuses** and names the fix.
+- **Safety-critical rows are refused outright.** Rows that change `sandbox`,
+  `sandbox-policy`, `fs-sandbox`, `bash-sandbox`, `pwsh-sandbox`, `approval`,
+  `permission` or `fs-observation-policy` (or disable them) belong in *your*
+  overlay; a repository never decides your file-effect boundary, and trust does
+  not buy them.
+
+When a repository overlay is in play the hero says so (`⚠ repo overlay applied:
+…`), and `--no-project-overlay` (or `DSH_TUI_NO_PROJECT_OVERLAY=1`) ignores the
+layer for one run. `dsh-tui plugin list` prints the layer, the rows that run
+processes and the trust state.
+
 The overlays can only mount plugins **bundled** into this binary. To run your own
 plugin, install it as an ordinary package inside the profile and trust it:
 
@@ -338,8 +362,11 @@ dsh-tui plugin trust my-plugin
 
 The loader enforces three things: the plugin must live **inside**
 `<profile>/node_modules` (symlinks are realpath-checked), it must be trusted for
-the harness version this binary embeds (an upgrade re-asks), and its files must
-not change afterwards — every edit invalidates the trust. A local plugin runs
+the harness version this binary embeds (an upgrade re-asks), and the plugin's
+**own** files must not change afterwards — every edit to them invalidates the
+trust. Its `node_modules/` and `.git/` are deliberately outside that hash
+(reinstalling a dependency is not tampering), so the hash covers the code you
+reviewed, not the dependency tree it pulls in. A local plugin runs
 **in this process with full privileges**, which is why trust is explicit,
 per-plugin and revocable (`dsh-tui plugin untrust <name>`).
 

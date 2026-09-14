@@ -647,6 +647,13 @@ export class Store {
    *  transcript row, so it cannot re-layout / follow-tail auto-scroll the
    *  transcript and slide the (screen-coordinate) selection highlight onto the
    *  next block below. */
+  /** The repository-overlay line this launch applied (or skipped), for the hero. */
+  private _repoOverlayNotice: string | undefined
+  get repoOverlayNotice(): string | undefined { return this._repoOverlayNotice }
+  setRepoOverlayNotice(text: string): void {
+    this._repoOverlayNotice = text
+    this.notify()
+  }
   private _statusFlash: { text: string; at: number } | null = null
   private _statusFlashTimer: ReturnType<typeof setTimeout> | null = null
   get statusFlash(): { text: string; at: number } | null { return this._statusFlash }
@@ -3243,11 +3250,70 @@ function HelpDialog(): React.JSX.Element {
   )
 }
 
+/**
+ * The sandbox mode the harness would actually enforce for a session.
+ *
+ * A view-side scan of `snapshotEvents()` is not enough: a NEWLY seeded session's
+ * `sandbox/mode` lives in seed events the snapshot does not carry, so the status
+ * bar would claim the TUI's default (workspace-write) while the session log —
+ * and every confined call — says something else. The policy service is the same
+ * authority `confine()` resolves through: request override, then the session's
+ * last logged mode, then the deployment default.
+ *
+ * @param ctx - the plugin context carrying the sandbox policy service.
+ * @param session - the session to resolve for, or undefined for the default.
+ * @returns the effective mode, or undefined without the service (the caller then
+ *   keeps its view-side value).
+ */
+function effectiveSandboxMode(ctx: Context, session: unknown): SandboxMode | undefined {
+  const policy = ctx.get('sandboxPolicy') as
+    | { resolve(request?: { session?: unknown }): { mode?: SandboxMode } }
+    | undefined
+  try {
+    return session === undefined ? policy?.resolve().mode : policy?.resolve({ session }).mode
+  } catch {
+    return undefined // a tree without the policy service: keep the view-side value
+  }
+}
+
+/**
+ * One line naming the repository overlay bin.ts applied (or skipped), or
+ * undefined when there is none. The layer is applied with no prompt, so this is
+ * the only thing standing between "silent" and "visible".
+ * @returns the notice text, or undefined.
+ */
+function projectOverlayNotice(): string | undefined {
+  const raw = process.env.DSH_TUI_PROJECT_OVERLAY
+  if (raw === undefined || raw === '') return undefined
+  try {
+    const info = JSON.parse(raw) as { file?: unknown; rows?: unknown; skipped?: unknown }
+    const file = typeof info.file === 'string' ? info.file : '(unknown)'
+    if (info.skipped === true) return `repo overlay IGNORED (--no-project-overlay): ${file}`
+    const rows = typeof info.rows === 'number' ? info.rows : 0
+    return `repo overlay applied: ${file} (${rows} row(s)) — \`dsh-tui --dump-config\` shows every row`
+  } catch {
+    return undefined // a malformed value must not break a launch
+  }
+}
+
 export function apply(ctx: Context, config: Config): void {
   // Surface services for this plugin tree and every panel plugin: the store
   // (UI state) and the `tui` aggregate (panel/command registration, notify).
   ctx.provide('tuiStore', store)
   ctx.provide('tui', tui)
+  // The repository overlay is applied without asking: name it in the status bar
+  // (long flash, visible on the hero) and leave a line in the transcript.
+  const overlayNotice = projectOverlayNotice()
+  if (overlayNotice !== undefined) {
+    store.setRepoOverlayNotice(overlayNotice)
+    store.flashStatus(`⚠ ${overlayNotice}`, 20_000)
+    store.append('status', `⚠ ${overlayNotice}`, true)
+  }
+  // A fresh session takes its mode from the deployment default, which an overlay
+  // can change: adopt it now so the chip does not claim the TUI's own default
+  // while every confined call uses something else (the session's durable mode
+  // replaces this at attach/switch time).
+  store.adoptPermission(effectiveSandboxMode(ctx, undefined))
   const exit = ctx.get('appExit')
   if (exit === undefined) {
     throw new Error('tui-runtime: the launcher must provide ctx.appExit before the tree mounts')
@@ -3929,7 +3995,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (store.readOnlyPermissionPicked) {
       try { setSandboxMode(agent.session, store.permission) } catch { /* best-effort */ }
     } else {
-      store.adoptPermission(lastSandboxMode(launchSnapshot))
+      store.adoptPermission(effectiveSandboxMode(ctx, agent.session) ?? lastSandboxMode(launchSnapshot))
     }
     store.settleReadOnlyPermission()
     const tPerm = Date.now()
@@ -4744,7 +4810,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         // P2①: the snapshot below is also what the title/blank fold uses, so it
         // is taken once here and handed to the fold instead of twice.
         const switchSnapshot = agent.session.snapshotEvents()
-        store.adoptPermission(lastSandboxMode(switchSnapshot))
+        store.adoptPermission(effectiveSandboxMode(ctx, agent.session) ?? lastSandboxMode(switchSnapshot))
         resumeHistoryIntoStore(store, agent.session, switchSnapshot)
         const foldMs = Date.now() - tFold
         store.beginSessionLoadStep('index', foldMs)

@@ -42,7 +42,12 @@ describe('plugin CLI', () => {
     expect(walk, 'uses a distinct filename').toContain("'.dsh', 'tui.cordis.patch.yml'")
     // Project outranks personal: it is the last layer in the list.
     expect(BIN, 'applied after the user overlay').toContain('...structuredClone(user), ...structuredClone(project)]')
-    expect(BIN, 'and validated like it').toContain('if (project.length > 0) validateUserLayer(project, known, projectFile)')
+    // Validated like the personal overlay AND policed: a repository may not
+    // change safety rows, and its process-running rows need the overlay ledger.
+    expect(BIN, 'validated like it').toContain('if (project.length > 0) {')
+    expect(BIN).toContain('validateUserLayer(project, known, projectFile)')
+    expect(BIN).toContain('assertProjectOverlaySafe(projectFile, projectPolicy)')
+    expect(BIN).toContain('assertProjectOverlayTrusted(projectFile, projectPolicy)')
   })
 
   test('③ add-mcp writes atomically, validates before installing, and cleans up', () => {

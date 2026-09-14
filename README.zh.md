@@ -21,7 +21,7 @@
 - bun（用于 `pnpm build` 的 `bun build --compile` 打包与 `pnpm test:unit`；未固定版本，装最新即可，参考已验证 v1.3.14）
 - 一份 DeepSeek Harness 检出（`DSH_HARNESS`，默认 `../deepseek-harness`；仅 `pnpm build` 需要，运行编译好的 `dist/dsh-tui` 无需检出）
 - 跑真实会话时需要 `DEEPSEEK_API_KEY`（环境变量、`~/.dsh` 设置或 `.env`）
-- **内存**：编译后的单文件可执行体启动 hero 约需 **270 MB 峰值**（打开超大会话约 330 MB），稳态常驻 150–220 MB。建议 **≥1 GB** 内存；512 MB 可用但偏紧（超长转录没有 swap 余量），低于 512 MB 不支持。运行时是 Bun/JSC，不会及时把已释放页面还给系统，所以 RSS 随使用缓慢上升后趋于平台——**这是 GC 策略，不是泄漏**（实测：同一负载下开 `BUN_JSC_collectContinuously=1`，RSS 不升反降）。内存紧张时该环境变量就是官方缓解手段，代价是 GC 更频繁。
+- **内存**（2026-09-14 在 `0.4.15-beta` 上实测；整棵进程树、静置 12 s）：编译后的单文件可执行体启动 hero 峰值约 **250–290 MB**、加载超大会话约 **330–345 MB**，稳态常驻 **约 170 MB（hero）–225 MB（长会话）**；只读打开一个 30 MB（压缩）的转录峰值约 **320 MB**、随后稳定在约 **220 MB**。建议 **≥1 GB** 内存；512 MB 可用但偏紧（超长转录没有 swap 余量），低于 512 MB 不支持。运行时是 Bun/JSC，不会及时把已释放页面还给系统，所以 RSS 随使用缓慢上升后趋于平台——**这是 GC 策略，不是泄漏**（实测：同一负载下开 `BUN_JSC_collectContinuously=1`，RSS 不升反降）。内存紧张时该环境变量就是官方缓解手段，代价是 GC 更频繁。
 
 ## 构建
 
@@ -166,6 +166,21 @@ dsh-tui plugin remove-mcp <name> [--project]
 `--project` 作用于**仓库级** overlay（`<repo>/.dsh/tui.cordis.patch.yml`）而非个人那份。
 启用/禁用不需要命令：**不带** `insert`、内容为 `disabled: true` 的行按 `id` 改内建行即可。
 
+**仓库 overlay 在启动时自动应用，所以它有自己的一套策略。** 仓库不等于你本人：`git clone <仓库> && dsh-tui`
+不能悄悄跑起一个进程、也不能悄悄放宽你的沙箱。两条后果：
+
+- **会 spawn 进程的行需要一次 per-repo 决定。** MCP server 行会在启动时执行它的 `command`，所以只有**这个文件**
+  被显式信任时才生效 —— 在仓库里跑 `dsh-tui plugin trust-overlay`，把内容哈希与 harness 版本记进
+  `<profile>/overlays.trust.json`；文件一旦被改动就会重新询问，`dsh-tui plugin list` 会显示状态。未信任时
+  启动**直接拒绝**并给出修法。
+- **安全类行一律拒绝。** 改（或关掉）`sandbox` / `sandbox-policy` / `fs-sandbox` / `bash-sandbox` /
+  `pwsh-sandbox` / `approval` / `permission` / `fs-observation-policy` 的行只能写在**你自己的** overlay 里；
+  仓库无权决定你的文件效果边界，信任也买不到它们。
+
+仓库 overlay 生效时 hero 会明说（`⚠ repo overlay applied: …`）；`--no-project-overlay`（或
+`DSH_TUI_NO_PROJECT_OVERLAY=1`）这一次启动直接忽略该层；`dsh-tui plugin list` 会打印该层、其中会跑进程的行
+以及信任状态。
+
 overlay 只能挂**打进本二进制**的插件。要跑自己的插件，把它当作普通包装进 profile 再显式信任：
 
 ```sh
@@ -178,8 +193,8 @@ dsh-tui plugin trust my-plugin
 ```
 
 加载器强制三件事：插件必须位于 `<profile>/node_modules` **之内**（软链会做 realpath 校验）；
-必须针对**本二进制内嵌的 harness 版本**被信任（升级后会重新询问）；信任之后文件**不得变化**——
-任何改动都会让信任失效。本地插件**在本进程内以完整权限运行**，所以信任是显式、逐个、可撤销的
+必须针对**本二进制内嵌的 harness 版本**被信任（升级后会重新询问）；信任之后插件**自身**的文件**不得变化**——
+任何改动都会让信任失效（`node_modules/` 与 `.git/` 刻意不在哈希内：重装依赖不算篡改，所以哈希覆盖的是你审阅过的代码，不是它拉进来的依赖树）。本地插件**在本进程内以完整权限运行**，所以信任是显式、逐个、可撤销的
 （`dsh-tui plugin untrust <name>`）。
 
 overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内建行（换 persona、关掉某个工具）。

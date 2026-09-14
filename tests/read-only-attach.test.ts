@@ -180,7 +180,12 @@ describe('start() read-only wiring (S2-2b)', () => {
     expect(from).toBeGreaterThan(0)
     const block = source.slice(from, from + 400)
     expect(block).toContain('setSandboxMode(agent.session, store.permission)')
-    expect(block).toContain('store.adoptPermission(lastSandboxMode(launchSnapshot))')
+    // The non-explicit branch now takes the EFFECTIVE mode from the policy
+    // service and only falls back to the session's own events: a freshly seeded
+    // session's mode lives in seed events `snapshotEvents()` does not carry, so
+    // the view-side scan alone let the chip claim "Workspace Write" while the
+    // session (and every confined call) used something else.
+    expect(block).toContain('store.adoptPermission(effectiveSandboxMode(ctx, agent.session) ?? lastSandboxMode(launchSnapshot))')
     expect(block).toContain('store.settleReadOnlyPermission()')
   })
 

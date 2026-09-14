@@ -265,7 +265,7 @@ function resolveLocalPlugin(name: string): { dir: string; entry: string } | unde
 function assertPluginTrusted(name: string, local: { dir: string; entry: string }, trusted: TrustLedger): void {
   const record = trusted[name]
   const prefix = `${NAME}: refusing to load local plugin "${name}" (${local.dir})`
-  const reTrust = `run \`${NAME} plugin trust ${name}\` to review and trust it`
+  const reTrust = `run \`${NAME} plugin trust ${name}\` to trust it (read its files yourself first)`
   if (record === undefined) {
     throw new Error(`${prefix}: it is not trusted yet — ${reTrust}`)
   }
@@ -321,6 +321,137 @@ function writeTrustLedger(ledger: TrustLedger): void {
   writeFileSync(temp, JSON.stringify(ledger, null, 2) + '\n', { mode: 0o600 })
   renameSync(temp, file)
   try { chmodSync(file, 0o600) } catch { /* best effort */ }
+}
+
+/**
+ * The PROJECT overlay (`<repoRoot>/.dsh/tui.cordis.patch.yml`) is the one layer a
+ * repository controls, and it is applied automatically at boot — `git clone &&
+ * dsh-tui` must not be able to run a process or lift the sandbox in silence. So
+ * the layer gets a policy of its own:
+ *
+ *  - **safety-critical rows are never repo-owned**: re-configuring the sandbox,
+ *    approval or permission rows (or disabling them) is refused outright, because
+ *    the effect is invisible on screen and the repository is not the authority
+ *    for your file-effect boundary. Write those in YOUR overlay instead.
+ *  - **rows that spawn a process need an explicit per-repository decision**: an
+ *    MCP row's `command` runs at boot, so it is honoured only when this exact
+ *    file's bytes are recorded in the overlay trust ledger (path + content hash +
+ *    harness version, like the T1 plugin ledger).
+ */
+const PROJECT_EXECUTION_ROWS: ReadonlySet<string> = new Set(['@deepseek-ai/dsh-mcp-client'])
+const PROJECT_FORBIDDEN_ROWS: ReadonlySet<string> = new Set([
+  'sandbox', 'sandbox-policy', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox',
+  'approval', 'permission', 'fs-observation-policy',
+])
+
+/** One project-layer row the policy refuses, and why. */
+interface ProjectRowProblem {
+  id: string
+  kind: 'execution' | 'safety'
+}
+
+/**
+ * Classify the project layer's rows against the policy above.
+ * @param patches - the parsed project layer.
+ * @returns the refused rows, in layer order.
+ */
+function classifyProjectLayer(patches: readonly PatchOptions[]): ProjectRowProblem[] {
+  const problems: ProjectRowProblem[] = []
+  const walk = (entries: readonly unknown[]): void => {
+    for (const entry of entries) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const row = entry as { id?: unknown; name?: unknown; insert?: unknown; disabled?: unknown }
+      const id = typeof row.id === 'string' ? row.id : '(no id)'
+      if (Array.isArray(row.insert)) { walk(row.insert); continue }
+      if (row.disabled === true) continue // a disabled row mounts nothing
+      if (typeof row.name === 'string' && PROJECT_EXECUTION_ROWS.has(row.name)) problems.push({ id, kind: 'execution' })
+      else if (PROJECT_FORBIDDEN_ROWS.has(id)) problems.push({ id, kind: 'safety' })
+    }
+  }
+  walk(patches)
+  return problems
+}
+
+/** The project-overlay trust ledger: `<profile>/overlays.trust.json`. */
+function overlayTrustFile(): string {
+  return join(profileDir(), 'overlays.trust.json')
+}
+
+/** One trusted project overlay: which bytes were vouched for, when, against which harness. */
+interface OverlayTrustRecord {
+  hash: string
+  harness: string
+  at: string
+}
+
+/** Absolute overlay path → its trust record. */
+type OverlayTrustLedger = Record<string, OverlayTrustRecord>
+
+/** Read the overlay ledger; a missing or unreadable file means "nothing trusted". */
+function readOverlayTrust(): OverlayTrustLedger {
+  try {
+    const raw = JSON.parse(readFileSync(overlayTrustFile(), 'utf8')) as unknown
+    return typeof raw === 'object' && raw !== null ? raw as OverlayTrustLedger : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Write the overlay ledger atomically (temp + rename) with owner-only modes. */
+function writeOverlayTrust(ledger: OverlayTrustLedger): void {
+  mkdirSync(profileDir(), { recursive: true, mode: 0o700 })
+  const file = overlayTrustFile()
+  const temp = `${file}.tmp`
+  writeFileSync(temp, JSON.stringify(ledger, null, 2) + '\n', { mode: 0o600 })
+  renameSync(temp, file)
+  try { chmodSync(file, 0o600) } catch { /* best effort */ }
+}
+
+/**
+ * Ledger key for one overlay: the realpath when it resolves, else the resolved
+ * path. A repository reached through a symlinked path must hit the same record
+ * as the same repository reached directly.
+ */
+function overlayKey(file: string): string {
+  try {
+    return realpathSync(file)
+  } catch {
+    return resolve(file)
+  }
+}
+
+/** sha256 of the overlay FILE's bytes — the thing that actually gets applied. */
+function overlayContentHash(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex')
+}
+
+/** Refuse safety row changes from the project scope, naming the rows and the fix. */
+function assertProjectOverlaySafe(file: string, problems: readonly ProjectRowProblem[]): void {
+  const safety = problems.filter((p) => p.kind === 'safety').map((p) => p.id)
+  if (safety.length === 0) return
+  throw new Error(`${NAME}: the project overlay ${file} changes safety-critical rows (${safety.join(', ')})`
+    + ` — this repository cannot decide your sandbox, approval or permission settings.`
+    + ` Move that part to YOUR overlay (${userPatchPath()}), or start with \`--no-project-overlay\`.`)
+}
+
+/** Refuse execution rows until this exact file is trusted for THIS harness version. */
+function assertProjectOverlayTrusted(file: string, problems: readonly ProjectRowProblem[]): void {
+  const rows = problems.filter((p) => p.kind === 'execution').map((p) => p.id).join(', ')
+  const reTrust = `run \`${NAME} plugin trust-overlay\` inside that repository to trust it (read the file yourself first)`
+  const record = readOverlayTrust()[overlayKey(file)]
+  if (record === undefined) {
+    throw new Error(`${NAME}: the project overlay ${file} mounts a server that runs a process (${rows})`
+      + ` — ${reTrust}, or start with \`--no-project-overlay\``)
+  }
+  if (record.harness !== HARNESS_VERSION) {
+    throw new Error(`${NAME}: the project overlay ${file} was trusted for harness ${record.harness},`
+      + ` this build embeds ${HARNESS_VERSION} — ${reTrust} again after reviewing it`)
+  }
+  const actual = overlayContentHash(file)
+  if (record.hash !== actual) {
+    throw new Error(`${NAME}: the project overlay ${file} changed since it was trusted (hash mismatch)`
+      + ` — ${reTrust} again after reviewing the change`)
+  }
 }
 
 /** Load a trusted local plugin IN PROCESS. `require` (not `import`) because the
@@ -677,9 +808,14 @@ Commands:
                                append an stdio MCP server to the overlay
   remove-mcp <name> [--project]
                                delete that server's row from the overlay
-  trust <name>                 review + trust a LOCAL plugin installed at
+  trust <name>                 record a LOCAL plugin as trusted (read its
+                               files yourself first — this command does not)
                                <profile>/node_modules/<name> (runs in-process)
   untrust <name|path>          forget that trust (the files stay on disk)
+  trust-overlay                trust THIS repository's overlay
+                               (.dsh/tui.cordis.patch.yml) to mount servers
+                               that run processes — read the file yourself first
+  untrust-overlay              forget that decision (the file stays on disk)
 
 MCP servers reach the model as mcp__<name>__<tool>. A row can only name a plugin
 bundled into this build, and a row id must match a built-in row (or use insert);
@@ -801,6 +937,17 @@ function runPlugin(argv: readonly string[]): number {
       const orphan = ledger[target] !== undefined && !referenced.includes(target) ? ' (not referenced by any overlay)' : ''
       process.stdout.write(`      ${target} → ${trustState(target, ledger)}${orphan}\n`)
     }
+    const projectFile = projectPatchPath(cwd)
+    if (existsSync(projectFile)) {
+      const project = readOverlay(NAME, projectFile).patches
+      const policy = classifyProjectLayer(project)
+      const execution = policy.filter((p) => p.kind === 'execution').map((p) => p.id)
+      const safety = policy.filter((p) => p.kind === 'safety').map((p) => p.id)
+      process.stdout.write(`  project overlay: ${projectFile} — ${project.length} row(s)`
+        + `${execution.length > 0 ? `, runs processes: ${execution.join(', ')}` : ''}`
+        + `${safety.length > 0 ? `, REFUSED safety rows: ${safety.join(', ')}` : ''}\n`
+        + `      trust: ${overlayTrustState(projectFile)}\n`)
+    }
     return 0
   }
   if (command === 'add-mcp' || command === 'remove-mcp') {
@@ -885,8 +1032,44 @@ function runPlugin(argv: readonly string[]): number {
     process.stdout.write(`${NAME}: untrusted local plugin "${target}" (it stays on disk)\n`)
     return 0
   }
+  if (command === 'trust-overlay' || command === 'untrust-overlay') {
+    hardenProfileDir()
+    const file = projectPatchPath(cwd)
+    if (!existsSync(file)) {
+      process.stderr.write(`${NAME}: no project overlay at ${file} (run this inside the repository)\n`)
+      return 1
+    }
+    const ledger = readOverlayTrust()
+    if (command === 'untrust-overlay') {
+      delete ledger[overlayKey(file)]
+      writeOverlayTrust(ledger)
+      process.stdout.write(`${NAME}: untrusted the project overlay ${file} (the file stays on disk)\n`)
+      return 0
+    }
+    // Show what is being vouched for: the rows that will run processes at boot.
+    const execution = classifyProjectLayer(readOverlay(NAME, file).patches).filter((p) => p.kind === 'execution')
+    if (execution.length === 0) {
+      process.stdout.write(`${NAME}: ${file} mounts no process-running rows — nothing to trust\n`)
+      return 0
+    }
+    const hash = overlayContentHash(file)
+    ledger[overlayKey(file)] = { hash, harness: HARNESS_VERSION, at: new Date().toISOString() }
+    writeOverlayTrust(ledger)
+    process.stdout.write(`${NAME}: trusted the project overlay for harness ${HARNESS_VERSION}\n`
+      + `  file:  ${file}\n  rows:  ${execution.map((p) => p.id).join(', ')}\n  hash:  ${hash}\n`
+      + '  Its commands now run when dsh-tui starts in this repository.\n')
+    return 0
+  }
   process.stderr.write(`${NAME}: unknown plugin command "${command}" (see \`dsh-tui plugin --help\`)\n`)
   return 1
+}
+
+/** Human-readable trust state of the project overlay (used by `plugin list`). */
+function overlayTrustState(file: string): string {
+  const record = readOverlayTrust()[overlayKey(file)]
+  if (record === undefined) return 'UNTRUSTED (execution rows will be refused at boot)'
+  if (record.harness !== HARNESS_VERSION) return `trusted for harness ${record.harness} (this build: ${HARNESS_VERSION})`
+  return record.hash === overlayContentHash(file) ? 'trusted' : 'CHANGED since trusted (refused at boot)'
 }
 
 /**
@@ -1260,14 +1443,34 @@ async function main(): Promise<void> {
   // can re-configure and insert BUNDLED plugins, never load arbitrary code.
   const userFile = userPatchPath()
   const user = loadOptionalPatches(NAME, userFile) ?? []
+  // The repository layer is skipped entirely by `--no-project-overlay` (or
+  // DSH_TUI_NO_PROJECT_OVERLAY=1): the escape hatch for a repository whose
+  // overlay this build refuses, and for anyone who does not want repo config.
+  const skipProject = args.includes('--no-project-overlay') || process.env.DSH_TUI_NO_PROJECT_OVERLAY === '1'
   const projectFile = projectPatchPath(process.cwd())
-  const project = loadOptionalPatches(NAME, projectFile) ?? []
+  const project = skipProject ? [] : loadOptionalPatches(NAME, projectFile) ?? []
   // Both overlays are hand-written, and the loader is silent about every way they
   // can be wrong — so they are validated here, before anything boots. The
   // PROJECT layer is applied last: a repository outranks the personal file.
   const known = layerRowIds([base, tui])
   if (user.length > 0) validateUserLayer(user, known, userFile)
-  if (project.length > 0) validateUserLayer(project, known, projectFile)
+  if (project.length > 0) {
+    validateUserLayer(project, known, projectFile)
+    // The project scope has a policy of its own: no safety-critical rows, and
+    // execution rows only when this exact file is trusted (see the block above).
+    const projectPolicy = classifyProjectLayer(project)
+    assertProjectOverlaySafe(projectFile, projectPolicy)
+    assertProjectOverlayTrusted(projectFile, projectPolicy)
+  }
+  // Tell the app about the repository layer so the status bar can name it: the
+  // layer is applied without any prompt, and silence is what makes it dangerous.
+  if (existsSync(projectFile)) {
+    process.env.DSH_TUI_PROJECT_OVERLAY = JSON.stringify({
+      file: projectFile,
+      rows: project.length,
+      skipped: skipProject,
+    })
+  }
   const patches = [...structuredClone(base), ...structuredClone(tui),
     ...structuredClone(user), ...structuredClone(project)]
 

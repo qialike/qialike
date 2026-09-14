@@ -68,6 +68,7 @@ import {
   heroLayout,
   heroHintLine,
   heroHintText,
+  heroNoticeText,
   heroMarkRows,
   heroTooSmallLines,
   type HeroBudget,
@@ -114,7 +115,7 @@ function composerMinHeight(): number {
  *  caret drifts out of the card. The formula itself lives in `hero-layout.ts`
  *  (`heroHintRows`) so it can be unit-tested on its own. */
 function heroHintRowCount(): number {
-  return heroHintRows(store.olderLoading, store.providerReady)
+  return heroHintRows(store.olderLoading, store.providerReady, store.repoOverlayNotice)
 }
 
 /** The hero's row budget for THIS frame, resolved once by `heroBudget`: the
@@ -2439,7 +2440,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // the sentence muted), so it cannot go through `centerInHero` — but its pad
   // must be computed from the concatenation of exactly those parts, or the
   // colored row would sit off-center against the art/title/card above it.
-  const heroHintFull = heroHintText(store.providerReady)
+  // A repository overlay REPLACES the tip row (same row count): the layer was
+  // applied without asking, so this row names it instead of giving advice.
+  const heroNoticeFull = heroNoticeText(store.repoOverlayNotice)
+  const heroHintFull = heroNoticeFull ?? heroHintText(store.providerReady)
   const heroHintPad = heroHintFull === undefined
     ? 0
     : Math.max(0, Math.floor((heroUsable - visualWidth(heroHintFull)) / 2))
@@ -2461,7 +2465,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // useful next step is `/models`; once one is ready the useful one is
     // `/sessions`. `undefined` = probe not settled yet (no wrong-instruction
     // flash).
-    if (heroHint !== undefined) {
+    if (heroNoticeFull !== undefined) {
+      heroHintPaint.push(
+        <Text key="hero-notice" color={theme.warning} wrap="truncate">
+          {' '.repeat(heroHintPad)}{heroNoticeFull}
+        </Text>,
+      )
+    } else if (heroHint !== undefined) {
       heroHintPaint.push(
         <Text key="hero-tip" wrap="truncate">
           {' '.repeat(heroHintPad)}

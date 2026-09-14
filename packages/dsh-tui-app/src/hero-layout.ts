@@ -566,16 +566,33 @@ export function heroHintText(providerReady: boolean | undefined): string | undef
 }
 
 /**
+ * The hero's warning line for a repository overlay that was applied (or skipped),
+ * or `undefined` when the launch had none.
+ *
+ * It REPLACES the tip rather than adding a row: the repository layer is applied
+ * without any prompt, so the row that would carry advice carries the one fact a
+ * user cannot otherwise see — and the hero stack keeps its row count, which is
+ * what the layout budget and the small-terminal scenarios pin.
+ * @param notice - `Store.repoOverlayNotice`.
+ * @returns the paintable line, or `undefined`.
+ */
+export function heroNoticeText(notice: string | undefined): string | undefined {
+  return notice === undefined ? undefined : `⚠ ${notice}`
+}
+
+/**
  * How many rows sit UNDER the card: the older-history progress line while a
- * resumed session folds, plus the tip line. Pure so the layout model
- * ({@link heroBudget}), the paint and the tests count them the same way — the
- * panel used to compute this inline with nothing asserting it.
+ * resumed session folds, plus exactly one of {repository-overlay warning, tip}.
+ * Pure so the layout model ({@link heroBudget}), the paint and the tests count
+ * them the same way — the panel used to compute this inline with nothing
+ * asserting it.
  * @param olderLoading - `Store.olderLoading`.
  * @param providerReady - `Store.providerReady`.
+ * @param notice - `Store.repoOverlayNotice` (replaces the tip when present).
  * @returns 0..2 rows.
  */
-export function heroHintRows(olderLoading: boolean, providerReady: boolean | undefined): number {
-  return (olderLoading ? 1 : 0) + (heroHintLine(providerReady) === undefined ? 0 : 1)
+export function heroHintRows(olderLoading: boolean, providerReady: boolean | undefined, notice?: string | undefined): number {
+  return (olderLoading ? 1 : 0) + (notice !== undefined || heroHintLine(providerReady) !== undefined ? 1 : 0)
 }
 
 /** Rows a mark occupies in the hero stack (0 for `none`). */

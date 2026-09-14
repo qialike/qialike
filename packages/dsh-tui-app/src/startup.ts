@@ -63,6 +63,7 @@ export function tuiCommand(): Command {
     .option('--resume <sessionId>', 'resume a specific persisted session (opens the conversation view directly)')
     .option('--model <model>', 'a provider/name model override, e.g. deepseek-v4-flash')
     .option('--dump-config', 'print the composed profile layers (embedded + user) and exit')
+    .option('--no-project-overlay', "ignore the repository's .dsh/tui.cordis.patch.yml for this run")
     .addHelpText('after', `
 Examples:
   dsh-tui                     start a NEW session and show the hero screen (never auto-resumes)
