@@ -21,6 +21,7 @@
 - bun（用于 `pnpm build` 的 `bun build --compile` 打包与 `pnpm test:unit`；未固定版本，装最新即可，参考已验证 v1.3.14）
 - 一份 DeepSeek Harness 检出（`DSH_HARNESS`，默认 `../deepseek-harness`；仅 `pnpm build` 需要，运行编译好的 `dist/dsh-tui` 无需检出）
 - 跑真实会话时需要 `DEEPSEEK_API_KEY`（环境变量、`~/.dsh` 设置或 `.env`）
+- **内存**：编译后的单文件可执行体启动 hero 约需 **270 MB 峰值**（打开超大会话约 330 MB），稳态常驻 150–220 MB。建议 **≥1 GB** 内存；512 MB 可用但偏紧（超长转录没有 swap 余量），低于 512 MB 不支持。运行时是 Bun/JSC，不会及时把已释放页面还给系统，所以 RSS 随使用缓慢上升后趋于平台——**这是 GC 策略，不是泄漏**（实测：同一负载下开 `BUN_JSC_collectContinuously=1`，RSS 不升反降）。内存紧张时该环境变量就是官方缓解手段，代价是 GC 更频繁。
 
 ## 构建
 

@@ -481,7 +481,16 @@ export function preparingRequestStatusText(startedAt: number | null, now: number
 let coldNextRequest = true
 
 export class Store {
+  /** The transcript rows. Mutated **in place** — the array identity is stable by
+   *  design, so re-render invalidation is signalled by {@link Store.itemsRev}
+   *  and NOT by `items !== previousItems`. (Every streamed delta used to copy
+   *  the whole array: O(n) per chunk, i.e. O(n²) per answer, and two full copies
+   *  alive at once — the peak measured while loading a giant session.) Consumers
+   *  that memoize on the rows must depend on `itemsRev`. */
   private items: TranscriptItem[] = []
+  /** Monotonic revision of {@link Store.items}. Bumped by the three writers
+   *  below and read by the transcript panel's row memo. */
+  private _itemsRev = 0
   private key = 0
   /** Key of the leading "loading older history" marker row while a chunked
    *  resume is still folding older slices in the background, or -1 when the
@@ -801,6 +810,16 @@ export class Store {
   newSessionAction: () => void = () => {}
 
   getItems(): readonly TranscriptItem[] { return this.items }
+  /** Revision of the in-place transcript array (see {@link Store.items}). The
+   *  panel's row memo keys on THIS: the array identity never changes, so an
+   *  identity-keyed memo would silently stop recomputing. */
+  get itemsRev(): number { return this._itemsRev }
+  /** The ONLY writers of {@link Store.items}. Each bumps {@link Store.itemsRev},
+   *  so no mutation can be invisible to the render path (a source guard in
+   *  `tests/items-inplace.test.ts` pins that down). */
+  private pushItem(item: TranscriptItem): void { this.items.push(item); this._itemsRev += 1 }
+  private setItemAt(index: number, item: TranscriptItem): void { this.items[index] = item; this._itemsRev += 1 }
+  private replaceItems(next: TranscriptItem[]): void { this.items = next; this._itemsRev += 1 }
   get steps(): readonly StepItem[] { return this._steps }
   get stepsDone(): number { return this._steps.filter(s => s.status === 'completed').length }
   get stepsTotal(): number { return this._steps.length }
@@ -964,7 +983,7 @@ export class Store {
   get secret() { return this._secret }
 
   append(kind: TranscriptItem['kind'], text: string, dim = kind === 'reasoning' || kind === 'status'): void {
-    this.items = [...this.items, { key: this.key += 1, kind, text, dim }]
+    this.pushItem({ key: this.key += 1, kind, text, dim })
     this.notify()
   }
 
@@ -974,12 +993,12 @@ export class Store {
    *  the counts and the summary — and it is the same row for a live compaction
    *  and for a resumed log, because the facts come from the durable events. */
   appendCompaction(facts: CompactionRowFacts): void {
-    this.items = [...this.items, {
+    this.pushItem({
       key: this.key += 1,
       kind: 'compaction',
       text: facts.summary ?? '',
       compaction: facts,
-    }]
+    })
     this.notify()
   }
 
@@ -988,7 +1007,7 @@ export class Store {
    *  error row, not a silent stop — the user can send another message to
    *  start a fresh turn (quota/billing failures are NOT auto-retried). */
   appendRunError(text: string): void {
-    this.items = [...this.items, { key: this.key += 1, kind: 'error', text }]
+    this.pushItem({ key: this.key += 1, kind: 'error', text })
     this.notify()
   }
 
@@ -1002,15 +1021,13 @@ export class Store {
    *  (Resume replays the same pair from the session log — foldHistoryEvents.) */
   toolCall(name: string, argsRaw?: string): void {
     const plan = name === EXIT_PLAN_TOOL ? extractPlanMarkdown(argsRaw) : undefined
-    this.items = plan === undefined
-      ? this.items
-      : [...this.items, { key: this.key += 1, kind: 'plan', text: plan }]
-    this.items = [...this.items, {
+    if (plan !== undefined) this.pushItem({ key: this.key += 1, kind: 'plan', text: plan })
+    this.pushItem({
       key: this.key += 1,
       kind: 'tool',
       text: `│ ${name}`,
       tool: { state: 'running', startedAt: Date.now(), ...argsRaw === undefined ? {} : { argsRaw: capToolArgs(argsRaw) } },
-    }]
+    })
     this._toolOpen += 1
     this._currentTool = name
     this._phase = 'tool'
@@ -1034,11 +1051,7 @@ export class Store {
           ...prevTool?.argsRaw === undefined ? {} : { argsRaw: prevTool.argsRaw },
           ...body === undefined ? {} : { body },
         }
-        this.items = [
-          ...this.items.slice(0, i),
-          { ...item, text: header, tool },
-          ...this.items.slice(i + 1),
-        ]
+        this.setItemAt(i, { ...item, text: header, tool })
         break
       }
     }
@@ -1123,9 +1136,9 @@ export class Store {
   streamText(text: string): void {
     const tail = this.items.at(-1)
     if (tail?.kind === 'assistant') {
-      this.items = [...this.items.slice(0, -1), { ...tail, text: tail.text + text }]
+      this.setItemAt(this.items.length - 1, { ...tail, text: tail.text + text })
     } else {
-      this.items = [...this.items, { key: this.key += 1, kind: 'assistant', text }]
+      this.pushItem({ key: this.key += 1, kind: 'assistant', text })
     }
     this._phase = 'answering'
     this.markActivity()
@@ -1152,16 +1165,14 @@ export class Store {
       if (this.items[i]?.kind === 'assistant') { idx = i; break }
     }
     if (idx === -1) {
-      this.items = [...this.items, { key: this.key += 1, kind: 'assistant', text }]
+      this.pushItem({ key: this.key += 1, kind: 'assistant', text })
       this._lastSettledKey = this.key
       this.notify()
       return
     }
     if (this.items[idx]!.text === text) return
-    const next = [...this.items]
-    next[idx] = { ...next[idx]!, text }
-    this.items = next
-    this._lastSettledKey = next[idx]!.key
+    this.setItemAt(idx, { ...this.items[idx]!, text })
+    this._lastSettledKey = this.items[idx]!.key
     this.notify()
   }
 
@@ -1169,9 +1180,9 @@ export class Store {
   streamReasoning(text: string): void {
     const tail = this.items.at(-1)
     if (tail?.kind === 'reasoning') {
-      this.items = [...this.items.slice(0, -1), { ...tail, text: tail.text + text }]
+      this.setItemAt(this.items.length - 1, { ...tail, text: tail.text + text })
     } else {
-      this.items = [...this.items, { key: this.key += 1, kind: 'reasoning', text }]
+      this.pushItem({ key: this.key += 1, kind: 'reasoning', text })
     }
     this._phase = 'thinking'
     this.markActivity()
@@ -1198,7 +1209,7 @@ export class Store {
   }
 
   clear(): void {
-    this.items = []
+    this.replaceItems([])
     this._historyMarkerKey = -1
     this._loadedOlder = 0
     this._historyProgressMax = 0
@@ -1239,7 +1250,7 @@ export class Store {
     // pending (the flag is only consulted while a marker exists).
     this._historySettled = false
     this._loadedOlder = 0
-    this.items = [...items]
+    this.replaceItems([...items])
     this.key = items.length
     this._steps = [...steps]
     this._toolBodiesOverride.clear()
@@ -1284,10 +1295,10 @@ export class Store {
     this._historyHolding = false
     this._historySettled = false
     this.key = markerKey
-    this.items = [
+    this.replaceItems([
       { key: markerKey, kind: 'status', text: Store.historyMarkerText(0, olderEvents, false), dim: true },
       ...items,
-    ]
+    ])
     this._steps = [...steps]
     this._toolBodiesOverride.clear()
     this._toolBodiesDefault = false
@@ -1311,9 +1322,9 @@ export class Store {
     const keyed: TranscriptItem[] = []
     for (const item of chunk) keyed.push({ ...item, key: this.key += 1 })
     const marker = this._historyMarkerKey >= 0 && this.items.length > 0 && this.items[0]?.key === this._historyMarkerKey
-    this.items = marker
+    this.replaceItems(marker
       ? [this.items[0]!, ...keyed, ...this.items.slice(1)]
-      : [...keyed, ...this.items]
+      : [...keyed, ...this.items])
     if (marker) this._loadedOlder += keyed.length
     this._measureEpoch += 1
     this.notify()
@@ -1635,7 +1646,7 @@ export class Store {
     const dropable = Math.max(0, this.items.length - 1)
     const dropN = Math.min(drop, dropable)
     if (dropN <= 0) return 0
-    this.items = [this.items[0]!, ...this.items.slice(1 + dropN)]
+    this.replaceItems([this.items[0]!, ...this.items.slice(1 + dropN)])
     this._loadedOlder -= dropN
     this._measureEpoch += 1
     this.notify()
@@ -1654,7 +1665,7 @@ export class Store {
     const shown = Math.max(this._historyProgressMax, done)
     this._historyProgressMax = shown
     this._historyTotal = total
-    this.items = [{ ...marker, text: Store.historyMarkerText(shown, total, this._historyHolding) }, ...this.items.slice(1)]
+    this.setItemAt(0, { ...marker, text: Store.historyMarkerText(shown, total, this._historyHolding) })
     this.notify()
   }
 
@@ -1672,7 +1683,7 @@ export class Store {
       ? READ_ONLY_OLDER_HISTORY
       : Store.historyMarkerText(this._historyProgressMax, this._historyTotal, this._historyHolding)
     if (marker.text === text) return
-    this.items = [{ ...marker, text }, ...this.items.slice(1)]
+    this.setItemAt(0, { ...marker, text })
     this.notify()
   }
 
@@ -1684,10 +1695,10 @@ export class Store {
     if (this._historyMarkerKey < 0 || this.items.length === 0) return
     const marker = this.items[0]!
     if (marker.key !== this._historyMarkerKey) return
-    this.items = [{
+    this.setItemAt(0, {
       ...marker,
       text: Store.historyMarkerText(this._historyProgressMax, this._historyTotal, holding),
-    }, ...this.items.slice(1)]
+    })
     this.notify()
   }
 
@@ -1696,7 +1707,7 @@ export class Store {
   finishHistory(): void {
     if (this._historyMarkerKey < 0) return
     this._historyMarkerKey = -1
-    this.items = this.items.length > 0 ? this.items.slice(1) : this.items
+    if (this.items.length > 0) this.replaceItems(this.items.slice(1))
     this._measureEpoch += 1
     this._expansionEpoch += 1
     this.notify()

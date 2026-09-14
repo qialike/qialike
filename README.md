@@ -22,6 +22,15 @@ bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
 - bun (for `bun build --compile` in `pnpm build` and `bun test` in `pnpm test:unit`; version not pinned — install the latest, v1.3.14 is a verified reference)
 - A DeepSeek Harness checkout (`DSH_HARNESS`, default `../deepseek-harness`; needed only for `pnpm build` — running the compiled `dist/dsh-tui` needs no checkout)
 - `DEEPSEEK_API_KEY` (via the environment, `~/.dsh` settings, or `.env`) when running a real session
+- **Memory**: the compiled single-file executable needs ~**270 MB peak** to start
+  the hero (~330 MB with a very large session loaded) and settles at 150–220 MB
+  resident. Recommend **≥1 GB** of RAM; 512 MB works but is tight (no swap
+  headroom for a giant transcript), and below 512 MB is unsupported. The runtime
+  is Bun/JSC, which does not return freed pages eagerly, so RSS creeps up with
+  use and then plateaus — this is GC policy, not a leak (verified: with
+  `BUN_JSC_collectContinuously=1` RSS goes *down* during the same workload). On a
+  memory-constrained box that flag is the supported mitigation, at the cost of
+  more frequent GC.
 
 ## Build
 

@@ -2346,6 +2346,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const version = store.getVersion()
   const themeEpoch = store.themeEpoch
   const items = store.getItems()
+  /** The rows array is mutated IN PLACE by the store (append/settle/window) —
+   *  its identity is stable, so the row memo below keys on the store's revision
+   *  counter instead. Keying on `items` would freeze the transcript after the
+   *  first frame. */
+  const itemsRev = store.itemsRev
   frameGapProbe(items.length, store.layoutScroll, store.followTail)
   const steps = store.steps
   const stepsDone = store.stepsDone
@@ -2560,7 +2565,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     const built = buildRows(items, steps)
     if (debugLayout) perfTick('items', Date.now() - t0, items.length, Math.round(process.memoryUsage().heapUsed / 1048576))
     return built
-  }, [items, steps])
+  }, [itemsRev, steps])
   // The collapsed Think tool rows always follow the tail (see thinkLiveLine /
   // capTail), so the row heights are independent of whether the model is
   // actively streaming — the layout never jumps mid-think.
