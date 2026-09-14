@@ -11,6 +11,8 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
+  HERO_ART_MIN_WIDTH,
+  HERO_CAPTION_URL,
   HERO_COMPOSER_EXTRA_ROWS,
   HERO_COMPOSER_MAX_COLS,
   HERO_COMPOSER_MIN_COLS,
@@ -336,6 +338,16 @@ describe('size gates and hero copy', () => {
     expect(HERO_PLACEHOLDER).toMatch(/\/ commands, @ files$/)
     expect(HERO_PLACEHOLDER, 'the prompt sentence stays the leading, greppable prefix')
       .toMatch(/^Describe what you want to build/)
+  })
+
+  test('the caption under the brand mark is the project site, not the version', () => {
+    expect(HERO_CAPTION_URL).toBe('qialike.com')
+    // ASCII-only, so it centers exactly (no East-Asian-Ambiguous glyph drift).
+    expect(visualWidth(HERO_CAPTION_URL)).toBe(HERO_CAPTION_URL.length)
+    // And it must survive every width the brand mark itself is drawn at: the
+    // caption is painted under the mark, so the mark's own floor is the widest
+    // the caption can ever be asked to fit.
+    expect(visualWidth(HERO_CAPTION_URL)).toBeLessThanOrEqual(HERO_ART_MIN_WIDTH)
   })
 })
 

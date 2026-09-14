@@ -47,6 +47,7 @@ import { questionPresentation } from '../plan-review.ts'
 import {
   HERO_ART_CELL_GLYPH,
   HERO_AREA_PADDING_Y,
+  HERO_CAPTION_URL,
   HERO_COMPOSER_EXTRA_ROWS,
   HERO_GAP,
   HERO_HINT_ICON,
@@ -2462,9 +2463,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     }
     heroHintPaint.splice(Math.max(0, heroB.hintLines))
   }
-  // The hero headline is the dsh-tui VERSION, verbatim (e.g. `0.3.1-beta`); the
-  // "-beta" prerelease segment already marks a preview build, so no extra badge.
-  const heroTitleLine = `${APP_VERSION}`
+  // The caption under the brand mark is the project's site (user call,
+  // 2026-09-13), not the version: the version still reads from the docked
+  // sidebar footer and `--version`. Painted PLAIN (see the render) — a brand
+  // plate, not a build stamp. The string is the pure module's constant so a
+  // unit test pins it.
+  const heroCaptionLine = HERO_CAPTION_URL
 
   const filtered = useMemo(
     () => filteredCommands(props.tui),
@@ -3046,12 +3050,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               ))}
             </Box>
           ) : null}
-          {/* Version caption: PLAIN (no accent color / no emphasis) — it reads as
-              a neutral label under the brand art instead of competing with it.
-              Nothing drops it: below the hero minimum the whole stack is replaced
-              by the notice. */}
+          {/* Brand caption (the project's site): PLAIN (no accent color / no
+              emphasis) — it reads as a neutral label under the brand art
+              instead of competing with it. Nothing drops it: below the hero
+              minimum the whole stack is replaced by the notice. */}
           {heroBrandLines > 0
-            ? <Text wrap="truncate">{centerInHero(heroTitleLine)}</Text>
+            ? <Text wrap="truncate">{centerInHero(heroCaptionLine)}</Text>
             : null}
           <Box flexShrink={0} height={heroTitleGap} />
           {/* The hero card is a CENTERED, NARROW column (web parity), not the

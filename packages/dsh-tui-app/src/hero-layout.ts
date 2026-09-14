@@ -66,6 +66,16 @@ export const HERO_TITLE_EN = 'Into the Unknown'
 /** The headline the hero actually draws. */
 export const HERO_TITLE = HERO_TITLE_EN
 
+/**
+ * The caption line UNDER the brand mark (user call, 2026-09-13). It used to be
+ * the dsh-tui VERSION; it is now the project's site — the version keeps its
+ * actionable homes (the docked sidebar footer and `--version`), so the hero
+ * reads as a brand plate instead of a build stamp. 11 columns wide, so it
+ * survives every width the brand mark itself is drawn at (the mark's floor is
+ * {@link HERO_ART_MIN_WIDTH} = 52 columns).
+ */
+export const HERO_CAPTION_URL = 'qialike.com'
+
 /** Rows between the title (end of the brand block) and the composer card when
  *  nothing sits in between (the hero draws no workspace line). */
 export const HERO_TITLE_CARD_GAP = 2
