@@ -22,11 +22,13 @@
  * @module @yourname/dsh-tui/bin
  */
 
-import { basename, dirname, join } from 'node:path'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join, resolve, sep } from 'node:path'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { constants, homedir, tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
-import { pathToFileURL } from 'node:url'
+import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context, FiberState } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
@@ -124,15 +126,246 @@ function preflightWebDsh(): 'ok' | 'missing' | 'mismatch' {
 }
 
 /**
- * Include subclass that resolves bare plugin names from the statically bundled
- * module map. `cordis:` names and relative paths still fall through to the
- * standard {@link Include#import}.
+ * The trust ledger the loader consults. It is module state on purpose: the
+ * harness constructs this plugin as `new Include(ctx, config)`, so a subclass
+ * constructor that swallows those arguments replaces the plugin's `ctx` with
+ * whatever it was handed — the tree then dies with `ctx.extend` undefined.
+ */
+let activeTrustLedger: TrustLedger = {}
+
+/** Publish the ledger to the loader (called once, before boot). */
+function setTrustLedger(ledger: TrustLedger): void {
+  activeTrustLedger = ledger
+}
+
+/**
+ * Where LOCAL (non-bundled) plugins live: `<profile>/node_modules/`, i.e. the
+ * ordinary npm layout. It must be this — and not a bespoke `plugins/` folder —
+ * because the patch parser resolves a `./…` name against the PROFILE directory
+ * before this code ever sees it, and because a plugin's own dependencies then
+ * resolve through the same `node_modules` chain (the tax the survey documents).
+ * Rename it here and the CLI, the validator and the loader stay in step.
+ */
+function localRoot(): string {
+  return join(profileDir(), 'node_modules')
+}
+
+/** The trust ledger: `<profile>/plugins.trust.json`. */
+function trustFile(): string {
+  return join(profileDir(), 'plugins.trust.json')
+}
+
+/** One trusted plugin: what was vouched for, when, and against which harness. */
+interface TrustRecord {
+  /** Hash of the plugin directory at trust time (see {@link hashPluginDir}). */
+  hash: string
+  /** The harness version it was trusted against — an upgrade re-asks. */
+  harness: string
+  /** ISO timestamp, for the human reading the file. */
+  at: string
+  /** The resolved entry that will be loaded. */
+  entry: string
+}
+
+/** Plugin name (or relative path) → its trust record. */
+type TrustLedger = Record<string, TrustRecord>
+
+/**
+ * Read the trust ledger. A missing or unreadable file means "nothing trusted" —
+ * the safe default: every local plugin then fails loud until it is trusted.
+ */
+function readTrustLedger(): TrustLedger {
+  try {
+    const raw = JSON.parse(readFileSync(trustFile(), 'utf8')) as unknown
+    return typeof raw === 'object' && raw !== null ? raw as TrustLedger : {}
+  } catch {
+    return {}
+  }
+}
+
+/** Restrictive permissions for the directory that holds plugins and the ledger. */
+function hardenProfileDir(): void {
+  try {
+    mkdirSync(profileDir(), { recursive: true, mode: 0o700 })
+    for (const path of [profileDir(), localRoot()]) {
+      if (existsSync(path)) chmodSync(path, 0o700)
+    }
+  } catch { /* best effort: a filesystem without POSIX modes must not break a boot */ }
+}
+
+/** Stable hash of a plugin directory: every file's relative path + bytes, with
+ *  `node_modules` excluded (dependencies are not what the user vouches for, and
+ *  hashing them would make a reinstall look like tampering). */
+function hashPluginDir(dir: string): string {
+  const hash = createHash('sha256')
+  const walk = (current: string, prefix: string): void => {
+    const entries = readdirSync(current, { withFileTypes: true })
+      .filter((entry) => entry.name !== 'node_modules' && entry.name !== '.git')
+      .sort((a, b) => a.name.localeCompare(b.name))
+    for (const entry of entries) {
+      const path = join(current, entry.name)
+      const rel = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+      if (entry.isDirectory()) walk(path, rel)
+      else if (entry.isFile()) {
+        hash.update(rel)
+        hash.update('\0')
+        hash.update(readFileSync(path))
+        hash.update('\0')
+      }
+    }
+  }
+  walk(dir, '')
+  return hash.digest('hex')
+}
+
+/** Resolve a plugin TARGET (`<name>` or a path under `plugins/`) to its entry,
+ *  or undefined when it is not a local plugin. Paths are realpath-checked, so a
+ *  symlink cannot point the loader outside the sandbox directory. */
+function localPluginTarget(target: string): { dir: string; entry: string } | undefined {
+  const root = localRoot()
+  let entry: string
+  if (target.startsWith('.') || target.startsWith('/') || target.startsWith('file:')) {
+    // A path form is accepted only INSIDE the plugin root; `file://` URLs come
+    // from the patch parser, which resolves `./name` against the profile dir.
+    const asPath = target.startsWith('file:') ? fileURLToPath(target) : resolve(root, target)
+    if (!existsSync(asPath)) return undefined
+    entry = asPath
+  } else {
+    try {
+      entry = createRequire(join(profileDir(), 'package.json')).resolve(target)
+    } catch {
+      return undefined
+    }
+  }
+  let real: string
+  let realRoot: string
+  try {
+    real = realpathSync(entry)
+    realRoot = realpathSync(root)
+  } catch {
+    return undefined
+  }
+  if (real !== realRoot && !real.startsWith(realRoot + sep)) return undefined
+  // Hash the plugin directory: the entry's own directory, or the package root
+  // when the entry is a file inside one.
+  const dir = statSync(real).isDirectory() ? real : dirname(real)
+  return { dir, entry: real }
+}
+
+/** The plugin target a RESOLVED specifier refers to (used by the ladder). */
+function resolveLocalPlugin(name: string): { dir: string; entry: string } | undefined {
+  return localPluginTarget(name)
+}
+
+/**
+ * Fail loud unless the ledger vouches for THIS directory, under THIS harness
+ * version, unchanged since it was trusted. The three failure modes have three
+ * different fixes, so each message says which one applies.
+ */
+function assertPluginTrusted(name: string, local: { dir: string; entry: string }, trusted: TrustLedger): void {
+  const record = trusted[name]
+  const prefix = `${NAME}: refusing to load local plugin "${name}" (${local.dir})`
+  const reTrust = `run \`${NAME} plugin trust ${name}\` to review and trust it`
+  if (record === undefined) {
+    throw new Error(`${prefix}: it is not trusted yet — ${reTrust}`)
+  }
+  if (record.harness !== HARNESS_VERSION) {
+    throw new Error(`${prefix}: it was trusted for harness ${record.harness}, this build embeds`
+      + ` ${HARNESS_VERSION} — ${reTrust} again after reviewing it`)
+  }
+  const actual = hashPluginDir(local.dir)
+  if (record.hash !== actual) {
+    throw new Error(`${prefix}: its contents changed since it was trusted (hash mismatch) —`
+      + ` ${reTrust} again after reviewing the change`)
+  }
+}
+
+/**
+ * Every LOCAL plugin name worth reporting: the ones an overlay actually
+ * references (a row that is neither bundled nor `cordis:`) plus whatever the
+ * ledger remembers. Enumerating `node_modules` itself would list the whole
+ * dependency tree of anything installed beside them.
+ * @param layers - the parsed layers, embedded first.
+ */
+function referencedLocalPlugins(layers: readonly (readonly PatchOptions[])[]): string[] {
+  const names = new Set<string>()
+  const walk = (entries: readonly unknown[]): void => {
+    for (const entry of entries) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const row = entry as { name?: unknown; insert?: unknown }
+      if (typeof row.name === 'string' && !(row.name in PLUGIN_BUILTINS) && !row.name.startsWith('cordis:')) {
+        names.add(row.name)
+      }
+      if (Array.isArray(row.insert)) walk(row.insert)
+    }
+  }
+  for (const layer of layers) walk(layer)
+  return [...names].sort()
+}
+
+/** Human-readable trust state of one candidate (used by `plugin list`). */
+function trustState(target: string, ledger: TrustLedger): string {
+  const local = localPluginTarget(target)
+  if (local === undefined) return 'UNRESOLVABLE'
+  const record = ledger[target]
+  if (record === undefined) return 'NOT TRUSTED'
+  if (record.harness !== HARNESS_VERSION) return `trusted for harness ${record.harness} (this build: ${HARNESS_VERSION})`
+  return record.hash === hashPluginDir(local.dir) ? 'trusted' : 'CHANGED since trusted'
+}
+
+/** Write the trust ledger atomically (temp + rename) with owner-only modes. */
+function writeTrustLedger(ledger: TrustLedger): void {
+  mkdirSync(profileDir(), { recursive: true, mode: 0o700 })
+  const file = trustFile()
+  const temp = `${file}.tmp`
+  writeFileSync(temp, JSON.stringify(ledger, null, 2) + '\n', { mode: 0o600 })
+  renameSync(temp, file)
+  try { chmodSync(file, 0o600) } catch { /* best effort */ }
+}
+
+/** Load a trusted local plugin IN PROCESS. `require` (not `import`) because the
+ *  loader resolves plugins synchronously; ESM namespaces are normalized to the
+ *  shape cordis expects (a function or an object with `apply`). */
+function loadLocalPlugin(local: { dir: string; entry: string }): unknown {
+  const loaded = createRequire(join(profileDir(), 'package.json'))(local.entry) as
+    { default?: unknown } | ((...args: unknown[]) => unknown)
+  const candidate = (loaded as { default?: unknown }).default ?? loaded
+  if (typeof candidate === 'function') return candidate
+  if (typeof loaded === 'function') return loaded
+  return candidate
+}
+
+/**
+ * Include subclass implementing the resolution ladder of a single-file build:
+ *
+ *  1. `cordis:*`            → the loader's own builtins;
+ *  2. a BUNDLED name        → the statically imported map (zero resolution risk);
+ *  3. a LOCAL plugin        → `<profile>/plugins/…`, loaded in-process, and only
+ *                             when the trust ledger vouches for it (see
+ *                             {@link assertPluginTrusted});
+ *  4. anything else         → loud failure naming every place that was tried.
+ *
+ * Step 3 is the T1 channel: it exists because the README invites third-party
+ * plugins through `ctx.get('tui')`, while a bundled-only build can only run
+ * plugins that were compiled into it. It is deliberately narrow — the plugin
+ * must live under the profile's `plugins/` directory (realpath-checked, so a
+ * symlink cannot escape), must be trusted for THIS harness version, and cannot
+ * have changed since it was trusted.
  */
 class SeaInclude extends Include {
   override import(name: string, getOuterStack?: () => string[]): unknown {
     const builtin = PLUGIN_BUILTINS[name]
     if (builtin !== undefined) return builtin
-    return super.import(name, getOuterStack)
+    if (name.startsWith('cordis:')) return super.import(name, getOuterStack)
+    const local = resolveLocalPlugin(name)
+    if (local !== undefined) {
+      assertPluginTrusted(name, local, activeTrustLedger)
+      return loadLocalPlugin(local)
+    }
+    throw new Error(`${NAME}: cannot resolve plugin "${name}": it is not one of the`
+      + ` ${Object.keys(PLUGIN_BUILTINS).length} plugins bundled into this build,`
+      + ` and no local plugin of that name is installed under ${localRoot()}`
+      + ` (add one there and run \`${NAME} plugin trust ${name}\`)`)
   }
 }
 
@@ -259,7 +492,8 @@ function sweepLegacyProfiles(): void {
  */
 function materializeProfile(): { root: string; base: string; tui: string } {
   const dir = profileDir()
-  mkdirSync(dir, { recursive: true })
+  mkdirSync(dir, { recursive: true, mode: 0o700 })
+  hardenProfileDir()
   const root = join(dir, 'cordis.yml')
   const base = join(dir, 'base.cordis.patch.yml')
   const tui = join(dir, 'tui-app.cordis.patch.yml')
@@ -362,8 +596,10 @@ function validateUserLayer(user: readonly PatchOptions[], known: ReadonlySet<str
       if (inserted) {
         if (typeof row.name !== 'string') {
           problems.push(`inserted row ${id} has no \`name\``)
-        } else if (!(row.name in PLUGIN_BUILTINS) && !row.name.startsWith('cordis:')) {
-          problems.push(`inserted row ${id} names "${row.name}", which this single-file build does not bundle`)
+        } else if (!(row.name in PLUGIN_BUILTINS) && !row.name.startsWith('cordis:')
+          && localPluginTarget(row.name) === undefined) {
+          problems.push(`inserted row ${id} names "${row.name}", which this single-file build does not`
+            + ` bundle and no local plugin under ${localRoot()} provides`)
         }
       } else if (typeof row.id === 'string' && !known.has(row.id)) {
         problems.push(`row ${id} matches no built-in row — a row WITHOUT \`insert\` only re-configures an`
@@ -441,6 +677,9 @@ Commands:
                                append an stdio MCP server to the overlay
   remove-mcp <name> [--project]
                                delete that server's row from the overlay
+  trust <name>                 review + trust a LOCAL plugin installed at
+                               <profile>/node_modules/<name> (runs in-process)
+  untrust <name|path>          forget that trust (the files stay on disk)
 
 MCP servers reach the model as mcp__<name>__<tool>. A row can only name a plugin
 bundled into this build, and a row id must match a built-in row (or use insert);
@@ -554,6 +793,14 @@ function runPlugin(argv: readonly string[]): number {
     const names = Object.keys(PLUGIN_BUILTINS).sort()
     process.stdout.write(`  bundled plugins: ${names.length}`
       + `${positional.includes('--available') ? `\n      ${names.join('\n      ')}` : ' (pass --available to list them)'}\n`)
+    const ledger = readTrustLedger()
+    const referenced = referencedLocalPlugins([layers[1]!.patches, layers[2]!.patches, layers[3]!.patches])
+    const all = [...new Set([...referenced, ...Object.keys(ledger)])].sort()
+    process.stdout.write(`  local plugins (${localRoot()}):${all.length === 0 ? ' none referenced' : ''}\n`)
+    for (const target of all) {
+      const orphan = ledger[target] !== undefined && !referenced.includes(target) ? ' (not referenced by any overlay)' : ''
+      process.stdout.write(`      ${target} → ${trustState(target, ledger)}${orphan}\n`)
+    }
     return 0
   }
   if (command === 'add-mcp' || command === 'remove-mcp') {
@@ -610,6 +857,33 @@ function runPlugin(argv: readonly string[]): number {
       process.stderr.write(`${NAME}: ${error instanceof Error ? error.message : String(error)}\n`)
       return 1
     }
+  }
+  if (command === 'trust' || command === 'untrust') {
+    const target = positional[0]
+    if (target === undefined) {
+      process.stderr.write(`${NAME}: ${command} needs a plugin <name> or path\n`)
+      return 1
+    }
+    hardenProfileDir()
+    const local = localPluginTarget(target)
+    if (local === undefined) {
+      process.stderr.write(`${NAME}: no local plugin "${target}" under ${localRoot()}\n`)
+      return 1
+    }
+    const ledger = readTrustLedger()
+    if (command === 'trust') {
+      const hash = hashPluginDir(local.dir)
+      ledger[target] = { hash, harness: HARNESS_VERSION, at: new Date().toISOString(), entry: local.entry }
+      writeTrustLedger(ledger)
+      process.stdout.write(`${NAME}: trusted local plugin "${target}" for harness ${HARNESS_VERSION}\n`
+        + `  dir:   ${local.dir}\n  entry: ${local.entry}\n  hash:  ${hash}\n`
+        + '  This plugin now runs IN THIS PROCESS with full privileges.\n')
+      return 0
+    }
+    delete ledger[target]
+    writeTrustLedger(ledger)
+    process.stdout.write(`${NAME}: untrusted local plugin "${target}" (it stays on disk)\n`)
+    return 0
   }
   process.stderr.write(`${NAME}: unknown plugin command "${command}" (see \`dsh-tui plugin --help\`)\n`)
   return 1
@@ -997,6 +1271,7 @@ async function main(): Promise<void> {
   const patches = [...structuredClone(base), ...structuredClone(tui),
     ...structuredClone(user), ...structuredClone(project)]
 
+  setTrustLedger(readTrustLedger())
   const ctx = await bootSea(NAME, profile.root, patches, (hostCtx) => {
     app.current = hostCtx
     hostCtx.provide('dshLaunchEnvironment', environment)

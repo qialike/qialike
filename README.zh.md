@@ -166,6 +166,22 @@ dsh-tui plugin remove-mcp <name> [--project]
 `--project` 作用于**仓库级** overlay（`<repo>/.dsh/tui.cordis.patch.yml`）而非个人那份。
 启用/禁用不需要命令：**不带** `insert`、内容为 `disabled: true` 的行按 `id` 改内建行即可。
 
+overlay 只能挂**打进本二进制**的插件。要跑自己的插件，把它当作普通包装进 profile 再显式信任：
+
+```sh
+# 1. 放到加载器查找的位置（npm install / pnpm 均可；软链也行）
+#    ~/.dsh/profiles/tui/node_modules/my-plugin/{package.json,index.cjs}
+#    module.exports = { name: 'my-plugin', inject: [], apply(ctx) { … } }
+# 2. 在 overlay 里引用：  - insert: [{ id: my-plugin, name: 'my-plugin' }]
+# 3. 审阅之后记录这次决定（hash + harness 版本）
+dsh-tui plugin trust my-plugin
+```
+
+加载器强制三件事：插件必须位于 `<profile>/node_modules` **之内**（软链会做 realpath 校验）；
+必须针对**本二进制内嵌的 harness 版本**被信任（升级后会重新询问）；信任之后文件**不得变化**——
+任何改动都会让信任失效。本地插件**在本进程内以完整权限运行**，所以信任是显式、逐个、可撤销的
+（`dsh-tui plugin untrust <name>`）。
+
 overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内建行（换 persona、关掉某个工具）。
 两种写错会被明确拒绝并给出原因 —— 插件加载器自己对这两种都是静默的：`insert` 里写了本构建未打包的插件名；
 行的 `id` 匹配不到任何内建行。`dsh-tui --dump-config` 会打印三层的组合结果以及每个插件来自哪一层。

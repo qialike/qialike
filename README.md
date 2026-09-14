@@ -324,6 +324,25 @@ dsh-tui plugin remove-mcp <name> [--project]
 instead of the personal one. Enabling/disabling needs no command: a row without
 `insert` that says `disabled: true` re-configures a built-in row by id.
 
+The overlays can only mount plugins **bundled** into this binary. To run your own
+plugin, install it as an ordinary package inside the profile and trust it:
+
+```sh
+# 1. put it where the loader looks (`npm install`/`pnpm` work; a symlink is fine)
+#    ~/.dsh/profiles/tui/node_modules/my-plugin/{package.json,index.cjs}
+#    module.exports = { name: 'my-plugin', inject: [], apply(ctx) { … } }
+# 2. name it from an overlay:  - insert: [{ id: my-plugin, name: 'my-plugin' }]
+# 3. review it, then record the decision (hash + harness version)
+dsh-tui plugin trust my-plugin
+```
+
+The loader enforces three things: the plugin must live **inside**
+`<profile>/node_modules` (symlinks are realpath-checked), it must be trusted for
+the harness version this binary embeds (an upgrade re-asks), and its files must
+not change afterwards — every edit invalidates the trust. A local plugin runs
+**in this process with full privileges**, which is why trust is explicit,
+per-plugin and revocable (`dsh-tui plugin untrust <name>`).
+
 Your overlay is applied **last**, so a row *without* `insert` can also
 re-configure a built-in row by its `id` (change a persona, disable a tool). Two
 mistakes are rejected with a message — the plugin loader itself ignores both in

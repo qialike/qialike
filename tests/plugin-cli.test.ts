@@ -52,11 +52,12 @@ describe('plugin CLI', () => {
     // to: that emitted a SECOND YAML document and failed to parse.
     expect(BIN, 'treats a zero-row overlay as empty').toContain('overlay.patches.length === 0')
     // Install = write temp -> PARSE IT -> rename, and never leave the temp behind.
-    const install = BIN.slice(BIN.indexOf('const temp = `${file}.tmp`'))
-    expect(install, 'parses the temp file before installing it').toContain('loadOptionalPatches(NAME, temp)')
-    expect(install, 'removes the temp on failure').toContain('rmSync(temp, { force: true })')
-    expect(install, 'installs by rename').toContain('renameSync(temp, file)')
-    expect(install.indexOf('renameSync(temp, file)'), 'rename AFTER the parse').toBeGreaterThan(install.indexOf('loadOptionalPatches(NAME, temp)'))
+    // (`writeTrustLedger` also uses a `.tmp`, so anchor on the overlay writer's
+    // own parse and look for the rename AFTER it.)
+    const parsed = BIN.indexOf('loadOptionalPatches(NAME, temp)')
+    expect(parsed, 'the overlay temp is parsed').toBeGreaterThan(-1)
+    expect(BIN.slice(parsed), 'removes the temp on failure').toContain('rmSync(temp, { force: true })')
+    expect(BIN.indexOf('renameSync(temp, file)', parsed), 'rename AFTER the parse').toBeGreaterThan(parsed)
   })
 
   test('④ remove-mcp is conservative: line surgery, no dangling insert, no guessing', () => {

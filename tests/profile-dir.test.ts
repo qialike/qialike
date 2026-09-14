@@ -28,7 +28,8 @@ describe('embedded profile directory', () => {
     expect(BIN, 'the path derives from the harness home').toContain("join(dshHomePath(), 'profiles', 'tui')")
     // Writing it must create the directory tree (first run: the home may not
     // have a profiles/ dir yet).
-    expect(mat, 'creates the directory').toContain('mkdirSync(dir, { recursive: true })')
+    expect(mat, 'creates the directory').toContain('mkdirSync(dir, { recursive: true, mode: 0o700 })')
+    expect(mat, 'and hardens the profile tree').toContain('hardenProfileDir()')
   })
 
   test('② the write is content-stamped, so an unchanged layer keeps its mtime', () => {
