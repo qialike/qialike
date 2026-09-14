@@ -135,30 +135,26 @@ describe('theme picker dialog', () => {
     expect(api.applied.at(-1)).toBe('user-x')
   })
 
-  test('right-click cancels immediately (== Esc with no filter): no apply, restores snapshot, closes', () => {
-    const store = fakeStore()
-    const api = fakeApi()
-    openThemePicker(store, api)
-    const handled = themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
-    expect(handled).toBe(true)
-    expect(api.applied).toHaveLength(0) // nothing selected on right-click
-    expect(api.restored.length).toBe(1) // opening theme restored
-    expect(api.restored[0]!.name).toBe('dark')
-    expect(store.calls).toContain('panel:conversation')
-  })
-
-  test('right-click with a filter in progress clears the filter first (== Esc step one)', () => {
+  test('right-click does NOTHING in the picker (user call 2026-09-14)', () => {
+    // Right-click used to mean Esc here (and in every popup, 2026-09-09). A stray
+    // right-click — also the terminal's own paste/context gesture — then threw the
+    // picker away, so the dialog now ignores it entirely; only Esc (and Ctrl+C)
+    // leave. `handleKey` consumes the press for every dialog panel, and this
+    // asserts the handler ITSELF does not act on it either.
     const store = fakeStore()
     const api = fakeApi()
     openThemePicker(store, api)
     themePickerKey(key({ char: 'l' }), store, api) // filter 'l' → preview light
-    themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
-    expect(store.calls.filter((c) => c === 'panel:conversation')).toHaveLength(0) // still open
-    expect(api.applied.at(-1)).toBe('dark') // preview back to first scheme
-    expect(api.restored.length).toBe(0) // not cancelled yet
-    // A second right-click now cancels (== Esc step two).
-    themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
-    expect(api.restored.length).toBe(1)
+    const before = api.applied.length
+    for (const _ of [0, 1]) themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
+    expect(api.applied.length).toBe(before) // no preview change, no filter clear
+    expect(api.restored).toHaveLength(0) // never cancelled
+    expect(store.calls).not.toContain('panel:conversation') // still open
+    // Esc is unchanged: it clears the filter first, then cancels.
+    themePickerKey(key({ escape: true }), store, api)
+    expect(store.calls).not.toContain('panel:conversation') // step one: filter cleared
+    themePickerKey(key({ escape: true }), store, api)
+    expect(api.restored.length).toBe(1) // step two: restores + closes
     expect(store.calls).toContain('panel:conversation')
   })
 })

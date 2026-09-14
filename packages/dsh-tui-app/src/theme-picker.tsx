@@ -94,14 +94,9 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
     state.snapshot = null
     close()
   }
-  // Right-click = Esc: exit the popup WITHOUT selecting. A filter in progress is
-  // first cleared (one step), then a second right-click / Esc restores the
-  // pre-open theme and closes — exactly the two-step Esc semantics below.
-  if (k.mouseRightPress) {
-    if (state.filter !== '') { state.filter = ''; state.index = 0; preview() }
-    else cancel()
-    return true
-  }
+  // A right-click is NOT a key here any more (user call, 2026-09-14): the dialog
+  // gate upstream consumes it, and only Esc runs the two-step semantics below —
+  // clear a filter first, then restore the pre-open theme and close.
   // Mouse: consume press (no selection); a left-click runs the current highlight
   // (== Enter) by re-dispatching as a return key.
   if (k.mousePress) return true
@@ -212,7 +207,7 @@ export function ThemePicker({ store, api }: { store: Store; api: ThemePickerApi 
           {total === 0 && <Text dimColor>no themes match “{state.filter}”</Text>}
         </Box>
         <Box flexDirection="row">
-          <Text dimColor>↑/↓ move · type to filter · Enter apply · Esc/right-click cancel — preview applies live ({allNames.length} schemes)</Text>
+          <Text dimColor>↑/↓ move · type to filter · Enter apply · Esc cancel — preview applies live ({allNames.length} schemes)</Text>
         </Box>
       </Box>
     </Box>

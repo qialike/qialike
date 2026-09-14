@@ -41,14 +41,16 @@ export interface RawKey {
   wheelUp?: { row: number; col: number }
   wheelDown?: { row: number; col: number }
   mousePress?: { row: number; col: number }
-  /** Right-button press (SGR button 2). Popups treat it as Esc — close /
-   *  cancel without selecting. */
+  /** Right-button press (SGR button 2). The conversation surface cancels a
+   *  running compaction with it; a DIALOG consumes it and does nothing (only
+   *  Esc leaves a dialog). Decoded so both can tell it apart from a left click
+   *  and so its release can be swallowed. */
   mouseRightPress?: { row: number; col: number }
   /** The release that follows a right-button press. The SGR protocol cannot
    *  tell a right-click's release from a left-click's (both arrive as button
-   *  3), so the decoder tags it after a mouseRightPress; popups swallow it —
-   *  the press already ran the cancel, and treating it as a left-click would
-   *  immediately re-enter / confirm a list row. */
+   *  3), so the decoder tags it after a mouseRightPress; every surface swallows
+   *  it — treating it as a left-click release would immediately re-enter /
+   *  confirm a list row the user never clicked. */
   mouseRightRelease?: { row: number; col: number }
   mouseMove?: { row: number; col: number }
   mouseDrag?: { row: number; col: number }

@@ -138,7 +138,7 @@ function ModelsDialog(): React.JSX.Element {
             <Text color={theme.accent} bold>API key for {store.keyDialogName}</Text>
             <Text color={theme.primary}>{masked}{block}</Text>
             <Box marginTop={1}>
-              <Text dimColor>{store.keyDialogConfigured ? 'replaces the current key · ' : ''}paste a single-line key · Enter save · Esc/right-click cancel</Text>
+              <Text dimColor>{store.keyDialogConfigured ? 'replaces the current key · ' : ''}paste a single-line key · Enter save · Esc cancel</Text>
             </Box>
           </>
         ) : store.providerList ? (
@@ -178,7 +178,7 @@ function ModelsDialog(): React.JSX.Element {
               {store.providerListFiltered.length === 0 && <Text dimColor>no providers match "{store.providerListFilter}"</Text>}
             </Box>
             <Box marginTop={1}>
-              <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter select · Esc/right-click clear/back</Text>
+              <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter select · Esc clear/back</Text>
             </Box>
           </>
         ) : store.providerForm ? (
@@ -203,7 +203,7 @@ function ModelsDialog(): React.JSX.Element {
             </Box>
             {store.providerFormError !== '' && <Text color={theme.error}>{store.providerFormError}</Text>}
             <Box marginTop={1}>
-              <Text dimColor>↑/↓ choose provider · type fields · Enter next · Enter on last saves · Esc/right-click cancel</Text>
+              <Text dimColor>↑/↓ choose provider · type fields · Enter next · Enter on last saves · Esc cancel</Text>
             </Box>
           </>
         ) : store.effortOpen ? (
@@ -226,7 +226,7 @@ function ModelsDialog(): React.JSX.Element {
               ))}
             </Box>
             <Box marginTop={1}>
-              <Text dimColor>↑/↓ choose · number selects · Enter confirm · Esc/right-click back</Text>
+              <Text dimColor>↑/↓ choose · number selects · Enter confirm · Esc back</Text>
             </Box>
           </>
         ) : store.modelScope !== '' ? (
@@ -265,7 +265,7 @@ function ModelsDialog(): React.JSX.Element {
               {store.modelFiltered.length === 0 && <Text dimColor>no models match "{store.modelFilter}"</Text>}
             </Box>
             <Box marginTop={1}>
-              <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter save · Esc/right-click clear/back</Text>
+              <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter save · Esc clear/back</Text>
             </Box>
           </>
         ) : (
@@ -318,7 +318,7 @@ function ModelsDialog(): React.JSX.Element {
             </Box>
             {store.dialogNotice !== '' && <Text color={theme.warning}>{store.dialogNotice}</Text>}
             <Box marginTop={1}>
-              <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter open models · Ctrl+D hide · Esc/right-click back</Text>
+              <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter open models · Ctrl+D hide · Esc back</Text>
             </Box>
           </>
         )}
@@ -360,7 +360,7 @@ function connectKey(k: RawKey): boolean {
       if (done !== null) store.keyDialogSubmit(done.provider, done.name, done.key)
     } else if (k.backspace || k.delete) {
       store.popSecret()
-    } else if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
+    } else if (k.escape || (k.ctrl && char === 'c')) {
       store.cancelKeyDialog()
     } else if (char) {
       store.pushSecret(char)
@@ -386,7 +386,7 @@ function connectKey(k: RawKey): boolean {
         if (picked.needsBaseURL) store.startProviderFormForTemplate(picked.provider)
         else store.openKeyDialog(picked.provider, picked.name, picked.configured)
       }
-    } else if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
+    } else if (k.escape || (k.ctrl && char === 'c')) {
       if (store.providerListFilter !== '') store.clearProviderListFilter()
       else store.cancelProviderList()
     } else if (k.backspace || k.delete) {
@@ -415,7 +415,7 @@ function connectKey(k: RawKey): boolean {
       }
     } else if (k.backspace || k.delete) {
       store.providerFormBackspace()
-    } else if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
+    } else if (k.escape || (k.ctrl && char === 'c')) {
       store.cancelProviderForm()
     } else if (char) {
       store.providerFormType(char)
@@ -447,7 +447,7 @@ function connectKey(k: RawKey): boolean {
       }
       return true
     }
-    if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) store.cancelEffort()
+    if (k.escape || (k.ctrl && char === 'c')) store.cancelEffort()
     return true
   }
   if (store.modelScope !== '') {
@@ -472,7 +472,7 @@ function connectKey(k: RawKey): boolean {
       if ((option?.efforts?.length ?? 0) > 0) { store.openEffort(); return true }
       store.cancelConnect()
       if (option !== undefined) store.modelsSaveAction(option.provider, option.model)
-    } else if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
+    } else if (k.escape || (k.ctrl && char === 'c')) {
       if (store.modelFilter !== '') store.clearModelFilter()
       else store.cancelProviderModels()
     } else if (k.backspace || k.delete) {
@@ -516,7 +516,7 @@ function connectKey(k: RawKey): boolean {
         : 0
       store.openProviderModels(entry, initial)
     }
-  } else if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
+  } else if (k.escape || (k.ctrl && char === 'c')) {
     if (store.providerFilter !== '') store.clearProviderFilter()
     else store.cancelConnect()
   } else if (k.backspace || k.delete) {

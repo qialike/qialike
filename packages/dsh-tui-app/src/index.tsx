@@ -3131,12 +3131,12 @@ function providerDisplayName(provider: string, templates: readonly TuiProviderTe
  *  panel). This replaces Ink's `useInput` (whose parser swallows Alt+Enter/
  *  Home/End and appends SGR mouse bytes as literal text). */
 function handleKey(k: RawKey): void {
-  // The release of a right-click: its PRESS already ran the popup's cancel /
-  // Esc action (or the main surface ignored it). The release carries no button
-  // in the SGR protocol, so without this swallow it would reach the active
-  // panel as a LEFT-click release and confirm/select something the user did not
-  // click. Right-click = Esc means press-only; drop the paired release here,
-  // once, for every panel (overlays included).
+  // The release of a right-click: its PRESS was consumed by the dialog gate
+  // below (or ignored by the conversation surface). The release carries no
+  // button in the SGR protocol, so without this swallow it would reach the
+  // active panel as a LEFT-click release and confirm/select something the user
+  // did not click. Right-click is press-only and, in a dialog, action-free; drop
+  // the paired release here, once, for every panel (overlays included).
   if (k.mouseRightRelease !== undefined) return
   // An in-flight session switch OWNS the input: the target session is being
   // opened and is about to replace everything on screen, so keys are ignored
@@ -3177,6 +3177,16 @@ function handleKey(k: RawKey): void {
     // and it is the only thing on screen. (User decision, 2026-09-13.)
     return
   }
+  // A DIALOG never acts on a right-click (user call, 2026-09-14). Right-click used
+  // to mean Esc in every popup (2026-09-09) — so a stray right-click, which is
+  // also the terminal's own paste/context gesture, threw away an open popup or a
+  // half-typed API key. Only Esc (and Ctrl+C) leave a dialog now. The press is
+  // CONSUMED here, not merely dropped, so it cannot fall through to the
+  // conversation surface, and its paired release is swallowed at the top of this
+  // function: while a dialog is up a right-click is a complete no-op. The
+  // compaction cancel above stays — that is the conversation surface, not a
+  // dialog, and it is an escape hatch.
+  if (store.panel !== 'conversation' && k.mouseRightPress !== undefined) return
   const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
   def?.handleKey?.(k, store)
 }
@@ -3243,7 +3253,7 @@ function HelpDialog(): React.JSX.Element {
           <Text>Press ctrl+p to see all available actions and commands in any context.</Text>
         </Box>
         <Box marginTop={1}>
-          <Text dimColor>Esc/right-click close</Text>
+          <Text dimColor>Esc close</Text>
         </Box>
       </Box>
     </Box>
@@ -3658,7 +3668,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     mode: 'fullscreen',
     render: () => <HelpDialog />,
     handleKey: (k) => {
-      if (k.escape || k.mouseRightPress || (k.ctrl && (k.char ?? '') === 'c')) store.cancelHelp()
+      if (k.escape || (k.ctrl && (k.char ?? '') === 'c')) store.cancelHelp()
       return true
     },
   })

@@ -173,7 +173,7 @@ function SessionsDialog(): React.JSX.Element {
           </Text>
         )}
         <Box marginTop={1}>
-          <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter resume · Ctrl+R rename · Ctrl+F pin · Ctrl+D delete · Esc/right-click clear/back</Text>
+          <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter resume · Ctrl+R rename · Ctrl+F pin · Ctrl+D delete · Esc clear/back</Text>
         </Box>
       </Box>
     </Box>
@@ -211,7 +211,7 @@ function sessionsKey(k: RawKey, reload: () => void): void {
       }
       store.cancelSessionsRename()
       reload()
-    } else if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
+    } else if (k.escape || (k.ctrl && char === 'c')) {
       store.cancelSessionsRename()
     } else if (k.backspace || k.delete) {
       store.sessionsRenameBackspace()
@@ -279,7 +279,7 @@ function sessionsKey(k: RawKey, reload: () => void): void {
     }
     return
   }
-  if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) {
+  if (k.escape || (k.ctrl && char === 'c')) {
     if (store.sessionsDeleting !== null) { store.cancelSessionsDelete(); return }
     if (store.sessionsFilter !== '') store.clearSessionsFilter()
     else store.cancelSessions()

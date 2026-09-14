@@ -293,7 +293,7 @@ function ExportDialog(): React.JSX.Element {
           {field2 ? block : null}
         </Text>
         <Box marginTop={1}>
-          <Text dimColor>↑/↓ move · ←/→ toggle · j/m format · o/n sanitize · type file name · Enter export · Esc/right-click cancel</Text>
+          <Text dimColor>↑/↓ move · ←/→ toggle · j/m format · o/n sanitize · type file name · Enter export · Esc cancel</Text>
         </Box>
       </Box>
     </Box>
@@ -324,7 +324,7 @@ function exportKey(k: RawKey): void {
     })
     return
   }
-  if (k.escape || k.mouseRightPress || (k.ctrl && char === 'c')) { store.cancelExport(); return }
+  if (k.escape || (k.ctrl && char === 'c')) { store.cancelExport(); return }
   if (store.exportField === 0) {
     // Direct letter shortcuts: j → JSON, m → Markdown (←/→ still toggle).
     if (char === 'j' || char === 'J') { if (store.exportFormat !== 'json') store.exportFormatToggle(); return }
