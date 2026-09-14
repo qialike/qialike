@@ -57,6 +57,40 @@ describe('repository overlay policy', () => {
       .toEqual([{ id: 'my-fs', kind: 'safety' }])
   })
 
+  test('④b a DISABLED row that re-configures an id from above still needs trust', () => {
+    // Disabling a row the user installed rewrites the user's composition — a
+    // repository could silently switch the user's MCP server off — so the trust
+    // decision is required even though a disabled row runs nothing. A FRESH
+    // disabled insert mounts nothing and touches nothing above: still free.
+    expect(classifyProjectLayer([{ id: 'mcp-probe', disabled: true }], [base, user]))
+      .toEqual([{ id: 'mcp-probe', kind: 'execution' }])
+    expect(classifyProjectLayer([{ insert: [{ id: 'mcp-own', name: '@deepseek-ai/dsh-mcp-client', disabled: true }] }], [base, user]))
+      .toEqual([])
+  })
+
+  test('④c safety resolution is SYMMETRIC with execution (id → name, not just `name`)', () => {
+    // `alias-fs` is not a forbidden id and the row restates no name, so only the
+    // id → name resolution can see that it is the observation policy. Nothing
+    // maps a forbidden plugin to a foreign id today; that is exactly why the
+    // check must not depend on it staying true.
+    const alias = [[{ insert: [{ id: 'alias-fs', name: '@deepseek-ai/dsh-fs-observation-policy' }] }]]
+    expect(classifyProjectLayer([{ id: 'alias-fs', config: {} }], alias))
+      .toEqual([{ id: 'alias-fs', kind: 'safety' }])
+    expect(classifyProjectLayer([{ id: 'alias-fs', disabled: true }], alias))
+      .toEqual([{ id: 'alias-fs', kind: 'safety' }])
+  })
+
+  test('④d a `disabled: true` WRAPPER does not hide its children', () => {
+    // Measured (pty, user overlay): the harness IGNORES `disabled` on an
+    // `insert` wrapper — the child MCP row mounts and its command really starts
+    // (`initialize`/`tools/list`). So descending into a "disabled" wrapper is
+    // required, not a false refusal.
+    expect(classifyProjectLayer([{ disabled: true, insert: [{ id: 'mcp-w', name: '@deepseek-ai/dsh-mcp-client' }] }], [base]))
+      .toEqual([{ id: 'mcp-w', kind: 'execution' }])
+    expect(classifyProjectLayer([{ disabled: true, insert: [{ id: 'sandbox' }] }], [base]))
+      .toEqual([{ id: 'sandbox', kind: 'safety' }])
+  })
+
   test('④ an MCP row needs trust — by name, or by re-targeting a row above it', () => {
     expect(classifyProjectLayer([{ insert: [{ id: 'mcp-evil', name: '@deepseek-ai/dsh-mcp-client' }] }], [base]))
       .toEqual([{ id: 'mcp-evil', kind: 'execution' }])

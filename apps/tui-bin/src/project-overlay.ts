@@ -94,18 +94,34 @@ export function classifyProjectLayer(
       const row = entry as Row
       const id = typeof row.id === 'string' ? row.id : '(no id)'
       const name = typeof row.name === 'string' ? row.name : undefined
-      if (Array.isArray(row.insert)) { walk(row.insert); continue }
+      if (Array.isArray(row.insert)) {
+        // Descend regardless of the WRAPPER's own `disabled`: measured, the
+        // harness ignores it — the children still mount (an MCP server under a
+        // `disabled: true` wrapper really starts and receives
+        // `initialize`/`tools/list`). Skipping a "disabled" wrapper would hand
+        // back exactly the bypass this policy exists to close.
+        walk(row.insert)
+        continue
+      }
+      const effective = name ?? known.get(id)
       // ① Safety FIRST, and before the `disabled` skip below: a disabled
-      //    safety row is precisely a fence-removing change, not a no-op.
-      if (PROJECT_FORBIDDEN_IDS.has(id) || (name !== undefined && PROJECT_FORBIDDEN_PLUGINS.has(name))) {
+      //    safety row is precisely a fence-removing change, not a no-op. The
+      //    resolution is the same one the execution branch uses — a row can
+      //    reach a forbidden plugin through an id no forbidden-set member owns,
+      //    and the fact that nothing does that today is exactly why this must
+      //    not depend on it.
+      if (PROJECT_FORBIDDEN_IDS.has(id) || (effective !== undefined && PROJECT_FORBIDDEN_PLUGINS.has(effective))) {
         problems.push({ id, kind: 'safety' })
         continue
       }
-      // ② A disabled row mounts nothing, so it cannot run anything.
-      if (row.disabled === true) continue
+      // ② A FRESH disabled row mounts nothing, so it cannot run anything.
+      //    A disabled row that re-configures an id the layers ABOVE defined is
+      //    not fresh: disabling it rewrites the user's composition (a
+      //    repository could silently switch off the MCP server the USER
+      //    installed), so it still needs the trust decision.
+      if (row.disabled === true && !known.has(id)) continue
       // ③ Execution: by its own name, or by the id of a row the layers above
       //    defined (a re-configuring row carries no `name`).
-      const effective = name ?? known.get(id)
       if (effective !== undefined && PROJECT_EXECUTION_PLUGINS.has(effective)) problems.push({ id, kind: 'execution' })
     }
   }

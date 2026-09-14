@@ -999,14 +999,22 @@ function runPlugin(argv: readonly string[]): number {
       process.stdout.write(`${NAME}: untrusted the project overlay ${file} (the file stays on disk)\n`)
       return 0
     }
-    // Show what is being vouched for: the rows that will run processes at boot.
+    // Show what is being vouched for: the rows that will run processes at boot —
+    // and say so when the layer is refused for a reason trust cannot fix.
     const dumped = materializeProfile()
     const prior = [readEmbeddedLayer(NAME, dumped.base), readEmbeddedLayer(NAME, dumped.tui),
       readOverlay(NAME, userPatchPath()).patches]
-    const execution = classifyProjectLayer(readOverlay(NAME, file).patches, prior).filter((p) => p.kind === 'execution')
+    const problems = classifyProjectLayer(readOverlay(NAME, file).patches, prior)
+    const execution = problems.filter((p) => p.kind === 'execution')
+    const safety = problems.filter((p) => p.kind === 'safety')
+    if (safety.length > 0) {
+      process.stdout.write(`${NAME}: ${file} changes safety-critical rows (${safety.map((p) => p.id).join(', ')})`
+        + ' — those are refused as a rule, not by trust, so this layer will be REJECTED at boot.'
+        + ` Move that part to your own overlay (${userPatchPath()}).\n`)
+    }
     if (execution.length === 0) {
-      process.stdout.write(`${NAME}: ${file} mounts no process-running rows — nothing to trust\n`)
-      return 0
+      if (safety.length === 0) process.stdout.write(`${NAME}: ${file} mounts no process-running rows — nothing to trust\n`)
+      return safety.length > 0 ? 1 : 0
     }
     const hash = overlayContentHash(file)
     ledger[overlayKey(file)] = { hash, harness: HARNESS_VERSION, at: new Date().toISOString() }
