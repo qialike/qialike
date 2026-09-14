@@ -63,6 +63,7 @@ import { describeResumeFailure, isCorruptLogMessage, planOlderRanges, planResume
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import { armPostExitNotices, flushPostExitNotices, postExitNotice } from './post-exit-notice.ts'
 import { outsideOpenDialogList } from './list-geometry.ts'
+import { FilesChangedLedger, filesChangedLine } from './files-changed.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
 /** Stable Cordis plugin name. */
@@ -2253,12 +2254,40 @@ export class Store {
   setSession(session: Session): void {
     this._session = session
     this._readOnlySessionId = undefined
+    // Turn ledgers belong to the session that produced them.
+    this._filesChanged.reset()
     coldNextRequest = true // S0 probe: the next LLM request pays a cold derive+freeze
     // A session switch (launch / /new / /sessions) starts a fresh hero state.
     this._promptAttempted = false
     // Stats belong to the session that produced them: a new session is not
     // window-only until ITS resume says so.
     this._statsWindowOnly = false
+  }
+
+  /** Per-turn ledger of the paths the turn WROTE (web parity: the harness's
+   *  `ui-deliverables` row). Reset with the session; fed by both the live event
+   *  stream and the resume replay, so a resumed turn shows the same row. */
+  private readonly _filesChanged = new FilesChangedLedger()
+
+  /** Remember one tool call's mutation path (see `files-changed.ts`). */
+  fileCall(turn: number, callId: string, name: string, argsRaw?: string): void {
+    this._filesChanged.call(turn, callId, name, argsRaw)
+  }
+
+  /** Settle one tool result: an errored call wrote nothing. */
+  fileResult(callId: string, error: boolean): void {
+    this._filesChanged.result(callId, error)
+  }
+
+  /**
+   * Close a turn and append the "Files changed" row when it wrote files.
+   * @param turn - the turn `turn/end` reports.
+   * @returns the paths listed (empty when the turn wrote nothing).
+   */
+  fileTurnEnd(turn: number): readonly string[] {
+    const paths = this._filesChanged.flush(turn)
+    if (paths.length > 0) this.append('status', filesChangedLine(paths))
+    return paths
   }
 
   /** Whether this session has had a submission attempt (see the field). */
@@ -4228,6 +4257,9 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       }
       case 'turn/end': {
         store.endPreparingRequest()
+        // Turn tail (web parity): the paths this turn WROTE, listed before the
+        // max-tokens notice so the notice stays the last word on the turn.
+        store.fileTurnEnd((event.data as { turn?: number }).turn ?? 0)
         const reason = (event.data as { reason?: { kind?: string } }).reason
         if (reason?.kind === 'max-tokens') {
           if (!textSinceThisTurn) {
@@ -4265,21 +4297,26 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // result also closes the tool's wall-time bucket (FIFO per turn:step).
       case 'tool/call': {
         store.endPreparingRequest()
-        const data = event.data as { turn?: number; step?: number }
+        const data = event.data as { turn?: number; step?: number; callId?: string; name?: string; arguments?: string }
         const key = `${data.turn}:${data.step}`
         const queue = toolCallsAt.get(key) ?? []
         queue.push(Date.now())
         toolCallsAt.set(key, queue)
-        store.toolCall(event.data.name, (event.data as { arguments?: string }).arguments)
+        store.toolCall(event.data.name, data.arguments)
+        // Files-changed ledger (web parity): remember what this call would write;
+        // only a successful result turns it into a listed path.
+        if (data.callId !== undefined) store.fileCall(data.turn ?? 0, data.callId, event.data.name, data.arguments)
         break
       }
       case 'tool/result': {
-        const data = event.data as { turn?: number; step?: number }
+        const data = event.data as { turn?: number; step?: number; message?: { content?: unknown; source?: { callId?: string } } }
         const key = `${data.turn}:${data.step}`
         const started = toolCallsAt.get(key)?.shift()
         if (started !== undefined) store.accrueTool(Date.now() - started)
-        const { text, error } = toolResultDisplay((event.data as { message?: { content?: unknown } }).message)
+        const { text, error } = toolResultDisplay(data.message)
         store.toolResult({ ok: !error, text })
+        const callId = data.message?.source?.callId
+        if (callId !== undefined) store.fileResult(callId, error)
         break
       }
       // The session title (first-task summary) folds in the harness
@@ -5274,6 +5311,10 @@ function reasoningTextFromStream(stream: unknown): string {
  * the settled `assistant/message` events (streaming chunks are dropped) and
  * the whole result is produced in one pass so a resumed session replays
  * instantly instead of chunk-by-chunk.
+ *
+ * Exported for `tests/files-changed.test.ts`, which folds the durable event
+ * shapes a REAL log carries (a turn's `tool/call` + `tool/result` + `turn/end`)
+ * and asserts the turn-tail row — the resume path has no other seam to test.
  * @param events - the resumed session's full event log.
  * @param stats - optional bottom-bar stats accumulator; when given, each event
  * is folded into it during the same walk so a caller can also obtain the
@@ -5281,7 +5322,7 @@ function reasoningTextFromStream(stream: unknown): string {
  * {@link foldSessionReplay}).
  * @returns the transcript rows and the latest step list.
  */
-function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStatsFolding): { items: TranscriptItem[]; steps: StepItem[] } {
+export function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStatsFolding): { items: TranscriptItem[]; steps: StepItem[] } {
   const items: TranscriptItem[] = []
   let key = 0
   let steps: StepItem[] = []
@@ -5300,6 +5341,10 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
       items.push({ key: key += 1, kind: 'reasoning', text: delta })
     }
   }
+  // The turn-tail "Files changed" ledger for THIS replay: the same rules the
+  // live path applies (see `files-changed.ts`), folded over the log so a resumed
+  // session shows the rows its turns produced.
+  const filesChanged = new FilesChangedLedger()
   for (const event of events) {
     stats?.observe(event)
     // TWO vocabularies reach this fold and both must render:
@@ -5382,6 +5427,10 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
       }
       case 'tool/call': {
         const argsRaw = (event.data as { arguments?: string }).arguments
+        const callData = event.data as { turn?: number; callId?: string; name?: string }
+        if (callData.callId !== undefined) {
+          filesChanged.call(callData.turn ?? 0, callData.callId, event.data.name, argsRaw)
+        }
         // Replay the plan block exactly as the live listener appended it
         // (same `arguments` source; see the live 'tool/call' case above).
         if (event.data.name === EXIT_PLAN_TOOL) {
@@ -5400,7 +5449,9 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
         // Mark the most recent running tool row as completed and attach the
         // result/error body — the same shape the live path's
         // store.toolResult() builds, so resume replays byte-identically.
-        const { text, error } = toolResultDisplay((event.data as { message?: { content?: unknown } }).message)
+        const resultMessage = (event.data as { message?: { content?: unknown; source?: { callId?: string } } }).message
+        const { text, error } = toolResultDisplay(resultMessage)
+        if (resultMessage?.source?.callId !== undefined) filesChanged.result(resultMessage.source.callId, error)
         const body = text.trim() === '' ? undefined : capToolBody(text.trim())
         for (let i = items.length - 1; i >= 0; i--) {
           const item = items[i]
@@ -5419,6 +5470,13 @@ function foldHistoryEvents(events: readonly SessionEvent[], stats?: SessionStats
             break
           }
         }
+        break
+      }
+      case 'turn/end': {
+        // Turn tail (web parity): the paths this turn WROTE, in the same
+        // position the live path appends them (after the turn's rows).
+        const paths = filesChanged.flush((event.data as { turn?: number }).turn ?? 0)
+        if (paths.length > 0) items.push({ key: key += 1, kind: 'status', text: filesChangedLine(paths), dim: true })
         break
       }
       default:
