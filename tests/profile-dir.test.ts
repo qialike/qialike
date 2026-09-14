@@ -48,10 +48,13 @@ describe('embedded profile directory', () => {
     expect(reader, 'reads through the parser').toContain('loadOptionalPatches(binName, file)')
     expect(reader, 'fails loud on a missing file').toContain('layer === undefined')
     expect(reader, 'names the file').toContain('throw new Error')
-    // …and BOTH required layers go through it (no `?? []` left on them).
+    // …and BOTH required layers go through it (no `?? []` left on them). The
+    // USER overlay legitimately uses the optional API (see user-layer.test.ts) —
+    // what must never appear is the optional call on an EMBEDDED layer.
     expect(BIN, 'base layer').toContain('readEmbeddedLayer(NAME, profile.base)')
     expect(BIN, 'tui layer').toContain('readEmbeddedLayer(NAME, profile.tui)')
-    expect(BIN, 'no silent fallback for the embedded layers').not.toContain('loadOptionalPatches(NAME,')
+    expect(BIN, 'no silent fallback for the embedded base layer').not.toContain('loadOptionalPatches(NAME, profile.base)')
+    expect(BIN, 'no silent fallback for the embedded tui layer').not.toContain('loadOptionalPatches(NAME, profile.tui)')
   })
 
   test('④ the legacy temp dirs are swept, but never a live one', () => {

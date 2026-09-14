@@ -62,6 +62,7 @@ export function tuiCommand(): Command {
     .option('--workspace <dir>', 'the directory the agent operates in (default: the invoking directory)')
     .option('--resume <sessionId>', 'resume a specific persisted session (opens the conversation view directly)')
     .option('--model <model>', 'a provider/name model override, e.g. deepseek-v4-flash')
+    .option('--dump-config', 'print the composed profile layers (embedded + user) and exit')
     .addHelpText('after', `
 Examples:
   dsh-tui                     start a NEW session and show the hero screen (never auto-resumes)

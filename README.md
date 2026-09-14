@@ -288,6 +288,37 @@ default is `false`, i.e. every launch starts fresh.
 
 ## Plugin architecture ("everything is a plugin")
 
+### Extending it without a rebuild
+
+Two channels take plain data files — no build step, no install step:
+
+- **Skills** — drop a skill bundle at `$DSH_HOME/skills/<name>/SKILL.md` (or a
+  project's `.dsh/skills/`, or `~/.agents/skills/`). The harness's filesystem
+  provider discovers them; there is nothing to enable.
+- **MCP servers** — this build bundles the MCP client rowless, so you mount your
+  own servers from a personal overlay at
+  `$DSH_HOME/profiles/tui/cordis.patch.yml`:
+
+  ```yaml
+  - insert:
+      - id: mcp-github
+        name: '@deepseek-ai/dsh-mcp-client'
+        config:
+          serverName: github
+          transport: stdio
+          command: npx
+          args: ['-y', '@modelcontextprotocol/server-github']
+  ```
+
+  Once mounted, the server's tools reach the model as `mcp__github__<tool>`.
+
+Your overlay is applied **last**, so a row *without* `insert` can also
+re-configure a built-in row by its `id` (change a persona, disable a tool). Two
+mistakes are rejected with a message — the plugin loader itself ignores both in
+silence: an `insert` naming a plugin this build does not bundle, and a row `id`
+that matches no built-in row. `dsh-tui --dump-config` prints the composed layers
+and which layer contributed each plugin.
+
 The surface is composed of Cordis plugins (like the harness): `tui-startup`
 (CLI flags), `tui-llm` (self-hosted provider layer), `tui-models` (provider
 enumeration / Add-provider writes), `tui-runtime` (the kernel: store, panel

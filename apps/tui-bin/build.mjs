@@ -453,6 +453,11 @@ function pluginSpecifiers() {
     '@deepseek-ai/cordis-plugin-group',
     '@deepseek-ai/cordis-plugin-hmr',
     '@deepseek-ai/cordis-plugin-timer',
+    // Bundled WITHOUT a row of its own: the USER overlay
+    // ($DSH_HOME/profiles/tui/cordis.patch.yml) mounts MCP servers by naming it,
+    // and a single-file build can only resolve names bundled HERE. Rowless costs
+    // nothing at runtime — an unmounted module never connects to anything.
+    '@deepseek-ai/dsh-mcp-client',
   ]) specifiers.add(name)
   return specifiers
 }

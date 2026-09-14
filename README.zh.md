@@ -133,6 +133,32 @@ dist/dsh-tui --help
 
 ## 插件化架构（"一切皆插件"）
 
+### 无需重编译的扩展方式
+
+两条通道都只吃数据文件 —— 不需要构建、也不需要安装：
+
+- **Skills** —— 把技能包放到 `$DSH_HOME/skills/<name>/SKILL.md`（或项目的 `.dsh/skills/`、
+  或 `~/.agents/skills/`），harness 的文件系统 provider 会自动发现，没有开关要开。
+- **MCP server** —— 本构建把 MCP 客户端**打进包但不挂载**，所以在自己的 overlay
+  `$DSH_HOME/profiles/tui/cordis.patch.yml` 里挂：
+
+  ```yaml
+  - insert:
+      - id: mcp-github
+        name: '@deepseek-ai/dsh-mcp-client'
+        config:
+          serverName: github
+          transport: stdio
+          command: npx
+          args: ['-y', '@modelcontextprotocol/server-github']
+  ```
+
+  挂上之后，该 server 的工具以 `mcp__github__<tool>` 出现在模型面前。
+
+overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内建行（换 persona、关掉某个工具）。
+两种写错会被明确拒绝并给出原因 —— 插件加载器自己对这两种都是静默的：`insert` 里写了本构建未打包的插件名；
+行的 `id` 匹配不到任何内建行。`dsh-tui --dump-config` 会打印三层的组合结果以及每个插件来自哪一层。
+
 界面由 Cordis 插件组合而成（与 harness 一致）：`tui-startup`（CLI 参数）、`tui-llm`（自研供应商层）、
 `tui-models`（提供商枚举 / Add-provider 写入）、`tui-runtime`（内核：Store、面板注册表、按键分发、agent 接线），
 以及向 `tui` 服务注册的功能插件——`tui-panel-conversation`（主界面）、

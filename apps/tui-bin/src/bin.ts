@@ -271,6 +271,108 @@ function materializeProfile(): { root: string; base: string; tui: string } {
 }
 
 /**
+ * Path of the USER overlay — the one layer this binary does not own, applied
+ * after both embedded layers (see `main`). Its absence is normal.
+ */
+function userPatchPath(): string {
+  return join(profileDir(), 'cordis.patch.yml')
+}
+
+/** One `name`-carrying row of a parsed patch layer. */
+interface LayerRow { id: string; name: string }
+
+/** Every row id a set of layers defines (top level and inside `insert`). */
+function layerRowIds(layers: readonly (readonly PatchOptions[])[]): Set<string> {
+  const ids = new Set<string>()
+  const walk = (entries: readonly unknown[]): void => {
+    for (const entry of entries) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const row = entry as { id?: unknown; insert?: unknown }
+      if (typeof row.id === 'string') ids.add(row.id)
+      if (Array.isArray(row.insert)) walk(row.insert)
+    }
+  }
+  for (const layer of layers) walk(layer)
+  return ids
+}
+
+/**
+ * Fail loud on a user overlay that cannot do what it says. The loader is silent
+ * about both mistakes, which is the worst possible outcome for a hand-written
+ * file: a row whose `id` matches nothing is a no-op, and an `insert`ed plugin
+ * name that this single-file build never bundled simply never mounts.
+ * @param user - the parsed user layer.
+ * @param known - row ids defined by the embedded layers.
+ * @throws when the layer contains an unmatched id or an unbundled plugin name.
+ */
+function validateUserLayer(user: readonly PatchOptions[], known: ReadonlySet<string>): void {
+  const problems: string[] = []
+  const walk = (entries: readonly unknown[], inserted: boolean): void => {
+    for (const entry of entries) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const row = entry as { id?: unknown; name?: unknown; insert?: unknown }
+      const id = typeof row.id === 'string' ? row.id : '(no id)'
+      if (Array.isArray(row.insert)) {
+        walk(row.insert, true)
+        continue
+      }
+      if (inserted) {
+        if (typeof row.name !== 'string') {
+          problems.push(`inserted row ${id} has no \`name\``)
+        } else if (!(row.name in PLUGIN_BUILTINS) && !row.name.startsWith('cordis:')) {
+          problems.push(`inserted row ${id} names "${row.name}", which this single-file build does not bundle`)
+        }
+      } else if (typeof row.id === 'string' && !known.has(row.id)) {
+        problems.push(`row ${id} matches no built-in row — a row WITHOUT \`insert\` only re-configures an`
+          + ' existing row; to add a plugin, put it under `insert:`')
+      }
+    }
+  }
+  walk(user, false)
+  if (problems.length > 0) {
+    throw new Error(`${NAME}: invalid user layer ${userPatchPath()}:\n  - ${problems.join('\n  - ')}`)
+  }
+}
+
+/**
+ * Every plugin a parsed layer contributes, including rows nested under
+ * `insert`. Used by `--dump-config` to show WHERE each mounted plugin comes
+ * from (embedded layer vs the user overlay).
+ */
+function layerRows(patches: readonly PatchOptions[]): LayerRow[] {
+  const rows: LayerRow[] = []
+  const walk = (entries: readonly unknown[]): void => {
+    for (const entry of entries) {
+      if (typeof entry !== 'object' || entry === null) continue
+      const row = entry as { id?: unknown; name?: unknown; insert?: unknown }
+      if (typeof row.name === 'string') {
+        rows.push({ id: typeof row.id === 'string' ? row.id : '(no id)', name: row.name })
+      }
+      if (Array.isArray(row.insert)) walk(row.insert)
+    }
+  }
+  walk(patches)
+  return rows
+}
+
+/**
+ * Print the composed profile layers and exit — the diagnostic that answers
+ * "which layer mounted this plugin?" (and the reason a user row failed to
+ * resolve). Deliberately does NOT boot the tree.
+ * @param layers - the layers in application order, embedded first.
+ */
+function dumpConfig(layers: readonly { label: string; file: string; patches: readonly PatchOptions[]; embedded: boolean }[]): void {
+  const out = [`${NAME}: composition dump`]
+  for (const layer of layers) {
+    const rows = layerRows(layer.patches)
+    out.push(`  ${layer.label.padEnd(5)} ${layer.file}${layer.embedded ? ' (embedded)' : ''}`
+      + ` — ${layer.patches.length} patch row(s), ${rows.length} plugin row(s)`)
+    for (const row of rows) out.push(`      ${row.id} → ${row.name}`)
+  }
+  process.stdout.write(out.join('\n') + '\n')
+}
+
+/**
  * Read one REQUIRED embedded layer. The harness's `loadOptionalPatches` is the
  * parser for USER overlays and reports a missing file as `undefined`; called on
  * our own just-materialized layer that would silently degrade into "boots
@@ -546,6 +648,21 @@ async function main(): Promise<void> {
     if (pre === 'mismatch') process.exit(1) // version differs: warn, do NOT start web
     process.exit(await runWeb(args))
   }
+  // `--dump-config` is a DIAGNOSTIC: it must not touch the terminal at all (a
+  // piped `dsh-tui --dump-config > file` has to stay free of screen escapes), so
+  // it runs before the alternate screen, the splash and every terminal probe.
+  // It materializes the layers (that is what it reports) and never boots.
+  if (args.includes('--dump-config')) {
+    const dumped = materializeProfile()
+    const userFile = userPatchPath()
+    dumpConfig([
+      { label: 'root', file: dumped.root, patches: [], embedded: true },
+      { label: 'base', file: dumped.base, patches: readEmbeddedLayer(NAME, dumped.base), embedded: true },
+      { label: 'tui', file: dumped.tui, patches: readEmbeddedLayer(NAME, dumped.tui), embedded: true },
+      { label: 'user', file: userFile, patches: loadOptionalPatches(NAME, userFile) ?? [], embedded: false },
+    ])
+    process.exit(0)
+  }
   // Run inside the alternate screen buffer so the terminal keeps no scrollback
   // and never shows its right-edge scrollbar. The leave (`\x1b[?1049l`) must be
   // the process's LAST terminal write: anything written after it lands on the
@@ -614,7 +731,17 @@ async function main(): Promise<void> {
 
   const base = readEmbeddedLayer(NAME, profile.base)
   const tui = readEmbeddedLayer(NAME, profile.tui)
-  const patches = [...structuredClone(base), ...structuredClone(tui)]
+  // The USER overlay is applied LAST, so it can re-target any built-in row by id
+  // or insert rows of its own (an MCP server: `name: '@deepseek-ai/dsh-mcp-client'`).
+  // Optional by design — an absent file simply means "no overlay". Because the
+  // single-file build resolves only the names bundled at build time, a user row
+  // can re-configure and insert BUNDLED plugins, never load arbitrary code.
+  const userFile = userPatchPath()
+  const user = loadOptionalPatches(NAME, userFile) ?? []
+  // The user layer is hand-written, and the loader is silent about both ways it
+  // can be wrong — so it is validated here, before anything boots.
+  if (user.length > 0) validateUserLayer(user, layerRowIds([base, tui]))
+  const patches = [...structuredClone(base), ...structuredClone(tui), ...structuredClone(user)]
 
   const ctx = await bootSea(NAME, profile.root, patches, (hostCtx) => {
     app.current = hostCtx
