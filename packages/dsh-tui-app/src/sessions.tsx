@@ -17,7 +17,7 @@
 import { Box, Text } from 'ink'
 import React, { useRef } from 'react'
 import type { DOMElement } from 'ink'
-import { useListGeometry, dialogListIndexFromRow } from './list-geometry.ts'
+import { useListGeometry, dialogListIndexFromRow, dialogListContains } from './list-geometry.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TuiService, Store, SessionSummary } from './index.tsx'
 import { truncateWide } from './markdown.tsx'
@@ -191,13 +191,18 @@ function sessionsKey(k: RawKey, reload: () => void): void {
   if (k.mouseMove) {
     // HOVER: highlight the session row under the cursor (map the screen row to the
     // visible display index, then to the flat sessions index; group headers pass).
-    const vi = dialogListIndexFromRow(k.mouseMove.row)
+    const vi = dialogListIndexFromRow(k.mouseMove.row, k.mouseMove.col)
     const d = vi >= 0 ? sessionsMouseDisp[vi] : undefined
     if (d !== undefined && d.kind === 'row') store.moveSessionsDialogIndex(d.i!)
     return
   }
   if (k.mouseRelease) {
-    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') sessionsKey({ return: true } as RawKey, reload)
+    // Only a click INSIDE the list box activates the highlighted row; a click on
+    // the transcript behind the dialog is inert (it used to resume a session).
+    const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
+    if (kind === 'click' && dialogListContains(k.mouseRelease.row, k.mouseRelease.col)) {
+      sessionsKey({ return: true } as RawKey, reload)
+    }
     return
   }
   // Rename mode: the filter box becomes a title input (Enter confirms, Esc
@@ -226,8 +231,14 @@ function sessionsKey(k: RawKey, reload: () => void): void {
   if (k.end) { store.cancelSessionsDelete(); clearNotice(); store.moveSessionsDialogIndex(store.sessionsFiltered.length); return }
   if (k.upArrow) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(-1); return }
   if (k.downArrow) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(1); return }
-  if (k.wheelUp) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(-1); return }
-  if (k.wheelDown) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(1); return }
+  if (k.wheelUp) {
+    if (dialogListContains(k.wheelUp.row, k.wheelUp.col)) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(-1) }
+    return
+  }
+  if (k.wheelDown) {
+    if (dialogListContains(k.wheelDown.row, k.wheelDown.col)) { store.cancelSessionsDelete(); clearNotice(); store.bumpSessionsDialogIndex(1) }
+    return
+  }
   if (k.return) {
     const rows = store.sessionsFiltered
     const index = store.sessionsDialogIndex

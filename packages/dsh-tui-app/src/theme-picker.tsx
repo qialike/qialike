@@ -21,7 +21,7 @@
 import React, { useRef } from 'react'
 import { Box, Text } from 'ink'
 import type { DOMElement } from 'ink'
-import { useListGeometry, dialogListIndexFromRow } from './list-geometry.ts'
+import { useListGeometry, dialogListIndexFromRow, dialogListContains } from './list-geometry.ts'
 import type { Store } from './index.tsx'
 import type { RawKey } from './stdin.ts'
 import { theme, type ThemePalette } from './theme.ts'
@@ -103,7 +103,7 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
   if (k.mouseMove) {
     // HOVER: highlight the scheme under the cursor (map the screen row to the
     // visible index, then add the scroll offset to the flat index).
-    const vi = dialogListIndexFromRow(k.mouseMove.row)
+    const vi = dialogListIndexFromRow(k.mouseMove.row, k.mouseMove.col)
     if (vi >= 0) {
       const names = filterSchemes(api.schemes(), state.filter)
       state.index = clampIndex(state.top + vi, names.length)
@@ -112,7 +112,12 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
     return true
   }
   if (k.mouseRelease) {
-    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return themePickerKey({ return: true } as RawKey, store, api)
+    // The click only confirms INSIDE the list box; a click on the transcript
+    // behind the dialog is inert (the user's call: mouse acts in the dialog only).
+    const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
+    if (kind === 'click' && dialogListContains(k.mouseRelease.row, k.mouseRelease.col)) {
+      return themePickerKey({ return: true } as RawKey, store, api)
+    }
     return true
   }
   if (k.escape) {

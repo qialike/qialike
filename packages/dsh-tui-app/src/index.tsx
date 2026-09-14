@@ -62,6 +62,7 @@ import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review
 import { describeResumeFailure, isCorruptLogMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import { armPostExitNotices, flushPostExitNotices, postExitNotice } from './post-exit-notice.ts'
+import { outsideOpenDialogList } from './list-geometry.ts'
 import pkg from '../../../package.json' with { type: 'json' }
 
 /** Stable Cordis plugin name. */
@@ -3187,6 +3188,18 @@ function handleKey(k: RawKey): void {
   // compaction cancel above stays — that is the conversation surface, not a
   // dialog, and it is an escape hatch.
   if (store.panel !== 'conversation' && k.mouseRightPress !== undefined) return
+  // A dialog LIST owns the mouse ONLY inside its own box. A hover or a wheel tick
+  // anywhere else — the transcript visible around/behind the dialog — is consumed
+  // and does nothing: it used to move the highlighted row, scroll the list, and on
+  // click CONFIRM it (a left-click on the background resumed a session in
+  // /sessions). The click half is gated inside each dialog, after
+  // `store.mouseRelease` has finalized the transcript selection.
+  //
+  // The scope is "a list box is registered", NOT every non-conversation panel:
+  // approval/question/plan-review route the pointer themselves (hover highlight,
+  // wheel → transcript scroll) and register no list box, so an unconditional gate
+  // would silently kill their mouse handling.
+  if (outsideOpenDialogList(store.panel, k.mouseMove ?? k.wheelUp ?? k.wheelDown)) return
   const def = tui.panels.byId(store.panel) ?? tui.panels.byId('conversation')
   def?.handleKey?.(k, store)
 }

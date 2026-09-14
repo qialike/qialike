@@ -16,7 +16,7 @@ import type { TuiService, ProviderModelsEntry, Store } from '../index.tsx'
 import { TUI_MODELS_SERVICE, type ModelsProviderOption, type TuiModelsService } from '../models.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
-import { useListGeometry, dialogListIndexFromRow } from '../list-geometry.ts'
+import { useListGeometry, dialogListIndexFromRow, dialogListContains } from '../list-geometry.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-models'
@@ -335,7 +335,12 @@ function connectKey(k: RawKey): boolean {
   // key so the existing per-mode selection logic is reused.
   if (k.mousePress) return true
   if (k.mouseRelease) {
-    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') return connectKey({ return: true })
+    // A click confirms only INSIDE the list box; on the transcript behind the
+    // dialog it is inert (the user's call: mouse acts in the dialog only).
+    const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
+    if (kind === 'click' && dialogListContains(k.mouseRelease.row, k.mouseRelease.col)) {
+      return connectKey({ return: true })
+    }
     return true
   }
   // Hover (no-button move) highlights the list entry under the cursor in the
@@ -344,7 +349,7 @@ function connectKey(k: RawKey): boolean {
   // mode, and its geometry (top row/count) was registered during render.
   if (k.mouseMove) {
     if (store.keyDialog || store.providerForm) return true
-    const vi = dialogListIndexFromRow(k.mouseMove.row)
+    const vi = dialogListIndexFromRow(k.mouseMove.row, k.mouseMove.col)
     if (vi >= 0) {
       const idx = modelsScrollStart + vi
       if (store.providerList) store.moveProviderListIndex(idx)
