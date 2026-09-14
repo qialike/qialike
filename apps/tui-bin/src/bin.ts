@@ -41,6 +41,8 @@ import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generat
 import { PLUGIN_BUILTINS } from '../generated/plugins.js'
 import pkg from '../../../package.json' with { type: 'json' }
 import { PLUGIN_MODE, UNINSTALL_MODE, WEB_MODE } from './launcher-modes.ts'
+import { classifyProjectLayer } from './project-overlay.ts'
+import type { ProjectRowProblem } from './project-overlay.ts'
 
 const NAME = 'dsh-tui'
 
@@ -321,55 +323,6 @@ function writeTrustLedger(ledger: TrustLedger): void {
   writeFileSync(temp, JSON.stringify(ledger, null, 2) + '\n', { mode: 0o600 })
   renameSync(temp, file)
   try { chmodSync(file, 0o600) } catch { /* best effort */ }
-}
-
-/**
- * The PROJECT overlay (`<repoRoot>/.dsh/tui.cordis.patch.yml`) is the one layer a
- * repository controls, and it is applied automatically at boot — `git clone &&
- * dsh-tui` must not be able to run a process or lift the sandbox in silence. So
- * the layer gets a policy of its own:
- *
- *  - **safety-critical rows are never repo-owned**: re-configuring the sandbox,
- *    approval or permission rows (or disabling them) is refused outright, because
- *    the effect is invisible on screen and the repository is not the authority
- *    for your file-effect boundary. Write those in YOUR overlay instead.
- *  - **rows that spawn a process need an explicit per-repository decision**: an
- *    MCP row's `command` runs at boot, so it is honoured only when this exact
- *    file's bytes are recorded in the overlay trust ledger (path + content hash +
- *    harness version, like the T1 plugin ledger).
- */
-const PROJECT_EXECUTION_ROWS: ReadonlySet<string> = new Set(['@deepseek-ai/dsh-mcp-client'])
-const PROJECT_FORBIDDEN_ROWS: ReadonlySet<string> = new Set([
-  'sandbox', 'sandbox-policy', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox',
-  'approval', 'permission', 'fs-observation-policy',
-])
-
-/** One project-layer row the policy refuses, and why. */
-interface ProjectRowProblem {
-  id: string
-  kind: 'execution' | 'safety'
-}
-
-/**
- * Classify the project layer's rows against the policy above.
- * @param patches - the parsed project layer.
- * @returns the refused rows, in layer order.
- */
-function classifyProjectLayer(patches: readonly PatchOptions[]): ProjectRowProblem[] {
-  const problems: ProjectRowProblem[] = []
-  const walk = (entries: readonly unknown[]): void => {
-    for (const entry of entries) {
-      if (typeof entry !== 'object' || entry === null) continue
-      const row = entry as { id?: unknown; name?: unknown; insert?: unknown; disabled?: unknown }
-      const id = typeof row.id === 'string' ? row.id : '(no id)'
-      if (Array.isArray(row.insert)) { walk(row.insert); continue }
-      if (row.disabled === true) continue // a disabled row mounts nothing
-      if (typeof row.name === 'string' && PROJECT_EXECUTION_ROWS.has(row.name)) problems.push({ id, kind: 'execution' })
-      else if (PROJECT_FORBIDDEN_ROWS.has(id)) problems.push({ id, kind: 'safety' })
-    }
-  }
-  walk(patches)
-  return problems
 }
 
 /** The project-overlay trust ledger: `<profile>/overlays.trust.json`. */
@@ -940,7 +893,7 @@ function runPlugin(argv: readonly string[]): number {
     const projectFile = projectPatchPath(cwd)
     if (existsSync(projectFile)) {
       const project = readOverlay(NAME, projectFile).patches
-      const policy = classifyProjectLayer(project)
+      const policy = classifyProjectLayer(project, [layers[0]!.patches, layers[1]!.patches, layers[2]!.patches])
       const execution = policy.filter((p) => p.kind === 'execution').map((p) => p.id)
       const safety = policy.filter((p) => p.kind === 'safety').map((p) => p.id)
       process.stdout.write(`  project overlay: ${projectFile} — ${project.length} row(s)`
@@ -1047,7 +1000,10 @@ function runPlugin(argv: readonly string[]): number {
       return 0
     }
     // Show what is being vouched for: the rows that will run processes at boot.
-    const execution = classifyProjectLayer(readOverlay(NAME, file).patches).filter((p) => p.kind === 'execution')
+    const dumped = materializeProfile()
+    const prior = [readEmbeddedLayer(NAME, dumped.base), readEmbeddedLayer(NAME, dumped.tui),
+      readOverlay(NAME, userPatchPath()).patches]
+    const execution = classifyProjectLayer(readOverlay(NAME, file).patches, prior).filter((p) => p.kind === 'execution')
     if (execution.length === 0) {
       process.stdout.write(`${NAME}: ${file} mounts no process-running rows — nothing to trust\n`)
       return 0
@@ -1458,7 +1414,7 @@ async function main(): Promise<void> {
     validateUserLayer(project, known, projectFile)
     // The project scope has a policy of its own: no safety-critical rows, and
     // execution rows only when this exact file is trusted (see the block above).
-    const projectPolicy = classifyProjectLayer(project)
+    const projectPolicy = classifyProjectLayer(project, [base, tui, user])
     assertProjectOverlaySafe(projectFile, projectPolicy)
     assertProjectOverlayTrusted(projectFile, projectPolicy)
   }
