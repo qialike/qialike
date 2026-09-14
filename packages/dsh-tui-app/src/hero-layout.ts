@@ -404,11 +404,20 @@ export function heroWordmarkFits(rows: number, width: number): boolean {
  */
 export const HERO_ART_CELL_GLYPH = '▀'
 
-/** Ink weight per tone role of the design: `B` primary, `M` secondary, `D`
- *  dim/shadow. Blending `theme.text` toward `theme.bg` with these weights
- *  reproduces the art's hierarchy on a dark AND on a light theme — the source
- *  variants only swap palettes, the roles are identical. */
-export const HERO_ART_TONE_ALPHA: readonly [number, number, number] = [1, 0.55, 0.25]
+/** Ink weights per tone role of the design: `B` primary, `M` secondary. Blending
+ *  `theme.text` toward `theme.bg` with these weights reproduces the art's
+ *  hierarchy on a dark AND on a light theme — the source variants only swap
+ *  palettes, the roles are identical.
+ *
+ *  The third weight is {@link HERO_ART_SHADOW_ALPHA}: the mark's shadow is not a
+ *  third *ink* but a 25% tint of the ink it hangs from, so it is derived from
+ *  these two rather than listed here. */
+export const HERO_ART_INK_ALPHA = { primary: 1, secondary: 0.7 } as const
+
+/** How far the shadow (and the letter-counter fill) is blended toward the
+ *  background — 25%, the same weight opencode's wordmark uses for its `~`
+ *  (bottom feather) and `_` (counter fill) marks. */
+export const HERO_ART_SHADOW_ALPHA = 0.25
 
 /** Rows the brand art occupies (two design-pixel rows per terminal row). */
 export const HERO_ART_ROWS = Math.ceil(HERO_ART_WORDMARK_ROWS / 2)
@@ -426,35 +435,121 @@ export const HERO_ART_MIN_ROWS = 23
 export interface HeroArtCell {
   /** Glyph to print (`▀`/`▄`/`█`/space). */
   ch: string
-  /** Upper-half ink tone index into {@link heroArtInkColors}, −1 = empty. */
+  /** Upper-half ink index into {@link heroArtInkColors}, −1 = empty. */
   fg: number
-  /** Lower-half ink tone index, −1 = none (the cell background stays clear). */
+  /** Lower-half ink index, −1 = none (the cell background stays clear). */
   bg: number
 }
 
-/** Tone character → tone index (`B`=0, `M`=1, `D`=2), −1 for empty/unknown. */
-function heroArtTone(tone: string | undefined): number {
-  const index = tone === undefined ? -1 : 'BMD'.indexOf(tone)
-  return index
+/** Whether a tone cell is part of the mark's BODY (one of the two inks). */
+function heroArtBody(tone: string | undefined): boolean {
+  return tone === 'B' || tone === 'M'
 }
 
 /**
- * Pack the generated tone grid into colored half-block cells: two stacked
+ * The generated tone grid as RENDERED.
+ *
+ * The SVG's `D` cells are its anti-aliased edge, and drawing all of them as a
+ * third, 25% ink put a grey ring around every stroke — brightest reading: a
+ * "ghost" halo, including a whole row of it ABOVE the wordmark (2026-09-15, user
+ * report). The edge is therefore no longer an outline. It is kept only where it
+ * does a job, following the idiom opencode's wordmark uses (`~` = a half block
+ * in the shadow colour below the ink, `_` = a letter counter filled with the
+ * shadow):
+ *
+ *  - a cell ENCLOSED by the body (a letter counter) → the shadow fill;
+ *  - a cell directly BELOW a body cell → the shadow's bottom feather.
+ *
+ * Every other `D` cell — above, left or right of the ink — is dropped; opencode
+ * never puts its shadow above the mark. Measured on the generated grid: 139 `D`
+ * cells → 49 kept (12 enclosed + 37 below) and 90 dropped, whole rows included.
+ * The dropped empty cells are replaced by shadow too where they are enclosed or
+ * sit below ink (26 of them), so the render grid carries 75 shadow cells.
+ * @param tones - the source tone rows (defaults to the generated wordmark).
+ * @returns rows of the same shape, using only `B`/`M`/`D`/`.` (`.` = no ink).
+ */
+export function heroArtShadedTones(tones: readonly string[] = HERO_ART_WORDMARK_TONES): string[] {
+  const height = tones.length
+  const width = tones.reduce((max, row) => Math.max(max, row.length), 0)
+  const at = (y: number, x: number): string => tones[y]?.[x] ?? '.'
+  // Flood-fill the OUTSIDE from the border across non-body cells: a non-body
+  // cell the fill never reaches is a letter counter (enclosed by the mark).
+  const outside: boolean[][] = tones.map(() => new Array<boolean>(width).fill(false))
+  const stack: [number, number][] = []
+  const visit = (y: number, x: number): void => {
+    if (y < 0 || y >= height || x < 0 || x >= width) return
+    if (outside[y]![x] || heroArtBody(at(y, x))) return
+    outside[y]![x] = true
+    stack.push([y, x])
+  }
+  for (let x = 0; x < width; x++) { visit(0, x); visit(height - 1, x) }
+  for (let y = 0; y < height; y++) { visit(y, 0); visit(y, width - 1) }
+  while (stack.length > 0) {
+    const [y, x] = stack.pop()!
+    visit(y - 1, x)
+    visit(y + 1, x)
+    visit(y, x - 1)
+    visit(y, x + 1)
+  }
+  return tones.map((_row, y) => {
+    let out = ''
+    for (let x = 0; x < width; x++) {
+      const tone = at(y, x)
+      if (heroArtBody(tone)) { out += tone; continue }
+      const enclosed = !outside[y]![x]
+      const underInk = y > 0 && heroArtBody(at(y - 1, x))
+      out += enclosed || underInk ? 'D' : '.'
+    }
+    return out
+  })
+}
+
+/**
+ * Ink index for one `D` half: the shadow belongs to the ink it hangs from, so
+ * the nearest body cell above it in the same column picks the slot — `M` strokes
+ * get the secondary shadow (index 3), everything else the primary one (index 2).
+ * Every shadow cell in the generated grid resolves this way (measured: no cell
+ * has body ink both above and below with disagreeing tones). A `D` with no body
+ * in its column at all (only reachable through an explicit test grid) falls back
+ * to the primary shadow.
+ */
+function heroArtShadowIndex(tones: readonly string[], y: number, x: number): number {
+  for (let up = y - 1; up >= 0; up--) {
+    const tone = tones[up]?.[x]
+    if (heroArtBody(tone)) return tone === 'M' ? 3 : 2
+  }
+  for (let down = y + 1; down < tones.length; down++) {
+    const tone = tones[down]?.[x]
+    if (heroArtBody(tone)) return tone === 'M' ? 3 : 2
+  }
+  return 2
+}
+
+/** Ink index of one half of a cell (`B`=0, `M`=1, shadow=2/3), −1 = no ink. */
+function heroArtInk(tones: readonly string[], y: number, x: number): number {
+  const tone = tones[y]?.[x]
+  if (tone === 'B') return 0
+  if (tone === 'M') return 1
+  if (tone === 'D') return heroArtShadowIndex(tones, y, x)
+  return -1
+}
+
+/**
+ * Pack the shaded tone grid into colored half-block cells: two stacked
  * design-pixel rows become one terminal row.
- * @param tones - tone rows (defaults to the generated wordmark art); a trailing
- *   odd row is dropped, since a half-block cell needs both halves.
+ * @param tones - tone rows (defaults to {@link heroArtShadedTones}, i.e. the
+ *   generated wordmark with the AA halo dropped and the counters/feather kept);
+ *   a trailing odd row is dropped, since a half-block cell needs both halves.
  * @returns one array of cells per terminal row.
  */
-export function heroArtCells(tones: readonly string[] = HERO_ART_WORDMARK_TONES): HeroArtCell[][] {
+export function heroArtCells(tones: readonly string[] = heroArtShadedTones()): HeroArtCell[][] {
   const width = tones.reduce((max, row) => Math.max(max, row.length), 0)
   const out: HeroArtCell[][] = []
   for (let r = 0; r + 1 < tones.length; r += 2) {
-    const topRow = tones[r] ?? ''
-    const bottomRow = tones[r + 1] ?? ''
     const line: HeroArtCell[] = []
     for (let c = 0; c < width; c++) {
-      const top = heroArtTone(topRow[c])
-      const bottom = heroArtTone(bottomRow[c])
+      const top = heroArtInk(tones, r, c)
+      const bottom = heroArtInk(tones, r + 1, c)
       if (top >= 0 && bottom >= 0) {
         // Same ink on both halves paints as one solid block (no background).
         line.push(top === bottom ? { ch: '█', fg: top, bg: -1 } : { ch: '▀', fg: top, bg: bottom })
@@ -477,25 +572,39 @@ function heroArtRgb(hex: string): [number, number, number] {
 }
 
 /**
- * Resolve the three tone colors for a theme: `theme.text` blended toward
- * `theme.bg` by {@link HERO_ART_TONE_ALPHA}, so the lightest ink (`B`) is the
- * theme's own text color and the shadow (`D`) sits close to the background.
+ * Resolve the four inks the brand art draws with, from a theme:
+ * `[primary, secondary, shadowOfPrimary, shadowOfSecondary]`.
+ *
+ * `primary` is `theme.text` itself and `secondary` is it blended
+ * {@link HERO_ART_INK_ALPHA}.secondary of the way toward `theme.bg` (the source
+ * SVG's own second ink sits at the same weight); each shadow is its ink blended
+ * {@link HERO_ART_SHADOW_ALPHA} toward `theme.bg`, so a dark theme gets a dark
+ * shadow and a light theme a light one.
  * @param text - theme text color (`#rgb`/`#rrggbb`).
  * @param bg - theme background color.
- * @returns hex colors for tones `B`, `M`, `D`.
+ * @returns hex colors for the four ink slots, in index order.
  */
 export function heroArtInkColors(
   text: string,
   bg: string,
-  alpha: readonly [number, number, number] = HERO_ART_TONE_ALPHA,
+  ink: { readonly primary: number; readonly secondary: number } = HERO_ART_INK_ALPHA,
+  shadow = HERO_ART_SHADOW_ALPHA,
 ): string[] {
   const [tr, tg, tb] = heroArtRgb(text)
   const [br, bgc, bb] = heroArtRgb(bg)
-  return alpha.map((a) => {
-    const mix = (t: number, b: number): string =>
-      Math.max(0, Math.min(255, Math.round(t * a + b * (1 - a)))).toString(16).padStart(2, '0')
-    return `#${mix(tr, br)}${mix(tg, bgc)}${mix(tb, bb)}`
-  })
+  const chan = (t: number, b: number, a: number): number =>
+    Math.max(0, Math.min(255, Math.round(t * a + b * (1 - a))))
+  const hex = (c: readonly [number, number, number]): string =>
+    `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`
+  type Rgb = readonly [number, number, number]
+  const primary: Rgb = [chan(tr, br, ink.primary), chan(tg, bgc, ink.primary), chan(tb, bb, ink.primary)]
+  const secondary: Rgb = [
+    chan(tr, br, ink.secondary),
+    chan(tg, bgc, ink.secondary),
+    chan(tb, bb, ink.secondary),
+  ]
+  const tint = (c: Rgb): Rgb => [chan(c[0], br, shadow), chan(c[1], bgc, shadow), chan(c[2], bb, shadow)]
+  return [hex(primary), hex(secondary), hex(tint(primary)), hex(tint(secondary))]
 }
 
 /** Brand mark flavor the hero draws above its title. */

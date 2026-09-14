@@ -23,16 +23,18 @@ import {
 } from '../packages/dsh-tui-app/src/hero-art.ts'
 import {
   HERO_ART_CELL_GLYPH,
+  HERO_ART_INK_ALPHA,
   HERO_ART_MARGIN_COLS,
   HERO_ART_MIN_ROWS,
   HERO_ART_MIN_WIDTH,
   HERO_ART_ROWS,
-  HERO_ART_TONE_ALPHA,
+  HERO_ART_SHADOW_ALPHA,
   HERO_WORDMARK,
   heroArtCells,
   heroArtInkColors,
   heroArtMarkKind,
   heroArtMode,
+  heroArtShadedTones,
   heroMarkRows,
 } from '../packages/dsh-tui-app/src/hero-layout.ts'
 
@@ -110,7 +112,9 @@ describe('half-block packing', () => {
 
     const [diff] = heroArtCells(['BM', 'MD'])
     expect(diff![0]).toEqual({ ch: '▀', fg: 0, bg: 1 })
-    expect(diff![1]).toEqual({ ch: '▀', fg: 1, bg: 2 })
+    // The `D` under the `M` half IS the secondary ink's shadow (index 3), not a
+    // third ink: shadows belong to the stroke they hang from.
+    expect(diff![1]).toEqual({ ch: '▀', fg: 1, bg: 3 })
 
     const [empty] = heroArtCells(['..', '..'])
     expect(empty![0]).toEqual({ ch: ' ', fg: -1, bg: -1 })
@@ -126,14 +130,102 @@ describe('half-block packing', () => {
   })
 })
 
-describe('tone -> theme ink ramp', () => {
-  test('blends theme.text toward theme.bg per the documented alphas', () => {
-    expect(HERO_ART_TONE_ALPHA).toEqual([1, 0.55, 0.25])
-    expect(heroArtInkColors('#ffffff', '#000000')).toEqual(['#ffffff', '#8c8c8c', '#404040'])
-    expect(heroArtInkColors('#000000', '#ffffff')).toEqual(['#000000', '#737373', '#bfbfbf'])
+describe('anti-aliased edge -> shadow (opencode shading, 2026-09-15)', () => {
+  const census = (grid: readonly string[]): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const row of grid) for (const tone of row) out[tone] = (out[tone] ?? 0) + 1
+    return out
+  }
+  const body = (grid: readonly string[], y: number, x: number): boolean =>
+    grid[y]?.[x] === 'B' || grid[y]?.[x] === 'M'
+
+  test('keeps only the shadow that does a job, and drops the rest of the edge', () => {
+    const src = census(HERO_ART_WORDMARK_TONES)
+    const out = census(heroArtShadedTones())
+    // Only the `D` cells change; the two inks are untouched.
+    expect(out['B']).toBe(src['B'])
+    expect(out['M']).toBe(src['M'])
+    expect(src['D']).toBe(139)
+    // 30 letter-counter fills + 45 cells under ink (37 of them the edge itself,
+    // 8 empty) survive; 90 outline cells are dropped.
+    expect(out['D']).toBe(75)
+    expect(out['.']).toBe(src['.']! + 90 - 26)
   })
 
-  test('primary ink IS the theme text color, and D sits closest to the bg', () => {
+  test('the grey row ABOVE the wordmark is gone (the reported ghost)', () => {
+    const src = HERO_ART_WORDMARK_TONES
+    const out = heroArtShadedTones()
+    // The rasterizer's top edge row sits directly above the first ink row.
+    expect(src[1]!.replace(/\./gu, '')).not.toBe('')
+    expect(out[1]!.replace(/\./gu, '')).toBe('')
+    // …and nothing else moved: the ink rows themselves are untouched.
+    for (let y = 2; y < src.length; y++) {
+      for (let x = 0; x < src[y]!.length; x++) {
+        if (body(src, y, x)) expect(out[y]![x], `(${y},${x})`).toBe(src[y]![x])
+      }
+    }
+  })
+
+  test('a kept edge cell is enclosed by the mark or sits under ink — never both-ish', () => {
+    const src = HERO_ART_WORDMARK_TONES
+    const out = heroArtShadedTones()
+    const height = src.length
+    const width = src[0]!.length
+    // Independent flood fill of the outside over non-body cells.
+    const outside = src.map(() => new Array<boolean>(width).fill(false))
+    const stack: [number, number][] = []
+    const visit = (y: number, x: number): void => {
+      if (y < 0 || y >= height || x < 0 || x >= width) return
+      if (outside[y]![x] || body(src, y, x)) return
+      outside[y]![x] = true
+      stack.push([y, x])
+    }
+    for (let x = 0; x < width; x++) { visit(0, x); visit(height - 1, x) }
+    for (let y = 0; y < height; y++) { visit(y, 0); visit(y, width - 1) }
+    while (stack.length > 0) {
+      const [y, x] = stack.pop()!
+      visit(y - 1, x); visit(y + 1, x); visit(y, x - 1); visit(y, x + 1)
+    }
+    let kept = 0
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const wanted = !body(src, y, x) && (!outside[y]![x] || (y > 0 && body(src, y - 1, x)))
+        expect(out[y]![x] === 'D', `(${y},${x})`).toBe(wanted)
+        if (wanted) kept += 1
+      }
+    }
+    expect(kept).toBe(75)
+  })
+
+  test('the shadow slot follows the stroke it hangs from', () => {
+    const cellOf = (grid: readonly string[]): unknown => heroArtCells(grid)[0]![0]
+    // Under an `M` stroke: the secondary shadow (3); under `B`: the primary (2).
+    expect(cellOf(['M', 'D'])).toEqual({ ch: '▀', fg: 1, bg: 3 })
+    expect(cellOf(['B', 'D'])).toEqual({ ch: '▀', fg: 0, bg: 2 })
+    // No body anywhere in the column: the primary shadow is the safe default.
+    expect(cellOf(['.', 'D'])).toEqual({ ch: '▄', fg: 2, bg: -1 })
+    // The generated grid resolves BOTH slots (40 + 35 shadow pixels).
+    const cells = heroArtCells()
+    const halves = new Set<number>()
+    for (const line of cells) for (const cell of line) {
+      if (cell.fg >= 2) halves.add(cell.fg)
+      if (cell.bg >= 2) halves.add(cell.bg)
+    }
+    expect([...halves].sort()).toEqual([2, 3])
+  })
+})
+
+describe('ink palette', () => {
+  test('is the SVG two-ink design plus a 25% shadow of each ink', () => {
+    expect(HERO_ART_INK_ALPHA).toEqual({ primary: 1, secondary: 0.7 })
+    expect(HERO_ART_SHADOW_ALPHA).toBe(0.25)
+    expect(heroArtInkColors('#ffffff', '#000000')).toEqual(['#ffffff', '#b3b3b3', '#404040', '#2d2d2d'])
+    expect(heroArtInkColors('#000000', '#ffffff')).toEqual(['#000000', '#4d4d4d', '#bfbfbf', '#d3d3d3'])
+    // The default dark theme's four inks (the approved preview's colors).
+    expect(heroArtInkColors('#f9fafb', '#151517')).toEqual(['#f9fafb', '#b5b5b7', '#4e4e50', '#3d3d3f'])
+  })
+
+  test('primary ink IS the theme text color, and the inks order away from the bg', () => {
     const [text, bg] = ['#f9fafb', '#151517']
     const inks = heroArtInkColors(text, bg)
     expect(inks[0]).toBe(text)
@@ -143,13 +235,13 @@ describe('tone -> theme ink ramp', () => {
       const b = rgb(bg)
       return a.reduce((sum, v, i) => sum + Math.abs(v - b[i]!), 0)
     }
-    expect(distance(inks[0]!)).toBeGreaterThan(distance(inks[1]!))
-    expect(distance(inks[1]!)).toBeGreaterThan(distance(inks[2]!))
+    const d = inks.map((ink) => distance(ink!))
+    for (let i = 1; i < d.length; i++) expect(d[i - 1]!).toBeGreaterThan(d[i]!)
   })
 
   test('accepts #rgb shorthand and survives junk input', () => {
     expect(heroArtInkColors('#fff', '#000')[0]).toBe('#ffffff')
-    expect(heroArtInkColors('nonsense', '#000')).toHaveLength(3)
+    expect(heroArtInkColors('nonsense', '#000')).toHaveLength(4)
   })
 })
 
