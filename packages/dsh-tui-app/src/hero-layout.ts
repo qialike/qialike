@@ -18,14 +18,15 @@ import {
   HERO_ART_WORDMARK_ROWS,
   HERO_ART_WORDMARK_TONES,
 } from './hero-art.ts'
-import { tooSmallNoticeLines } from './layout-budget.ts'
+import { STATUS_BAR_HEIGHT, tooSmallNoticeLines } from './layout-budget.ts'
 
 /** Composer box border rows included in `boxH` (round border top+bottom). */
 export const HERO_GAP = 1
-/** The DOCKED status bar's row count (mirrors conversation STATUS_BAR_HEIGHT).
- *  The hero reserves no status rows at all — it is chrome-free — so this is
- *  kept only for documentation/tests of the docked geometry. */
-export const HERO_STATUS_BAR_HEIGHT = 3
+/** The DOCKED status bar's row count, re-exported from the single source
+ *  ({@link STATUS_BAR_HEIGHT} in `layout-budget.ts`). The hero reserves no
+ *  status rows at all — it is chrome-free — so this is kept only for
+ *  documentation/tests of the docked geometry. */
+export const HERO_STATUS_BAR_HEIGHT = STATUS_BAR_HEIGHT
 /** The padded hero area's top/bottom padding rows (paddingY={1}). */
 export const HERO_AREA_PADDING_Y = 1
 

@@ -11,6 +11,11 @@
  *   ① a mutation that does not bump `Store.itemsRev` (the render never learns);
  *   ② a consumer that still keys a memo on the array identity (stable now, so
  *      the memo would freeze after the first frame).
+ *
+ * KNOWN LIMIT of a text guard: it can only see writes spelled in this file. A
+ * mutation through the live alias (`const a = store.getItems(); a.push(x)`) is
+ * invisible to it — that is why `getItems()` hands out `readonly TranscriptItem[]`
+ * and why every consumer was audited by hand when the array went in-place.
  */
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -19,20 +24,53 @@ const INDEX = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', impo
 const PANEL = readFileSync(new URL('../packages/dsh-tui-app/src/panels/conversation.tsx', import.meta.url), 'utf-8')
 
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1
+/** Occurrences of a /g pattern. `String.match` ignores `lastIndex`, so the
+ *  patterns below are safe to reuse across calls. */
+const hits = (re: RegExp, haystack: string): number => haystack.match(re)?.length ?? 0
+
+/** An indexed or whole-length WRITE — never a comparison (`===`, `==`, `!==`,
+ *  `<=`, `>=` all fail the negative lookahead). */
+const IDX_WRITE = /this\.items\[[^\]]*\]\s*=(?!=)/g
+const LEN_WRITE = /this\.items\.length\s*=(?!=)/g
 
 describe('in-place transcript array', () => {
   test('① every write goes through one of the three rev-bumping writers', () => {
     // Exactly three writers may touch the array: one whole-array assignment,
     // one append, one indexed write — each inside its helper, each bumping the
-    // revision. Any fourth write site (or any other mutating array method) is a
+    // revision. Any fourth write site (or any other mutating route) is a
     // mutation the render path cannot see.
     expect(count(INDEX, 'this.items = '), 'whole-array writes').toBe(1)
     expect(count(INDEX, 'this.items.push('), 'appends').toBe(1)
-    expect(INDEX.match(/this\.items\[[^\]]*\]\s*=/g)?.length ?? 0, 'indexed writes').toBe(1)
+    expect(hits(IDX_WRITE, INDEX), 'indexed writes').toBe(1)
     expect(count(INDEX, 'this._itemsRev += 1'), 'revision bumps').toBe(3)
     for (const method of ['splice', 'sort', 'pop', 'shift', 'unshift', 'reverse', 'fill', 'copyWithin']) {
       expect(count(INDEX, `this.items.${method}(`), `this.items.${method}( must not appear`).toBe(0)
     }
+    // Routes a `this.items[...]` pattern would miss.
+    expect(hits(LEN_WRITE, INDEX), 'this.items.length = n must not appear').toBe(0)
+    for (const route of ['delete this.items', 'Object.assign(this.items', 'Array.prototype.splice.call(this.items']) {
+      expect(count(INDEX, route), `${route} must not appear`).toBe(0)
+    }
+  })
+
+  test('①b the write patterns ignore comparisons (and still catch real writes)', () => {
+    // The first cut of this guard used `\]\s*=` without the lookahead, so ANY
+    // future element comparison (`=== undefined`, `!== last`) counted as a
+    // write and turned the guard red spuriously.
+    for (const cmp of [
+      'if (this.items[i] === undefined) return',
+      'if (this.items[i] !== last) return',
+      'if (this.items[i] == x) return',
+      'while (this.items.length === 0) {}',
+      'if (this.items.length >= 1) return',
+      'if (this.items.length <= 1) return',
+    ]) {
+      expect(hits(IDX_WRITE, cmp), `IDX_WRITE must not match: ${cmp}`).toBe(0)
+      expect(hits(LEN_WRITE, cmp), `LEN_WRITE must not match: ${cmp}`).toBe(0)
+    }
+    expect(hits(IDX_WRITE, 'this.items[index] = item'), 'the real indexed write').toBe(1)
+    expect(hits(IDX_WRITE, 'this.items[i] = { ...this.items[i], text }'), 'an element replace').toBe(1)
+    expect(hits(LEN_WRITE, 'this.items.length = 0'), 'the real length write').toBe(1)
   })
 
   test('② the revision is published, and the array still reads as a live view', () => {

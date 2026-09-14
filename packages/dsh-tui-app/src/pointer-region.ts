@@ -189,8 +189,10 @@ export function sidebarContentBand(width: number, messageRight: number): { left:
   return { left: messageRight + 2, right: width - 3 }
 }
 
-/** Rows the bottom status bar occupies (mirrors conversation.tsx). */
-export const SIDEBAR_STATUS_BAR_ROWS = 3
+/** Rows the bottom status bar occupies. Alias of the single source
+ *  ({@link STATUS_BAR_HEIGHT} in `layout-budget.ts`), kept for the sidebar
+ *  planner's own vocabulary — it used to be a second literal `3`. */
+export const SIDEBAR_STATUS_BAR_ROWS = STATUS_BAR_HEIGHT
 
 /** Rows of one sidebar Text at `contentWidth` columns, using the SAME wrapper
  *  Ink's `<Text wrap="wrap">` uses (see composerWrap) so the budget below can

@@ -1166,7 +1166,10 @@ function composerBand(width: number, rows: number): { top: number; left: number;
     // terminal too short for even the bare card (`fits === false`) no stack is
     // painted: the notice row sits at the top of the hero area.
     const b = heroBudgetNow(rows, width)
-    if (!b.fits) return { top: 1 + HERO_AREA_PADDING_Y, left: 1, height: 1 }
+    // The band is the rows of the SAME builder the paint maps over
+    // (`heroTooSmallLines`, see the render), never a literal: the hero used to
+    // hardcode `height: 1` and disagreed with its own two-row notice.
+    if (!b.fits) return { top: 1 + HERO_AREA_PADDING_Y, left: 1, height: heroTooSmallLines(COMPOSER_MIN_HEIGHT).length }
     const hero = heroLayout({
       rows,
       boxH: height,
@@ -1176,10 +1179,11 @@ function composerBand(width: number, rows: number): { top: number; left: number;
     })
     return { top: hero.composerTopRow, left: heroComposerLeft(width), height }
   }
-  // Below the docked minimum the render paints the TWO-row notice instead of the
+  // Below the docked minimum the render paints the notice instead of the
   // conversation view, so the band is exactly those rows — rows 2-3, the message
   // column's first content rows (its paddingY 1 takes row 1). There is no card.
-  if (!dockedFits(rows)) return { top: 2, left: 1, height: 2 }
+  // The count comes from the SAME builder the paint maps over (see the render).
+  if (!dockedFits(rows)) return { top: 2, left: 1, height: tooSmallNoticeLines(DOCKED_MIN_ROWS).length }
   return { top: dockedComposerTop(rows, height), left: 1, height }
 }
 

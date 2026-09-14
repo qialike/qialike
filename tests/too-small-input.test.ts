@@ -70,4 +70,25 @@ describe('terminal-too-small input gate', () => {
     expect(INDEX.slice(gate - 400, gate)).toContain("activePanel.mode !== 'fullscreen'")
     expect(INDEX.slice(gate - 400, gate)).toContain("store.panel === 'conversation'")
   })
+
+  test('④ the notice band is the PAINTED notice height on both surfaces', () => {
+    // Same drift class as the gate itself: the hero branch of `composerBand`
+    // hardcoded `height: 1` while its notice had been split into two rows (the
+    // docked branch had been updated). Both branches must derive the height from
+    // the very builder the render maps over, never from a literal.
+    const line = (needle: string): string => {
+      const at = PANEL.indexOf(needle)
+      expect(at, `${needle} exists`).toBeGreaterThan(-1)
+      return PANEL.slice(at, PANEL.indexOf('\n', at))
+    }
+    const heroBand = line('if (!b.fits) return')
+    const dockedBand = line('if (!dockedFits(rows)) return')
+    expect(heroBand, 'hero band height = hero notice rows').toContain('heroTooSmallLines(COMPOSER_MIN_HEIGHT).length')
+    expect(heroBand, 'no hardcoded hero band height').not.toContain('height: 1')
+    expect(dockedBand, 'docked band height = docked notice rows').toContain('tooSmallNoticeLines(DOCKED_MIN_ROWS).length')
+    expect(dockedBand, 'no hardcoded docked band height').not.toContain('height: 2')
+    // …and the paint at both call sites uses exactly those two builders.
+    expect(PANEL, 'hero paint').toContain('{heroTooSmallLines(COMPOSER_MIN_HEIGHT).map(')
+    expect(PANEL, 'docked paint').toContain('{tooSmallNoticeLines(DOCKED_MIN_ROWS).map(')
+  })
 })
