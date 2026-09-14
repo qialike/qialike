@@ -23,7 +23,7 @@
  */
 
 import { basename, dirname, join } from 'node:path'
-import { lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { constants, homedir, tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { pathToFileURL } from 'node:url'
@@ -38,7 +38,7 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generated/config-embed.js'
 import { PLUGIN_BUILTINS } from '../generated/plugins.js'
 import pkg from '../../../package.json' with { type: 'json' }
-import { UNINSTALL_MODE, WEB_MODE } from './launcher-modes.ts'
+import { PLUGIN_MODE, UNINSTALL_MODE, WEB_MODE } from './launcher-modes.ts'
 
 const NAME = 'dsh-tui'
 
@@ -278,8 +278,50 @@ function userPatchPath(): string {
   return join(profileDir(), 'cordis.patch.yml')
 }
 
+/**
+ * The PROJECT overlay: `<projectRoot>/.dsh/tui.cordis.patch.yml`, applied AFTER
+ * the user overlay so a repository can pin its own MCP servers without touching
+ * the personal file. The filename is distinct from the harness's own project
+ * files, so the two never fight over one path.
+ *
+ * The project root rule MIRRORS the harness's skill provider (walk up to the
+ * first `.git`, else stay at cwd) — the overlay must land in the same directory
+ * the project's `.dsh/skills` is discovered from, or "the project config" would
+ * mean two different places.
+ * @param cwd - directory the walk starts from.
+ * @returns absolute path of the project overlay.
+ */
+function projectPatchPath(cwd: string): string {
+  let current = cwd
+  for (;;) {
+    if (existsSync(join(current, '.git'))) return join(current, '.dsh', 'tui.cordis.patch.yml')
+    const parent = dirname(current)
+    if (parent === current) return join(cwd, '.dsh', 'tui.cordis.patch.yml')
+    current = parent
+  }
+}
+
+/** The overlay file for a scope. */
+function overlayPath(scope: 'user' | 'project', cwd: string): string {
+  return scope === 'project' ? projectPatchPath(cwd) : userPatchPath()
+}
+
+/** One `insert` row for an MCP server, as text (values JSON-quoted, which is
+ *  also valid YAML double-quoted scalar / flow-sequence syntax). */
+function mcpRowText(serverName: string, command: string, commandArgs: readonly string[]): string {
+  return ['- insert:',
+    `    - id: mcp-${serverName}`,
+    "      name: '@deepseek-ai/dsh-mcp-client'",
+    '      config:',
+    `        serverName: ${JSON.stringify(serverName)}`,
+    "        transport: 'stdio'",
+    `        command: ${JSON.stringify(command)}`,
+    `        args: [${commandArgs.map((a) => JSON.stringify(a)).join(', ')}]`,
+    ''].join('\n')
+}
+
 /** One `name`-carrying row of a parsed patch layer. */
-interface LayerRow { id: string; name: string }
+interface LayerRow { id: string; name: string; disabled: boolean }
 
 /** Every row id a set of layers defines (top level and inside `insert`). */
 function layerRowIds(layers: readonly (readonly PatchOptions[])[]): Set<string> {
@@ -303,9 +345,10 @@ function layerRowIds(layers: readonly (readonly PatchOptions[])[]): Set<string> 
  * name that this single-file build never bundled simply never mounts.
  * @param user - the parsed user layer.
  * @param known - row ids defined by the embedded layers.
+ * @param file - the overlay file the message must name.
  * @throws when the layer contains an unmatched id or an unbundled plugin name.
  */
-function validateUserLayer(user: readonly PatchOptions[], known: ReadonlySet<string>): void {
+function validateUserLayer(user: readonly PatchOptions[], known: ReadonlySet<string>, file: string): void {
   const problems: string[] = []
   const walk = (entries: readonly unknown[], inserted: boolean): void => {
     for (const entry of entries) {
@@ -326,11 +369,17 @@ function validateUserLayer(user: readonly PatchOptions[], known: ReadonlySet<str
         problems.push(`row ${id} matches no built-in row — a row WITHOUT \`insert\` only re-configures an`
           + ' existing row; to add a plugin, put it under `insert:`')
       }
+      // `insert:` with nothing under it (or a non-list value) is a row that
+      // mounts nothing while looking like it should — e.g. the header left
+      // behind by deleting its last child.
+      if ('insert' in row && !Array.isArray(row.insert)) {
+        problems.push(`row ${id} has an empty \`insert\` — it needs at least one child row`)
+      }
     }
   }
   walk(user, false)
   if (problems.length > 0) {
-    throw new Error(`${NAME}: invalid user layer ${userPatchPath()}:\n  - ${problems.join('\n  - ')}`)
+    throw new Error(`${NAME}: invalid overlay ${file}:\n  - ${problems.join('\n  - ')}`)
   }
 }
 
@@ -344,9 +393,13 @@ function layerRows(patches: readonly PatchOptions[]): LayerRow[] {
   const walk = (entries: readonly unknown[]): void => {
     for (const entry of entries) {
       if (typeof entry !== 'object' || entry === null) continue
-      const row = entry as { id?: unknown; name?: unknown; insert?: unknown }
+      const row = entry as { id?: unknown; name?: unknown; insert?: unknown; disabled?: unknown }
       if (typeof row.name === 'string') {
-        rows.push({ id: typeof row.id === 'string' ? row.id : '(no id)', name: row.name })
+        rows.push({
+          id: typeof row.id === 'string' ? row.id : '(no id)',
+          name: row.name,
+          disabled: row.disabled === true,
+        })
       }
       if (Array.isArray(row.insert)) walk(row.insert)
     }
@@ -365,11 +418,201 @@ function dumpConfig(layers: readonly { label: string; file: string; patches: rea
   const out = [`${NAME}: composition dump`]
   for (const layer of layers) {
     const rows = layerRows(layer.patches)
-    out.push(`  ${layer.label.padEnd(5)} ${layer.file}${layer.embedded ? ' (embedded)' : ''}`
-      + ` — ${layer.patches.length} patch row(s), ${rows.length} plugin row(s)`)
-    for (const row of rows) out.push(`      ${row.id} → ${row.name}`)
+    const off = rows.filter((row) => row.disabled).length
+    out.push(`  ${layer.label.padEnd(7)} ${layer.file}${layer.embedded ? ' (embedded)' : ''}`
+      + ` — ${layer.patches.length} patch row(s), ${rows.length} plugin row(s)`
+      + `${off > 0 ? `, ${off} disabled` : ''}`)
+    for (const row of rows) out.push(`      ${row.id} → ${row.name}${row.disabled ? ' (disabled)' : ''}`)
   }
   process.stdout.write(out.join('\n') + '\n')
+}
+
+const PLUGIN_HELP = `Usage: dsh-tui plugin <command> [options]
+
+Inspect and edit the layers this binary composes. The embedded (base + tui)
+layers are read-only; the OVERLAYS are the extension point:
+  user     ${'$DSH_HOME'}/profiles/tui/cordis.patch.yml           (always)
+  project  <projectRoot>/.dsh/tui.cordis.patch.yml  (per repository)
+
+Commands:
+  list [--available]           layers, their plugin rows, and every plugin
+                               bundled into this binary with --available
+  add-mcp <name> <command> [args...] [--project]
+                               append an stdio MCP server to the overlay
+  remove-mcp <name> [--project]
+                               delete that server's row from the overlay
+
+MCP servers reach the model as mcp__<name>__<tool>. A row can only name a plugin
+bundled into this build, and a row id must match a built-in row (or use insert);
+anything else is rejected instead of being ignored.
+`
+
+/** Parse an overlay file, requiring it to be a valid patch list. */
+function readOverlay(binName: string, file: string): { text: string; patches: PatchOptions[] } {
+  const text = existsSync(file) ? readFileSync(file, 'utf8') : ''
+  if (text.trim() === '') return { text: '', patches: [] }
+  const patches = loadOptionalPatches(binName, file)
+  if (patches === undefined) throw new Error(`${binName}: ${file} disappeared while reading it`)
+  return { text, patches }
+}
+
+/** The `serverName` of one MCP row, or undefined. */
+function mcpServerName(row: unknown): string | undefined {
+  if (typeof row !== 'object' || row === null) return undefined
+  const entry = row as { name?: unknown; config?: unknown }
+  if (entry.name !== '@deepseek-ai/dsh-mcp-client') return undefined
+  const config = entry.config as { serverName?: unknown } | undefined
+  return typeof config?.serverName === 'string' ? config.serverName : undefined
+}
+
+/** Whether a parsed layer already defines this MCP server. */
+function definesMcpServer(patches: readonly PatchOptions[], serverName: string): boolean {
+  const walk = (entries: readonly unknown[]): boolean => entries.some((entry) => {
+    if (typeof entry !== 'object' || entry === null) return false
+    const row = entry as { insert?: unknown }
+    if (mcpServerName(entry) === serverName) return true
+    return Array.isArray(row.insert) ? walk(row.insert) : false
+  })
+  return walk(patches)
+}
+
+/**
+ * Delete one MCP server's row from an overlay by LINE SURGERY — the file is
+ * hand-written and may hold `!!js` expressions or comments that a parse →
+ * re-serialize round trip would destroy. The row is located by its
+ * `serverName`, expanded upward to its enclosing `- ` item and downward to the
+ * next item at the same indent, and only removed when exactly one candidate
+ * exists (otherwise nothing is written).
+ * @returns the new file text, or undefined when nothing matched.
+ * @throws when the server appears more than once (ambiguous: refuse to guess).
+ */
+function removeMcpRowText(text: string, serverName: string): string | undefined {
+  const lines = text.split('\n')
+  const needle = new RegExp(`^\\s*serverName:\\s*['"]?${serverName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}['"]?\\s*$`)
+  const hits = lines.reduce<number[]>((acc, line, i) => (needle.test(line) ? [...acc, i] : acc), [])
+  if (hits.length === 0) return undefined
+  if (hits.length > 1) {
+    throw new Error(`${NAME}: ${serverName} appears ${hits.length} times — remove the rows by hand`)
+  }
+  const at = hits[0]!
+  const indentOf = (line: string): number => (/^(\s*)/.exec(line)?.[1] ?? '').length
+  const serverIndent = indentOf(lines[at]!)
+  let start = at
+  while (start > 0) {
+    const above = lines[start - 1]!
+    const item = /^(\s*)-\s/.exec(above)
+    if (item !== null && item[1]!.length < serverIndent) { start -= 1; break }
+    if (above.trim() === '' || indentOf(above) === 0) break
+    start -= 1
+  }
+  const rowIndent = indentOf(lines[start]!)
+  let end = at + 1
+  while (end < lines.length) {
+    const item = /^(\s*)-\s/.exec(lines[end]!)
+    if (item !== null && item[1]!.length <= rowIndent) break
+    end += 1
+  }
+  const kept = [...lines.slice(0, start), ...lines.slice(end)]
+  // An `insert:` header whose block just lost its LAST row would be left dangling
+  // (`- insert:` with nothing under it parses as a null child and mounts
+  // nothing) — drop such a header too.
+  for (let i = kept.length - 1; i >= 0; i--) {
+    const header = /^(\s*)-\s+insert:\s*$/.exec(kept[i] ?? '')
+    if (header === null) continue
+    const next = kept.slice(i + 1).find((line) => line.trim() !== '')
+    if (next === undefined || indentOf(next) <= header[1]!.length) kept.splice(i, 1)
+  }
+  const body = kept.join('\n')
+  return body.trim() === '' ? '[]\n' : body
+}
+
+/**
+ * `dsh-tui plugin …` — the overlay CLI (a launcher mode: it never boots the TUI).
+ * @param argv - the whole invocation, `plugin` first.
+ * @returns the process exit code.
+ */
+function runPlugin(argv: readonly string[]): number {
+  const args = argv.slice(1)
+  const command = args[0]
+  const rest = args.slice(1)
+  const scope: 'user' | 'project' = rest.includes('--project') ? 'project' : 'user'
+  const positional = rest.filter((arg) => arg !== '--project')
+  const cwd = process.cwd()
+  if (command === undefined || command === '--help' || command === '-h') {
+    process.stdout.write(PLUGIN_HELP)
+    return 0
+  }
+  if (command === 'list') {
+    const dumped = materializeProfile()
+    const layers = [
+      { label: 'base', file: dumped.base, patches: readEmbeddedLayer(NAME, dumped.base), embedded: true },
+      { label: 'tui', file: dumped.tui, patches: readEmbeddedLayer(NAME, dumped.tui), embedded: true },
+      { label: 'user', file: userPatchPath(), patches: readOverlay(NAME, userPatchPath()).patches, embedded: false },
+      { label: 'project', file: projectPatchPath(cwd), patches: readOverlay(NAME, projectPatchPath(cwd)).patches, embedded: false },
+    ]
+    dumpConfig(layers)
+    const names = Object.keys(PLUGIN_BUILTINS).sort()
+    process.stdout.write(`  bundled plugins: ${names.length}`
+      + `${positional.includes('--available') ? `\n      ${names.join('\n      ')}` : ' (pass --available to list them)'}\n`)
+    return 0
+  }
+  if (command === 'add-mcp' || command === 'remove-mcp') {
+    const [serverName, command0, ...commandArgs] = positional
+    if (serverName === undefined) {
+      process.stderr.write(`${NAME}: ${command} needs a server <name>\n`)
+      return 1
+    }
+    if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) {
+      process.stderr.write(`${NAME}: "${serverName}" is not a valid server name ([A-Za-z0-9_-]{1,32})\n`)
+      return 1
+    }
+    const file = overlayPath(scope, cwd)
+    try {
+      const overlay = readOverlay(NAME, file)
+      let next: string
+      if (command === 'add-mcp') {
+        if (command0 === undefined) {
+          process.stderr.write(`${NAME}: add-mcp needs <name> and <command>\n`)
+          return 1
+        }
+        if (definesMcpServer(overlay.patches, serverName)) {
+          process.stderr.write(`${NAME}: ${file} already defines the MCP server "${serverName}"\n`)
+          return 1
+        }
+        // An overlay that parses to ZERO rows is effectively empty — appending
+        // to the literal text of an `[]` file would emit a second YAML document.
+        const text = overlay.patches.length === 0 ? '' : overlay.text.replace(/\n*$/, '\n')
+        next = text + mcpRowText(serverName, command0, commandArgs)
+      } else {
+        const removed = removeMcpRowText(overlay.text, serverName)
+        if (removed === undefined) {
+          process.stderr.write(`${NAME}: ${file} defines no MCP server "${serverName}"\n`)
+          return 1
+        }
+        next = removed
+      }
+      // Validate the FILE WE ARE ABOUT TO INSTALL (temp + rename): a broken
+      // overlay must be caught here, not at the next boot.
+      const temp = `${file}.tmp`
+      mkdirSync(dirname(file), { recursive: true })
+      try {
+        writeFileSync(temp, next)
+        loadOptionalPatches(NAME, temp)
+        renameSync(temp, file)
+      } catch (error) {
+        rmSync(temp, { force: true }) // never leave a temp layer behind
+        throw error
+      }
+      process.stdout.write(`${NAME}: ${command === 'add-mcp' ? 'added' : 'removed'} MCP server`
+        + ` "${serverName}" ${command === 'add-mcp' ? 'to' : 'from'} ${file}\n`)
+      return 0
+    } catch (error) {
+      process.stderr.write(`${NAME}: ${error instanceof Error ? error.message : String(error)}\n`)
+      return 1
+    }
+  }
+  process.stderr.write(`${NAME}: unknown plugin command "${command}" (see \`dsh-tui plugin --help\`)\n`)
+  return 1
 }
 
 /**
@@ -648,6 +891,9 @@ async function main(): Promise<void> {
     if (pre === 'mismatch') process.exit(1) // version differs: warn, do NOT start web
     process.exit(await runWeb(args))
   }
+  // `plugin` owns its whole command line too, and — like the other launcher
+  // modes — never boots the tree or touches the terminal.
+  if (args[0] === PLUGIN_MODE) process.exit(runPlugin(args))
   // `--dump-config` is a DIAGNOSTIC: it must not touch the terminal at all (a
   // piped `dsh-tui --dump-config > file` has to stay free of screen escapes), so
   // it runs before the alternate screen, the splash and every terminal probe.
@@ -655,11 +901,13 @@ async function main(): Promise<void> {
   if (args.includes('--dump-config')) {
     const dumped = materializeProfile()
     const userFile = userPatchPath()
+    const projectFile = projectPatchPath(process.cwd())
     dumpConfig([
       { label: 'root', file: dumped.root, patches: [], embedded: true },
       { label: 'base', file: dumped.base, patches: readEmbeddedLayer(NAME, dumped.base), embedded: true },
       { label: 'tui', file: dumped.tui, patches: readEmbeddedLayer(NAME, dumped.tui), embedded: true },
       { label: 'user', file: userFile, patches: loadOptionalPatches(NAME, userFile) ?? [], embedded: false },
+      { label: 'project', file: projectFile, patches: loadOptionalPatches(NAME, projectFile) ?? [], embedded: false },
     ])
     process.exit(0)
   }
@@ -738,10 +986,16 @@ async function main(): Promise<void> {
   // can re-configure and insert BUNDLED plugins, never load arbitrary code.
   const userFile = userPatchPath()
   const user = loadOptionalPatches(NAME, userFile) ?? []
-  // The user layer is hand-written, and the loader is silent about both ways it
-  // can be wrong — so it is validated here, before anything boots.
-  if (user.length > 0) validateUserLayer(user, layerRowIds([base, tui]))
-  const patches = [...structuredClone(base), ...structuredClone(tui), ...structuredClone(user)]
+  const projectFile = projectPatchPath(process.cwd())
+  const project = loadOptionalPatches(NAME, projectFile) ?? []
+  // Both overlays are hand-written, and the loader is silent about every way they
+  // can be wrong — so they are validated here, before anything boots. The
+  // PROJECT layer is applied last: a repository outranks the personal file.
+  const known = layerRowIds([base, tui])
+  if (user.length > 0) validateUserLayer(user, known, userFile)
+  if (project.length > 0) validateUserLayer(project, known, projectFile)
+  const patches = [...structuredClone(base), ...structuredClone(tui),
+    ...structuredClone(user), ...structuredClone(project)]
 
   const ctx = await bootSea(NAME, profile.root, patches, (hostCtx) => {
     app.current = hostCtx

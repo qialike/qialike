@@ -26,9 +26,11 @@
 export const UNINSTALL_MODE = 'uninstall'
 /** Hands over to the installed `dsh` CLI's web server. */
 export const WEB_MODE = 'web'
+/** Inspects / edits the overlay layers; never boots the TUI. */
+export const PLUGIN_MODE = 'plugin'
 
 /** Every launcher-owned positional mode, in the order `bin.ts` resolves them. */
-export const LAUNCHER_MODES = [UNINSTALL_MODE, WEB_MODE] as const
+export const LAUNCHER_MODES = [UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE] as const
 
 /** Whether `arg` is a launcher mode, i.e. its whole argv belongs to `bin.ts`. */
 export function isLauncherMode(arg: string | undefined): arg is (typeof LAUNCHER_MODES)[number] {

@@ -155,6 +155,17 @@ dist/dsh-tui --help
 
   挂上之后，该 server 的工具以 `mcp__github__<tool>` 出现在模型面前。
 
+`dsh-tui plugin` 可以代你操作这些文件：
+
+```sh
+dsh-tui plugin list [--available]   # 三层与各行；--available 列出本构建打包的全部插件
+dsh-tui plugin add-mcp <name> <command> [args...] [--project]
+dsh-tui plugin remove-mcp <name> [--project]
+```
+
+`--project` 作用于**仓库级** overlay（`<repo>/.dsh/tui.cordis.patch.yml`）而非个人那份。
+启用/禁用不需要命令：**不带** `insert`、内容为 `disabled: true` 的行按 `id` 改内建行即可。
+
 overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内建行（换 persona、关掉某个工具）。
 两种写错会被明确拒绝并给出原因 —— 插件加载器自己对这两种都是静默的：`insert` 里写了本构建未打包的插件名；
 行的 `id` 匹配不到任何内建行。`dsh-tui --dump-config` 会打印三层的组合结果以及每个插件来自哪一层。

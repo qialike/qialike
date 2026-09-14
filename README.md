@@ -312,6 +312,18 @@ Two channels take plain data files — no build step, no install step:
 
   Once mounted, the server's tools reach the model as `mcp__github__<tool>`.
 
+`dsh-tui plugin` drives those files for you:
+
+```sh
+dsh-tui plugin list [--available]   # layers + rows; --available lists every bundled plugin
+dsh-tui plugin add-mcp <name> <command> [args...] [--project]
+dsh-tui plugin remove-mcp <name> [--project]
+```
+
+`--project` targets the repository overlay (`<repo>/.dsh/tui.cordis.patch.yml`)
+instead of the personal one. Enabling/disabling needs no command: a row without
+`insert` that says `disabled: true` re-configures a built-in row by id.
+
 Your overlay is applied **last**, so a row *without* `insert` can also
 re-configure a built-in row by its `id` (change a persona, disable a tool). Two
 mistakes are rejected with a message — the plugin loader itself ignores both in

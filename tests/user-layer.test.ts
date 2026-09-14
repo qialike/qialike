@@ -26,7 +26,7 @@ describe('user overlay', () => {
     expect(path, 'lives next to the built-in layers').toContain("join(profileDir(), 'cordis.patch.yml')")
     expect(BIN, 'read as an OPTIONAL overlay').toContain('loadOptionalPatches(NAME, userFile) ?? []')
     // Order is the contract: a user row may re-target any built-in row.
-    expect(BIN, 'applied after both embedded layers').toContain('[...structuredClone(base), ...structuredClone(tui), ...structuredClone(user)]')
+    expect(BIN, 'applied after both embedded layers').toContain('...structuredClone(base), ...structuredClone(tui),')
   })
 
   test('② a wrong layer fails loud instead of no-opping', () => {
@@ -34,9 +34,11 @@ describe('user overlay', () => {
     expect(validate, 'unbundled names are rejected against the bundle map').toContain('in PLUGIN_BUILTINS')
     expect(validate, 'cordis: builtins stay allowed').toContain("startsWith('cordis:')")
     expect(validate, 'rows without insert must match a built-in id').toContain('known.has(row.id)')
-    expect(validate, 'the message names the file').toContain('userPatchPath()')
+    // The file is a PARAMETER (the same validator guards the project overlay)
+    // — the message must interpolate it, not hardcode the personal path.
+    expect(validate, 'the message names the file it rejected').toContain('invalid overlay ${file}')
     // And it actually runs (only when there IS a user layer).
-    expect(BIN, 'validation is wired into the boot path').toContain('if (user.length > 0) validateUserLayer(user, layerRowIds([base, tui]))')
+    expect(BIN, 'validation is wired into the boot path').toContain('if (user.length > 0) validateUserLayer(user, known, userFile)')
   })
 
   test('③ --dump-config is a declared flag, handled before the terminal is touched', () => {

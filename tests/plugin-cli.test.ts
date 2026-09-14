@@ -1,0 +1,75 @@
+/**
+ * Source guards for `dsh-tui plugin …` and the PROJECT overlay.
+ *
+ * Step 4 of the composition follow-up (research/ai-agent-code-loading-survey.md
+ * §7.8) productizes the overlay: `plugin list` for discovery, `add-mcp` /
+ * `remove-mcp` for the one row shape a hand-written file gets wrong most often,
+ * and a per-repository scope (`<projectRoot>/.dsh/tui.cordis.patch.yml`) applied
+ * after the personal one.
+ *
+ * Two runtime bugs found while building it are pinned here, because both were
+ * invisible in the happy path: appending a row to a file that parses to ZERO
+ * rows emitted a SECOND YAML document (`[]` then `- insert:`), and deleting a
+ * block's last row left the `- insert:` header dangling.
+ */
+import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+
+const BIN = readFileSync(new URL('../apps/tui-bin/src/bin.ts', import.meta.url), 'utf-8')
+const MODES = readFileSync(new URL('../apps/tui-bin/src/launcher-modes.ts', import.meta.url), 'utf-8')
+
+const body = (source: string, marker: string): string =>
+  source.slice(source.indexOf(marker), source.indexOf('\n}\n', source.indexOf(marker)))
+
+describe('plugin CLI', () => {
+  test('① it is a launcher mode, dispatched before the terminal is touched', () => {
+    expect(MODES, 'the mode exists').toContain("export const PLUGIN_MODE = 'plugin'")
+    expect(MODES, 'and is registered in the single source of truth').toContain('LAUNCHER_MODES = [UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE]')
+    const dispatch = BIN.indexOf('runPlugin(args)')
+    const alt = BIN.indexOf("process.stdout.write('\\x1b[?1049h')")
+    expect(dispatch, 'dispatched').toBeGreaterThan(-1)
+    expect(dispatch, 'before the alternate screen').toBeLessThan(alt)
+    const help = body(BIN, 'const PLUGIN_HELP')
+    for (const cmd of ['list', 'add-mcp', 'remove-mcp']) {
+      expect(help, `\`${cmd}\` is documented`).toContain(cmd)
+    }
+  })
+
+  test('② the project overlay mirrors the skill provider and is applied LAST', () => {
+    const walk = body(BIN, 'function projectPatchPath(')
+    expect(walk, 'walks up to the first .git').toContain("join(current, '.git')")
+    expect(walk, 'stays at cwd when there is no marker').toContain('return join(cwd')
+    expect(walk, 'uses a distinct filename').toContain("'.dsh', 'tui.cordis.patch.yml'")
+    // Project outranks personal: it is the last layer in the list.
+    expect(BIN, 'applied after the user overlay').toContain('...structuredClone(user), ...structuredClone(project)]')
+    expect(BIN, 'and validated like it').toContain('if (project.length > 0) validateUserLayer(project, known, projectFile)')
+  })
+
+  test('③ add-mcp writes atomically, validates before installing, and cleans up', () => {
+    expect(BIN, 'refuses a duplicate server').toContain('definesMcpServer(overlay.patches, serverName)')
+    expect(BIN, 'validates the server name').toContain('is not a valid server name')
+    // A zero-row overlay (e.g. the `[]` left by remove-mcp) must NOT be appended
+    // to: that emitted a SECOND YAML document and failed to parse.
+    expect(BIN, 'treats a zero-row overlay as empty').toContain('overlay.patches.length === 0')
+    // Install = write temp -> PARSE IT -> rename, and never leave the temp behind.
+    const install = BIN.slice(BIN.indexOf('const temp = `${file}.tmp`'))
+    expect(install, 'parses the temp file before installing it').toContain('loadOptionalPatches(NAME, temp)')
+    expect(install, 'removes the temp on failure').toContain('rmSync(temp, { force: true })')
+    expect(install, 'installs by rename').toContain('renameSync(temp, file)')
+    expect(install.indexOf('renameSync(temp, file)'), 'rename AFTER the parse').toBeGreaterThan(install.indexOf('loadOptionalPatches(NAME, temp)'))
+  })
+
+  test('④ remove-mcp is conservative: line surgery, no dangling insert, no guessing', () => {
+    const remove = body(BIN, 'function removeMcpRowText(')
+    expect(remove, 'refuses an ambiguous match').toContain('remove the rows by hand')
+    expect(remove, 'drops an `insert:` header left without children').toContain('insert:')
+    expect(remove, 'leaves a valid empty list').toContain("'[]\\n'")
+    expect(remove, 'locates the row by serverName (hand-written files keep their formatting)').toContain('serverName')
+  })
+
+  test('⑤ an empty `insert` is rejected by the validator', () => {
+    const validate = body(BIN, 'function validateUserLayer(')
+    expect(validate, 'empty insert is a problem').toContain("'insert' in row && !Array.isArray(row.insert)")
+    expect(validate, 'and it says why').toContain('it needs at least one child row')
+  })
+})
