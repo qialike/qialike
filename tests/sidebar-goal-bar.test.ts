@@ -54,7 +54,7 @@ const goal = (over: Partial<GoalView> = {}): GoalView => ({
   ...over,
 } as GoalView)
 
-describe('sidebarStepPlan budgets plugin sections first', () => {
+describe('sidebarStepPlan budgets plugin sections AFTER the steps', () => {
   test('omitting `sections` is byte-identical to passing none', () => {
     for (const rows of [14, 16, 20, 37]) {
       for (const width of [80, 133]) {
@@ -71,13 +71,25 @@ describe('sidebarStepPlan budgets plugin sections first', () => {
     expect(p.rows).toBeLessThanOrEqual(p.capacity)
   })
 
-  test('a tight column takes the compact fallback instead of dropping it', () => {
-    // 16 rows: inner 10, gaps 5 + heading 1 + footer 3 => 1 slack row for the
-    // section — full (2) cannot fit, compact (1) can, and the steps then get 0.
+  test('a tight column keeps the STEPS and yields the section', () => {
+    // 16 rows with a four-step plan: the compact section would fit, but only by
+    // taking the row the first step needs. Steps are the primary content, so the
+    // section is dropped and the step survives (this is the finding's fix: the
+    // old "sections first" rule showed the bar and evicted the step).
     const p = plan(16, 80, [SECTION])
-    expect(p.shownSections).toEqual([{ id: 'goal-bar', compact: true }])
-    expect(p.visible).toBe(0)
+    expect(p.shownSections).toEqual([])
+    expect(p.visible).toBe(1)
     expect(p.rows).toBeLessThanOrEqual(p.capacity)
+  })
+
+  test('with nothing to show in the steps the section still folds to compact', () => {
+    // No steps: the planner has no visible step to protect, so the section takes
+    // its compact row (and the full form at two rows less still needs 17 rows).
+    const compact = plan(16, 80, [SECTION], [])
+    expect(compact.shownSections).toEqual([{ id: 'goal-bar', compact: true }])
+    expect(compact.rows).toBeLessThanOrEqual(compact.capacity)
+    const full = plan(17, 80, [SECTION], [])
+    expect(full.shownSections).toEqual([{ id: 'goal-bar', compact: false }])
   })
 
   test('when not even the compact row fits the section is dropped whole', () => {
@@ -117,6 +129,7 @@ describe('sidebarStepPlan budgets plugin sections first', () => {
         for (const list of sections) {
           const p = plan(rows, width, list, [])
           const where = `${width}x${rows} sections=${list.map((s) => s.full).join(',')}`
+          expect(p.visible + p.hidden, where).toBe(0) // conservation (no steps here)
           if (!sidebarFits(rows)) {
             // Below the floor the renderer does not draw the sidebar at all
             // (same contract as the pre-section plan), so only the section
@@ -130,17 +143,48 @@ describe('sidebarStepPlan budgets plugin sections first', () => {
     }
   })
 
-  test('more terminal rows never shows fewer steps under the same sections', () => {
-    for (const width of [80, 133]) {
-      for (const steps of [STEPS, ['✓ ' + 'x'.repeat(90)]]) {
-        let previous = -1
-        for (let rows = 14; rows <= 60; rows++) {
-          const p = plan(rows, width, [SECTION], steps)
-          expect(p.visible, `${width}x${rows}`).toBeGreaterThanOrEqual(previous)
-          previous = p.visible
+  test('more terminal rows never shows fewer steps — for EVERY plugin budget', () => {
+    // The finding this pins: budgeting sections first made the step count
+    // non-monotone for 40 of 44 (full, compact) pairs — one extra row let a
+    // dropped section back in (or upgraded it to full) and pushed steps out.
+    // The old single-fixture test missed it because goal-bar's own pair happened
+    // to be safe on those widths/step sets. Sweep the whole grid.
+    const widths = [60, 80, 100, 133, 160, 200]
+    const stepSets = [[], ['✓ one'], STEPS, Array.from({ length: 20 }, (_, i) => `✓ step ${i + 1}`),
+      ['✓ a', '✓ ' + 'x'.repeat(60), '→ three', '· four']]
+    let checked = 0
+    for (const width of widths) {
+      for (const steps of stepSets) {
+        for (let full = 1; full <= 6; full++) {
+          for (let compact = 0; compact <= full; compact++) {
+            checked += 1
+            let previous = -1
+            for (let rows = 14; rows <= 60; rows++) {
+              const p = plan(rows, width, [{ id: 'goal-bar', order: 10, full, compact }], steps)
+              const where = `${width}x${rows} ${full}/${compact} steps=${steps.length}`
+              expect(p.visible, where).toBeGreaterThanOrEqual(previous)
+              expect(p.visible + p.hidden, where).toBe(steps.length)
+              previous = p.visible
+            }
+          }
         }
       }
     }
+    expect(checked).toBe(widths.length * stepSets.length * 27)
+  })
+
+  test('the goal-bar pair that broke before now keeps the step', () => {
+    // Measured pre-fix at width 80 with one short step and goal-bar's own 2/1:
+    // rows 15 -> visible 1 (no bar), rows 16 -> visible 0 + compact bar. The step
+    // must survive the extra row.
+    const one = ['✓ one']
+    expect(plan(15, 80, [SECTION], one).visible).toBe(1)
+    const at16 = plan(16, 80, [SECTION], one)
+    expect(at16.visible).toBe(1)
+    expect(at16.shownSections).toEqual([])
+    const at17 = plan(17, 80, [SECTION], one)
+    expect(at17.visible).toBe(1)
+    expect(at17.shownSections).toEqual([{ id: 'goal-bar', compact: true }])
   })
 })
 
