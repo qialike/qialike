@@ -11,10 +11,13 @@
  * theme-plugin.ts; see its docstring for provenance). Ink renders hex colors
  * via chalk (truecolor), so the palette
  * below maps 1:1 when the terminal supports 24-bit color (GNOME
- * Terminal/VTE does). The conversation frame paints `bg` as a full-screen
- * background layer (see panels/conversation.tsx), so colorscheme switches are
- * visible even when the terminal background would otherwise show through the
- * transparent surfaces.
+ * Terminal/VTE does) — and when it does NOT (a terminal that is 24-bit capable
+ * but exports no `COLORTERM` falls back to 256 colours), `applyScheme()`
+ * pre-maps every role through `color-depth.ts` instead of letting chalk's own
+ * cube rounding collapse the surfaces. The conversation frame paints `bg` as a
+ * full-screen background layer (see panels/conversation.tsx), so colorscheme
+ * switches are visible even when the terminal background would otherwise show
+ * through the transparent surfaces.
  *
  * The palette is backed by a PROCESS-WIDE bucket (a `globalThis` singleton
  * behind a Proxy): the SEA build bundles each plugin entry separately, which

@@ -35,6 +35,28 @@ bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
   memory-constrained box that flag is the supported mitigation, at the cost of
   more frequent GC.
 
+### Terminal colour depth
+
+dsh-tui paints hex colours through Ink/chalk, and chalk decides how many colours
+your terminal can show from the environment. **GNOME Terminal/VTE on Ubuntu 24.04
+is 24-bit capable but exports no `COLORTERM`**, so chalk falls back to 256 colours;
+dsh-tui therefore maps the palette itself at that depth (keeping the page, the
+raised panels and the composer card on distinct colours — without that mapping,
+five of the built-in schemes painted the card the same colour as the page). If
+your terminal really is 24-bit and you want the exact hexes:
+
+```sh
+export COLORTERM=truecolor      # the standard signal, understood by every tool
+# or, per run:
+DSH_TUI_COLOR=24bit dsh-tui
+```
+
+`DSH_TUI_COLOR` also accepts `256` and `16` (useful to preview how a
+lower-colour terminal renders a scheme). At **16 colours** the card and the page
+are both black on a dark scheme — the palette has no second near-black to offer,
+so that mode is degraded by design; see
+`dsh-tui-color-depth-fix-design.md` in the workspace for the measurements.
+
 ## Build
 
 ```sh

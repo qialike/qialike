@@ -1,0 +1,7 @@
+[test]
+# Unit tests must not depend on the developer's terminal: pin 24-bit colour so
+# `applyScheme` leaves the authored hexes alone (`packages/dsh-tui-app/src/
+# color-depth.ts`). The depth rules themselves are covered with explicit `env`
+# objects in `tests/color-depth.test.ts`, and the pty suite spawns the real
+# binary with its own env.
+preload = ["./tests/preload.ts"]

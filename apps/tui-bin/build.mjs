@@ -949,7 +949,25 @@ const __dshAnsi256ToAnsi = (code) => {
     if (value === 2) result += 60;
     return result;
 };
-const __dshLevel = () => (typeof chalk !== 'undefined' && typeof chalk.level === 'number') ? chalk.level : 0;
+// Colour-depth override (DSH_TUI_COLOR): the table is a deliberate DUPLICATE of
+// colorOverride() in packages/dsh-tui-app/src/color-depth.ts, and it lives here
+// because this is the copy that owns Ink's chalk instance — the palette decision
+// happens in a separate plugin bundle, and forcing only there left chalk at level
+// 2, rendering the unmapped hexes back into the collapse the override exists to
+// escape (measured: page #000000, card #5f5f5f). tests/color-depth.test.ts
+// extracts this snippet and fails if the two tables drift.
+const __dshColorOverride = (env) => {
+    const v = String((env && env.DSH_TUI_COLOR) || '').trim().toLowerCase();
+    if (v === '24bit' || v === 'truecolor') return 3;
+    if (v === '256') return 2;
+    if (v === '16') return 1;
+    return null;
+};
+const __dshLevel = () => {
+    const forced = __dshColorOverride(typeof process !== 'undefined' ? process.env : null);
+    if (forced !== null && chalk.level !== forced) chalk.level = forced;
+    return (typeof chalk !== 'undefined' && typeof chalk.level === 'number') ? chalk.level : 0;
+};
 const __dshBgSeq = (hex) => {
     const rgb = __dshRgb(hex);
     if (!rgb) return '';

@@ -42,6 +42,7 @@ import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import z from '@deepseek-ai/schemastery'
 import { theme, type ThemePalette } from './theme.ts'
+import { colorLevel, quantizePalette } from './color-depth.ts'
 import type { Store, TuiPanelDefinition } from './index.tsx'
 import { openThemePicker, ThemePicker, themePickerKey, type ThemePickerApi } from './theme-picker.tsx'
 import { CLASSIC_SCHEMES } from './classic-schemes.ts'
@@ -174,6 +175,10 @@ export function applyScheme(name: string, overrides?: Record<string, string>): v
       if (key in theme) mutable[key] = overrides[key]!
     }
   }
+  // Last stop before Ink/chalk sees the palette: if this terminal cannot show
+  // 24-bit colour, bake in the mapping ourselves (see color-depth.ts — chalk's
+  // own fallback collides, which is what merged the card into the page).
+  quantizePalette(theme as unknown as Record<string, string>, colorLevel())
 }
 
 /** Resolve a name argument: exact match, else a UNIQUE prefix (vim-like). */
