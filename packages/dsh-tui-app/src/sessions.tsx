@@ -219,6 +219,8 @@ function sessionsKey(k: RawKey, reload: () => void): void {
       reload()
     } else if (k.escape || (k.ctrl && char === 'c')) {
       store.cancelSessionsRename()
+    } else if (k.ctrl && char === 'u') {
+      store.sessionsRenameClear()  // Ctrl+U: delete the whole title line
     } else if (k.backspace || k.delete) {
       store.sessionsRenameBackspace()
     } else if (handleDialogPaste(k, store, (text) => store.sessionsRenameType(text), { singleLine: true, maxChars: 120 })) {
@@ -297,6 +299,14 @@ function sessionsKey(k: RawKey, reload: () => void): void {
     if (store.sessionsDeleting !== null) { store.cancelSessionsDelete(); return }
     if (store.sessionsFilter !== '') store.clearSessionsFilter()
     else store.cancelSessions()
+    return
+  }
+  if (k.ctrl && char === 'u') {
+    // Ctrl+U: delete the whole filter line (the single-line dialog inputs clear
+    // the line; the composer's Ctrl+U deletes to the line start).
+    store.cancelSessionsDelete()
+    clearNotice()
+    store.clearSessionsFilter()
     return
   }
   if (k.backspace || k.delete) {

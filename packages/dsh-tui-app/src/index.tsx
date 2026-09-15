@@ -912,6 +912,12 @@ export class Store {
     this._sessionsRenameInput = this._sessionsRenameInput.slice(0, -1)
     this.notify()
   }
+  /** Clear the whole rename input (`Ctrl+U`; the rename box is single-line). */
+  sessionsRenameClear(): void {
+    if (this._sessionsRenameInput === '') return
+    this._sessionsRenameInput = ''
+    this.notify()
+  }
   cancelSessionsRename(): void {
     if (this._sessionsRenaming !== null) { this._sessionsRenaming = null; this._sessionsRenameInput = ''; this.notify() }
   }
@@ -954,6 +960,13 @@ export class Store {
   exportNameBackspace(): void {
     this._exportNameEdited = true
     this._exportName = this._exportName.slice(0, -1)
+    this.notify()
+  }
+  /** Clear the whole file name (`Ctrl+U`; the field is single-line). */
+  exportNameClear(): void {
+    this._exportNameEdited = true
+    if (this._exportName === '') return
+    this._exportName = ''
     this.notify()
   }
   cancelExport(): void {
@@ -2742,6 +2755,13 @@ export class Store {
     this._providerValues[this._providerField - 1] = value.slice(0, -1)
     this.notify()
   }
+  /** Clear the current form field (`Ctrl+U`; field 0 is a dropdown). */
+  providerFormClear(): void {
+    if (this._providerField === 0) return
+    if ((this._providerValues[this._providerField - 1] ?? '') === '') return
+    this._providerValues[this._providerField - 1] = ''
+    this.notify()
+  }
   /** Advance to the next form field; true when the last field was just finished. */
   providerFormAdvance(): boolean {
     if (this._providerField === 0) this.applyProviderTemplateDefaults()
@@ -2752,6 +2772,14 @@ export class Store {
   }
   /** Append a masked character to the in-progress secret. */
   pushSecret(char: string): void { this._secret += char; this.notify() }
+  /** Clear the whole API-key field (`Ctrl+U` in the key dialog — the single-line
+   *  inputs delete the WHOLE line, unlike the composer/question editors where the
+   *  same key deletes to the line start). */
+  clearSecret(): void {
+    if (this._secret === '') return
+    this._secret = ''
+    this.notify()
+  }
   /** Remove the last secret character (backspace). */
   popSecret(): void { this._secret = this._secret.slice(0, -1); this.notify() }
   /** Close the /connect overlay without storing. */
@@ -3211,9 +3239,10 @@ function handleKey(k: RawKey): void {
   // Esc in every popup (2026-09-09), so a stray right-click — which is also the
   // terminal's own paste/context gesture — threw away an open popup or a
   // half-typed API key; only Esc (and Ctrl+C) leave a dialog now. Since
-  // 2026-09-15 the press is not a blanket no-op either: it is handed to the
-  // dialog, whose text inputs PASTE the clipboard with it (clipboard.ts) — the
-  // only way to get a right-click paste while this app has mouse tracking on.
+  // 2026-09-15 the press is handed to the dialog, where a text input pastes the
+  // clipboard on SHIFT+right-click (clipboard.ts) — the only way to get that
+  // gesture while this app has mouse tracking on. A PLAIN right-click stays
+  // inert (the user's call: too easy to trigger by accident).
   // Either way the branch RETURNS, so the press can never reach the conversation
   // surface, and its paired release is swallowed at the top of this function.
   // The compaction cancel above stays: that is the conversation surface, not a

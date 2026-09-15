@@ -370,6 +370,8 @@ function connectKey(k: RawKey): boolean {
       if (done !== null) store.keyDialogSubmit(done.provider, done.name, done.key)
     } else if (k.backspace || k.delete) {
       store.popSecret()
+    } else if (k.ctrl && char === 'u') {
+      store.clearSecret()          // Ctrl+U: delete the whole key line
     } else if (k.escape || (k.ctrl && char === 'c')) {
       store.cancelKeyDialog()
     } else if (char) {
@@ -399,6 +401,8 @@ function connectKey(k: RawKey): boolean {
     } else if (k.escape || (k.ctrl && char === 'c')) {
       if (store.providerListFilter !== '') store.clearProviderListFilter()
       else store.cancelProviderList()
+    } else if (k.ctrl && char === 'u') {
+      store.clearProviderListFilter()
     } else if (k.backspace || k.delete) {
       store.providerListFilterBackspace()
     } else if (handleDialogPaste(k, store, (text) => store.providerListFilterType(text), { singleLine: true, maxChars: 120 })) {
@@ -425,6 +429,8 @@ function connectKey(k: RawKey): boolean {
           models: (values[4] ?? '').split(',').map((s) => s.trim()).filter((s) => s !== ''),
         })
       }
+    } else if (k.ctrl && char === 'u') {
+      store.providerFormClear()    // the dropdown field ignores it
     } else if (k.backspace || k.delete) {
       store.providerFormBackspace()
     } else if (k.escape || (k.ctrl && char === 'c')) {
@@ -490,6 +496,8 @@ function connectKey(k: RawKey): boolean {
     } else if (k.escape || (k.ctrl && char === 'c')) {
       if (store.modelFilter !== '') store.clearModelFilter()
       else store.cancelProviderModels()
+    } else if (k.ctrl && char === 'u') {
+      store.clearModelFilter()
     } else if (k.backspace || k.delete) {
       store.modelFilterBackspace()
     } else if (handleDialogPaste(k, store, (text) => store.modelFilterType(text), { singleLine: true, maxChars: 120 })) {
@@ -536,6 +544,8 @@ function connectKey(k: RawKey): boolean {
   } else if (k.escape || (k.ctrl && char === 'c')) {
     if (store.providerFilter !== '') store.clearProviderFilter()
     else store.cancelConnect()
+  } else if (k.ctrl && char === 'u') {
+    store.clearProviderFilter()
   } else if (k.backspace || k.delete) {
     store.providerFilterBackspace()
   } else if (handleDialogPaste(k, store, (text) => store.providerFilterType(text), { singleLine: true, maxChars: 120 })) {

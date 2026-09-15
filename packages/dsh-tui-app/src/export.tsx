@@ -339,6 +339,7 @@ function exportKey(k: RawKey): void {
     return
   }
   if (store.exportField === 1) {
+    if (k.ctrl && char === 'u') { store.exportNameClear(); return }
     if (k.backspace || k.delete) store.exportNameBackspace()
     else if (handleDialogPaste(k, store, (text) => store.exportNameType(text), { singleLine: true, maxChars: 120 })) return
     else if (char) store.exportNameType(char)

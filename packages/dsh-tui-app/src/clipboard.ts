@@ -10,8 +10,9 @@
  * Two entry points feed the same insertion:
  *   - a bracketed paste (`k.paste`): the terminal already read the clipboard and
  *     sent the text, so nothing is spawned;
- *   - a right-click (`k.mouseRightPress`) inside a dialog: read the clipboard
- *     with the platform tools and insert that.
+ *   - a SHIFT+right-click (`k.mouseRightPress` + `k.shift`) inside a dialog: read
+ *     the clipboard with the platform tools and insert that. (Plain right-click is
+ *     deliberately inert: too easy to hit by accident.)
  *
  * Everything that lands in an input passes {@link pastedText}: control bytes and
  * escape sequences are stripped (`stripTerminalControls` — clipboard content is
@@ -99,6 +100,9 @@ export interface PasteHost {
 export interface PasteKey {
   paste?: string
   mouseRightPress?: { row: number; col: number }
+  /** Shift held with the right-click: the paste gesture (a plain right-click is
+   *  inert — too easy to trigger by accident — but still never closes a dialog). */
+  shift?: boolean
 }
 
 /** Options for {@link handleDialogPaste}. */
@@ -111,8 +115,9 @@ export interface DialogPasteOptions {
 
 /**
  * The ONE place a dialog input accepts a paste: a bracketed paste inserts the
- * text it already carries, a right-click reads the clipboard and inserts that —
- * and neither ever closes the dialog (the caller returns `true`).
+ * text it already carries, a SHIFT+right-click reads the clipboard and inserts
+ * that — and neither ever closes the dialog (the caller returns `true`). A plain
+ * right-click is not a paste (returns false: the caller consumes it inertly).
  * @param k - the key being handled.
  * @param host - status-flash sink.
  * @param type - the dialog's own "append text" action (Store method).
@@ -131,7 +136,10 @@ export function handleDialogPaste(
     if (text !== '') type(text)
     return true
   }
-  if (k.mouseRightPress === undefined) return false
+  // A PLAIN right-click does not paste (the user's call: it is far too easy to
+  // hit by accident next to a half-typed key); only Shift+right-click does. It is
+  // still never an exit — the caller consumes it and the dialog stays open.
+  if (k.mouseRightPress === undefined || k.shift !== true) return false
   const read = options.read ?? ((): ClipboardReadResult => readClipboardText())
   const result = read()
   if (!result.ok) {

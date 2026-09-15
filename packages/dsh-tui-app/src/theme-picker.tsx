@@ -141,6 +141,12 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
     if (state.filter.length > 0) { state.filter = state.filter.slice(0, -1); state.index = 0; preview() }
     return true
   }
+  if (k.ctrl && k.char === 'u') {
+    // Ctrl+U: delete the whole filter line (the composer's Ctrl+U deletes to the
+    // line start; these single-line dialog inputs clear the line).
+    if (state.filter !== '') { state.filter = ''; state.index = 0; preview() }
+    return true
+  }
   const names = filterSchemes(api.schemes(), state.filter)
   if (k.upArrow || k.downArrow || k.wheelUp || k.wheelDown) {
     if (names.length > 0) {

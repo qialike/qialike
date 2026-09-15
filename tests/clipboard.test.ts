@@ -91,10 +91,10 @@ describe('handleDialogPaste: bracketed paste and right-click', () => {
     expect(h.flashes).toEqual([])
   })
 
-  test('a right-click reads the clipboard, inserts, and says how much', () => {
+  test('a SHIFT+right-click reads the clipboard, inserts, and says how much', () => {
     const h = host()
     const typed: string[] = []
-    const handled = handleDialogPaste({ mouseRightPress: { row: 5, col: 5 } }, h, (t) => typed.push(t), {
+    const handled = handleDialogPaste({ mouseRightPress: { row: 5, col: 5 }, shift: true }, h, (t) => typed.push(t), {
       singleLine: true,
       read: () => ({ ok: true, text: 'sk-abc\r\n', reason: '' }),
     })
@@ -103,10 +103,22 @@ describe('handleDialogPaste: bracketed paste and right-click', () => {
     expect(h.flashes).toEqual(['pasted 6 chars'])
   })
 
+  test('a PLAIN right-click pastes nothing (it is inert, never an exit)', () => {
+    const h = host()
+    const typed: string[] = []
+    // No shift: not a paste — the caller consumes the press and the dialog stays
+    // open (the guard test below pins that no dialog maps it to an exit).
+    expect(handleDialogPaste({ mouseRightPress: { row: 5, col: 5 } }, h, (t) => typed.push(t), {
+      read: () => ({ ok: true, text: 'sk-should-not-be-pasted', reason: '' }),
+    })).toBe(false)
+    expect(typed).toEqual([])
+    expect(h.flashes).toEqual([])
+  })
+
   test('an unavailable or empty clipboard flashes instead of inserting', () => {
     const h = host()
     const typed: string[] = []
-    handleDialogPaste({ mouseRightPress: { row: 5, col: 5 } }, h, (t) => typed.push(t), {
+    handleDialogPaste({ mouseRightPress: { row: 5, col: 5 }, shift: true }, h, (t) => typed.push(t), {
       read: () => ({ ok: false, text: '', reason: 'xclip: exit 1' }),
     })
     expect(typed).toEqual([])
@@ -115,7 +127,7 @@ describe('handleDialogPaste: bracketed paste and right-click', () => {
 
     // Whitespace that a SINGLE-LINE field folds away counts as empty...
     const h2 = host()
-    handleDialogPaste({ mouseRightPress: { row: 5, col: 5 } }, h2, (t) => typed.push(t), {
+    handleDialogPaste({ mouseRightPress: { row: 5, col: 5 }, shift: true }, h2, (t) => typed.push(t), {
       singleLine: true,
       read: () => ({ ok: true, text: '\n', reason: '' }),
     })
@@ -124,7 +136,7 @@ describe('handleDialogPaste: bracketed paste and right-click', () => {
 
     // ...but a newline IS content for a multi-line field (the question editor).
     const h3 = host()
-    handleDialogPaste({ mouseRightPress: { row: 5, col: 5 } }, h3, (t) => typed.push(t), {
+    handleDialogPaste({ mouseRightPress: { row: 5, col: 5 }, shift: true }, h3, (t) => typed.push(t), {
       read: () => ({ ok: true, text: '\n', reason: '' }),
     })
     expect(typed).toEqual(['\n'])

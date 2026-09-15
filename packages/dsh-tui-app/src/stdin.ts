@@ -42,10 +42,17 @@ export interface RawKey {
   wheelDown?: { row: number; col: number }
   mousePress?: { row: number; col: number }
   /** Right-button press (SGR button 2). The conversation surface cancels a
-   *  running compaction with it; a DIALOG consumes it and does nothing (only
-   *  Esc leaves a dialog). Decoded so both can tell it apart from a left click
-   *  and so its release can be swallowed. */
+   *  running compaction with it; a DIALOG consumes it (Esc is still the only
+   *  way out) and pastes ONLY with the shift modifier (see `shift`). Decoded so
+   *  both can tell it apart from a left click and so its release can be
+   *  swallowed. */
   mouseRightPress?: { row: number; col: number }
+  /** Modifier held while a MOUSE event was sent (SGR bit 2 = shift). Today only
+   *  a right-button press reads it: a plain right-click is inert inside dialogs
+   *  (too easy to hit by accident), while Shift+right-click pastes. Terminals do
+   *  not all forward it — VTE keeps Shift+right-click for its own menu, which is
+   *  the terminal's paste affordance anyway. */
+  shift?: boolean
   /** The release that follows a right-button press. The SGR protocol cannot
    *  tell a right-click's release from a left-click's (both arrive as button
    *  3), so the decoder tags it after a mouseRightPress; every surface swallows
@@ -282,9 +289,10 @@ export class StdinDecoder {
     // SGR button codes: bits 0-1 are the button (0 left, 1 middle, 2 right);
     // bit 5 (32) marks motion (drag); bit 6 (64/65) is wheel up/down.
     const button = raw & 0x3
+    const shift = (raw & 0x04) !== 0
     if (button === 2 && (raw & 0x20) === 0) {
       this.rightClickPending = true
-      out.push({ mouseRightPress: { row, col } })
+      out.push(shift ? { mouseRightPress: { row, col }, shift: true } : { mouseRightPress: { row, col } })
       return
     }
     this.rightClickPending = false
@@ -294,7 +302,8 @@ export class StdinDecoder {
     else if (raw === 3) out.push({ mouseRelease: { row, col } }) // X10-style release button
     else if (raw === 64) out.push({ wheelUp: { row, col } })
     else if (raw === 65) out.push({ wheelDown: { row, col } })
-    // other buttons / modifier combos (Shift/alt/ctrl, right+motion, middle)
-    // are ignored so the terminal can perform its own selection.
+    // other buttons / modifier combos (alt/ctrl, right+motion, middle) are
+    // ignored so the terminal can perform its own selection. Shift on a RIGHT
+    // press is the one exception, kept above for the dialog paste gesture.
   }
 }

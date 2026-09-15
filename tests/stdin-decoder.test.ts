@@ -97,6 +97,18 @@ describe('StdinDecoder', () => {
     expect(d.push(esc('1b 5b 3c 32 3b 35 3b 31 30 6d'))).toEqual([{ mouseRelease: { row: 10, col: 5 } }])
   })
 
+  test('sgr mouse: SHIFT+right press carries the modifier, plain right does not', () => {
+    const d = new StdinDecoder()
+    // SGR button 6 = right (2) + shift (4). The dialog paste gesture is
+    // Shift+right-click, so the bit must survive decoding; a plain right press
+    // must stay exactly as before (no `shift` field).
+    expect(d.push(esc('1b 5b 3c 36 3b 35 3b 31 30 4d'))).toEqual([{ mouseRightPress: { row: 10, col: 5 }, shift: true }])
+    expect(d.push(esc('1b 5b 3c 32 3b 35 3b 31 30 4d'))).toEqual([{ mouseRightPress: { row: 10, col: 5 } }])
+    // Other modifier combos stay ignored (the terminal keeps its own selection).
+    expect(d.push(esc('1b 5b 3c 30 3b 35 3b 31 30 4d'))).toEqual([{ mousePress: { row: 10, col: 5 } }])
+    expect(d.push(esc('1b 5b 3c 34 3b 35 3b 31 30 4d'))).toEqual([])
+  })
+
   test('sgr mouse: the release after a right press is tagged mouseRightRelease', () => {
     const d = new StdinDecoder()
     // Right press then its release (SGR release carries no button — the decoder
