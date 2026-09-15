@@ -62,6 +62,10 @@
       "types": "./lib/types/goal.d.ts",
       "default": "./lib/goal.js"
     },
+    "./goal-bar": {
+      "types": "./lib/types/goal-bar.d.ts",
+      "default": "./lib/goal-bar.js"
+    },
     "./plan": {
       "types": "./lib/types/plan.d.ts",
       "default": "./lib/plan.js"

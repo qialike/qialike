@@ -212,6 +212,12 @@
     - id: tui-goal
       name: '@yourname/dsh-tui-app/goal'
 
+    # Goal bar: a right-sidebar section showing the current goal (phase /
+    # objective / rounds / blocker) — the TUI counterpart of the web's
+    # `ui-goal` GoalBar. Read-only; mutations stay on /goal and the model tools.
+    - id: tui-goal-bar
+      name: '@yourname/dsh-tui-app/goal-bar'
+
     # /plan: human command plane over the harness plan-mode service (the
     # plan/mode state, guidance prompt section, and exit_plan_mode review
     # tool are mounted by the base bundle; only the command was missing).

@@ -2584,6 +2584,14 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // EMPTY draft, so the draft's line count is not the trigger). Reserve the fixed
   // rows first — heading, session block, footer, borders, padding, gaps — and let
   // only the STEPS list give way; the planner is pure and unit-tested.
+  // Plugin sidebar sections (the `tui.sidebar` extension point): ask each for
+  // its row needs at the sidebar's content width and let the planner decide who
+  // fits — a section is painted by its own plugin, the height math stays here.
+  const sidebarContentWidth = Math.max(1, sidebarWidth - 4)
+  const sidebarSections = (props.tui.sidebar?.list() ?? []).map((section) => ({
+    section,
+    ...section.rows(store, sidebarContentWidth),
+  }))
   const sidebarPlan = sidebarStepPlan({
     rows: store.rows,
     width,
@@ -2593,6 +2601,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       sessionId: String(store.session.id),
     }),
     footerLines: [`deepseek-harness: ${HARNESS_VERSION}`, `dsh-tui: ${APP_VERSION}${BETA_FOOTER_SUFFIX}`],
+    sections: sidebarSections.map(({ section, full, compact }) => ({ id: section.id, order: section.order, full, compact })),
   })
   const viewportLines = convViewportLines(composerH, 0, modalH)
   const rows = useMemo(() => {
@@ -3192,6 +3201,16 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         </Box>
         {showSidebar && (
         <Box borderStyle="round" borderColor={theme.border} width={sidebarWidth} flexShrink={0} minHeight={0} flexDirection="column" paddingX={1} paddingTop={1} gap={1}>
+          {/* Plugin sections first (the `tui.sidebar` extension point — today
+              the goal bar): each is ONE child, so the planner's gap/row budget
+              counts it exactly like the built-in blocks. `shownSections` is
+              ordered and already sized; `compact` asks for the one-line form. */}
+          {sidebarPlan.shownSections.map(({ id, compact }) => {
+            const entry = sidebarSections.find((candidate) => candidate.section.id === id)
+            return entry === undefined
+              ? null
+              : <React.Fragment key={id}>{entry.section.render(store, sidebarContentWidth, compact)}</React.Fragment>
+          })}
           <Text color={theme.accent} bold>Steps {stepsTotal > 0 ? `${stepsDone}/${stepsTotal}` : ''}</Text>
           {steps.length === 0
             ? (sidebarPlan.showEmpty ? <Text color={mutedReadable()}>no plan yet</Text> : <Box />)

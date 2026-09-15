@@ -3077,7 +3077,27 @@ export interface TuiPanelDefinition {
   handleKey?(key: RawKey, store: Store): boolean
 }
 
-/** The surface plugins consume: panels, slash commands, and notifications. */
+/** One plugin-contributed block in the right sidebar (above the Steps list).
+ *  The plugin owns its rows and its paint; the conversation panel owns the
+ *  height budget, so `rows()` is what keeps a contributed block from pushing
+ *  the sidebar's footer over the composer (Ink 4 has no `overflow`). */
+export interface TuiSidebarSection {
+  /** Stable id (also the registration key; re-registering replaces). */
+  id: string
+  /** Sort key inside the column; smaller renders higher. */
+  order: number
+  /** Rows this section needs: `full` at rest, `compact` when the column is
+   *  tight (`compact <= full`; either 0 means "render nothing"). Both are
+   *  budgeted before the Steps list, and the section is dropped when neither
+   *  fits. Pure enough to call during render. */
+  rows(store: Store, contentWidth: number): { full: number; compact: number }
+  /** Paint the section; `compact` is true when the planner took the fallback
+   *  row count, so the plugin can paint a one-line form. */
+  render(store: Store, contentWidth: number, compact: boolean): React.ReactNode
+}
+
+/** The surface plugins consume: panels, slash commands, sidebar sections, and
+ *  notifications. */
 export interface TuiService {
   panels: {
     register(def: TuiPanelDefinition): void
@@ -3088,6 +3108,13 @@ export interface TuiService {
     remove(name: string): void
     list(): readonly CommandItem[]
   }
+  /** Right-sidebar sections (rendered above the Steps list, budgeted by
+   *  `sidebarStepPlan`). */
+  sidebar: {
+    register(section: TuiSidebarSection): void
+    /** Registered sections in render order (`order`, then id). */
+    list(): readonly TuiSidebarSection[]
+  }
   /** Image drag-in attachment (mounted by the tui-image-attach plugin). */
   imageAttach?: ImageAttachApi
   notify(message: string): void
@@ -3095,6 +3122,7 @@ export interface TuiService {
 
 const tuiPanels = new Map<string, TuiPanelDefinition>()
 const tuiCommands: CommandItem[] = []
+const tuiSidebar = new Map<string, TuiSidebarSection>()
 
 /** The tui service singleton (provided by apply() as `tui`). */
 export const tui: TuiService = {
@@ -3109,6 +3137,12 @@ export const tui: TuiService = {
       if (index >= 0) tuiCommands.splice(index, 1)
     },
     list() { return tuiCommands },
+  },
+  sidebar: {
+    register(section) { tuiSidebar.set(section.id, section) },
+    list() {
+      return [...tuiSidebar.values()].sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    },
   },
   notify(message) { store.append('status', message, true) },
 }
