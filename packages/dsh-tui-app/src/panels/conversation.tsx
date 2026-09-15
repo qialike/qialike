@@ -1129,6 +1129,28 @@ function composerWindow(input: string, usable: number, caretRow: number, textAre
   return { rows, first, start: rows[first]!.start, end: lastRow.start + lastRow.text.length }
 }
 
+/**
+ * The composer's height when the LOWER BOUND on rows already reaches the cap.
+ *
+ * Every painted row holds at most `usable` display cells (hard wrap never
+ * exceeds the column), so a draft of `cells` cells needs at least
+ * `ceil(cells/usable)` rows. When that alone saturates the clamp, the exact row
+ * count cannot change the answer — which is what keeps a multi-megabyte draft
+ * O(1) here instead of one `wrap-ansi` pass per logical line (~750 ms/MB
+ * measured vs ~12 ms/MB for `visualWidth`).
+ * @param cells - display width of the whole draft (`visualWidth`, NOT
+ *   `String.length`: a surrogate pair or ZWJ sequence is many code units on one
+ *   row — the UTF-16 bound over-estimated in 5404 of 40000 fuzzed strings).
+ * @param usable - wrap width (>= 1).
+ * @param min - the composer's minimum height.
+ * @param cap - the clamped maximum (`heroBudgetNow().boxH` or `rows - 8`).
+ * @returns `cap` when the bound saturates, else undefined (count exactly).
+ */
+export function composerHeightSaturated(cells: number, usable: number, min: number, cap: number): number | undefined {
+  const rows = Math.ceil(Math.max(0, cells) / Math.max(1, usable))
+  return min + rows - 1 >= cap ? cap : undefined
+}
+
 export function composerHeight(width: number, input: string, min: number): number {
   const usable = composerUsable(width)
   const cap = store.hero ? heroBudgetNow(store.rows, width).boxH : Math.max(min, store.rows - 8)
@@ -1141,7 +1163,8 @@ export function composerHeight(width: number, input: string, min: number): numbe
   // surrogate pair or a ZWJ sequence is many code units on one row (measured
   // over 40k random strings: the cell bound never over-estimated, the UTF-16
   // length bound did 5404 times).
-  if (min + Math.ceil(visualWidth(input) / usable) - 1 >= cap) return cap
+  const saturated = composerHeightSaturated(visualWidth(input), usable, min, cap)
+  if (saturated !== undefined) return saturated
   const wrapped = input.split('\n').reduce((sum, seg) => sum + composerWrap(seg, usable).length, 0)
   if (store.hero) {
     // HERO budget: the stack (brand block + title gap + card + hint block) must
