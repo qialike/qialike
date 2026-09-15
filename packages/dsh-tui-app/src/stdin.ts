@@ -16,6 +16,8 @@
  * @module @yourname/dsh-tui-app/stdin
  */
 
+import { sanitizeTerminalText } from './terminal-safe.ts'
+
 /** One decoded key event. */
 export interface RawKey {
   char?: string
@@ -124,15 +126,29 @@ export class StdinDecoder {
           this.buf.splice(0, term.length)
           const text = Buffer.from(this.paste).toString('utf8')
           this.paste = null
-          // Normalize the paste's line endings AT THE SOURCE: a paste is TEXT,
-          // so a CR is content, never a keystroke. A CRLF clipboard (Windows
-          // apps, browsers, chat UIs) otherwise reached the draft verbatim, and
-          // a row of text ending in CR is WIPED when it is written to the
-          // terminal (the CR returns the cursor to column 0 and the row's own
-          // padding then overwrites it) — measured: pasting two CRLF lines left
-          // an empty first row and only the second line visible, which reads as
-          // "the sidebar footer ran into the input box".
-          out.push({ paste: text.replace(/\r\n?/g, '\n') })
+          // A paste is UNTRUSTED TEXT, and both normalizations belong HERE, at the
+          // single point where raw paste bytes become a value the app can use, so
+          // no consumer has to remember them:
+          //
+          //  · line endings: a paste is TEXT, so a CR is content, never a
+          //    keystroke. A CRLF clipboard (Windows apps, browsers, chat UIs)
+          //    otherwise reached the draft verbatim, and a row of text ending in CR
+          //    is WIPED when it is written to the terminal (the CR returns the
+          //    cursor to column 0 and the row's own padding then overwrites it) —
+          //    measured: pasting two CRLF lines left an empty first row and only the
+          //    second line visible, which reads as "the sidebar footer ran into the
+          //    input box".
+          //  · control bytes: copied terminal/build output is full of ANSI
+          //    (`\x1b[31m`, `\x1b[2J`, `\x1b[K`, OSC titles) and copied web text can
+          //    carry OSC 52. Ink re-emits a control byte it does not recognise
+          //    VERBATIM into the frame — measured on the real binary: a draft holding
+          //    `X\x1b[2JY` put `\x1b[2J` into the composer row's own write (a screen
+          //    erase, replayed on every repaint), `\x1b[31m` reached the terminal as
+          //    live styling and OSC 52 as a clipboard write. The DIALOG paste path
+          //    already sanitizes (clipboard.ts); doing it here covers the composer
+          //    and every other consumer of `k.paste` at once. Typed input cannot
+          //    carry these bytes — the decoder discards unrecognized sequences.
+          out.push({ paste: sanitizeTerminalText(text.replace(/\r\n?/g, '\n')) })
           continue
         }
         this.paste.push(this.buf.shift()!)

@@ -50,6 +50,27 @@ describe('plugin CLI', () => {
     expect(BIN).toContain('assertProjectOverlayTrusted(projectFile, projectPolicy)')
   })
 
+  test('②b `trust-overlay` refuses a MIXED layer instead of reporting success', () => {
+    // Measured before the fix: a layer with a safety row AND an execution row made
+    // the command print "this layer will be REJECTED at boot", write the trust
+    // ledger and exit 0 — while the boot with that ledger exited 1. A script doing
+    // `trust-overlay && dsh-tui` saw success and then a refused launch, and the
+    // record was worthless anyway (removing the safety row changes the file hash).
+    const from = BIN.indexOf("if (command === 'trust-overlay'")
+    // Slice to the END of the command block (the next command's dispatch), so the
+    // guard cannot be satisfied by an unrelated later `return 1`.
+    const trust = BIN.slice(from, BIN.indexOf('unknown plugin command', from))
+    const safetyReturn = trust.indexOf('return 1')
+    const ledgerWrite = trust.indexOf('ledger[overlayKey(file)] =')
+    expect(safetyReturn, 'the safety branch returns non-zero').toBeGreaterThan(-1)
+    expect(ledgerWrite, 'and there is still a ledger write for the clean case').toBeGreaterThan(-1)
+    expect(safetyReturn, 'safety is decided BEFORE anything is recorded').toBeLessThan(ledgerWrite)
+    // The refusal must not be guarded by "no execution rows either" any more: the
+    // old shape was `if (execution.length === 0) { … return safety.length > 0 ? 1 : 0 }`.
+    expect(trust).not.toContain('return safety.length > 0 ? 1 : 0')
+    expect(trust, 'and it says what was NOT recorded').toContain('not trusted:')
+  })
+
   test('③ add-mcp writes atomically, validates before installing, and cleans up', () => {
     expect(BIN, 'refuses a duplicate server').toContain('definesMcpServer(overlay.patches, serverName)')
     expect(BIN, 'validates the server name').toContain('is not a valid server name')

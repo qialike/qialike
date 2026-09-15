@@ -14,15 +14,21 @@
  *     the clipboard with the platform tools and insert that. (Plain right-click is
  *     deliberately inert: too easy to hit by accident.)
  *
- * Everything that lands in an input passes {@link pastedText}: control bytes and
- * escape sequences are stripped (`stripTerminalControls` — clipboard content is
- * attacker-controllable), single-line fields get their newlines folded away, and
+ * Everything that lands in a DIALOG input passes {@link pastedText}: escape
+ * sequences and control bytes are stripped (`sanitizeTerminalText` — clipboard
+ * content is machine output and attacker-controllable), single-line fields get their newlines folded away, and
  * the length is capped. The dialog never closes on either gesture.
+ *
+ * This module is not the only paste consumer in the app: the CONVERSATION panel
+ * inserts `k.paste` into the composer draft directly, so the same strip runs at
+ * the shared decoder (`stdin.ts`) as well — a bracketed paste is cleaned before
+ * any consumer sees it, and the dialog path is then a second, idempotent pass
+ * (see dsh-tui-security.md, 补丁 1).
  *
  * @module @yourname/dsh-tui-app/clipboard
  */
 import { spawnSync } from 'node:child_process'
-import { stripTerminalControls } from './terminal-safe.ts'
+import { sanitizeTerminalText } from './terminal-safe.ts'
 
 /** Default cap for one paste into a dialog input (characters). */
 export const PASTE_MAX_CHARS = 4096
@@ -84,7 +90,7 @@ export function readClipboardText(
  * @returns the text to insert (possibly empty).
  */
 export function pastedText(raw: string, singleLine = false, maxChars = PASTE_MAX_CHARS): string {
-  let text = stripTerminalControls(raw)
+  let text = sanitizeTerminalText(raw)
   if (singleLine) text = text.replace(/[\r\n\t]+/gu, ' ').replace(/ {2,}/gu, ' ').trim()
   else text = text.replace(/\r\n?/gu, '\n')
   return text.slice(0, Math.max(0, maxChars))

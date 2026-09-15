@@ -31,7 +31,7 @@ import {
   type TuiService,
 } from '../index.tsx'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
-import { stripTerminalControls } from '../terminal-safe.ts'
+import { sanitizeTerminalText, stripTerminalControls } from '../terminal-safe.ts'
 import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import {
@@ -621,7 +621,15 @@ function itemContent(item: TranscriptItem, expandReasoning: boolean, toolExpande
   // Terminal-injection guard: strip control bytes from every untrusted text
   // surface before it enters the render tree (dsh-tui-security.md). The store
   // keeps the original text; only the display is sanitized.
-  const text = stripTerminalControls(item.text)
+  //
+  // TOOL bodies are MACHINE output (a captured command's stdout/stderr): there an
+  // escape is decoration, so the whole sequence goes too — measured, a coloured
+  // `git diff` keeps 16.5% of its width as `[1m`/`[0m` litter under a byte-only
+  // strip, and `ESC[?1049h` from a captured `--help` leaves `[?1049h` in the body.
+  // Authored text (assistant / reasoning / plan / user / error) keeps the byte
+  // floor only: an escape byte inside model prose or a code block is CONTENT, and
+  // deleting it silently would lose information (the parameters stay visible).
+  const text = item.kind === 'tool' ? sanitizeTerminalText(item.text) : stripTerminalControls(item.text)
   if (item.kind === 'assistant') {
     // Assistant: indent the markdown to the shared content column.
     return <Box width="100%" paddingLeft={MESSAGE_LEFT_COLS} paddingRight={MESSAGE_RIGHT_COLS}><MarkdownText text={text} usable={MESSAGE_TEXT_WIDTH(usable)} /></Box>

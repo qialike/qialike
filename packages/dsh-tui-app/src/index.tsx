@@ -25,6 +25,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
 import { SessionLogReader } from './log-frames.ts'
+import { sanitizeTerminalText } from './terminal-safe.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
@@ -722,6 +723,11 @@ export class Store {
    *  ~5.1k markdown rows, 0.72 s on every assistant settle). */
   private _lastSettledKey = -1
   get lastSettledKey(): number { return this._lastSettledKey }
+
+  /** Request a repaint without changing state: a plugin that keeps its own
+   *  view state (e.g. the `@file` palette's candidate index) has no store
+   *  field to mutate, and `notify` is private to the store. */
+  repaint(): void { this.notify() }
 
   private notify(): void {
     this._lastMutationAt = Date.now()
@@ -1784,11 +1790,16 @@ export class Store {
     this.setCursor(this._lineEnd(this._cursor))
   }
   insertAtCursor(text: string): void {
-    // Belt and braces for the same defect the paste path normalizes: a CR in the
-    // buffer is invisible at best and erases its own row on screen at worst, so
-    // it must never get in (CRLF -> LF, a lone CR -> LF). Typed input cannot
-    // contain one — Enter is handled as its own key and inserts '\n'.
-    const clean = text.replace(/\r\n?/g, '\n')
+    // Second gate for the two things that must never enter the draft. The paste
+    // path already normalizes both at the decoder (stdin.ts); this one keeps any
+    // OTHER textual insert (today: a typed character, an inserted '\n') from
+    // smuggling them in, and is a no-op for text that is already clean.
+    //  · a CR is invisible at best and erases its own row on screen at worst
+    //    (CRLF -> LF, a lone CR -> LF). Enter is handled as its own key.
+    //  · control bytes: Ink re-emits a control byte it does not recognise
+    //    VERBATIM into the frame, so a draft holding `X\x1b[2JY` erased the screen
+    //    (measured, replayed on every repaint) — see terminal-safe.ts.
+    const clean = sanitizeTerminalText(text.replace(/\r\n?/g, '\n'))
     this._input = this._input.slice(0, this._cursor) + clean + this._input.slice(this._cursor)
     this._cursor += clean.length
     this.notify()

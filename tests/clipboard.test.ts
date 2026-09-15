@@ -27,10 +27,11 @@ const APP = join(import.meta.dir, '..', 'packages', 'dsh-tui-app', 'src')
 const read = (file: string): string => readFileSync(join(APP, file), 'utf8')
 
 describe('pastedText: sanitising one paste', () => {
-  test('drops escape/control bytes but keeps real text', () => {
-    // A clipboard is attacker-controllable: an ESC would reach the terminal.
-    expect(pastedText('sk-\u001b[31mabc\u0007', true)).toBe('sk-[31mabc')
-    expect(pastedText('ok\u009b32m', true)).toBe('ok32m')
+  test('drops escape sequences and control bytes but keeps real text', () => {
+    // A clipboard is machine output and attacker-controllable: an ESC would reach
+    // the terminal, and its parameters would litter the field.
+    expect(pastedText('sk-\u001b[31mabc\u0007', true)).toBe('sk-abc')
+    expect(pastedText('ok\u009b32m', true)).toBe('ok')   // 8-bit CSI is a whole sequence too
     expect(pastedText('keep\ttabs and spaces', true)).toBe('keep tabs and spaces')
   })
 
@@ -87,7 +88,7 @@ describe('handleDialogPaste: bracketed paste and right-click', () => {
     const typed: string[] = []
     const handled = handleDialogPaste({ paste: 'sk-\u001b[31mkey\n' }, h, (t) => typed.push(t), { singleLine: true })
     expect(handled).toBe(true)
-    expect(typed).toEqual(['sk-[31mkey'])
+    expect(typed).toEqual(['sk-key'])
     expect(h.flashes).toEqual([])
   })
 

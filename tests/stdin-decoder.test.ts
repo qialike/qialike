@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { sanitizeTerminalText } from '../packages/dsh-tui-app/src/terminal-safe.ts'
 import { StdinDecoder } from '../packages/dsh-tui-app/src/stdin.ts'
 
 const esc = (hex: string): Uint8Array => Buffer.from(hex.split(' ').map((h) => Number.parseInt(h, 16)))
@@ -196,6 +197,47 @@ test('bracketed paste normalizes CRLF / CR line endings to LF', () => {
   expect(d.push(Buffer.from('\x1b[200~one\r\ntwo\x1b[201~'))).toEqual([{ paste: 'one\ntwo' }])
   const e = new StdinDecoder()
   expect(e.push(Buffer.from('\x1b[200~a\rb\x1b[201~'))).toEqual([{ paste: 'a\nb' }])
+})
+
+test('bracketed paste strips terminal control bytes AND whole escape sequences', () => {
+  // A paste is untrusted text: copying from a build/terminal log brings ANSI with
+  // it, and Ink re-emits a control byte it does not recognise VERBATIM into the
+  // frame — measured on the real binary, a draft holding `X\x1b[2JY` put
+  // `\x1b[2J` into the composer row's own write (a screen erase, replayed every
+  // repaint), `\x1b[31m` reached the terminal as live styling, and OSC 52 reached
+  // it as a clipboard write. The DIALOG paste path already sanitizes
+  // (clipboard.ts); this is the same treatment at the shared source, so the
+  // composer (and any other `k.paste` consumer) cannot smuggle them in.
+  const cases: [string, string][] = [
+    ['SGR colour', 'A\x1b[31mRED\x1b[0mB'],
+    ['erase display', 'X\x1b[2JY'],
+    ['erase line', 'X\x1b[KY'],
+    ['cursor move', 'X\x1b[10;10HY'],
+    ['hide cursor', 'X\x1b[?25lY'],
+    ['OSC 52 clipboard write', 'X\x1b]52;c;cGF3bmVk\x07Y'],
+    ['OSC 0 window title', 'X\x1b]0;pwned\x07Y'],
+    ['C1 CSI (0x9b)', 'X\x9b31mY'],
+    ['DEL and NUL', 'A\x00B\x7fC'],
+  ]
+  for (const [label, payload] of cases) {
+    const d = new StdinDecoder()
+    d.push(Buffer.from('\x1b[200~'))
+    const out = d.push(Buffer.from(payload + '\x1b[201~'))
+    expect(out, label).toHaveLength(1)
+    const pasted = out[0]!.paste ?? ''
+    expect(pasted, `${label}: machine text is sanitized`).toBe(sanitizeTerminalText(payload))
+    expect(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x80-\x9f]/.test(pasted), `${label}: measured clean`).toBe(false)
+  }
+  // The kept whitespace is untouched: tabs and newlines are content.
+  const d = new StdinDecoder()
+  d.push(Buffer.from('\x1b[200~'))
+  expect(d.push(Buffer.from('a\tb\nc\x1b[201~'))).toEqual([{ paste: 'a\tb\nc' }])
+  // …and the two normalizations compose (CRLF -> LF, then whole escape sequences,
+  // then the byte floor): a pasted colour code is decoration, not content, so it
+  // disappears entirely while the words survive.
+  const e = new StdinDecoder()
+  e.push(Buffer.from('\x1b[200~'))
+  expect(e.push(Buffer.from('one\r\n\x1b[31mtwo\x1b[201~'))).toEqual([{ paste: 'one\ntwo' }])
 })
 
 test('bracketed paste splits cleanly around surrounding text', () => {

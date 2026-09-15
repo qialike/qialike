@@ -37,3 +37,59 @@ export function stripTerminalControls(text: string): string {
   out += text.slice(last)
   return out
 }
+
+/**
+ * Complete ANSI escape sequences inside captured/machine text.
+ *
+ * Anchored on a REAL `ESC` / C1 byte, never on the parameters alone, so ordinary
+ * text is untouched: the literal characters some text uses to TALK about escapes
+ * (`\u001b[31m`, `\x1b[31m`) and bracket usage like `array[0m]` contain no
+ * control byte and are left exactly as they are. Only the shapes a terminal would
+ * ACT on are matched: CSI (incl. SGR, private modes like `ESC[?1049h`), OSC
+ * (titles, OSC 8 hyperlinks, OSC 52 clipboard writes) in both the 7-bit and 8-bit
+ * form, charset designation and the two-byte escapes.
+ */
+const ANSI_SEQUENCE = new RegExp([
+  String.raw`\x1b\][^\u0007\x1b]*(?:\u0007|\x1b\\)`,   // OSC … BEL | ST
+  String.raw`\u009d[^\u0007\x1b]*(?:\u0007|\x1b\\)`,    // 8-bit OSC (C1)
+  String.raw`\x1b\[[0-?]*[ -/]*[@-~]`,                       // CSI (params, intermediates, final)
+  String.raw`\u009b[0-?]*[ -/]*[@-~]`,                        // 8-bit CSI (C1)
+  String.raw`\x1b[()][0-9A-Za-z]`,                            // charset designation
+  String.raw`\x1b[@-Z\\-_]`,                                // two-byte escape
+].join('|'), 'gu')
+
+/** True when the text carries anything a sequence pass could act on. */
+function hasEscapeStart(text: string): boolean {
+  return text.includes('\x1b') || text.includes('\u009b') || text.includes('\u009d')
+}
+
+/**
+ * Drop COMPLETE escape sequences, keeping the text around them.
+ *
+ * Use this for text a MACHINE produced — captured command output, a terminal
+ * paste — where an escape is decoration: `git diff --color=always` keeps 16.5% of
+ * its width as `[1m`/`[0m` litter under a byte-only strip (measured), and a pasted
+ * `ESC[?1049h` leaves `[?1049h` in the draft. It is deliberately NOT used for
+ * model/agent-authored text: an escape byte inside a code block or prose is
+ * content there, and deleting it silently would lose information (the byte-level
+ * strip keeps the parameters visible instead).
+ *
+ * This is an ADDITION to {@link stripTerminalControls}, never a replacement: a
+ * truncated or unterminated sequence (`ESC[31` at the end of a paste) does not
+ * match and is then handled by the byte floor. Call {@link sanitizeTerminalText}
+ * to get both.
+ */
+export function stripAnsiSequences(text: string): string {
+  if (!hasEscapeStart(text)) return text
+  return text.replace(ANSI_SEQUENCE, '')
+}
+
+/**
+ * The sanitizer for MACHINE-produced text: whole sequences first, then the
+ * control-byte floor. The order matters — the floor is what makes the guarantee
+ * ("no control byte reaches the frame") unconditional, so it must stay last and
+ * must never be dropped in favour of the sequence pass.
+ */
+export function sanitizeTerminalText(text: string): string {
+  return stripTerminalControls(stripAnsiSequences(text))
+}
