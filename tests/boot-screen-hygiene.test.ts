@@ -74,13 +74,20 @@ describe('the alternate screen is entered WITH the first frame that has content'
 })
 
 describe('the CPR probe is invisible and non-destructive', () => {
-  test('the glyph is concealed, and no line is erased', () => {
+  test('the glyph is concealed, the cursor hidden, and no line is erased', () => {
     const charwidth = app('charwidth.ts')
     expect(charwidth).toContain('\\x1b[8m${glyph}\\x1b[28m\\x1b[6n')
     // The old probe + finish erased the whole bottom row (`2K`) — on the normal
     // screen that ate a line of the user's shell.
     expect(charwidth).not.toContain('\\x1b[2K${glyph}')
-    expect(charwidth).toContain('try { process.stdout.write(`\\x1b8`) }')
+    // The probe parks the cursor on the LAST row to read its position report:
+    // hide it for the round trip and put the app's own cursor state back right
+    // after, or the visible composer caret blinks on the status bar while a
+    // batch runs (reported on WSL/Ubuntu 24.04 when the `/` palette introduced
+    // new glyphs; the behavioural half lives in `charwidth-probe-cursor.test.ts`).
+    expect(charwidth).toContain('\\x1b[?25l\\x1b7')
+    expect(charwidth).toContain('try { process.stdout.write(`\\x1b8${appCursorState()}`) }')
+    expect(charwidth).toContain("typeof hook === 'function' ? hook() : '\\x1b[?25h'")
   })
 })
 

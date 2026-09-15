@@ -111,10 +111,30 @@ async function withLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+/** The app's own cursor state — park + show/hide — when the TUI installed its
+ *  frame suffix (the conversation panel does). Falls back to "show". */
+function appCursorState(): string {
+  try {
+    const hook = (globalThis as { __dshTuiFrameSuffix?: () => string }).__dshTuiFrameSuffix
+    return typeof hook === 'function' ? hook() : '\x1b[?25h'
+  } catch {
+    return '\x1b[?25h'
+  }
+}
+
 /** Measure one code point: print it on the bottom row and ask where the cursor
  *  landed. Returns the width in cells, or null on timeout (terminal without
  *  CPR support). Caller keeps frames frozen while a batch runs. Exported for
- *  the CPR responder test. */
+ *  the CPR responder test.
+ *
+ *  The HARDWARE CURSOR is hidden for the round trip and the app's own state is
+ *  restored right after it. Moving a VISIBLE cursor to the last row left it
+ *  blinking on the status bar while a batch ran — reported on WSL and Ubuntu
+ *  24.04 when typing `/`, because the command palette introduces eight new
+ *  ambiguous glyphs (`╭ ─ ╮ │ — … ╰ ╯`, the box and the hints' em dash/ellipsis)
+ *  and that batch ran while the composer caret was shown. Restoring through the
+ *  frame suffix also puts the caret back at the composer immediately instead of
+ *  waiting for the next repaint. */
 export function measureOne(cp: number, timeoutMs = 300): Promise<number | null> {
   return new Promise((resolve) => {
     const glyph = String.fromCodePoint(cp)
@@ -131,7 +151,7 @@ export function measureOne(cp: number, timeoutMs = 300): Promise<number | null> 
       // erase. The old `2K` here wiped a whole line — on the normal screen (when
       // the alternate one has not been entered yet) that ate a row of the user's
       // shell output.
-      try { process.stdout.write(`\x1b8`) } catch { /* ignore */ }
+      try { process.stdout.write(`\x1b8${appCursorState()}`) } catch { /* ignore */ }
     }
     const onData = (chunk: Buffer | string): void => {
       buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8')
@@ -155,7 +175,7 @@ export function measureOne(cp: number, timeoutMs = 300): Promise<number | null> 
       // the terminal honouring SGR 8 concealment, and no glyph anywhere. Two
       // spaces cover a 1- or 2-cell advance; the saved cursor is restored in
       // `finish()`.
-      process.stdout.write(`\x1b7\x1b[${rows};1H\x1b[8m${glyph}\x1b[28m\x1b[6n\x1b[${rows};1H  `)
+      process.stdout.write(`\x1b[?25l\x1b7\x1b[${rows};1H\x1b[8m${glyph}\x1b[28m\x1b[6n\x1b[${rows};1H  `)
     } catch {
       finish()
       resolve(null)
