@@ -518,7 +518,7 @@ export class Store {
   private _input = ''
   private _cursor = 0
   private _composerImage: ComposerImage | null = null
-  private _panel: 'conversation' | 'approval' | 'connect' | 'question' | 'sessions' | 'export' | 'help' | 'themes' = 'conversation'
+  private _panel: 'conversation' | 'approval' | 'connect' | 'question' | 'sessions' | 'export' | 'help' | 'themes' | 'file-refs' = 'conversation'
   private _commandFilter = ''
   private _commandIndex = 0
   private _approval: PendingApproval | null = null

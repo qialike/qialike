@@ -89,8 +89,12 @@ export function fileRowLabel(candidate: FileCandidate): string {
 export function applyFileMention(
   input: string, token: ActiveFileToken, mention: string, space: boolean,
 ): { input: string; cursor: number } {
-  const insert = space ? `${mention} ` : mention
   const end = token.start + token.prefix.length
+  // Answering `@sr` in `read @sr and` must not produce a double space: the
+  // separator that is already there is kept, and one is added only when the
+  // token ends the draft or abuts a non-space character.
+  const next = input[end]
+  const insert = space && next !== ' ' ? `${mention} ` : mention
   return { input: input.slice(0, token.start) + insert + input.slice(end), cursor: token.start + insert.length }
 }
 
