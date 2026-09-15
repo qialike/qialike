@@ -32,8 +32,10 @@
  */
 
 import wrapAnsi from 'wrap-ansi'
+import stringWidth from 'string-width'
 import { SIDEBAR_MIN_WIDTH } from './config.ts'
 import { COMPOSER_MIN_HEIGHT, STATUS_BAR_HEIGHT, dockedComposerTop, dockedFits } from './layout-budget.ts'
+import { composerCap, composerHeightFor, composerHeightSaturated, composerUsableFor } from './composer-metrics.ts'
 
 /** One pointer cell's region while an in-flow dock is open. */
 export type PointerRegion = 'dock' | 'composer' | 'message' | 'none'
@@ -95,22 +97,31 @@ export function composerStripRows(
   // Below the docked minimum the conversation view is replaced by a one-row
   // notice (no composer at all), so NO cell belongs to the composer strip.
   if (!dockedFits(rows)) return null
-  const usable = Math.max(10, messageRight - 4)
+  const usable = composerUsableFor(messageRight)
   const min = COMPOSER_MIN_HEIGHT
-  // Mirrors conversation.tsx composerHeight: rows of the wrapped draft at the
-  // usable width, then min(min + wrapped − 1, cap). The card is BORDERLESS but
-  // paints two half-row fill edges (▄ above, ▀ below), so this height counts
-  // them just like the framed card counted its two border rows. The height cap
-  // is tied to the TERMINAL HEIGHT — cap = max(min, rows − 8); the text window
-  // is height − 4, so the max VISIBLE text rows scale with the screen. Beyond it
-  // the draft scrolls inside a caret-following window — exactly the conversation
-  // render's formula.
-  const wrapped = input.split('\n').reduce(
-    (sum, seg) => sum + (seg === '' ? 1 : wrapAnsi(seg, usable, { trim: false, hard: true }).split('\n').length),
-    0,
-  )
-  const cap = Math.max(min, rows - 8)
-  const composerH = Math.min(min + wrapped - 1, cap) // includes the 2 half-row fill edges
+  // Mirrors conversation.tsx composerHeight from the SAME shared arithmetic
+  // (`composer-metrics.ts`): the rows of the wrapped draft at the usable width,
+  // then min(min + wrapped − 1, cap). The card is BORDERLESS but paints two
+  // half-row fill edges (▄ above, ▀ below), so this height counts them just like
+  // the framed card counted its two border rows. The height cap is tied to the
+  // TERMINAL HEIGHT — cap = max(min, rows − 8); the text window is height − 4,
+  // so the max VISIBLE text rows scale with the screen. Beyond it the draft
+  // scrolls inside a caret-following window — exactly the conversation render's
+  // formula.
+  //
+  // The SATURATION bound runs FIRST, exactly as in the panel: once
+  // `ceil(cells/usable)` already reaches the cap, the exact row count cannot
+  // change the answer, so a multi-megabyte draft costs one display-width pass
+  // instead of a per-line `wrap-ansi` pass. Same arithmetic, same early exit —
+  // a mirror that skips it would still agree on the number but pay the wrap.
+  const cap = composerCap(rows, min)
+  const saturated = composerHeightSaturated(stringWidth(input), usable, min, cap)
+  const composerH = saturated !== undefined
+    ? saturated
+    : composerHeightFor(input.split('\n').reduce(
+      (sum, seg) => sum + (seg === '' ? 1 : wrapAnsi(seg, usable, { trim: false, hard: true }).split('\n').length),
+      0,
+    ), min, cap)
   // The image chip adds one rendered row to the composer box (conversation
   // renders height = composerHeight + (image ? 1 : 0)).
   const height = composerH + (hasImage ? 1 : 0)

@@ -53,6 +53,17 @@ let busy = false
 /** The token prefix an Esc dismissed: the palette must not reopen for the SAME
  *  token, but any edit (which changes the prefix) re-arms it. */
 let dismissed: string | null = null
+/** The token key the palette currently reflects. A store notification — including
+ *  the palette's OWN `store.repaint()` when an answer lands — must not start a
+ *  new query for a token that is already showing or in flight, or every answer
+ *  would re-query the workspace forever (measured on the real binary before this
+ *  guard: the header stayed `…` and the host was re-queried every ~25 ms). */
+let activeKey: string | null = null
+
+/** Identity of one `@` token: same start, same quoting, same query ⇒ same list. */
+function tokenKey(token: { start: number; quoted: boolean; query: string }): string {
+  return `${token.start}\u0000${token.quoted ? 1 : 0}\u0000${token.query}`
+}
 
 /** Abort/debounce handles for the in-flight fetch. */
 let inflight: AbortController | undefined
@@ -74,11 +85,13 @@ function close(prefix: string | null): void {
   busy = false
   index = 0
   dismissed = prefix
+  activeKey = null
   if (store.panel === FILE_PANEL) store.setPanel('conversation')
 }
 
-function fetch(q: string, quoted: boolean): void {
+function fetch(q: string, quoted: boolean, key: string): void {
   stopFetch()
+  activeKey = key
   if (listCandidates === undefined) { candidates = []; busy = false; return }
   const generation = query.begin()
   busy = true
@@ -108,13 +121,18 @@ function sync(): void {
   const token = activeFileToken(store.input, store.cursor)
   if (token === undefined) {
     if (dismissed !== null) dismissed = null
+    activeKey = null
     if (store.panel === FILE_PANEL) close(null)
     return
   }
   if (dismissed === token.prefix) return
   dismissed = null
   if (store.panel !== FILE_PANEL) store.setPanel(FILE_PANEL)
-  fetch(token.query, token.quoted)
+  const key = tokenKey(token)
+  // Already showing / already fetching THIS token: the notification was a
+  // repaint (often the palette's own), not a new query.
+  if (key === activeKey) return
+  fetch(token.query, token.quoted, key)
 }
 
 /** Accept one candidate: replace the token with the mention text. A directory
@@ -128,7 +146,12 @@ function pick(candidate: FileCandidate, drill: boolean): void {
   const applied = applyFileMention(store.input, token, mention, !drill)
   store.setInput(applied.input)
   store.setCursor(applied.cursor)
-  if (drill) { dismissed = null; fetch(activeFileToken(store.input, store.cursor)?.query ?? '', true); return }
+  if (drill) {
+    dismissed = null
+    const next = activeFileToken(store.input, store.cursor)
+    if (next !== undefined) fetch(next.query, true, tokenKey(next))
+    return
+  }
   close(null)
 }
 

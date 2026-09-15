@@ -32,7 +32,6 @@ import {
 } from '../index.tsx'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
 import { sanitizeTerminalText, stripTerminalControls } from '../terminal-safe.ts'
-import wrapAnsi from 'wrap-ansi'
 import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import {
   COMPOSER_MIN_HEIGHT,
@@ -75,6 +74,16 @@ import {
   type HeroMarkKind,
 } from '../hero-layout.ts'
 import { surfaceRegion, sidebarContentBand, sidebarFits, sidebarStepPlan, type SurfaceRegion, type SurfaceGeometry } from '../pointer-region.ts'
+import {
+  composerCap, composerHeightFor, composerHeightSaturated as composerHeightSaturatedPure, composerUsableFor,
+} from '../composer-metrics.ts'
+import {
+  composerCaretGlobalRow, composerCaretMoveVisual, composerCaretRowIn, composerCells, composerRows, composerWindow,
+  type ComposerRow,
+} from '../composer-rows.ts'
+
+/** Re-exported for the geometry tests that drive these through the panel. */
+export { composerCaretGlobalRow, composerCaretMoveVisual }
 import { formatSessionStatsParts } from '../session-stats.ts'
 import { sessionDisplayTitle } from '../session-titles.ts'
 import { logError, logErrorFileOnly } from '../log.ts'
@@ -1083,50 +1092,10 @@ function composerOuterWidth(width: number): number {
 }
 
 /** The composer text wrap width: outer width minus round border (2) and
- *  paddingX (2). */
+ *  paddingX (2). The arithmetic itself lives in `composer-metrics.ts`, shared
+ *  with the dock pointer mirror so the two cannot drift. */
 function composerUsable(width: number): number {
-  return Math.max(10, composerOuterWidth(width) - 4)
-}
-
-/** Wrap composer text exactly like Ink's `<Text wrap="wrap">`: the same
- *  wrap-ansi call Ink's wrap-text.js makes (`trim: false, hard: true`), so
- *  composer height/caret math can never drift from the rendered rows. Words
- *  longer than the column break anywhere; shorter words stay whole. */
-function composerWrap(text: string, usable: number): string[] {
-  if (text === '') return ['']
-  return wrapAnsi(text, usable, { trim: false, hard: true }).split('\n')
-}
-
-/** Per-VISUAL-row character offsets of the whole input: wrap every logical line
- *  with Ink's rule and walk each wrapped row's character length, so a row's
- *  `start` is the input index where that visual row begins (rows are bijective
- *  with the text because wrap keeps every character with `trim: false`). */
-function composerVisualRows(input: string, usable: number): Array<{ start: number; text: string }> {
-  const rows: Array<{ start: number; text: string }> = []
-  let offset = 0
-  for (const seg of input.split('\n')) {
-    let at = 0
-    for (const text of composerWrap(seg, usable)) {
-      rows.push({ start: offset + at, text })
-      at += text.length
-    }
-    offset += seg.length + 1
-  }
-  return rows
-}
-
-/** Which visual rows are visible in the composer's text area, given the caret's
- *  global row: a window of `textArea` rows that keeps the caret row visible
- *  (tail when typing at the end). Returns the first visible row and the exact
- *  `[start, end)` character range of those rows, so the caller can render ONLY
- *  that window — the box never overflows, and the caret row stays inside it. */
-function composerWindow(input: string, usable: number, caretRow: number, textArea: number): { rows: Array<{ start: number; text: string }>; first: number; start: number; end: number } {
-  const rows = composerVisualRows(input, usable)
-  const total = rows.length
-  const area = Math.max(1, textArea)
-  const first = total <= area ? 0 : Math.max(0, Math.min(caretRow - (area - 1), total - area))
-  const lastRow = rows[Math.min(total - 1, first + area - 1)]!
-  return { rows, first, start: rows[first]!.start, end: lastRow.start + lastRow.text.length }
+  return composerUsableFor(composerOuterWidth(width))
 }
 
 /**
@@ -1146,37 +1115,35 @@ function composerWindow(input: string, usable: number, caretRow: number, textAre
  * @param cap - the clamped maximum (`heroBudgetNow().boxH` or `rows - 8`).
  * @returns `cap` when the bound saturates, else undefined (count exactly).
  */
-export function composerHeightSaturated(cells: number, usable: number, min: number, cap: number): number | undefined {
-  const rows = Math.ceil(Math.max(0, cells) / Math.max(1, usable))
-  return min + rows - 1 >= cap ? cap : undefined
-}
+export const composerHeightSaturated = composerHeightSaturatedPure
 
 export function composerHeight(width: number, input: string, min: number): number {
   const usable = composerUsable(width)
-  const cap = store.hero ? heroBudgetNow(store.rows, width).boxH : Math.max(min, store.rows - 8)
+  const cap = store.hero ? heroBudgetNow(store.rows, width).boxH : composerCap(store.rows, min)
   // SATURATION before the exact count: every painted row holds at most `usable`
   // display CELLS (hard wrap never exceeds the column), so the real row count is
   // at least ceil(cells/usable). Once THAT lower bound already reaches the cap,
   // the exact count cannot change the answer — so a multi-megabyte draft costs
-  // one `visualWidth` pass (native, ~12 ms/MB) instead of one `wrap-ansi` pass
-  // per line (~750 ms/MB measured). `visualWidth`, not `String.length`: a
-  // surrogate pair or a ZWJ sequence is many code units on one row (measured
-  // over 40k random strings: the cell bound never over-estimated, the UTF-16
-  // length bound did 5404 times).
-  const saturated = composerHeightSaturated(visualWidth(input), usable, min, cap)
+  // one display-width pass (`composerCells`, native, ~12 ms/MB and memoized per
+  // draft) instead of one `wrap-ansi` pass per line (~750 ms/MB measured).
+  // `composerCells`, not `String.length`: a surrogate pair or a ZWJ sequence is
+  // many code units on one row (measured over 40k random strings: the cell bound
+  // never over-estimated, the UTF-16 length bound did 5404 times).
+  const saturated = composerHeightSaturatedPure(composerCells(input), usable, min, cap)
   if (saturated !== undefined) return saturated
-  const wrapped = input.split('\n').reduce((sum, seg) => sum + composerWrap(seg, usable).length, 0)
-  if (store.hero) {
-    // HERO budget: the stack (brand block + title gap + card + hint block) must
-    // FIT the hero area, and the hero is ALL OR NOTHING (user call: minimum 14
-    // rows) — `heroBudget` reports `fits` and hands back the card cap that keeps
-    // `heroLayout().free >= 0`; below the minimum the render paints the notice
-    // instead. The old cap floored itself at `min`, which re-raised the bound
-    // above the area on short terminals and brought the +1-row caret drift back
-    // (measured at 133 columns: drift on rows 8/9/10/11, card bottom edge and
-    // tip row clipped at 8/10).
-    return Math.min(min + wrapped - 1, cap)
-  }
+  // Below the clamp the exact row count is needed; `composerRows` memoizes it on
+  // the draft's identity, so the three per-render calls (band/geometry/render)
+  // and every repaint with an unchanged draft share ONE wrap.
+  const wrapped = composerRows(input, usable).length
+  // HERO budget: the stack (brand block + title gap + card + hint block) must
+  // FIT the hero area, and the hero is ALL OR NOTHING (user call: minimum 14
+  // rows) — `heroBudget` reports `fits` and hands back the card cap that keeps
+  // `heroLayout().free >= 0`; below the minimum the render paints the notice
+  // instead. The old cap floored itself at `min`, which re-raised the bound
+  // above the area on short terminals and brought the +1-row caret drift back
+  // (measured at 133 columns: drift on rows 8/9/10/11, card bottom edge and
+  // tip row clipped at 8/10).
+  //
   // Docked: the composer grows with the draft (pushing the message area upward)
   // up to a height cap tied to the TERMINAL HEIGHT: cap = rows − 8 (never more
   // than min when the terminal is tiny). Its text window is composerH − 4, so
@@ -1186,7 +1153,7 @@ export function composerHeight(width: number, input: string, min: number): numbe
   // window (see the render + caret math) instead of overflowing its box over
   // the footer/status rows. The rows−8 floor guard also keeps a ≥3-row
   // message viewport on small terminals.
-  return Math.min(min + wrapped - 1, cap)
+  return composerHeightFor(wrapped, min, cap)
 }
 
 /** Where the composer card actually sits: its FIRST painted row, its leftmost
@@ -1778,12 +1745,6 @@ function colToChar(line: string, col: number): number {
   return line.length
 }
 
-/** The caret's GLOBAL visual row (0-based over ALL wrapped input rows). */
-export function composerCaretGlobalRow(input: string, cursor: number, usable: number): number {
-  const caret = Math.max(0, Math.min(cursor, input.length))
-  return Math.max(0, composerWrap(input.slice(0, caret), usable).length - 1)
-}
-
 /** Pure main-surface geometry: where the message column, the composer box and
  *  the status bar sit on screen, so pointer routing (wheel/click per hovered
  *  region) can classify a cell WITHOUT touching the DOM. All numbers mirror
@@ -1860,34 +1821,68 @@ function composerTextArea(): number {
   return Math.max(1, composerHeight(store.width, store.input, composerMinHeight()) - 4)
 }
 
-/** New caret index after moving the composer caret by `dirRows` VISUAL lines
- *  (whole wrapped rows), keeping the same cell column when possible. Used by
- *  the wheel over the composer: when the draft is taller than its box the
- *  wheel scrolls the DRAFT (visual-line caret moves = what ↑/↓ do), not the
- *  transcript. Pure for tests; mirrors conversation's composer row model
- *  (composerVisualRows, so word-wrap row boundaries are exact). */
-export function composerCaretMoveVisual(input: string, caret: number, usable: number, dirRows: -1 | 1): number {
-  const rows = composerVisualRows(input, usable)
-  if (rows.length <= 1) return caret
-  const from = composerCaretGlobalRow(input, caret, usable)
-  const target = Math.max(0, Math.min(rows.length - 1, from + dirRows))
-  if (target === from) return caret
-  const src = rows[from]!
-  // Column (cells) of the caret inside its source visual row.
-  const srcCol = src.text.slice(0, caret - src.start).split('').reduce((acc, ch) => acc + visualWidth(ch), 0)
-  const dst = rows[target]!
-  let acc = 0
-  let idx = dst.text.length
-  for (let i = 0; i < dst.text.length; i++) {
-    const cw = visualWidth(dst.text[i]!)
-    if (acc >= srcCol) { idx = i; break }
-    acc += cw
-    if (acc === srcCol) { idx = i + 1; break }
-  }
-  return dst.start + Math.min(idx, dst.text.length)
+/** Map a cell in the painted composer card to an input character index. PURE
+ *  (rows + the card band in, index out) so the click→caret mapping is unit
+ *  tested against the same row model the render paints; `colToChar` is the
+ *  panel's cell→char rule (wide glyphs count two cells).
+ *  `rows` are the VISIBLE rows (window), `first` the global row of the first
+ *  one, `bandTop`/`bandLeft` the card's first painted row/column, `lead` the
+ *  image chip row (1 when an image is attached). */
+export function composerInputIndexIn(
+  rows: ReadonlyArray<ComposerRow>,
+  first: number,
+  bandTop: number,
+  bandLeft: number,
+  lead: number,
+  row: number,
+  col: number,
+): number | null {
+  const clickRow = first + (row - (bandTop + 1 + lead))
+  if (clickRow < 0 || clickRow >= rows.length) return null
+  const target = rows[clickRow]!
+  // Card content starts after the round border + paddingX (2 cells) of `left`.
+  return target.start + colToChar(target.text, Math.max(0, col - (bandLeft + 2)))
 }
 
+/** Pure hardware-caret cell inside the painted card: the row/column of the
+ *  caret's cell, from the shared row model (no prefix re-wrap). `first` is the
+ *  global row of the first VISIBLE row (the caret-following window). */
+export function composerCaretCellIn(
+  rows: ReadonlyArray<ComposerRow>,
+  input: string,
+  caret: number,
+  bandTop: number,
+  bandLeft: number,
+  lead: number,
+  first: number,
+): { row: number; col: number } {
+  const at = Math.max(0, Math.min(caret, input.length))
+  const caretRow = composerCaretRowIn(rows, input, at)
+  const lastLine = rows[caretRow]!.text.slice(0, at - rows[caretRow]!.start)
+  const visRow = Math.max(0, caretRow - first)
+  // bandTop is the card's ▄ edge row; the content starts one row below it,
+  // two columns in (the two pad columns this borderless card paints itself).
+  return { row: bandTop + 1 + lead + visRow, col: bandLeft + 2 + visualWidth(lastLine) }
+}
 
+/** Pure selection bounds from the two endpoint indices a drag produced: the
+ *  order of the drag does not matter, a null endpoint means "past the end of
+ *  what could be hit" and collapses to the draft's edge, and an empty range
+ *  (or a single-point drag) is no selection at all. */
+export function composerSelectionBounds(
+  a: number | null,
+  c: number | null,
+  inputLength: number,
+): { start: number; end: number } | null {
+  if (a === null && c === null) return null
+  const start = a === null ? 0 : c === null ? a : Math.min(a, c)
+  const end = a === null ? (c ?? 0) : c === null ? inputLength : Math.max(a, c)
+  if (start >= end) return null
+  return { start, end }
+}
+
+/** Map a screen cell inside the painted composer card to an input character
+ *  index — the same caret window the render paints, from the shared row cache. */
 function composerInputIndex(row: number, col: number): number | null {
   const width = process.stdout.columns ?? 80
   const height = process.stdout.rows ?? 24
@@ -1897,11 +1892,7 @@ function composerInputIndex(row: number, col: number): number | null {
   const textArea = Math.max(1, band.height - 4)
   const caretRow = composerCaretGlobalRow(store.input, store.cursor, usable)
   const win = composerWindow(store.input, usable, caretRow, textArea)
-  const clickRow = win.first + (row - (band.top + 1 + lead))
-  if (clickRow < 0 || clickRow >= win.rows.length) return null
-  const target = win.rows[clickRow]!
-  // Card content starts after the round border + paddingX (2 cells) of `left`.
-  return target.start + colToChar(target.text, Math.max(0, col - (band.left + 2)))
+  return composerInputIndexIn(win.rows, win.first, band.top, band.left, lead, row, col)
 }
 
 function positionCursorByMouse(row: number, col: number): void {
@@ -1918,29 +1909,17 @@ function composerCaretCell(): { row: number; col: number } | null {
   const band = composerBand(width, height)
   const usable = composerUsable(width)
   const lead = store.composerImage !== null ? 1 : 0
-  const caret = Math.max(0, Math.min(store.cursor, store.input.length))
-  // The caret cell is the end of the wrapped PREFIX (input[0..caret)): the
-  // suffix that follows the caret starts at that same cell, so wrapping the
-  // prefix with Ink's own rule yields the exact rendered caret position.
-  const lines = composerWrap(store.input.slice(0, caret), usable)
-  const lastLine = lines[lines.length - 1] ?? ''
-  const caretRow = Math.max(0, lines.length - 1)
   const textArea = Math.max(1, band.height - 4)
-  const win = composerWindow(store.input, usable, caretRow, textArea)
-  const visRow = Math.max(0, caretRow - win.first)
-  // band.top is the card's ▄ edge row; the content starts one row below it,
-  // two columns in (the two pad columns this borderless card paints itself).
-  return { row: band.top + 1 + lead + visRow, col: band.left + 2 + visualWidth(lastLine) }
+  const win = composerWindow(store.input, usable, composerCaretGlobalRow(store.input, store.cursor, usable), textArea)
+  return composerCaretCellIn(win.rows, store.input, store.cursor, band.top, band.left, lead, win.first)
 }
 
 function composerSelectionRange(sel: { aRow: number; aCol: number; cRow: number; cCol: number }): { start: number; end: number } | null {
-  const a = composerInputIndex(sel.aRow, sel.aCol)
-  const c = composerInputIndex(sel.cRow, sel.cCol)
-  if (a === null && c === null) return null
-  const start = a === null ? 0 : c === null ? a : Math.min(a, c)
-  const end = a === null ? (c ?? 0) : c === null ? store.input.length : Math.max(a, c)
-  if (start >= end) return null
-  return { start, end }
+  return composerSelectionBounds(
+    composerInputIndex(sel.aRow, sel.aCol),
+    composerInputIndex(sel.cRow, sel.cCol),
+    store.input.length,
+  )
 }
 
 function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): string {
@@ -2212,7 +2191,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
         // follows), and is inert when the draft fits (nothing to scroll).
         if (k.wheelUp !== undefined || k.wheelDown !== undefined) {
           const usable = composerUsable(store.width)
-          const allRows = composerVisualRows(store.input, usable).length
+          const allRows = composerRows(store.input, usable).length
           if (allRows > composerTextArea()) {
             const dir: -1 | 1 = k.wheelUp !== undefined ? -1 : 1
             let caret = store.cursor
@@ -2550,7 +2529,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // render only the caret-following window (keeps the caret row visible;
   // nothing overflows over the composer footer).
   const cUsable = composerUsable(width)
-  const caretGlobalRow = Math.max(0, composerWrap(input.slice(0, store.cursor), cUsable).length - 1)
+  const caretGlobalRow = composerCaretGlobalRow(input, store.cursor, cUsable)
   const cTextArea = Math.max(1, composerH - 4)
   const cWin = composerWindow(input, cUsable, caretGlobalRow, cTextArea)
   // Approval dock height: fixed — border 2 + padding 2 + header 1 + gap 1 +
@@ -3048,6 +3027,21 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const overlay = (id: string): React.ReactNode | undefined =>
     store.panel === id ? props.tui.panels.byId(id)?.render(store) : undefined
 
+  /** Every OTHER overlay-mode panel must be composited too, not just the three
+   *  the conversation knows by name. The `@file` palette is registered by the
+   *  `tui-file-reference` sub-plugin with `mode: 'overlay'`; before this slot
+   *  its keys routed (store.panel named it, so Enter picked a candidate) while
+   *  its box NEVER painted — measured on the real binary: typing `@` showed no
+   *  list, and Enter silently inserted `@deepseek-harness/`. Approval/question
+   *  keep their own slots: they are in-flow docks whose height the viewport
+   *  math reserves, not absolute overlays. */
+  const overlayOther = (): React.ReactNode | undefined => {
+    const id = store.panel
+    if (id === 'conversation' || id === 'approval' || id === 'question') return undefined
+    const def = props.tui.panels.byId(id)
+    return def?.mode === 'overlay' ? def.render(store) : undefined
+  }
+
   return (
     <Box flexDirection="column" height={store.rows}>
       {/* Background layer: paints theme.bg so colorscheme switches are
@@ -3137,6 +3131,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           {heroHintPaint}
           <Box flexShrink={0} height={hero?.bottomSpacer ?? 0} />
           {renderPalette(hero?.paletteBottomMargin ?? 0)}
+          {overlayOther()}
           </>
           )}
         </Box>
@@ -3184,6 +3179,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               above the composer. Each row is opaque (theme.bg) so the
               underlying transcript text never shows through between rows. */}
           {renderPalette(0)}
+          {overlayOther()}
         </Box>
         {/* The composer is pinned to the bottom of the message column and spans
             its full width: with the Steps sidebar visible its right border sits
