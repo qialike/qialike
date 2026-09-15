@@ -3001,28 +3001,37 @@ export class Store {
     this.notify()
   }
   private _maxScroll(): number { return Math.max(0, this._layoutContent - this._layoutViewport) }
-  scrollPage(dir: -1 | 1): void {
-    // A mouse-selection highlight is baked into the SCREEN cells; once the
-    // content scrolls those coordinates no longer point at the selected text, so
-    // clear it (visible-region selections also clear on scroll).
+  /**
+   * Move the transcript by `delta` rows and decide tail-following from WHERE
+   * THE WINDOW LANDS.
+   *
+   * A mouse-selection highlight is baked into the SCREEN cells; once the
+   * content scrolls those coordinates no longer point at the selected text, so
+   * clear it (visible-region selections also clear on scroll).
+   *
+   * While following, `_scroll` is not kept in sync (the effective scroll IS
+   * maxScroll), so the first scroll must sync to the tail: sticky scroll leaves
+   * the bottom edge, one page/step at a time, instead of jumping from stale 0.
+   *
+   * Reaching the bottom RE-ARMS following (this is the fix for the reported
+   * "PgUp to browse mid-turn, PgDn back to the bottom, new content no longer
+   * auto-scrolls"): the old code cleared `_followTail` on every scroll input, so
+   * a reader who returned to the tail kept a frozen window while rows streamed
+   * in below it.
+   */
+  private scrollBy(delta: number): void {
     this.clearSelection()
-    const page = Math.max(1, this._layoutViewport)
-    // While following the tail, _scroll is never kept in sync (the effective
-    // scroll IS maxScroll), so a first PgUp would page from stale 0 and clamp
-    // to the TOP of the transcript. Sync to the tail first: sticky scroll
-    // pages up from the bottom edge, one viewport at a time.
     if (this._followTail) this._scroll = this._maxScroll()
-    this._followTail = false
-    this._scroll = Math.max(0, Math.min(this._scroll + dir * page, this._maxScroll()))
+    this._scroll = Math.max(0, Math.min(this._scroll + delta, this._maxScroll()))
+    this._followTail = this._scroll >= this._maxScroll()
     this.notify()
+  }
+  scrollPage(dir: -1 | 1): void {
+    this.scrollBy(dir * Math.max(1, this._layoutViewport))
   }
   /** Scroll the transcript by a small line delta (mouse wheel). */
   scrollLines(delta: number): void {
-    this.clearSelection()
-    if (this._followTail) this._scroll = this._maxScroll()
-    this._followTail = false
-    this._scroll = Math.max(0, Math.min(this._scroll + delta, this._maxScroll()))
-    this.notify()
+    this.scrollBy(delta)
   }
   scrollTop(): void { this.clearSelection(); this._followTail = false; this._scroll = 0; this.notify() }
   scrollBottom(): void { this.clearSelection(); this._followTail = true; this._scroll = this._maxScroll(); this.notify() }
