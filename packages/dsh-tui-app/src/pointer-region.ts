@@ -273,10 +273,8 @@ export interface SidebarSectionBudget {
   readonly compact: number
 }
 
-/** One candidate section configuration's full budget. */
+/** One section configuration's step/session/placeholder budget for a slack. */
 interface SidebarBudget {
-  gaps: number
-  sectionRows: number
   visible: number
   hidden: number
   showMore: boolean
@@ -314,19 +312,20 @@ export function sidebarStepPlan(input: {
   const wanted = [...(input.sections ?? [])]
     .filter((section) => section.full > 0)
     .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-  /** The whole plan for ONE section configuration: the fixed chrome + the
-   *  sections' rows leave `slack` for the steps/session/placeholder. */
-  const budget = (
-    shown: ReadonlyArray<{ id: string; compact: boolean }>,
-    sectionRows: number,
-  ): SidebarBudget | undefined => {
-    const gaps = 4 + shown.length // gap 1 between every pair of children
-    const slack = inner - gaps - heading - footer - sectionRows
+  // The step wrap depends only on (steps, contentWidth) — NOT on the section
+  // configuration — so it runs ONCE for the whole plan. It used to be repeated
+  // inside every candidate budget: at the 6-section cap that was 729 x N
+  // `wrapAnsi` passes per call (measured 139 ms for 20 steps on this machine,
+  // where a single pass is 0.19 ms).
+  const stepRows = steps.map((step) => sidebarWrappedRows(step, contentWidth))
+  /** The steps/session/placeholder rows for one slack (rows left for the steps
+   *  after the fixed chrome, the accepted sections and their `gap 1` rows). */
+  const budget = (slack: number): SidebarBudget | undefined => {
     if (slack < 0) return undefined
     let used = 0
     let visible = 0
-    for (const step of steps) {
-      const need = sidebarWrappedRows(step, contentWidth)
+    while (visible < stepRows.length) {
+      const need = stepRows[visible]!
       if (used + need > slack) break
       used += need
       visible += 1
@@ -340,7 +339,7 @@ export function sidebarStepPlan(input: {
       while (visible > 0 && used + 1 > slack) {
         visible -= 1
         hidden += 1
-        used -= sidebarWrappedRows(steps[visible]!, contentWidth)
+        used -= stepRows[visible]!
       }
       showMore = used + 1 <= slack
     }
@@ -357,87 +356,105 @@ export function sidebarStepPlan(input: {
     // step-less session at 100x18). It is the LOWEST priority though: a real
     // session id is worth more than a filler row, so it only takes what is left.
     const showEmpty = steps.length === 0 && afterSteps - sessionRows >= 1
-    const emptyRows = showEmpty ? 1 : 0
-    return { gaps, sectionRows, visible, hidden, showMore, showSession, showEmpty, used, sessionRows, emptyRows }
+    return { visible, hidden, showMore, showSession, showEmpty, used, sessionRows, emptyRows: showEmpty ? 1 : 0 }
   }
-  // STEPS ARE THE PRIMARY CONTENT, so the section configuration is chosen by
-  // MAXIMUM VISIBLE STEPS (ties prefer the section that uses more rows, i.e. the
-  // full form over the compact one, and a shown section over a dropped one).
-  // Picking "the section first, the steps get the rest" made the visible step
-  // count NON-monotone in the terminal height: one extra row let a dropped
-  // section back in — or upgraded it to its full form — and pushed steps out
-  // (measured: 40 of 44 (full, compact) pairs). Maximizing over configurations
-  // whose budgets each grow with the terminal makes the step count monotone for
-  // ANY plugin budget; a section only renders out of room the steps did not need.
-  let best: SidebarBudget | undefined
-  let bestShown: ReadonlyArray<{ id: string; compact: boolean }> = []
-  const consider = (shown: ReadonlyArray<{ id: string; compact: boolean }>, sectionRows: number): void => {
-    const plan = budget(shown, sectionRows)
-    if (plan === undefined) return
-    if (best === undefined || plan.visible > best.visible
-      || (plan.visible === best.visible && sectionRows > best.sectionRows)) {
-      best = plan
-      bestShown = [...shown]
+  const fixed = 4 /* gaps over the five base children */ + heading + footer
+  const base = budget(inner - fixed)
+  if (base === undefined) {
+    // Below the draw floor (`sidebarFits` is false) nothing is painted; report
+    // the fixed-chrome shape the pre-section plan reported.
+    return {
+      visible: 0, hidden: steps.length, showMore: false, showSession: false, showEmpty: false,
+      shownSections: [], rows: fixed, capacity: inner,
     }
   }
-  if (wanted.length <= 6) {
-    // Exact: one candidate per section (drop / compact / full). Six sections is
-    // 729 candidates and each budget is one pass over the steps — the number a
-    // sidebar can actually carry. Deeper columns fall back to the greedy pass
-    // below so a pathological plugin cannot make the plan exponential.
-    const walk = (i: number, shown: Array<{ id: string; compact: boolean }>, sectionRows: number): void => {
-      if (i === wanted.length) { consider(shown, sectionRows); return }
-      const section = wanted[i]!
-      const compact = Math.max(0, Math.min(section.compact, section.full))
-      walk(i + 1, shown, sectionRows) // dropped
-      if (compact > 0 && compact < section.full) {
-        shown.push({ id: section.id, compact: true })
-        walk(i + 1, shown, sectionRows + compact)
-        shown.pop()
-      }
-      shown.push({ id: section.id, compact: false })
-      walk(i + 1, shown, sectionRows + section.full)
-      shown.pop()
+  // STEPS ARE THE PRIMARY CONTENT: dropping every section gives the best
+  // possible visible count, and a section only renders out of slack that does
+  // not cost a step.
+  //
+  // A configuration's COST is `shownSections + their rows` (its gaps included),
+  // and the slack is `inner - fixed - cost` — so `visible` depends on that ONE
+  // integer. That turns "pick the best configuration" from a 3^N enumeration
+  // into: find the largest cost whose slack still shows every step the no-section
+  // plan showed, then a 0/1 knapsack maximizing the shown rows under it.
+  // Polynomial: O(N x slack) with no exponential cap and no greedy fallback.
+  // No sections (today's default: nothing registered): the base budget IS the
+  // plan — no threshold scan, no knapsack, exactly the pre-extension cost.
+  if (wanted.length === 0) {
+    return {
+      visible: base.visible,
+      hidden: base.hidden,
+      showMore: base.showMore,
+      showSession: base.showSession,
+      showEmpty: base.showEmpty,
+      shownSections: [],
+      rows: fixed + base.sessionRows + base.used + (base.showMore ? 1 : 0) + base.emptyRows,
+      capacity: inner,
     }
-    walk(0, [], 0)
-  } else {
-    const shown: Array<{ id: string; compact: boolean }> = []
-    let sectionRows = 0
-    for (const section of wanted) {
-      const compact = Math.max(0, Math.min(section.compact, section.full))
-      const options: Array<{ compact: boolean; rows: number } | null> = [
-        null,
-        ...(compact > 0 && compact < section.full ? [{ compact: true, rows: compact }] : []),
-        { compact: false, rows: section.full },
-      ]
-      let pick: { compact: boolean; rows: number } | null = null
-      let pickPlan: SidebarBudget | undefined
-      let pickRows = sectionRows
-      for (const option of options) {
-        const rows = option === null ? sectionRows : sectionRows + option.rows
-        const plan = budget(option === null ? shown : [...shown, { id: section.id, compact: option.compact }], rows)
-        if (plan === undefined) continue
-        if (pickPlan === undefined || plan.visible > pickPlan.visible
-          || (plan.visible === pickPlan.visible && rows > pickRows)) {
-          pick = option
-          pickPlan = plan
-          pickRows = rows
-        }
+  }
+  const vmax = base.visible
+  const maxCost = Math.max(0, inner - fixed)
+  // The costs that still show `vmax` steps form a prefix: `visible` is
+  // non-decreasing in the slack (the step list only grows with the room), so the
+  // largest such cost is found by binary search instead of a linear scan.
+  let threshold = 0
+  {
+    let lo = 1
+    let hi = maxCost
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1
+      const probe = budget(inner - fixed - mid)
+      if (probe !== undefined && probe.visible === vmax) { threshold = mid; lo = mid + 1 } else { hi = mid - 1 }
+    }
+  }
+  /** One section's non-drop options (dropping is always available, cost 0). */
+  const optionsOf = (section: SidebarSectionBudget): Array<{ compact: boolean; rows: number; cost: number }> => {
+    const compact = Math.max(0, Math.min(section.compact, section.full))
+    return [
+      ...(compact > 0 && compact < section.full ? [{ compact: true, rows: compact, cost: 1 + compact }] : []),
+      { compact: false, rows: section.full, cost: 1 + section.full },
+    ]
+  }
+  // bounded[i][w] = most section rows from sections i.. with total cost <= w.
+  const bounded: number[][] = Array.from({ length: wanted.length + 1 }, () => new Array<number>(threshold + 1).fill(0))
+  for (let i = wanted.length - 1; i >= 0; i--) {
+    const opts = optionsOf(wanted[i]!)
+    const next = bounded[i + 1]!
+    const row = bounded[i]!
+    for (let w = 0; w <= threshold; w++) {
+      let best = next[w]! // dropped
+      for (const option of opts) {
+        if (option.cost > w) continue
+        const candidate = option.rows + next[w - option.cost]!
+        if (candidate > best) best = candidate
       }
-      if (pick !== null) {
-        shown.push({ id: section.id, compact: pick.compact })
-        sectionRows += pick.rows
+      row[w] = best
+    }
+  }
+  // Reconstruct the FIRST optimal configuration in the old enumeration's order
+  // (per section: dropped, then compact, then full) so the painted result did
+  // not change when the search did.
+  const shownSections: Array<{ id: string; compact: boolean }> = []
+  let remainingRows = bounded[0]![threshold]!
+  let remainingCost = threshold
+  for (let i = 0; i < wanted.length; i++) {
+    const opts = optionsOf(wanted[i]!)
+    if (bounded[i + 1]![remainingCost]! === remainingRows) continue // dropped
+    for (const option of opts) {
+      if (option.cost > remainingCost) continue
+      if (option.rows + bounded[i + 1]![remainingCost - option.cost]! === remainingRows) {
+        shownSections.push({ id: wanted[i]!.id, compact: option.compact })
+        remainingRows -= option.rows
+        remainingCost -= option.cost
+        break
       }
     }
-    consider(shown, sectionRows)
   }
-  // Below the draw floor (`sidebarFits` is false) nothing is painted; mirror the
-  // pre-section shape so callers still get the fixed chrome's row count.
-  const plan: SidebarBudget = best ?? {
-    gaps: 4, sectionRows: 0, visible: 0, hidden: steps.length, showMore: false,
-    showSession: false, showEmpty: false, used: 0, sessionRows: 0, emptyRows: 0,
-  }
-  const total = plan.gaps + heading + plan.sectionRows + plan.sessionRows + plan.used
+  const cost = threshold - remainingCost
+  const plan = budget(inner - fixed - cost)!
+  const gaps = 4 + shownSections.length
+  const sectionRows = cost - shownSections.length
+  const total = gaps + heading + sectionRows + plan.sessionRows + plan.used
     + (plan.showMore ? 1 : 0) + plan.emptyRows + footer
   return {
     visible: plan.visible,
@@ -445,7 +462,7 @@ export function sidebarStepPlan(input: {
     showMore: plan.showMore,
     showSession: plan.showSession,
     showEmpty: plan.showEmpty,
-    shownSections: bestShown,
+    shownSections,
     rows: total,
     capacity: inner,
   }

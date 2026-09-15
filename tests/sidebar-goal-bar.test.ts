@@ -17,7 +17,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { sidebarStepPlan, sidebarFits, type SidebarSectionBudget } from '../packages/dsh-tui-app/src/pointer-region.ts'
+import wrapAnsi from 'wrap-ansi'
+import { sidebarStepPlan, sidebarFits, SIDEBAR_STATUS_BAR_ROWS, type SidebarSectionBudget } from '../packages/dsh-tui-app/src/pointer-region.ts'
 import { goalBarRows, goalBarTitle } from '../packages/dsh-tui-app/src/goal-bar.tsx'
 import type { GoalView } from '@deepseek-ai/dsh-goal'
 
@@ -173,6 +174,39 @@ describe('sidebarStepPlan budgets plugin sections AFTER the steps', () => {
     expect(checked).toBe(widths.length * stepSets.length * 27)
   })
 
+
+  test('parity: the polynomial selection matches the exhaustive reference everywhere', () => {
+    // The rewrite must not change WHAT is painted — only how it is found.
+    const widths = [60, 80, 133, 200]
+    const stepSets = [[], ['✓ one'], STEPS, Array.from({ length: 9 }, (_, i) => `✓ step ${i + 1}`)]
+    const sectionSets: SidebarSectionBudget[][] = []
+    for (let full = 1; full <= 4; full++) {
+      for (let compact = 0; compact <= full; compact++) sectionSets.push([{ id: 'g', order: 10, full, compact }])
+    }
+    sectionSets.push([{ id: 'a', order: 5, full: 1, compact: 1 }, { id: 'b', order: 9, full: 3, compact: 1 }])
+    sectionSets.push([{ id: 'a', order: 5, full: 2, compact: 0 }, { id: 'b', order: 9, full: 2, compact: 1 }])
+    sectionSets.push([
+      { id: 'a', order: 1, full: 1, compact: 1 }, { id: 'b', order: 2, full: 3, compact: 2 },
+      { id: 'c', order: 3, full: 2, compact: 1 },
+    ])
+    let checked = 0
+    for (const width of widths) {
+      for (const steps of stepSets) {
+        for (const sections of sectionSets) {
+          for (let rows = 12; rows <= 40; rows += 2) {
+            const input = { rows, width, steps, sessionTitle: 'goal bar', sessionId: SESSION_ID, footerLines: FOOTER, sections }
+            const want = referencePlan(input)
+            const got = sidebarStepPlan(input)
+            const where = `${width}x${rows} steps=${steps.length} sections=${sections.length} ${sections.map((s) => `${s.full}/${s.compact}`).join(',')}`
+            expect({ ...got }, where).toEqual(want)
+            checked += 1
+          }
+        }
+      }
+    }
+    expect(checked).toBe(4 * 4 * (14 + 3) * 15)
+  })
+
   test('the goal-bar pair that broke before now keeps the step', () => {
     // Measured pre-fix at width 80 with one short step and goal-bar's own 2/1:
     // rows 15 -> visible 1 (no bar), rows 16 -> visible 0 + compact bar. The step
@@ -187,6 +221,94 @@ describe('sidebarStepPlan budgets plugin sections AFTER the steps', () => {
     expect(at17.shownSections).toEqual([{ id: 'goal-bar', compact: true }])
   })
 })
+
+/**
+ * The PRE-polynomial selection, kept as an independent reference: enumerate
+ * every (dropped | compact | full) configuration, keep max `visible` then max
+ * section rows, first in the DFS order (dropped, then compact, then full per
+ * section). `sidebarStepPlan` must agree with it field for field — that is the
+ * parity the polynomial rewrite (cost threshold + knapsack) has to preserve.
+ */
+function referencePlan(input: {
+  rows: number; width: number; steps: readonly string[]; sessionTitle?: string; sessionId?: string
+  footerLines: readonly string[]; sections?: readonly SidebarSectionBudget[]
+}) {
+  const contentWidth = Math.max(1, Math.max(20, Math.round(input.width * 0.3)) - 4)
+  const inner = Math.max(0, input.rows - SIDEBAR_STATUS_BAR_ROWS - 2 - 1)
+  const heading = 1
+  const footer = 3
+  const stepRows = input.steps.map((step) => step === ''
+    ? 1
+    : wrapAnsi(step, Math.max(1, contentWidth), { trim: false, hard: true }).split('\n').length)
+  const budget = (shownCount: number, sectionRows: number) => {
+    const gaps = 4 + shownCount
+    const slack = inner - gaps - heading - footer - sectionRows
+    if (slack < 0) return undefined
+    let used = 0
+    let visible = 0
+    while (visible < stepRows.length && used + stepRows[visible]! <= slack) { used += stepRows[visible]!; visible += 1 }
+    let hidden = input.steps.length - visible
+    let showMore = false
+    if (hidden > 0) {
+      while (visible > 0 && used + 1 > slack) { visible -= 1; hidden += 1; used -= stepRows[visible]! }
+      showMore = used + 1 <= slack
+    }
+    const sessionNeeds = 1 + (input.sessionTitle === undefined ? 0 : 1)
+      + (input.sessionId === undefined ? 0 : (input.sessionId === '' ? 1
+        : wrapAnsi(input.sessionId, Math.max(1, contentWidth), { trim: false, hard: true }).split('\n').length))
+    const afterSteps = slack - used - (showMore ? 1 : 0)
+    const showSession = input.sessionId !== undefined && afterSteps >= sessionNeeds
+    const sessionRows = showSession ? sessionNeeds : 0
+    const showEmpty = input.steps.length === 0 && afterSteps - sessionRows >= 1
+    const emptyRows = showEmpty ? 1 : 0
+    return { gaps, sectionRows, visible, hidden, showMore, showSession, showEmpty, used, sessionRows, emptyRows, slack }
+  }
+  const wanted = [...(input.sections ?? [])].filter((section) => section.full > 0)
+    .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  let best: ReturnType<typeof budget>
+  let bestShown: Array<{ id: string; compact: boolean }> = []
+  let bestRows = -1
+  const walk = (i: number, shown: Array<{ id: string; compact: boolean }>, sectionRows: number): void => {
+    if (i === wanted.length) {
+      const plan = budget(shown.length, sectionRows)
+      if (plan === undefined) return
+      if (best === undefined || plan.visible > best.visible
+        || (plan.visible === best.visible && sectionRows > bestRows)) {
+        best = plan
+        bestShown = [...shown]
+        bestRows = sectionRows
+      }
+      return
+    }
+    const section = wanted[i]!
+    const compact = Math.max(0, Math.min(section.compact, section.full))
+    walk(i + 1, shown, sectionRows)
+    if (compact > 0 && compact < section.full) {
+      shown.push({ id: section.id, compact: true })
+      walk(i + 1, shown, sectionRows + compact)
+      shown.pop()
+    }
+    shown.push({ id: section.id, compact: false })
+    walk(i + 1, shown, sectionRows + section.full)
+    shown.pop()
+  }
+  walk(0, [], 0)
+  const plan = best ?? {
+    gaps: 4, sectionRows: 0, visible: 0, hidden: input.steps.length, showMore: false,
+    showSession: false, showEmpty: false, used: 0, sessionRows: 0, emptyRows: 0, slack: -1,
+  }
+  return {
+    visible: plan.visible,
+    hidden: plan.hidden,
+    showMore: plan.showMore,
+    showSession: plan.showSession,
+    showEmpty: plan.showEmpty,
+    shownSections: bestShown,
+    rows: plan.gaps + heading + plan.sectionRows + plan.sessionRows + plan.used
+      + (plan.showMore ? 1 : 0) + plan.emptyRows + footer,
+    capacity: inner,
+  }
+}
 
 describe('the goal bar paints the durable goal state', () => {
   test('title carries phase, disarmed activation and the round counter', () => {
