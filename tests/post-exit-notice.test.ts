@@ -78,22 +78,33 @@ describe('the wiring in index.tsx', () => {
     new URL('../packages/dsh-tui-app/src/post-exit-notice.ts', import.meta.url), 'utf8',
   )
 
+  // The leave WRITE expression, anchored on `writeSync(1, '…1049l')` rather than
+  // on a frozen prefix: the sequence legitimately grows (it now also closes the
+  // synchronized-output mode, see `__dshFrameEnvelope`), and pinning the whole
+  // literal made an added mode look like a missing write. The regex still cannot
+  // match the P2 comment above, which has no `writeSync(1, '`.
+  const LEAVE_WRITE_RE = /writeSync\(1, '[^']*\\x1b\[\?1049l'\)/
+
   test('the channel is armed immediately after the leave WRITE', () => {
-    // Anchor on the write expression, never on the first mention of the escape:
-    // `\x1b[?1049l` also appears in the P2 comment above (line ~3287), so an
-    // `indexOf` of the bare escape finds the comment and the guard would pass
-    // even if the real write wandered after the arm.
-    const leaveWrite = appSource.indexOf("writeSync(1, '\\x1b[0 q\\x1b[?25h\\x1b[?1049l')")
+    const m = LEAVE_WRITE_RE.exec(appSource)
+    expect(m, 'the leave write exists').not.toBeNull()
     const armed = appSource.indexOf('armPostExitNotices(flushPostExitNotices)')
-    expect(leaveWrite).toBeGreaterThan(-1)
-    expect(armed).toBeGreaterThan(leaveWrite)
+    expect(armed).toBeGreaterThan(m!.index)
   })
 
   test('both the leave and the notice are written synchronously', () => {
     // The order only holds because BOTH writes are sync: an async leave (a
     // Windows TTY, a POSIX pipe) could be overtaken by the sync notice.
-    expect(appSource).toContain("writeSync(1, '\\x1b[0 q\\x1b[?25h\\x1b[?1049l')")
-    expect(appSource).not.toContain("process.stdout.write('\\x1b[0 q\\x1b[?25h\\x1b[?1049l')")
+    expect(appSource, 'the leave is a sync write').toMatch(LEAVE_WRITE_RE)
+    // …and it must not ALSO be written asynchronously anywhere.
+    expect(appSource).not.toContain("process.stdout.write('\\x1b[0 q")
+    expect(appSource).not.toContain("process.stdout.write('\\x1b[?2026l")
+    // Every mode the leave opens/closes must be reset in that same write: the
+    // synchronized-output mode would leave a supporting terminal buffering.
+    const leave = LEAVE_WRITE_RE.exec(appSource)![0]
+    expect(leave, 'closes synchronized output').toContain('\\x1b[?2026l')
+    expect(leave, 'restores the cursor shape').toContain('\\x1b[0 q')
+    expect(leave, 're-shows the cursor').toContain('\\x1b[?25h')
     expect(noticesSource).toContain('writeSync(2, text)')
   })
 

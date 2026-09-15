@@ -76,10 +76,16 @@ describe('terminal-too-small input gate', () => {
     // hardcoded `height: 1` while its notice had been split into two rows (the
     // docked branch had been updated). Both branches must derive the height from
     // the very builder the render maps over, never from a literal.
+    // Scoped to `composerBand` itself: matching the first `if (!b.fits) return`
+    // anywhere in the panel let an unrelated guard in another function shadow the
+    // band this test is about.
+    const bandAt = PANEL.indexOf('function composerBand(')
+    expect(bandAt, 'composerBand exists').toBeGreaterThan(-1)
+    const BAND = PANEL.slice(bandAt, PANEL.indexOf('\nexport function ', bandAt + 1))
     const line = (needle: string): string => {
-      const at = PANEL.indexOf(needle)
-      expect(at, `${needle} exists`).toBeGreaterThan(-1)
-      return PANEL.slice(at, PANEL.indexOf('\n', at))
+      const at = BAND.indexOf(needle)
+      expect(at, `${needle} exists in composerBand`).toBeGreaterThan(-1)
+      return BAND.slice(at, BAND.indexOf('\n', at))
     }
     const heroBand = line('if (!b.fits) return')
     const dockedBand = line('if (!dockedFits(rows)) return')

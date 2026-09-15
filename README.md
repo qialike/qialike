@@ -64,6 +64,19 @@ are both black on a dark scheme — the palette has no second near-black to offe
 so that mode is degraded by design; see
 `dsh-tui-color-depth-fix-design.md` in the workspace for the measurements.
 
+### Frame repaints (cursor + synchronized output)
+
+Every frame **hides the hardware cursor for the paint** and ends with a suffix that
+restores the caret's shape and position, so the cursor is never dragged (visible)
+across the rows a repaint touches. Each frame is also bracketed by the terminal's
+**synchronized output** mode (`ESC[?2026h` … `ESC[?2026l`). A frame is a full-width
+repaint — opening the command palette measures ~4.4 KB at 120×30 and ~5.7 KB at
+240×30 — and a pty hands writes larger than its ~4095-byte line-discipline buffer
+to the terminal in instalments, so without the mode a half-painted frame is
+briefly visible (the composer card's chrome showing through the popup). Terminals
+that do not know the mode ignore it; if one mishandles it, `DSH_TUI_NO_SYNC=1`
+writes plain frames.
+
 ## Build
 
 ```sh

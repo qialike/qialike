@@ -11,6 +11,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
+  HERO_AREA_PADDING_Y,
   HERO_ART_MIN_WIDTH,
   HERO_CAPTION_URL,
   HERO_COMPOSER_EXTRA_ROWS,
@@ -38,11 +39,17 @@ import {
   heroTooSmallLines,
   HERO_TITLE_CARD_GAP,
   heroLayout,
+  paletteBoxRows,
+  paletteContentRows,
+  paletteWindow,
+  HERO_PALETTE_MAX_ROWS,
+  PALETTE_DOCKED_GAP,
   heroHintLine,
   heroHintText,
   heroWordmarkFits,
 } from '../packages/dsh-tui-app/src/hero-layout.ts'
 import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
+import { COMPOSER_MIN_HEIGHT } from '../packages/dsh-tui-app/src/layout-budget.ts'
 
 const BASE = { rows: 30, boxH: 5, brandLines: HERO_WORDMARK.length + 1, hintLines: 1 }
 
@@ -414,5 +421,148 @@ describe('hero hint line (under the card)', () => {
     for (const ready of [false, true] as const) {
       expect(visualWidth(heroHintText(ready)!)).toBeLessThanOrEqual(widest)
     }
+  })
+})
+
+describe('the command palette box (paletteBoxRows)', () => {
+  const CARD_TOP = 23
+
+  test('docked: the box bottom clears the card by the documented gap', () => {
+    const box = paletteBoxRows({ hero: false, count: 14, bandTop: CARD_TOP })
+    expect(box.last).toBe(CARD_TOP - PALETTE_DOCKED_GAP)
+    // Bordered box: count content rows between the two borders.
+    expect(box.last - box.first + 1).toBe(14 + 2)
+    // The content rows are exactly the ones the mouse mapping always used
+    // (`bandTop − n − 3` first), so pointer routing is unchanged in this view.
+    expect(box.first + 1).toBe(CARD_TOP - 14 - 3)
+  })
+
+  test('hero: the box bottom is the area bottom minus the render lift', () => {
+    const l = heroLayout(BASE)
+    const box = paletteBoxRows({
+      hero: true, count: 14, rows: BASE.rows, heroLift: l.paletteBottomMargin,
+    })
+    // MEASURED against the painted screen (see `paletteBoxRows`): the overlay's
+    // coordinate space is the padded AREA starting at screen row 1, so the box
+    // bottom is `areaRows − lift` — NOT `rows − padding − lift`, which was one row
+    // low on every size probed.
+    expect(box.last).toBe(heroAreaRows(BASE.rows) - l.paletteBottomMargin)
+    expect(box.last - box.first + 1).toBe(14 + 2)
+  })
+
+  test('no commands means nothing is painted (empty range)', () => {
+    const box = paletteBoxRows({ hero: true, count: 0, rows: BASE.rows, heroLift: 0 })
+    expect(box.last).toBeLessThan(box.first)
+  })
+
+  /**
+   * The reported regression: the popup is bottom-anchored and grows UPWARD, so a
+   * WIDE list covers the input row (caret hidden — the block caret must not blink
+   * through the popup) while a NARROW list sits across the card's lower rows and
+   * leaves the input row visible. The caret's visibility is decided from this
+   * overlap, so a narrow list must NOT report coverage.
+   */
+  test('a narrow hero list does not cover the input row; a wide one does', () => {
+    // The REAL hero card height: `composerMinHeight()` is COMPOSER_MIN_HEIGHT (5)
+    // plus HERO_COMPOSER_EXTRA_ROWS — the two-row hero input box. Using BASE's
+    // 5-row card here moved the card one row and inverted this boundary, which is
+    // why the fixture height is asserted rather than assumed.
+    const boxH = COMPOSER_MIN_HEIGHT + HERO_COMPOSER_EXTRA_ROWS
+    expect(boxH).toBe(6)
+    const l = heroLayout({ ...BASE, boxH })
+    const caretRow = l.composerTopRow + 1 // the card's first content (input) row
+    const covers = (count: number): boolean => {
+      const box = paletteBoxRows({
+        hero: true, count, rows: BASE.rows, heroLift: l.paletteBottomMargin,
+      })
+      return caretRow >= box.first && caretRow <= box.last
+    }
+    // One match + no footer: the box sits BELOW the input row, so the caret stays
+    // visible — measured on the real binary (`/help` → `visible=True`).
+    expect(covers(1)).toBe(false)
+    // Two content rows already grow the top border up onto the input row.
+    expect(covers(2)).toBe(true)
+    expect(covers(14)).toBe(true)
+    // The hider must never claim coverage the paint cannot back: the input row is
+    // inside the card, which the popup can only reach by growing up from its own
+    // anchored bottom.
+    expect(l.composerTopRow).toBeLessThanOrEqual(l.composerBottomRow)
+  })
+})
+
+describe('the palette window (paletteWindow / paletteContentRows)', () => {
+  test('every match is shown when the list fits the cap', () => {
+    const w = paletteWindow(3, 0, 8)
+    expect(w).toEqual({ first: 0, visible: 3, hidden: 0 })
+    expect(paletteContentRows(w.visible, w.hidden)).toBe(3)
+  })
+
+  test('a list longer than the cap is sliced and reports its remainder', () => {
+    const w = paletteWindow(14, 0, HERO_PALETTE_MAX_ROWS)
+    expect(w.first).toBe(0)
+    expect(w.visible).toBe(HERO_PALETTE_MAX_ROWS)
+    expect(w.hidden).toBe(14 - HERO_PALETTE_MAX_ROWS)
+    // The footer row that reports the remainder is part of the box.
+    expect(paletteContentRows(w.visible, w.hidden)).toBe(HERO_PALETTE_MAX_ROWS + 1)
+  })
+
+  test('the window slides only as far as the selection requires', () => {
+    const max = HERO_PALETTE_MAX_ROWS
+    // Inside the window: it must not move (the list cannot jump under the user).
+    for (let i = 0; i < max; i++) expect(paletteWindow(14, i, max).first).toBe(0)
+    // Past the bottom edge it follows, one row at a time, and stops at the end.
+    expect(paletteWindow(14, max, max).first).toBe(1)
+    expect(paletteWindow(14, max + 2, max).first).toBe(3)
+    expect(paletteWindow(14, 13, max).first).toBe(14 - max)
+    // An out-of-range index WRAPS (the store's selection cycles), so the window
+    // follows the wrapped row instead of running off the end.
+    expect(paletteWindow(14, 99, max).first).toBe(paletteWindow(14, 99 % 14, max).first)
+  })
+
+  test('the selected row is always inside the painted window', () => {
+    const max = 5
+    for (let count = 1; count <= 20; count++) {
+      for (let i = -3; i <= count + 3; i++) {
+        const w = paletteWindow(count, i, max)
+        const sel = ((i % count) + count) % count
+        expect(sel, `count=${count} i=${i}`).toBeGreaterThanOrEqual(w.first)
+        expect(sel, `count=${count} i=${i}`).toBeLessThan(w.first + w.visible)
+        expect(w.first + w.visible, 'never past the end').toBeLessThanOrEqual(count)
+      }
+    }
+  })
+
+  test('an empty match list paints nothing', () => {
+    expect(paletteWindow(0, 0, 8)).toEqual({ first: 0, visible: 0, hidden: 0 })
+    expect(paletteContentRows(0, 0)).toBe(0)
+  })
+
+  test('the docked popup is uncapped (cap = count), so nothing is hidden', () => {
+    const w = paletteWindow(14, 13, 14)
+    expect(w).toEqual({ first: 0, visible: 14, hidden: 0 })
+    expect(paletteContentRows(w.visible, w.hidden)).toBe(14)
+  })
+
+  /**
+   * The reported flash: the hero popup is lifted ONTO the card, and the frame
+   * carrying a full 14-command palette is 4573 bytes — more than the tty hands
+   * over in one 4095-byte instalment, so the card's status row showed through the
+   * half-drawn box for one round trip. The bounded window must keep the box (and
+   * so the frame) small; this pins the row budget that achieves it.
+   */
+  test('the hero box stays within the budget that avoids the tty instalment split', () => {
+    const l = heroLayout(BASE)
+    const w = paletteWindow(14, 0, HERO_PALETTE_MAX_ROWS)
+    const box = paletteBoxRows({
+      hero: true,
+      count: paletteContentRows(w.visible, w.hidden),
+      rows: BASE.rows,
+      heroLift: l.paletteBottomMargin,
+    })
+    // The popup must not reach the card's first content row any more, which is
+    // the band the user saw: `content = visible + footer = 9`, borders included
+    // the box spans 11 rows.
+    expect(box.last - box.first + 1).toBe(HERO_PALETTE_MAX_ROWS + 1 + 2)
+    expect(box.last - box.first + 1).toBeLessThan(14 + 2)
   })
 })

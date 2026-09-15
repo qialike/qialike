@@ -70,6 +70,10 @@ import {
   heroNoticeText,
   heroMarkRows,
   heroTooSmallLines,
+  HERO_PALETTE_MAX_ROWS,
+  paletteBoxRows,
+  paletteContentRows,
+  paletteWindow,
   type HeroBudget,
   type HeroMarkKind,
 } from '../hero-layout.ts'
@@ -99,11 +103,20 @@ export const name = 'tui-panel-conversation'
  *  a second store instance, so the store is fetched through the service seam. */
 let store!: Store
 
-/** Whether the COMMAND PALETTE is painted this frame (`/` + at least one
- *  match). Set by the render, read by {@link installFrameSuffix}: while the
- *  popup covers the composer card (hero — the card sits mid-screen and the
- *  popup is lifted onto it) the hardware caret must NOT blink through it. */
-let commandPaletteOpen = false
+/** The command palette's PAINTED box for this frame (1-based terminal rows,
+ *  both borders included), or null when it is not drawn. Set by the render from
+ *  the same numbers it paints with, read by {@link installFrameSuffix}: the
+ *  hardware caret must be parked at the composer and HIDDEN only while the popup
+ *  really covers its cell — a blanket "hero + palette open ⇒ hidden" hid the
+ *  caret even when a narrow palette had stopped covering the input row, which
+ *  reads as the cursor blinking somewhere else. */
+let commandPaletteBox: { first: number; last: number } | null = null
+
+/** The command slice the palette actually PAINTED this frame (`paletteWindow`),
+ *  or null when it is not drawn. Published by the same render as
+ *  {@link commandPaletteBox} so the mouse→row mapping reads the window that is on
+ *  screen — including which match sits on which row after sliding. */
+let commandPaletteWindow: { first: number; visible: number; hidden: number } | null = null
 
 /** The `tui` service must be available to register panels and commands. */
 export const inject = ['tui']
@@ -491,22 +504,46 @@ function filteredCommands(tui: TuiService): readonly CommandItem[] {
   })
 }
 
-/** Index of the command whose palette row occupies screen row `row`, or -1. The
- *  palette is a bottom-anchored bordered box just above the composer; this
- *  mirrors the layout math so a mouse click/wheel can drive it. */
-function commandPaletteIndexFromRow(row: number, tui: TuiService): number {
-  const n = filteredCommands(tui).length
-  if (n === 0) return -1
-  const width = process.stdout.columns ?? 80
-  const height = process.stdout.rows ?? 24
-  const band = composerBand(width, height)
-  // Palette box: bordered (2 rows) + n content rows, sitting just above the
-  // composer card. Docked: the box bottom is ~cardTop−3 (message-column
-  // paddingY + gap). Hero: the popup is centered on the card and lifted by
-  // `paletteBottomMargin`, so it rests DIRECTLY on the card's top border.
-  const contentFirst = store.hero ? band.top - n - 1 : band.top - n - 3
-  const idx = row - contentFirst
-  return (idx >= 0 && idx < n) ? idx : -1
+/** The command rows a palette paints for `count` matches with `index` selected:
+ *  the hero is bounded ({@link HERO_PALETTE_MAX_ROWS}) so its popup neither
+ *  covers the composer card's chrome nor grows the frame past the tty's
+ *  4095-byte instalment, while the docked popup floats over empty transcript and
+ *  shows every match. */
+function paletteWindowNow(count: number, index: number): { first: number; visible: number; hidden: number } {
+  return paletteWindow(count, index, store.hero ? HERO_PALETTE_MAX_ROWS : count)
+}
+
+/** The command palette's painted box for a terminal of `rows`/`width` showing
+ *  `content` rows (see {@link paletteContentRows}), or null when the active view
+ *  cannot paint it (the hero's too-small notice is up instead).
+ *
+ *  `lift` is the `paddingBottom` the render ACTUALLY hands to `renderPalette` (0
+ *  when docked), taken from the same `heroLayout` result the render paints with
+ *  rather than recomputed here: the hero's bottom spacer depends on the composer
+ *  card's live box height, which only the render knows, so a second derivation
+ *  can disagree with the paint by a row. */
+function paletteBoxNow(width: number, rows: number, content: number, lift: number): { first: number; last: number } | null {
+  if (content <= 0) return null
+  const band = composerBand(width, rows)
+  if (!store.hero) {
+    return paletteBoxRows({ hero: false, count: content, bandTop: band.top })
+  }
+  // Below the hero minimum the notice row is painted instead of the stack, so
+  // there is no popup to describe.
+  if (!heroBudgetNow(rows, width).fits) return null
+  return paletteBoxRows({ hero: true, count: content, rows, heroLift: lift })
+}
+
+/** Index of the command whose palette row occupies screen row `row`, or -1. Both
+ *  the box and the window come from the LAST render, which is what is on screen,
+ *  so a click can never land on a row other than the one under the pointer. The
+ *  hidden-remainder footer is not a command row and maps to -1. */
+function commandPaletteIndexFromRow(row: number, _tui: TuiService): number {
+  if (commandPaletteBox === null || commandPaletteWindow === null) return -1
+  // Command rows sit between the top border and the optional footer row.
+  const idx = row - (commandPaletteBox.first + 1)
+  if (idx < 0 || idx >= commandPaletteWindow.visible) return -1
+  return commandPaletteWindow.first + idx
 }
 
 /** Run the command at palette index `index`, taking the input's remainder as its
@@ -2516,8 +2553,16 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   )
 
   const isSlash = input.startsWith('/')
-  // Mirrors the palette's painted state for the frame suffix (caret hiding).
-  commandPaletteOpen = isSlash && filtered.length > 0
+  // The palette's painted geometry for THIS frame, published for the caret's
+  // coverage test and the mouse→row mapping (both must read what is on screen).
+  const paletteCount = isSlash ? filtered.length : 0
+  const paletteWin = paletteWindowNow(paletteCount, commandIndex)
+  commandPaletteWindow = paletteCount > 0 && paletteWin.visible > 0 ? paletteWin : null
+  // The SAME lift `renderPalette` is handed below (line `renderPalette(hero?…)`).
+  const paletteLift = hero?.paletteBottomMargin ?? 0
+  commandPaletteBox = commandPaletteWindow === null
+    ? null
+    : paletteBoxNow(width, store.rows, paletteContentRows(paletteWin.visible, paletteWin.hidden), paletteLift)
   const [hoverIndex, setHoverIndex] = useState(commandIndex)
   React.useEffect(() => setHoverIndex(commandIndex), [commandIndex])
   const effectiveIndex = filtered.length === 0 ? -1 : (hoverIndex % filtered.length)
@@ -3001,10 +3046,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const heroPaletteLeft = store.hero ? heroCardPad + HERO_CONTENT_ORIGIN : undefined
 
   const renderPalette = (lift: number): React.ReactNode =>
-    isSlash && filtered.length > 0 ? (
+    isSlash && filtered.length > 0 && paletteWin.visible > 0 ? (
     <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end" alignItems={store.hero ? 'flex-start' : undefined} paddingLeft={heroPaletteLeft} paddingBottom={lift}>
       <Box borderStyle="round" borderColor={theme.border} flexDirection="column" width={store.hero ? heroComposerWidth(store.width) : undefined}>
-        {filtered.map((c, i) => {
+        {filtered.slice(paletteWin.first, paletteWin.first + paletteWin.visible).map((c, i) => {
+          // `i` is local to the painted window; the SELECTED row is compared in
+          // absolute command indices.
+          const abs = paletteWin.first + i
           const line = `/${c.name} — ${c.hint}`
           // Ink Box has NO background, so a Box paddingX would leave the
           // transcript visible through the 2-char left/right margin. The
@@ -3024,11 +3072,28 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           const trail = '  '
           const fill = Math.max(1, contentW - visualWidth(line) - visualWidth(lead) - visualWidth(trail))
           return (
-            <Text key={c.name} color={i === effectiveIndex ? theme.accent : undefined} inverse={i === effectiveIndex} backgroundColor={theme.bg} wrap="truncate">
+            <Text key={c.name} color={abs === effectiveIndex ? theme.accent : undefined} inverse={abs === effectiveIndex} backgroundColor={theme.bg} wrap="truncate">
               {lead}{line}{' '.repeat(fill)}{trail}
             </Text>
           )
         })}
+        {/* Hidden-remainder footer: the hero window is bounded (see
+            HERO_PALETTE_MAX_ROWS), so the list must SAY that it is truncated —
+            otherwise the missing commands read as "these are all the commands".
+            It is a content row like any other (so the box geometry counts it),
+            but `commandPaletteIndexFromRow` maps it to -1: it is not a command,
+            and the mouse passes straight through it. */}
+        {paletteWin.hidden > 0 ? (() => {
+          const line = `… ${paletteWin.hidden} more — type to filter, ↑/↓ to scroll`
+          const contentW = Math.max(20, store.hero ? heroComposerWidth(store.width) - 2 : usable - 2)
+          const lead = '  '
+          const fill = Math.max(1, contentW - visualWidth(line) - visualWidth(lead) - 1)
+          return (
+            <Text key="palette-more" color={mutedReadable()} backgroundColor={theme.bg} wrap="truncate">
+              {lead}{line}{' '.repeat(fill)}{' '}
+            </Text>
+          )
+        })() : null}
       </Box>
     </Box>
   ) : null
@@ -3379,11 +3444,6 @@ export function installFrameSuffix(): void {
       return '\x1b[?25l'
     }
     const cell = composerCaretCell()
-    // The hero's command palette is lifted ONTO the card, so it covers the
-    // input row: keep the cursor parked at the caret cell (IME anchoring) but
-    // HIDDEN, otherwise the block caret blinks through the popup's text. In
-    // the docked phase the palette floats ABOVE the card and the caret stays
-    // visible in the draft, so nothing changes there.
     if (store.hero ? !heroBudgetNow(store.rows, store.width).fits : !dockedFits(store.rows)) {
       // Neither view can be positioned honestly in this window (see
       // `heroBudget` / `dockedFits`): the notice row is painted instead of the
@@ -3392,14 +3452,29 @@ export function installFrameSuffix(): void {
       // a 5-row terminal before the hero gate).
       return '\x1b[?25l'
     }
-    if (commandPaletteOpen && store.hero) {
-      return `\x1b[?25l${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
+    // The hero's command palette is lifted ONTO the card and grows UPWARD from a
+    // fixed bottom, so it covers the input row only while it is tall enough: a
+    // NARROW list (one or two matches) sits across the card's lower rows and
+    // leaves the input row fully visible. Hiding the caret there removed it from
+    // the box the user was typing in — reported as "the cursor blinks somewhere
+    // else" — so the decision is made from the popup's ACTUAL painted box
+    // (`commandPaletteBox`, published by the render) versus the caret's cell, not
+    // from by-view flags. While it really does cover the caret the cursor stays
+    // parked at the caret cell (IME anchoring) but HIDDEN, so the block caret
+    // cannot blink through the popup's text.
+    if (commandPaletteBox !== null && cell !== null
+        && cell.row >= commandPaletteBox.first && cell.row <= commandPaletteBox.last) {
+      return `\x1b[?25l\x1b[${cell.row};${cell.col}H`
     }
     // A session switch paints a centered banner over everything: the composer
     // caret belongs to the session being replaced, so keep the cursor hidden
     // until the new session owns the screen.
     if (store.sessionLoading !== null) return '\x1b[?25l'
-    return `\x1b[?25h\x1b[2 q${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}`
+    // Park while the cursor is still HIDDEN (the frame writer hides it for the
+    // paint — see `__dshFrameEnvelope` in the build), then reveal it. Emitting
+    // `?25h` first would flash the cursor at the last painted row for one round
+    // trip before this CUP moved it to the caret.
+    return `\x1b[2 q${cell === null ? '' : `\x1b[${cell.row};${cell.col}H`}\x1b[?25h`
   }
   ;(globalThis as unknown as { __dshTuiFrameSuffix?: () => string }).__dshTuiFrameSuffix = frameSuffix
 }

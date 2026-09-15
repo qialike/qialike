@@ -1053,6 +1053,44 @@ const __dshWriteFrame = (stdout, frame) => {
     }
     stdout.write(frame);
 };
+// Wrap one frame so the terminal presents it ATOMICALLY, with the cursor hidden
+// for the paint.
+//
+// Two defects share this one seam, both measured on a real pty:
+//
+//  1. CURSOR TRAVEL. The writer moves the cursor with a CUP before EVERY changed
+//     line and only appends its cursor suffix at the END of the frame, so the
+//     visibility in force during those CUPs is the PREVIOUS frame's (usually
+//     ?25h, the composer caret) — a VISIBLE cursor was dragged across every
+//     repainted row. Measured: 16 distinct rows visited while visible when typing
+//     / (17 in the docked view), 0 after hiding for the paint.
+//
+//  2. MID-FRAME TEARING. One frame is one write(), but a pty hands a large write
+//     to the terminal in line-discipline-sized instalments (4095 B measured
+//     here), so the terminal paints an intermediate picture. A frame's size
+//     scales with the terminal WIDTH — every painted line is padded to the full
+//     width — so it grows without bound: the palette-open frame measures 3777 B
+//     at 120x30, 4657 B at 200x60 and 10870 B at 240x30 (>=110 cols also turns on
+//     the Steps sidebar, which is painted in the same frame). Delivered in
+//     instalments, a half-painted palette exposed the composer card's status row
+//     and its block edge THROUGH the popup — the horizontal band the user reports
+//     as a flash that vanishes. Bounding the palette cannot remove this on its
+//     own, because the cost is the full-width repaint, not the popup's height.
+//
+// ESC[?2026h/l (DEC private mode 2026, "synchronized output") is the standard
+// answer: the terminal buffers everything between the pair and presents it in one
+// go, so a split delivery stops being visible at ANY frame size. Terminals
+// without the mode ignore it (an unrecognized DEC private mode is ignored), and
+// DSH_TUI_NO_SYNC=1 opts out. Hiding the cursor for the paint also costs
+// nothing: the suffix appended below decides the final state, so the caret still
+// ends up exactly where the app wants it. Only applied when a suffix will follow,
+// so a build without the hook can never leave the cursor hidden or the terminal
+// buffering.
+const __dshFrameEnvelope = (frame, suffix) => {
+    if (!suffix || frame === '') return frame;
+    const sync = (typeof process !== 'undefined' && process.env && process.env.DSH_TUI_NO_SYNC === '1') ? '' : '\\x1b[?2026h';
+    return sync + '\\x1b[?25l' + frame + suffix + (sync ? '\\x1b[?2026l' : '');
+};
 // Whether a frame carries any visible text (background fills and SGR-only rows
 // do not count). Used to hold back the first, empty frames — see below.
 const __dshFrameHasText = (lines) => {
@@ -1106,7 +1144,7 @@ const writeFullScreenFrame = (stdout, output) => {
     }
     writeFullScreenFrame._prev = lines;
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
-    if (suffix) frame += suffix;
+    if (suffix) frame = __dshFrameEnvelope(frame, suffix);
     if (frame !== '') __dshWriteFrame(stdout, frame);
     if (typeof globalThis !== 'undefined' && typeof globalThis.__dshCharScan === 'function' && changedLines.length > 0) {
         globalThis.__dshCharScan(changedLines);
@@ -1125,7 +1163,7 @@ globalThis.__dshCalibrationFlush = () => {
     for (let i = 0; i < pending.length; i++) frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(pending[i]);
     if (pending.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J';
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
-    if (suffix) frame += suffix;
+    if (suffix) frame = __dshFrameEnvelope(frame, suffix);
     if (frame !== '') __dshWriteFrame(process.stdout, frame);
     writeFullScreenFrame._prev = pending;
     if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
@@ -1148,7 +1186,7 @@ globalThis.__dshTuiRepaintLastFrame = () => {
     for (let i = 0; i < prevLines.length; i++) frame += '\\x1b[' + (i + 1) + ';1H\\x1b[2K' + paint(prevLines[i]);
     if (prevLines.length > 0) frame += (bgHex ? __dshBgSeq(bgHex) : '') + '\\x1b[0J';
     const suffix = typeof globalThis.__dshTuiFrameSuffix === 'function' ? globalThis.__dshTuiFrameSuffix() : '';
-    if (suffix) frame += suffix;
+    if (suffix) frame = __dshFrameEnvelope(frame, suffix);
     if (frame !== '') __dshWriteFrame(process.stdout, frame);
     if (typeof globalThis !== 'undefined') globalThis.__dshTuiLastFlushAt = Date.now();
 };

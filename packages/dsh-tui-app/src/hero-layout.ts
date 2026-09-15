@@ -170,8 +170,14 @@ export interface HeroLayout {
   composerTopRow: number
   /** Last border row of the centered composer card. */
   composerBottomRow: number
-  /** Rows below the composer inside the hero area (gap + hints + bottom spacer
-   *  + footer): the command palette lifts by this much to sit on the card. */
+  /** Rows between the BOTTOM of the hero area and the command popup's bottom
+   *  edge: the popup is bottom-anchored, so this is the lift the render hands to
+   *  `renderPalette` and the popup grows UPWARD from there. `hintBlock +
+   *  bottomSpacer + footerLines` clears everything BELOW the card, which parks
+   *  the popup's bottom just above the card's own last row — i.e. lifted ONTO the
+   *  card, covering its lower rows (that overlap is what lets a full 14-command
+   *  list fit above an already-tall hero stack). The popup's actual row range
+   *  comes from {@link paletteBoxRows}, never from this number alone. */
   paletteBottomMargin: number
   /** Content rows available inside the padded hero area. */
   areaRows: number
@@ -338,6 +344,117 @@ export function heroMinRows(minBoxH: number): number {
  */
 export function heroTooSmallLines(minBoxH: number): readonly [string, string] {
   return tooSmallNoticeLines(heroMinRows(minBoxH))
+}
+
+/**
+ * Rows the DOCKED command palette leaves BELOW its box: the message column's
+ * `paddingY` (1) plus the gap between the transcript and the card (2) — the
+ * docked popup floats just above the card and never reaches it. The hero leaves
+ * `{@link HeroLayout.paletteBottomMargin}` instead (it lifts the popup ONTO the
+ * card).
+ */
+export const PALETTE_DOCKED_GAP = 3
+
+/** Inputs of {@link paletteBoxRows}. */
+export interface PaletteBoxInput {
+  /** True while the hero is up (the popup is lifted onto the card, so its box
+   *  bottom is measured from the bottom of the hero area). */
+  hero: boolean
+  /** Content rows painted inside the box (commands plus the hidden-remainder
+   *  footer — see {@link paletteContentRows}; 0 = no popup). */
+  count: number
+  /** Terminal rows — required for the hero (the lift is measured from the area's
+   *  bottom edge). */
+  rows?: number
+  /** Hero: the lift the render passes to the popup
+   *  ({@link HeroLayout.paletteBottomMargin}). */
+  heroLift?: number
+  /** Docked: the composer card's first painted row ({@link HeroLayout.composerTopRow}). */
+  bandTop?: number
+}
+
+/**
+ * The row range the command palette's bordered box ACTUALLY occupies (1-based
+ * terminal rows, both borders included), or an empty range when nothing is
+ * painted.
+ *
+ * ONE source for the three consumers that must agree about the popup: the paint
+ * (which passes the lift/`bandTop` in), the caret's visibility
+ * (`installFrameSuffix` — the hardware caret must be hidden only when the popup
+ * really covers its cell) and the mouse→row mapping
+ * (`commandPaletteIndexFromRow`). Deriving them separately is exactly how the
+ * caret came to be hidden while the popup was nowhere near it: the visibility
+ * rule assumed "hero + palette open ⇒ the input row is covered", but the popup
+ * grows UPWARD from a fixed bottom, so a NARROW palette (a few matches) stops
+ * covering the input row while the caret stayed hidden.
+ *
+ * @param input - see {@link PaletteBoxInput}.
+ * @returns the box's first/last row; `last < first` when `count` is 0.
+ */
+export function paletteBoxRows(input: PaletteBoxInput): { first: number; last: number } {
+  // Nothing is painted without a content row: an empty range, so every
+  // containment test against it is false by construction.
+  if (input.count <= 0) return { first: 1, last: 0 }
+  const bottom = input.hero
+    // The popup is bottom-anchored inside the hero's padded AREA: Yoga positions
+    // the absolute overlay against that box's own coordinate space, whose row 1
+    // is screen row 1 and whose height is {@link heroAreaRows}. MEASURED against
+    // the painted screen at 120x30, 100x26, 160x50, 80x24, 120x18 and 140x40 (the
+    // `╭`/`╰` rows the writer actually emits): `areaRows − lift` reproduces the
+    // bottom border on all six, while `rows − padding − lift` was one row LOW on
+    // every one — which silently mis-mapped every palette click by a row and made
+    // the caret's coverage test reason about a box that was not on screen.
+    ? heroAreaRows(input.rows ?? 0) - (input.heroLift ?? 0)
+    : (input.bandTop ?? 0) - PALETTE_DOCKED_GAP
+  // A bordered box: `count` content rows between a top and a bottom border.
+  return { first: bottom - input.count - 1, last: bottom }
+}
+
+/** Command rows the HERO palette paints at most; the rest stay reachable by
+ *  typing a filter or with ↑/↓.
+ *
+ *  Why the hero is bounded and the docked popup is not: the hero popup is lifted
+ *  ONTO the card, so every row it grows upward covers a row of the composer card,
+ *  and a full 14-command list spanned 16 rows. Measured on a real pty, that frame
+ *  is 4573 bytes and the tty hands it to the terminal in 4095-byte instalments:
+ *  the first instalment stopped one row short of the box, so for one round trip
+ *  the palette's bottom border was missing and the card's status row
+ *  (`🔒 Workspace Write (Tab) … Model: …`) plus its `▀▀▀` edge showed THROUGH the
+ *  half-drawn popup — a horizontal band that flashed and vanished. A bounded
+ *  window keeps the box (and with it the frame) small enough to arrive in one
+ *  instalment, and keeps the popup clear of the card's chrome. The docked popup
+ *  floats over empty transcript, where the same half-frame reveals nothing. */
+export const HERO_PALETTE_MAX_ROWS = 8
+
+/** Content rows a palette box paints: the command rows plus the single footer
+ *  row that reports the hidden remainder (see {@link paletteWindow}). */
+export function paletteContentRows(visible: number, hidden: number): number {
+  return Math.max(0, visible) + (hidden > 0 ? 1 : 0)
+}
+
+/**
+ * The slice of the command list a palette shows, keeping the SELECTED row
+ * visible with minimal sliding.
+ *
+ * @param count - matches after the filter.
+ * @param index - the selected match (any integer; it is wrapped here).
+ * @param max - largest number of command rows to show (≥1).
+ * @returns `first` (index of the first painted match), `visible` (how many rows
+ *   are painted) and `hidden` (how many remain, reachable by filtering/scrolling).
+ */
+export function paletteWindow(count: number, index: number, max: number): {
+  first: number
+  visible: number
+  hidden: number
+} {
+  if (count <= 0) return { first: 0, visible: 0, hidden: 0 }
+  const limit = Math.max(1, Math.min(max, count))
+  const sel = ((index % count) + count) % count
+  // Slide only as far as the selection requires: while it is inside the window
+  // the window stays put (so the list never jumps under the user), and past the
+  // bottom edge it follows one row at a time.
+  const first = sel < limit ? 0 : Math.min(sel - limit + 1, count - limit)
+  return { first, visible: limit, hidden: count - limit }
 }
 
 /**

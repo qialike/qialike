@@ -3917,7 +3917,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       ;(globalThis as { __dshTuiSyncFrameWriter?: (frame: string) => void }).__dshTuiSyncFrameWriter =
         (frame: string): void => { writeSync(1, frame) }
       void app.unmount()
-      try { writeSync(1, '\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
+      // `?2026l` first: every frame is wrapped in the synchronized-output mode
+      // (see `__dshFrameEnvelope` in the build), and a terminal left inside it
+      // would hold its buffer and look frozen. Each frame closes the mode in the
+      // same write, so this is a belt for the exit path only.
+      try { writeSync(1, '\x1b[?2026l\x1b[0 q\x1b[?25h\x1b[?1049l') } catch { /* ignore */ }
     })
     // Registered AFTER the leave writer above, so every notice queued through
     // the channel is written once the alternate screen is gone — the only place
