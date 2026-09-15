@@ -22,6 +22,11 @@
 - 一份 DeepSeek Harness 检出（`DSH_HARNESS`，默认 `../deepseek-harness`；仅 `pnpm build` 需要，运行编译好的 `dist/dsh-tui` 无需检出）
 - 跑真实会话时需要 `DEEPSEEK_API_KEY`（环境变量、`~/.dsh` 设置或 `.env`）
 - **内存**（2026-09-14 在 `0.4.15-beta` 上实测；整棵进程树、静置 12 s）：编译后的单文件可执行体启动 hero 峰值约 **250–290 MB**、加载超大会话约 **330–345 MB**，稳态常驻 **约 170 MB（hero）–225 MB（长会话）**；只读打开一个 30 MB（压缩）的转录峰值约 **320 MB**、随后稳定在约 **220 MB**。建议 **≥1 GB** 内存；512 MB 可用但偏紧（超长转录没有 swap 余量），低于 512 MB 不支持。运行时是 Bun/JSC，不会及时把已释放页面还给系统，所以 RSS 随使用缓慢上升后趋于平台——**这是 GC 策略，不是泄漏**（实测：同一负载下开 `BUN_JSC_collectContinuously=1`，RSS 不升反降）。内存紧张时该环境变量就是官方缓解手段，代价是 GC 更频繁。
+- **Linux 沙箱前置**：受限 `bash` 经 `bwrap`（**bubblewrap**，需宿主自行安装）运行，并要求内核开启
+  非特权 user namespace。缺失时应用照常启动、非 shell 工具全部可用，但 `workspace-write` / `read-only`
+  下**每条 bash 都 fail-closed 报 `SANDBOX_UNAVAILABLE`**，只有 `danger-full-access`（无隔离）能跑。
+  macOS 用系统自带 Seatbelt，Windows 无 OS 级进程沙箱。**dsh-tui 不使用 LandLock**：单文件构建把原生
+  launcher stub 成不可用，Linux 固定落到 bwrap 档（harness 自身是 bwrap → Landlock 两级）。
 
 ### 终端颜色档位
 

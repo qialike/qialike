@@ -34,6 +34,13 @@ bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
   `BUN_JSC_collectContinuously=1` RSS goes *down* during the same workload). On a
   memory-constrained box that flag is the supported mitigation, at the cost of
   more frequent GC.
+- **Linux sandbox**: the confined `bash` rung runs through `bwrap` (**bubblewrap**), which must be
+  installed on the host, and it needs a kernel with unprivileged user namespaces. Without it the app
+  still boots and every non-shell tool works, but each `workspace-write` / `read-only` bash call
+  fails closed (`SANDBOX_UNAVAILABLE`); only `danger-full-access` (unconfined) runs. macOS uses the
+  built-in Seatbelt; Windows has no OS-level process sandbox. **LandLock is not used** by dsh-tui:
+  the single-file build stubs the native launcher as unusable, so Linux always takes the bwrap rung
+  (the harness itself is bwrap → Landlock).
 
 ### Terminal colour depth
 
