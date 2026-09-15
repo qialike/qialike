@@ -1779,7 +1779,7 @@ function colToChar(line: string, col: number): number {
 }
 
 /** The caret's GLOBAL visual row (0-based over ALL wrapped input rows). */
-function composerCaretGlobalRow(input: string, cursor: number, usable: number): number {
+export function composerCaretGlobalRow(input: string, cursor: number, usable: number): number {
   const caret = Math.max(0, Math.min(cursor, input.length))
   return Math.max(0, composerWrap(input.slice(0, caret), usable).length - 1)
 }
