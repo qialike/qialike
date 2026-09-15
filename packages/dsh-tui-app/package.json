@@ -74,6 +74,10 @@
       "types": "./lib/types/selftest.d.ts",
       "default": "./lib/selftest.js"
     },
+    "./file-reference": {
+      "types": "./lib/types/file-reference.d.ts",
+      "default": "./lib/file-reference.js"
+    },
     "./image-attach": {
       "types": "./lib/types/image-attach.d.ts",
       "default": "./lib/image-attach.js"

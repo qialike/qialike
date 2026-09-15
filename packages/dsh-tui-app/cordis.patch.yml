@@ -39,6 +39,25 @@
     - id: workspace
       name: '@deepseek-ai/dsh-workspace'
 
+# `@file` references (composer `@` completion). The web bundle mounts this row
+# itself (packages/bundle/web-app/cordis.patch.yml); the TUI profile has to ask
+# for it, otherwise `ctx.fileReferences` does not exist and the composer's `@`
+# palette has nothing to search with. It provides the host-side candidate search
+# (`WorkspaceFileSearch`: 20 rows per query, 50k indexed entries, fixed
+# directory excludes — no .gitignore semantics) AND installs the model-facing
+# `FILE_REFERENCE_PROMPT` section on each agent that has the `read` tool, so the
+# `@path` text the composer inserts is understood exactly as it is in the web UI.
+- insert:
+    - id: file-reference-local
+      name: '@deepseek-ai/dsh-file-reference-local'
+
+# The `@file` palette itself: a child plugin of THIS bundle. It owns an overlay
+# panel (`file-refs`) and the `@`-token detection, and searches through the
+# `fileReferences` row above; the conversation panel needs no knowledge of it.
+- insert:
+    - id: tui-file-reference
+      name: '@yourname/dsh-tui-app/file-reference'
+
 # ── OS-level sandbox: bwrap (Linux) / Seatbelt (macOS) / ACL (Windows) ──────
 #
 # The SEA single file cannot bundle the Linux-only landlock native addon, so
