@@ -18,6 +18,7 @@ import { Box, Text } from 'ink'
 import React, { useRef } from 'react'
 import type { DOMElement } from 'ink'
 import { useListGeometry, dialogListIndexFromRow, dialogListContains } from './list-geometry.ts'
+import { handleDialogPaste } from './clipboard.ts'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TuiService, Store, SessionSummary } from './index.tsx'
 import { truncateWide } from './markdown.tsx'
@@ -220,6 +221,8 @@ function sessionsKey(k: RawKey, reload: () => void): void {
       store.cancelSessionsRename()
     } else if (k.backspace || k.delete) {
       store.sessionsRenameBackspace()
+    } else if (handleDialogPaste(k, store, (text) => store.sessionsRenameType(text), { singleLine: true, maxChars: 120 })) {
+      return
     } else if (char) {
       store.sessionsRenameType(char)
     }
@@ -302,6 +305,7 @@ function sessionsKey(k: RawKey, reload: () => void): void {
     store.sessionsFilterBackspace()
     return
   }
+  if (handleDialogPaste(k, store, (text) => { store.cancelSessionsDelete(); clearNotice(); store.sessionsFilterType(text) }, { singleLine: true, maxChars: 120 })) return
   if (char) {
     store.cancelSessionsDelete()
     clearNotice()

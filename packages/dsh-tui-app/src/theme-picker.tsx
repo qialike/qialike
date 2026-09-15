@@ -22,6 +22,7 @@ import React, { useRef } from 'react'
 import { Box, Text } from 'ink'
 import type { DOMElement } from 'ink'
 import { useListGeometry, dialogListIndexFromRow, dialogListContains } from './list-geometry.ts'
+import { handleDialogPaste } from './clipboard.ts'
 import type { Store } from './index.tsx'
 import type { RawKey } from './stdin.ts'
 import { theme, type ThemePalette } from './theme.ts'
@@ -159,6 +160,14 @@ export function themePickerKey(k: RawKey, store: Store, api: ThemePickerApi): bo
       }
       preview()
     }
+    return true
+  }
+  // Paste into the filter (bracketed paste, or a right-click): the picker keeps
+  // its filter in local state, so it appends the sanitised text itself.
+  if (k.paste !== undefined || k.mouseRightPress !== undefined) {
+    const before = state.filter
+    handleDialogPaste(k, store, (text) => { state.filter = (before + text).slice(0, 64); state.index = 0; preview() },
+      { singleLine: true, maxChars: 64 })
     return true
   }
   if (k.char !== undefined && k.char.length === 1 && !k.ctrl && !k.meta && k.char >= ' ') {

@@ -17,6 +17,7 @@ import { TUI_MODELS_SERVICE, type ModelsProviderOption, type TuiModelsService } 
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 import { useListGeometry, dialogListIndexFromRow, dialogListContains } from '../list-geometry.ts'
+import { handleDialogPaste } from '../clipboard.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-models'
@@ -360,6 +361,10 @@ function connectKey(k: RawKey): boolean {
     return true
   }
   if (store.keyDialog) {
+    // Paste into the masked key field: a bracketed paste from the terminal, or a
+    // right-click (which reads the clipboard for us — see clipboard.ts). Neither
+    // closes the dialog; the hint has always promised "paste a single-line key".
+    if (handleDialogPaste(k, store, (text) => store.pushSecret(text), { singleLine: true })) return true
     if (k.return) {
       const done = store.keyDialogDone()
       if (done !== null) store.keyDialogSubmit(done.provider, done.name, done.key)
@@ -396,6 +401,8 @@ function connectKey(k: RawKey): boolean {
       else store.cancelProviderList()
     } else if (k.backspace || k.delete) {
       store.providerListFilterBackspace()
+    } else if (handleDialogPaste(k, store, (text) => store.providerListFilterType(text), { singleLine: true, maxChars: 120 })) {
+      return true
     } else if (char) {
       store.providerListFilterType(char)
     }
@@ -422,6 +429,9 @@ function connectKey(k: RawKey): boolean {
       store.providerFormBackspace()
     } else if (k.escape || (k.ctrl && char === 'c')) {
       store.cancelProviderForm()
+    } else if (store.providerField !== 0
+      && handleDialogPaste(k, store, (text) => store.providerFormType(text), { singleLine: true, maxChars: 512 })) {
+      return true
     } else if (char) {
       store.providerFormType(char)
     }
@@ -482,6 +492,8 @@ function connectKey(k: RawKey): boolean {
       else store.cancelProviderModels()
     } else if (k.backspace || k.delete) {
       store.modelFilterBackspace()
+    } else if (handleDialogPaste(k, store, (text) => store.modelFilterType(text), { singleLine: true, maxChars: 120 })) {
+      return true
     } else if (char) {
       store.modelFilterType(char)
     }
@@ -526,6 +538,8 @@ function connectKey(k: RawKey): boolean {
     else store.cancelConnect()
   } else if (k.backspace || k.delete) {
     store.providerFilterBackspace()
+  } else if (handleDialogPaste(k, store, (text) => store.providerFilterType(text), { singleLine: true, maxChars: 120 })) {
+    return true
   } else if (char) {
     store.providerFilterType(char)
   }

@@ -41,6 +41,7 @@ import {
 import { pointerRegion, composerStripRows, messageRightFor, type PointerRegion } from '../pointer-region.ts'
 import { isPlanReview, questionPresentation } from '../plan-review.ts'
 import { stripTerminalControls } from '../terminal-safe.ts'
+import { handleDialogPaste } from '../clipboard.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-question'
@@ -878,6 +879,8 @@ function revealOption(index: number): void {
       store.questionBackspace()
     } else if (k.delete) {
       store.questionDelete()
+    } else if (handleDialogPaste(k, store, (text) => store.questionType(text), { maxChars: 8192 })) {
+      return true
     } else if (char) {
       store.questionType(char)
     }

@@ -22,6 +22,8 @@ function fakeStore(): Store & { calls: string[] } {
     rows: 40,
     setPanel: (p: string) => calls.push(`panel:${p}`),
     append: (_kind: string, text: string) => calls.push(`append:${text}`),
+    // The paste path flashes what it did (the real Store has this too).
+    flashStatus: (text: string) => calls.push(`flash:${text}`),
   }
   return store as never as Store & { calls: string[] }
 }
@@ -135,21 +137,27 @@ describe('theme picker dialog', () => {
     expect(api.applied.at(-1)).toBe('user-x')
   })
 
-  test('right-click does NOTHING in the picker (user call 2026-09-14)', () => {
-    // Right-click used to mean Esc here (and in every popup, 2026-09-09). A stray
-    // right-click — also the terminal's own paste/context gesture — then threw the
-    // picker away, so the dialog now ignores it entirely; only Esc (and Ctrl+C)
-    // leave. `handleKey` consumes the press for every dialog panel, and this
-    // asserts the handler ITSELF does not act on it either.
+  test('a right-click PASTES into the filter and never cancels (user call 2026-09-15)', () => {
+    // Right-click meant Esc until 2026-09-14; it then became a complete no-op, and
+    // the user asked for the useful half back: paste, but never exit. The
+    // deterministic half is a bracketed paste (the same insertion path a
+    // right-click feeds); the right-click itself is asserted only for "does not
+    // cancel", because its clipboard read is environment-dependent (and unit-tested
+    // with an injected reader in tests/clipboard.test.ts).
     const store = fakeStore()
     const api = fakeApi()
     openThemePicker(store, api)
-    themePickerKey(key({ char: 'l' }), store, api) // filter 'l' → preview light
-    const before = api.applied.length
-    for (const _ of [0, 1]) themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
-    expect(api.applied.length).toBe(before) // no preview change, no filter clear
+    themePickerKey(key({ paste: 'light' }), store, api) // as if pasted from the clipboard
+    expect(api.applied.at(-1)).toBe('light') // the pasted filter previewed that scheme
+    const applied = api.applied.length
+    themePickerKey(key({ mouseRightPress: { row: 5, col: 10 } }), store, api)
     expect(api.restored).toHaveLength(0) // never cancelled
     expect(store.calls).not.toContain('panel:conversation') // still open
+    expect(api.applied.length).toBeGreaterThanOrEqual(applied) // paste may preview, never throws work away
+    // The press went through the paste path: it either pasted or said why not
+    // (the clipboard read is environment-dependent; tests/clipboard.test.ts pins
+    // the exact behaviour with an injected reader).
+    expect(store.calls.some((c) => c.startsWith('flash:pasted ') || c.startsWith('flash:clipboard'))).toBe(true)
     // Esc is unchanged: it clears the filter first, then cancels.
     themePickerKey(key({ escape: true }), store, api)
     expect(store.calls).not.toContain('panel:conversation') // step one: filter cleared

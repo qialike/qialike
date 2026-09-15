@@ -3207,16 +3207,22 @@ function handleKey(k: RawKey): void {
     // and it is the only thing on screen. (User decision, 2026-09-13.)
     return
   }
-  // A DIALOG never acts on a right-click (user call, 2026-09-14). Right-click used
-  // to mean Esc in every popup (2026-09-09) — so a stray right-click, which is
-  // also the terminal's own paste/context gesture, threw away an open popup or a
-  // half-typed API key. Only Esc (and Ctrl+C) leave a dialog now. The press is
-  // CONSUMED here, not merely dropped, so it cannot fall through to the
-  // conversation surface, and its paired release is swallowed at the top of this
-  // function: while a dialog is up a right-click is a complete no-op. The
-  // compaction cancel above stays — that is the conversation surface, not a
+  // A DIALOG never EXITS on a right-click (user call, 2026-09-14). It used to mean
+  // Esc in every popup (2026-09-09), so a stray right-click — which is also the
+  // terminal's own paste/context gesture — threw away an open popup or a
+  // half-typed API key; only Esc (and Ctrl+C) leave a dialog now. Since
+  // 2026-09-15 the press is not a blanket no-op either: it is handed to the
+  // dialog, whose text inputs PASTE the clipboard with it (clipboard.ts) — the
+  // only way to get a right-click paste while this app has mouse tracking on.
+  // Either way the branch RETURNS, so the press can never reach the conversation
+  // surface, and its paired release is swallowed at the top of this function.
+  // The compaction cancel above stays: that is the conversation surface, not a
   // dialog, and it is an escape hatch.
-  if (store.panel !== 'conversation' && k.mouseRightPress !== undefined) return
+  if (store.panel !== 'conversation' && k.mouseRightPress !== undefined) {
+    // Let the dialog paste with it (and stay open); never fall through.
+    tui.panels.byId(store.panel)?.handleKey?.(k, store)
+    return
+  }
   // A dialog LIST owns the mouse ONLY inside its own box. A hover or a wheel tick
   // anywhere else — the transcript visible around/behind the dialog — is consumed
   // and does nothing: it used to move the highlighted row, scroll the list, and on

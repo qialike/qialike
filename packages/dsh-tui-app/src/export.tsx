@@ -24,6 +24,7 @@ import React from 'react'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
+import { handleDialogPaste } from './clipboard.ts'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import type { TuiService, Store } from './index.tsx'
 import { readSessionEvents } from './session-files.ts'
@@ -339,6 +340,7 @@ function exportKey(k: RawKey): void {
   }
   if (store.exportField === 1) {
     if (k.backspace || k.delete) store.exportNameBackspace()
+    else if (handleDialogPaste(k, store, (text) => store.exportNameType(text), { singleLine: true, maxChars: 120 })) return
     else if (char) store.exportNameType(char)
   }
 }
