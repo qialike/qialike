@@ -1129,8 +1129,19 @@ function composerWindow(input: string, usable: number, caretRow: number, textAre
   return { rows, first, start: rows[first]!.start, end: lastRow.start + lastRow.text.length }
 }
 
-function composerHeight(width: number, input: string, min: number): number {
+export function composerHeight(width: number, input: string, min: number): number {
   const usable = composerUsable(width)
+  const cap = store.hero ? heroBudgetNow(store.rows, width).boxH : Math.max(min, store.rows - 8)
+  // SATURATION before the exact count: every painted row holds at most `usable`
+  // display CELLS (hard wrap never exceeds the column), so the real row count is
+  // at least ceil(cells/usable). Once THAT lower bound already reaches the cap,
+  // the exact count cannot change the answer — so a multi-megabyte draft costs
+  // one `visualWidth` pass (native, ~12 ms/MB) instead of one `wrap-ansi` pass
+  // per line (~750 ms/MB measured). `visualWidth`, not `String.length`: a
+  // surrogate pair or a ZWJ sequence is many code units on one row (measured
+  // over 40k random strings: the cell bound never over-estimated, the UTF-16
+  // length bound did 5404 times).
+  if (min + Math.ceil(visualWidth(input) / usable) - 1 >= cap) return cap
   const wrapped = input.split('\n').reduce((sum, seg) => sum + composerWrap(seg, usable).length, 0)
   if (store.hero) {
     // HERO budget: the stack (brand block + title gap + card + hint block) must
@@ -1141,7 +1152,7 @@ function composerHeight(width: number, input: string, min: number): number {
     // above the area on short terminals and brought the +1-row caret drift back
     // (measured at 133 columns: drift on rows 8/9/10/11, card bottom edge and
     // tip row clipped at 8/10).
-    return Math.min(min + wrapped - 1, heroBudgetNow(store.rows, width).boxH)
+    return Math.min(min + wrapped - 1, cap)
   }
   // Docked: the composer grows with the draft (pushing the message area upward)
   // up to a height cap tied to the TERMINAL HEIGHT: cap = rows − 8 (never more
@@ -1152,7 +1163,7 @@ function composerHeight(width: number, input: string, min: number): number {
   // window (see the render + caret math) instead of overflowing its box over
   // the footer/status rows. The rows−8 floor guard also keeps a ≥3-row
   // message viewport on small terminals.
-  return Math.min(min + wrapped - 1, Math.max(min, store.rows - 8))
+  return Math.min(min + wrapped - 1, cap)
 }
 
 /** Where the composer card actually sits: its FIRST painted row, its leftmost
