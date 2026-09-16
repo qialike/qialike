@@ -32,7 +32,7 @@ import { ManualCompactionError, type CompactionResult, type ManualCompactAgentCo
 import { createUserMessage, expandAssistantStream } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { projectKey, resolveSessionLogPath, sessionDir } from './session-files.ts'
+import { listSessionFiles, projectKey, resolveSessionLogPath, sessionDir, sessionInspector } from './session-files.ts'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { existsSync, readdirSync } from 'node:fs'
 import { probeSessionHead } from './session-head.ts'
@@ -2805,14 +2805,26 @@ export class Store {
     this.notify()
   }
   /** Refresh the /sessions dialog rows in place, keeping filter and highlight;
-   *  opens the dialog when it is not already open (background title folding). */
+   *  opens the dialog when it is not already open (background title folding).
+   *  The highlight follows the SELECTED SESSION, not its row index: a refresh
+   *  can drop rows (a folded `blank` bit hides an unused placeholder) or reorder
+   *  them (a pin), and an index that survived that would point at a different
+   *  session — Ctrl+F/Ctrl+D would then act on the wrong one. */
   refreshSessionsDialog(sessions: readonly SessionSummary[]): void {
+    const highlighted = this.sessionsFiltered[this._sessionsDialogIndex]?.id
     this._sessionsDialog = sessions
     if (this._panel !== 'sessions') {
       this._sessionsDialogIndex = 0
       this._sessionsFilter = ''
       this._sessionsSearch = []
       this._panel = 'sessions'
+    } else if (highlighted !== undefined) {
+      const at = this.sessionsFiltered.findIndex((row) => String(row.id) === String(highlighted))
+      this._sessionsDialogIndex = at >= 0
+        ? at
+        // The highlighted session is gone (deleted/hidden): stay in range rather
+        // than on a row that no longer exists.
+        : Math.min(this._sessionsDialogIndex, Math.max(0, this.sessionsFiltered.length - 1))
     }
     this.notify()
   }
@@ -3714,29 +3726,18 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // Flat launch (the default): REUSE this workspace's unused New Session
       // placeholder when one exists (web parity — no empty-session pile-up),
       // otherwise create one. Either way the launch shows the hero screen.
-      const persistence = ctx.get('sessionPersistence') as {
-        list?: (signal?: AbortSignal) => Promise<Array<{ id: SessionId; cwd?: string; createdAt?: number }>>
-        inspect?: (id: SessionId) => Promise<{ events: readonly unknown[] }>
-      } | undefined
-      if (persistence?.list !== undefined && persistence.inspect !== undefined) {
-        try {
-          const headers = listRowHeaders(await persistence.list())
-          const reused = await findReusableBlank(
-            { inspect: (id) => persistence.inspect!(id) },
-            headers,
-            config.workspace,
-            undefined,
+      try {
+        const { inspection, headers } = await blankReuseSource(ctx, config.workspace)
+        const reused = await findReusableBlank(inspection, headers, config.workspace, undefined)
+        if (reused !== undefined) {
+          nextHandle = await withResumeCorruptRetry(
+            () => agents.resume({ resumeSessionId: reused, agentOptions, setup }),
+            { retries: 2, waitMs: 250 },
           )
-          if (reused !== undefined) {
-            nextHandle = await withResumeCorruptRetry(
-              () => agents.resume({ resumeSessionId: reused, agentOptions, setup }),
-              { retries: 2, waitMs: 250 },
-            )
-            nextResumed = true
-          }
-        } catch {
-          // Listing/inspection/open failure falls back to a fresh session.
+          nextResumed = true
         }
+      } catch {
+        // Listing/inspection/open failure falls back to a fresh session.
       }
     }
     if (nextHandle === undefined) {
@@ -4834,23 +4835,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           store.append('status', 'already on a new (unused) session', true)
           return
         }
-        const persistence = ctx.get('sessionPersistence') as {
-          list?: (signal?: AbortSignal) => Promise<Array<{ id: SessionId; cwd?: string; createdAt?: number }>>
-          inspect?: (id: SessionId) => Promise<{ events: readonly unknown[] }>
-        } | undefined
         let reused: SessionId | undefined
-        if (persistence?.list !== undefined && persistence.inspect !== undefined) {
-          try {
-            const headers = listRowHeaders(await persistence.list())
-            reused = await findReusableBlank(
-              { inspect: (id) => persistence.inspect!(id) },
-              headers,
-              config.workspace,
-              sessionId,
-            )
-          } catch {
-            // Listing/inspection failure falls back to creating a fresh id.
-          }
+        try {
+          const { inspection, headers } = await blankReuseSource(ctx, config.workspace)
+          reused = await findReusableBlank(inspection, headers, config.workspace, sessionId)
+        } catch {
+          // Listing/inspection failure falls back to creating a fresh id.
         }
         // Open the next agent BEFORE tearing the old one down: a failed
         // open leaves the current session untouched.
@@ -5204,6 +5194,42 @@ async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestion
     // submitted.
     store.append('status', 'Question cancelled — answer not submitted', true)
     throw error
+  }
+}
+
+/**
+ * The inputs `findReusableBlank` needs for one workspace: the session rows and
+ * the `inspect` capability it folds to a blank bit.
+ *
+ * Both come from the persistence service when the running composition can
+ * answer, and from the session files otherwise. The files are not a corner
+ * case: harness 0.1.3 replaced `SessionPersistence.inspect` with the handle
+ * API, so a 0.1.5 composition lists rows but has NO `inspect` — reading only
+ * the service made every blank-reuse path silently skip and mint a fresh empty
+ * session per launch (`sessionInspector` owns that fallback).
+ * @param ctx - the runtime context (sessionPersistence).
+ * @param workspace - the workspace whose sessions to consider.
+ * @returns the candidate rows and the `inspect` adapter.
+ */
+async function blankReuseSource(
+  ctx: Context,
+  workspace: string,
+): Promise<{ inspection: SessionTitlesPersistence; headers: readonly SessionHeaderLike[] }> {
+  const persistence = ctx.get('sessionPersistence') as {
+    list?: (signal?: AbortSignal) => Promise<readonly unknown[]>
+    inspect?: (id: SessionId) => Promise<{ events: readonly unknown[] }>
+  } | undefined
+  const inspection = sessionInspector(persistence, workspace)
+  if (persistence?.list === undefined) {
+    return { inspection, headers: await listSessionFiles(workspace) }
+  }
+  try {
+    return { inspection, headers: listRowHeaders(await persistence.list()) }
+  } catch {
+    // A failing service list must not cost the reuse its candidate rows (nor
+    // block the launch): the file-backed listing is the same data source the
+    // /sessions dialog falls back to.
+    return { inspection, headers: await listSessionFiles(workspace) }
   }
 }
 

@@ -95,6 +95,15 @@ describe('sessionBlank / rememberBlank', () => {
     rememberTitle(sid('titled-id-1'), 'some task')
     expect(sessionBlank(sid('titled-id-1'))).toBe(false)
   })
+
+  test('a title outranks a recorded blank bit (renaming an unused placeholder)', () => {
+    // The HEAD probe records `blank: true` for an untitled placeholder; Ctrl+R
+    // then names it. The record must not keep the renamed session hidden.
+    rememberBlank(sid('renamed-id-1'), true)
+    expect(sessionBlank(sid('renamed-id-1'))).toBe(true)
+    rememberTitle(sid('renamed-id-1'), 'zz-renamed')
+    expect(sessionBlank(sid('renamed-id-1'))).toBe(false)
+  })
 })
 
 describe('hideUnselectedBlanks', () => {

@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 import { SessionLogReader, type DurableEvent } from './log-frames.ts'
-import type { SessionHeaderLike } from './session-titles.ts'
+import type { SessionHeaderLike, SessionTitlesPersistence } from './session-titles.ts'
 
 /** True for characters the jsonl backend keeps verbatim in path segments. */
 function isSafeSegmentChar(ch: string): boolean {
@@ -168,14 +168,47 @@ export function findSessionLogPath(cwd: string, id: SessionId): string | undefin
   return undefined
 }
 
+/** The `inspect` slice of `sessionPersistence` this module can fall back from
+ *  (harness ≤ 0.1.2 answered it; 0.1.3+ replaced it with the handle API). */
+export interface SessionInspectService {
+  inspect?(id: SessionId): Promise<{ events: readonly unknown[] }>
+}
+
+/**
+ * The `inspect` capability the blank-reuse paths need, taken from whichever
+ * source the RUNNING composition has.
+ *
+ * Harness 0.1.3 replaced `SessionPersistence.inspect` with the per-session
+ * handle API (`open`/`read`), and dsh-tui still accepts the whole
+ * `HARNESS_VERSION_MIN..MAX` range, so the service answers on 0.1.2 while the
+ * generation-aware file reader has to answer on 0.1.5. Probing the METHOD —
+ * never the service's presence — is what keeps both working: a composition with
+ * the service but without `inspect` looked "unavailable" to every caller, so
+ * the flat launch's blank reuse silently skipped and each launch minted a new
+ * empty session (the pile-up that reuse exists to prevent).
+ * @param service - `ctx.sessionPersistence`, when this composition has one.
+ * @param cwd - the workspace whose project directory holds the logs.
+ * @returns `inspect` backed by the service when it still offers one, else by
+ *   the session's log file.
+ */
+export function sessionInspector(
+  service: SessionInspectService | undefined,
+  cwd: string,
+): SessionTitlesPersistence {
+  if (typeof service?.inspect === 'function') {
+    return { inspect: (id) => service.inspect!(id) }
+  }
+  return { inspect: async (id) => ({ events: await readSessionEvents(cwd, id) }) }
+}
+
 /**
  * Read one session's whole durable log through the file-backed reader (highest
  * generation present, historical packed rows and current rows both decoded).
  *
- * This is the stand-in for `persistence.inspect` when this composition has no
- * local persistence service. Windowed so a giant log never lands in one slice
- * burst; callers that want the whole transcript (export, title folding) hold the
- * result on purpose.
+ * This is what {@link sessionInspector} delegates to when the persistence
+ * service has no `inspect` (harness 0.1.3+). Windowed so a giant log never
+ * lands in one slice burst; callers that want the whole transcript (export,
+ * title folding) hold the result on purpose.
  * @param cwd - the session's working directory (project key).
  * @param id - the session id.
  * @returns every event of the session, in log order.

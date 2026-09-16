@@ -73,7 +73,10 @@ export function listRowHeaders(rows: readonly unknown[]): SessionHeaderLike[] {
   return out
 }
 
-/** The slice of `sessionPersistence` this module needs. */
+/** The whole-log read this module needs. `findReusableBlank` is handed the
+ *  version-independent adapter (`sessionInspector` in session-files.ts: the
+ *  persistence service on harness ≤ 0.1.2, the session log file on 0.1.3+);
+ *  the title folds receive whatever their caller holds. */
 export interface SessionTitlesPersistence {
   inspect(id: SessionId): Promise<{ events: readonly unknown[] }>
 }
@@ -289,14 +292,16 @@ export function rememberBlank(id: SessionId, blank: boolean): void {
   shared.blank.set(String(id), blank)
 }
 
-/** The known blank bit: an explicit record, else `false` once a title exists
- *  (a title implies content), else `undefined` (unknown — callers treat an
- *  unknown row as ordinary history, never hiding it). */
+/** The known blank bit. A TITLE always means content and wins over the explicit
+ *  record — otherwise renaming an unused placeholder (Ctrl+R in /sessions) would
+ *  leave the recorded `blank: true` in force and the renamed session would stay
+ *  hidden as a placeholder. Without a title: the explicit record, else
+ *  `undefined` (unknown — callers treat an unknown row as ordinary history,
+ *  never hiding it). */
 export function sessionBlank(id: SessionId): boolean | undefined {
   ensureDiskLoaded()
-  const known = shared.blank.get(String(id))
-  if (known !== undefined) return known
-  return titleOf(id) === undefined ? undefined : false
+  if (titleOf(id) !== undefined) return false
+  return shared.blank.get(String(id))
 }
 
 /** Hide every UNUSED "New Session" placeholder except the selected one — the
@@ -318,7 +323,7 @@ export function hideUnselectedBlanks(
  * blank one targeting the same workspace"), newest activity first. Titled
  * sessions are skipped (content); untitled candidates are inspected and their
  * blank bit recorded. Bounded to the newest `limit` candidates.
- * @param persistence - sessionPersistence service (inspect).
+ * @param persistence - the whole-log `inspect` source for these candidates.
  * @param headers - rows from `persistence.list()`.
  * @param cwd - the workspace directory the blank must belong to.
  * @param excludeId - a session id never to reuse (the current one).
@@ -418,7 +423,7 @@ function buildRows(
  * Fold titles for the newest 40 cache-missing sessions into the cache. Only
  * the newest sessions matter: the lists are newest-first and callers cap them
  * (e.g. slice(0, 40)), so older sessions keep their time label.
- * @param persistence - sessionPersistence service (inspect).
+ * @param persistence - the whole-log `inspect` source for these candidates.
  * @param headers - rows from `persistence.list()`.
  */
 async function foldMissingTitles(
@@ -460,7 +465,7 @@ async function foldMissingTitles(
  * `onUpdated` — so the dialog opens instantly and titles appear as they are
  * folded. An unreadable log degrades to its time label rather than failing the
  * whole list.
- * @param persistence - sessionPersistence service (inspect).
+ * @param persistence - the whole-log `inspect` source for these candidates.
  * @param headers - rows from `persistence.list()`.
  * @param onUpdated - optional callback with the fully enriched list (invoked
  *   asynchronously after background folding finishes).
@@ -484,7 +489,7 @@ export async function listWithTitles(
  * Warm the title cache in the background (called shortly after launch): fold
  * missing titles for the newest persisted sessions so the first `/sessions` /
  * `/resume` open is already fully titled.
- * @param persistence - sessionPersistence service (inspect).
+ * @param persistence - the whole-log `inspect` source for these candidates.
  * @param headers - rows from `persistence.list()`.
  */
 /** Per-session HEAD probes resolved by the caller (see `session-head.ts`): a
