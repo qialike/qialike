@@ -70,7 +70,7 @@ import {
   heroNoticeText,
   heroMarkRows,
   heroTooSmallLines,
-  HERO_PALETTE_MAX_ROWS,
+  heroPaletteLimitRows,
   paletteBoxRows,
   paletteContentRows,
   paletteWindow,
@@ -504,13 +504,16 @@ function filteredCommands(tui: TuiService): readonly CommandItem[] {
   })
 }
 
-/** The command rows a palette paints for `count` matches with `index` selected:
- *  the hero is bounded ({@link HERO_PALETTE_MAX_ROWS}) so its popup neither
- *  covers the composer card's chrome nor grows the frame past the tty's
- *  4095-byte instalment, while the docked popup floats over empty transcript and
- *  shows every match. */
-function paletteWindowNow(count: number, index: number): { first: number; visible: number; hidden: number } {
-  return paletteWindow(count, index, store.hero ? HERO_PALETTE_MAX_ROWS : count)
+/** The command rows a palette paints for `count` matches with `index` selected.
+ *
+ *  HERO: the popup is lifted ONTO the card and grows UPWARD from a fixed bottom,
+ *  so the whole list is shown as long as it fits above that bottom
+ *  ({@link heroPaletteLimitRows}); on a short hero the window is clamped to the
+ *  rows that fit and the footer reports the remainder. The docking view floats
+ *  over empty transcript and always shows every match. */
+function paletteWindowNow(count: number, index: number, lift: number): { first: number; visible: number; hidden: number } {
+  if (!store.hero) return paletteWindow(count, index, count)
+  return paletteWindow(count, index, heroPaletteLimitRows(store.rows, lift, count))
 }
 
 /** The command palette's painted box for a terminal of `rows`/`width` showing
@@ -2555,11 +2558,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const isSlash = input.startsWith('/')
   // The palette's painted geometry for THIS frame, published for the caret's
   // coverage test and the mouse→row mapping (both must read what is on screen).
-  const paletteCount = isSlash ? filtered.length : 0
-  const paletteWin = paletteWindowNow(paletteCount, commandIndex)
-  commandPaletteWindow = paletteCount > 0 && paletteWin.visible > 0 ? paletteWin : null
-  // The SAME lift `renderPalette` is handed below (line `renderPalette(hero?…)`).
+  // The lift comes FIRST: the hero's window limit is derived from the popup's
+  // anchored bottom, which is the same lift `renderPalette` is handed below.
   const paletteLift = hero?.paletteBottomMargin ?? 0
+  const paletteCount = isSlash ? filtered.length : 0
+  const paletteWin = paletteWindowNow(paletteCount, commandIndex, paletteLift)
+  commandPaletteWindow = paletteCount > 0 && paletteWin.visible > 0 ? paletteWin : null
   commandPaletteBox = commandPaletteWindow === null
     ? null
     : paletteBoxNow(width, store.rows, paletteContentRows(paletteWin.visible, paletteWin.hidden), paletteLift)
@@ -3077,12 +3081,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             </Text>
           )
         })}
-        {/* Hidden-remainder footer: the hero window is bounded (see
-            HERO_PALETTE_MAX_ROWS), so the list must SAY that it is truncated —
-            otherwise the missing commands read as "these are all the commands".
-            It is a content row like any other (so the box geometry counts it),
-            but `commandPaletteIndexFromRow` maps it to -1: it is not a command,
-            and the mouse passes straight through it. */}
+        {/* Hidden-remainder footer: the hero shows the whole command list when
+            it fits above the card and is clamped only on a SHORT hero (see
+            `heroPaletteLimitRows`), so whenever this row appears the list really
+            is truncated and must SAY so — otherwise the missing commands read as
+            "these are all the commands". It is a content row like any other (so
+            the box geometry counts it), but `commandPaletteIndexFromRow` maps it
+            to -1: it is not a command, and the mouse passes straight through it. */}
         {paletteWin.hidden > 0 ? (() => {
           const line = `… ${paletteWin.hidden} more — type to filter, ↑/↓ to scroll`
           const contentW = Math.max(20, store.hero ? heroComposerWidth(store.width) - 2 : usable - 2)

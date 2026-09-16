@@ -70,7 +70,7 @@ Every frame **hides the hardware cursor for the paint** and ends with a suffix t
 restores the caret's shape and position, so the cursor is never dragged (visible)
 across the rows a repaint touches. Each frame is also bracketed by the terminal's
 **synchronized output** mode (`ESC[?2026h` … `ESC[?2026l`). A frame is a full-width
-repaint — opening the command palette measures ~4.4 KB at 120×30 and ~5.7 KB at
+repaint — opening the command palette measures ~5.5 KB at 120×30 and ~7.4 KB at
 240×30 — and a pty hands writes larger than its ~4095-byte line-discipline buffer
 to the terminal in instalments, so without the mode a half-painted frame is
 briefly visible (the composer card's chrome showing through the popup). Terminals

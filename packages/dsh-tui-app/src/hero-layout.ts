@@ -404,27 +404,80 @@ export function paletteBoxRows(input: PaletteBoxInput): { first: number; last: n
     // bottom border on all six, while `rows − padding − lift` was one row LOW on
     // every one — which silently mis-mapped every palette click by a row and made
     // the caret's coverage test reason about a box that was not on screen.
-    ? heroAreaRows(input.rows ?? 0) - (input.heroLift ?? 0)
+    ? heroPaletteBottomRow(input.rows ?? 0, input.heroLift ?? 0)
     : (input.bandTop ?? 0) - PALETTE_DOCKED_GAP
   // A bordered box: `count` content rows between a top and a bottom border.
   return { first: bottom - input.count - 1, last: bottom }
 }
 
-/** Command rows the HERO palette paints at most; the rest stay reachable by
- *  typing a filter or with ↑/↓.
+/**
+ * The row the hero palette's box is anchored to: the hero area's bottom edge
+ * minus the lift the render hands to the popup. Shared by {@link paletteBoxRows}
+ * (the painted box), {@link heroPaletteLimitRows} (how many command rows fit
+ * above it) and therefore the caret's coverage test and the mouse→row mapping —
+ * one expression, so the consumers cannot disagree.
  *
- *  Why the hero is bounded and the docked popup is not: the hero popup is lifted
- *  ONTO the card, so every row it grows upward covers a row of the composer card,
- *  and a full 14-command list spanned 16 rows. Measured on a real pty, that frame
- *  is 4573 bytes and the tty hands it to the terminal in 4095-byte instalments:
- *  the first instalment stopped one row short of the box, so for one round trip
- *  the palette's bottom border was missing and the card's status row
- *  (`🔒 Workspace Write (Tab) … Model: …`) plus its `▀▀▀` edge showed THROUGH the
- *  half-drawn popup — a horizontal band that flashed and vanished. A bounded
- *  window keeps the box (and with it the frame) small enough to arrive in one
- *  instalment, and keeps the popup clear of the card's chrome. The docked popup
- *  floats over empty transcript, where the same half-frame reveals nothing. */
-export const HERO_PALETTE_MAX_ROWS = 8
+ * The popup is ABSOLUTE inside the hero's padded area, whose row 1 is screen row
+ * 1, so this is a screen row as well.
+ * @param rows - terminal rows.
+ * @param heroLift - the `paddingBottom` the render hands to `renderPalette`
+ *   ({@link HeroLayout.paletteBottomMargin}).
+ * @returns the box's bottom border row.
+ */
+export function heroPaletteBottomRow(rows: number, heroLift: number): number {
+  return heroAreaRows(rows) - heroLift
+}
+
+/** Command rows the HERO palette paints at most: the whole command list.
+ *
+ *  It used to be 8 (with a `… N more` footer), on the theory that a smaller box
+ *  keeps the frame under the pty's ~4095-byte instalment. MEASURED (the frame
+ *  that OPENS the palette, split by its `ESC[?2026h…l` envelope,
+ *  `test/probes/hero-palette-rows.py`):
+ *
+ *  | terminal | 8 rows + footer | 14 rows |
+ *  |---|---|---|
+ *  | 80×24  | 3333 B | 4784 B |
+ *  | 120×30 | 3814 B | 5465 B |
+ *  | 160×50 | 4254 B | 6110 B |
+ *  | 240×30 | 5134 B | 7385 B |
+ *
+ *  So the cap did keep the frame in one instalment at 80–120 columns and never
+ *  did at 160+ (the cost is the full-WIDTH repaint, not the popup's height). The
+ *  full list crosses the limit everywhere, and what makes that invisible is the
+ *  synchronized-output envelope (`ESC[?2026h/l`, see `__dshFrameEnvelope` in the
+ *  build), which presents a split frame as one picture. On a terminal that
+ *  ignores the mode the old one-round-trip half-paint can be visible again — the
+ *  accepted price of showing all 14 commands.
+ *
+ *  It is still CLAMPED to what fits: the popup grows upward from
+ *  {@link heroPaletteBottomRow}, so on a short hero a full list would push the
+ *  box's top border off screen — {@link heroPaletteLimitRows} keeps it on row 1
+ *  and lets the footer report the remainder (pty-measured: 14 rows with no footer
+ *  from a 24-row terminal up, 8 rows + footer at 120×18; see the `hero-palette`
+ *  scenario). */
+export const HERO_PALETTE_MAX_ROWS = 14
+
+/**
+ * The number of palette content rows the hero can paint without pushing the box's
+ * top border off screen: the box is bottom-anchored at {@link heroPaletteBottomRow}
+ * and grows upward, so it may spend `bottom − 2` content rows (the box spans
+ * `[bottom − count − 1, bottom]`, both borders included). When the list is longer
+ * than the window one of those rows goes to the `… N more` footer, so the window
+ * shrinks by one; shrinking can only make the list "still too long", so the
+ * decision cannot oscillate. Never below 1, so a hero with no room still paints
+ * one command row plus the footer.
+ * @param rows - terminal rows.
+ * @param heroLift - the lift handed to the popup.
+ * @param count - matches after the filter (decides whether a footer is painted).
+ * @returns the content-row limit for {@link paletteWindow}.
+ */
+export function heroPaletteLimitRows(rows: number, heroLift: number, count: number): number {
+  const room = heroPaletteBottomRow(rows, heroLift) - 2
+  const cap = Math.min(HERO_PALETTE_MAX_ROWS, Math.max(1, count))
+  const limit = Math.max(1, Math.min(cap, room))
+  return count > limit ? Math.max(1, Math.min(limit, room - 1)) : limit
+}
 
 /** Content rows a palette box paints: the command rows plus the single footer
  *  row that reports the hidden remainder (see {@link paletteWindow}). */
