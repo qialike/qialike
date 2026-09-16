@@ -1087,7 +1087,14 @@ const __dshWriteFrame = (stdout, frame) => {
 // so a build without the hook can never leave the cursor hidden or the terminal
 // buffering.
 const __dshFrameEnvelope = (frame, suffix) => {
-    if (!suffix || frame === '') return frame;
+    // A frame with NO changed lines is still a WRITE worth making: the suffix is
+    // how the caret moves. Typing never produces one (the draft row changes), but
+    // left/right, Home/End and a mouse click move the caret and repaint NOTHING —
+    // so the suffix-only frame is the only thing that carries the new caret cell
+    // to the terminal. Dropping it (frame === '', 0.4.17–0.4.18-beta) froze the
+    // visible caret while the draft was edited correctly underneath: the reported
+    // "arrows / Home / End / mouse caret do nothing".
+    if (!suffix) return frame;
     const sync = (typeof process !== 'undefined' && process.env && process.env.DSH_TUI_NO_SYNC === '1') ? '' : '\\x1b[?2026h';
     return sync + '\\x1b[?25l' + frame + suffix + (sync ? '\\x1b[?2026l' : '');
 };

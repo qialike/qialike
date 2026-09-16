@@ -71,6 +71,33 @@ describe('StdinDecoder', () => {
     expect(d.push(esc('1b 5b 33 7e'))).toEqual([{ delete: true }]) // Delete \x1b[3~
   })
 
+  /**
+   * The SAME logical key arrives in several encodings depending on the terminal
+   * and its current mode. A terminal in DECCKM (`?1h`, application cursor keys)
+   * sends the arrows as SS3 — a decoder that only knew the CSI forms made every
+   * arrow key dead there; the vt220/linux-console and rxvt Home/End tilde forms
+   * (`ESC[1~`/`ESC[4~`/`ESC[7~`/`ESC[8~`) had the same problem. Both were
+   * reported as "the key does nothing" in the composer.
+   */
+  test('the same key in its other encodings (SS3 arrows, Home/End tilde forms)', () => {
+    const d = new StdinDecoder()
+    expect(d.push(esc('1b 4f 41'))).toEqual([{ upArrow: true }]) // SS3 \x1bOA (DECCKM)
+    expect(d.push(esc('1b 4f 42'))).toEqual([{ downArrow: true }])
+    expect(d.push(esc('1b 4f 43'))).toEqual([{ rightArrow: true }])
+    expect(d.push(esc('1b 4f 44'))).toEqual([{ leftArrow: true }])
+    expect(d.push(esc('1b 5b 31 7e'))).toEqual([{ home: true }]) // \x1b[1~ (vt220 / linux console)
+    expect(d.push(esc('1b 5b 34 7e'))).toEqual([{ end: true }]) // \x1b[4~
+    expect(d.push(esc('1b 5b 37 7e'))).toEqual([{ home: true }]) // \x1b[7~ (rxvt)
+    expect(d.push(esc('1b 5b 38 7e'))).toEqual([{ end: true }]) // \x1b[8~
+    // The variants must not have widened the "unknown CSI" contract: Insert
+    // (\x1b[2~), modified arrows (\x1b[1;5D) and F-keys stay discarded, and never
+    // leak into the draft as text.
+    expect(d.push(esc('1b 5b 32 7e'))).toEqual([])
+    expect(d.push(esc('1b 5b 31 3b 35 44'))).toEqual([])
+    expect(d.push(esc('1b 4f 50'))).toEqual([]) // SS3 F1
+    expect(d.push('a')).toEqual([{ char: 'a' }])
+  })
+
   test('alt+enter', () => {
     const d = new StdinDecoder()
     expect(d.push(esc('1b 0d'))).toEqual([{ altEnter: true }])

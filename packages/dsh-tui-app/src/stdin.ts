@@ -215,9 +215,16 @@ export class StdinDecoder {
       if (buf.length < 3) return 0
       const final = buf[2]!
       buf.splice(0, 3)
-      if (final === 0x48) out.push({ home: true }) // \x1bOH
+      // DECCKM (`?1h`, application cursor keys): a terminal in that mode sends
+      // the arrows as SS3 too, so they must decode exactly like their CSI forms —
+      // otherwise every arrow key dies in whichever terminal enabled the mode.
+      if (final === 0x41) out.push({ upArrow: true }) // \x1bOA
+      else if (final === 0x42) out.push({ downArrow: true }) // \x1bOB
+      else if (final === 0x43) out.push({ rightArrow: true }) // \x1bOC
+      else if (final === 0x44) out.push({ leftArrow: true }) // \x1bOD
+      else if (final === 0x48) out.push({ home: true }) // \x1bOH
       else if (final === 0x46) out.push({ end: true }) // \x1bOF
-      // other SS3 (F1-F4 = P/Q/R/S, etc.): discarded
+      // other SS3 (F1-F4 = P/Q/R/S, keypad in DECKPAM, etc.): discarded
       return 3
     }
     if (buf[1] === 0x74) { // Alt+T (the Ctrl+T fallback for terminals that swallow Ctrl+T)
@@ -280,6 +287,11 @@ export class StdinDecoder {
     if (final === 0x7e && p0 === 0x35) { out.push({ pageUp: true }); return }
     if (final === 0x7e && p0 === 0x36) { out.push({ pageDown: true }); return }
     if (final === 0x7e && p0 === 0x33) { out.push({ delete: true }); return } // Delete: "\x1b[3~"
+    // Home/End as the vt220/linux-console and rxvt tilde forms. Terminals pick
+    // these from their own TERM/mode, so a box that only understood `\x1b[H`/
+    // `\x1b[F` reported Home/End as dead keys on those terminals.
+    if (final === 0x7e && (p0 === 0x31 || p0 === 0x37)) { out.push({ home: true }); return } // \x1b[1~ / \x1b[7~
+    if (final === 0x7e && (p0 === 0x34 || p0 === 0x38)) { out.push({ end: true }); return } // \x1b[4~ / \x1b[8~
     // Everything else (cursor-position, color SGR, modified arrows, etc.) is discarded.
   }
 

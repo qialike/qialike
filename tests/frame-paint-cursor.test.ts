@@ -28,6 +28,10 @@
  * they live in the injected Ink frame writer and in the panel's suffix string,
  * which unit tests cannot reach (they would have to boot the SEA binary on a
  * pty) — the same approach as the boot-screen hygiene and prompt-gate tests.
+ * A third one is pinned the same way after 0.4.18-beta: a frame with NO changed
+ * lines must still be written, because that suffix-only frame is the ONLY thing
+ * that moves the hardware caret on ←/→, Home/End and a mouse click (dropping it
+ * froze the visible caret while the draft kept editing correctly).
  *
  * Run with `bun test tests/frame-paint-cursor.test.ts`.
  *
@@ -58,14 +62,38 @@ describe('the frame writer hides the cursor for the paint', () => {
     expect(naive.length, 'no bare suffix append').toBe(0)
   })
 
-  test('② the envelope is conditional (never strands the cursor hidden or the terminal buffering)', () => {
-    // A build without the hook must change nothing: the envelope is a no-op
-    // unless it is handed a non-empty suffix.
+  test('② a frame with NO changed lines still carries its suffix (the caret-only frame)', () => {
+    // REGRESSION (0.4.17 → 0.4.18-beta): the envelope bailed out on
+    // `frame === ''`, which is exactly the frame a caret-only change produces
+    // (←/→, Home/End, a mouse click repaint NOTHING). The suffix — the CUP that
+    // parks the hardware caret — was dropped with it, so the visible cursor froze
+    // while the draft was edited correctly underneath. Evaluated, not grepped:
+    // the helper is plain JS in build.mjs.
     const at = build.indexOf('const __dshFrameEnvelope =')
-    const helper = build.slice(at, build.indexOf('};', at))
-    expect(helper, 'suffix is required').toContain('!suffix')
-    expect(helper, 'empty frame is left alone').toContain("frame === ''")
-    expect(helper, 'the hide escape is ESC[?25l').toContain('\\x1b[?25l')
+    // The helper lives inside the patch template literal, so its escapes are
+    // written `\\x1b` there and become real ESC bytes in the injected bundle:
+    // collapse the doubling before evaluating, exactly like the build does.
+    const src = build.slice(at, build.indexOf('\n};', at) + 3).replace(/\\\\/g, '\\')
+    const make = (env: Record<string, string>) =>
+      new Function('process', `${src}\nreturn __dshFrameEnvelope;`)({ env }) as
+        (frame: string, suffix: string) => string
+    const env = make({})
+    expect(env('LINES', 'SUF'), 'suffix-only frame survives').toContain('SUF')
+    expect(env('LINES', 'SUF'), 'and is hidden + synchronized around').toMatch(/^\x1b\[\?2026h\x1b\[\?25l/)
+    expect(env('LINES', 'SUF'), 'both modes closed').toMatch(/\x1b\[\?2026l$/)
+    expect(env('LINES', ''), 'no suffix → frame untouched').toBe('LINES')
+    expect(env('', ''), 'nothing at all → nothing').toBe('')
+    const off = make({ DSH_TUI_NO_SYNC: '1' })
+    expect(off('LINES', 'SUF'), 'opt-out drops the sync pair').toBe('\x1b[?25lLINESSUF')
+    expect(off('', 'SUF'), 'the caret park survives the opt-out').toBe('\x1b[?25lSUF')
+  })
+
+  test('②b a suffix-only frame is a WRITE (the writer must not skip it)', () => {
+    // The other half of the same contract: every caller writes when the wrapped
+    // frame is non-empty. A bare `if (frame !== '')` after the envelope is what
+    // makes the caret-only frame reach the terminal.
+    const sites = build.match(/if \(frame !== ''\) __dshWriteFrame/g) ?? []
+    expect(sites.length, 'one guarded write per writer').toBe(3)
   })
 
   test('⑤ every frame is bracketed by synchronized output (?2026h … ?2026l)', () => {
