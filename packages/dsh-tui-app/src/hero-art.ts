@@ -3,28 +3,17 @@
  *
  * Regenerate with:  python3 svg/gen-hero-art.py
  *
- * Source: the `qialike-wordmark-{dark,light}.svg` wordmark. It is PIXEL
- * ART on a 3-unit grid: every coordinate is a multiple of it, so the
- * 168x42 viewBox is a 56x14 grid of 3x3 source pixels and the table
- * below is that grid cropped to the ink bounds (56x12). It is read
- * straight off the path data — nothing is rasterized or resampled (see the
- * generator for why that matters). Both variants carry IDENTICAL geometry and
- * differ only in palette, so they resolve to this one grid (the generator
- * asserts that) — the ink COLORS the app draws with come from the active
- * theme, not from the SVG: `heroArtInkColors(theme.text, theme.bg)` blends by
+ * Source: the `qialike-wordmark-{dark,light}.svg` wordmark. Those are PIXEL
+ * ART, not vector art: every coordinate is a multiple of 6, so the 168x42
+ * viewBox holds a 28x6 grid of 6x6 source pixels and this table is
+ * read straight off the path data — nothing is rasterized or resampled (see
+ * the generator for why that matters). Both variants carry IDENTICAL geometry
+ * and differ only in palette, so they resolve to this one grid (the generator
+ * asserts that) — the ink COLORS the app draws with come from the active theme,
+ * not from the SVG: `heroArtInkColors(theme.text, theme.bg)` blends by
  * `HERO_ART_INK_ALPHA`.
  *
- * TWO grids, because the art is painted with cell BACKGROUNDS at
- * `HERO_ART_CELLS_PER_PIXEL` terminal columns per source pixel:
- *   - `HERO_ART_WORDMARK_FINE_*` is the source's own 56x12 grid; it needs
- *     112 terminal columns, so it is the tier a WIDE terminal draws;
- *   - `HERO_ART_WORDMARK_*` is that grid reduced 2x2 (a cell keeps an
- *     ink when at least half of the fine sub-pixels it covers carry it),
- *     28x6 / 56 columns, the tier a NARROW terminal draws.
- * The reduction is exact in shape and asserted by the generator, never
- * eyeballed.
- *
- * Tone alphabet (one cell = one source pixel):
+ * Tone alphabet (one cell = one SOURCE pixel of the wordmark):
  *   `B` primary ink  ·  `M` secondary ink  ·  `.` empty
  *   dark  variant B=#f1ecec M=#b7b1b1
  *   light variant B=#201e1e M=#656363
@@ -40,64 +29,28 @@ export const HERO_ART_SOURCES = {
 
 /** sha256 of the source SVGs at generation time (drift check). */
 export const HERO_ART_SOURCE_SHA256 = {
-  dark: '36e9142e9567f2121ab69941872b56695b0310fb58fed10c97781e62e1f2744c',
-  light: '569e32d7858613d96b765258e52cc633c911ccc129ec98a645e643398f0e94be',
+  dark: 'abe7c945b5f0496227d07c0c8685d7e6d605e332ef47e9b1aeb83309bec11724',
+  light: '63a272e5554f2e9097db8f572b69f189fa3b097c9784fd26aede5ad606fedca4',
 } as const
 
 /**
- * SVG user units per source pixel of the FINE grid. The generator DERIVES
- * this from the coordinates (their greatest common divisor, after snapping
- * Inkscape float noise) and REFUSES a source that does not sit on a shared
- * grid or whose grid does not tile the viewBox — reading artwork off a grid it
- * does not sit on is what resampled (and so jagged) the mark before.
- */
-export const HERO_ART_WORDMARK_FINE_UNIT: number = 3
-
-/** Fine grid width in SOURCE PIXELS (56 of them, cropped from the
- *  56 the 168x42 viewBox holds at 3 units each). */
-export const HERO_ART_WORDMARK_FINE_COLS: number = 56
-
-/** Fine grid height in source pixels (cropped to the ink bounds). */
-export const HERO_ART_WORDMARK_FINE_ROWS: number = 12
-
-/**
- * The `qialike` wordmark on its OWN source grid, one string per source-pixel
- * row (12 x 56), left to right, top to bottom.
- */
-export const HERO_ART_WORDMARK_FINE_TONES: readonly string[] = [
-  'MMMMMMMM..MM....MMMMMM..BB........BB..BB....BB..BBBBBBBB',
-  'MM....MM..MM........MM..BB........BB..BB....BB..BB....BB',
-  'MM....MM..MM........MM..BB........BB..BB..BB....BB....BB',
-  'MM....MM..MM........MM..BB........BB..BB..BB....BB....BB',
-  'MM....MM..MM..MMMMMMMM..BB........BB..BBBB......BBBBBBBB',
-  'MM....MM..MM..MMMMMMMM..BB........BB..BBBB......BBBBBBBB',
-  'MM....MM..MM..MM....MM..BB........BB..BB..BB....BB......',
-  'MM....MM..MM..MM....MM..BB........BB..BB..BB....BB......',
-  'MM....MM..MM..MM....MM..BB........BB..BB....BB..BB......',
-  'MMMMMMMM..MM..MMMMMMMM..BBBBBBBB..BB..BB....BB..BBBBBBBB',
-  '......MM................................................',
-  '......MM................................................',
-]
-
-/**
- * SVG user units per source pixel of the COARSE grid: 3 (the fine unit) times
- * 2, i.e. 6. The coarse grid is the fine one reduced, so its
- * pixels are exactly the design pixels the hero drew before the source was
- * refined — same table, same footprint.
+ * SVG user units per source pixel of the wordmark. The generator REFUSES a
+ * source whose coordinates are not all multiples of this: the artwork is pixel
+ * art, and reading it off a grid it does not sit on is what resampled (and so
+ * jagged) the mark before.
  */
 export const HERO_ART_WORDMARK_UNIT: number = 6
 
-/** Coarse grid width in SOURCE PIXELS (28 x 6); one coarse pixel is
- *  2x2 fine ones. */
+/** Wordmark grid width in SOURCE PIXELS (the 168x42 viewBox holds
+ *  28 x 6 of them). */
 export const HERO_ART_WORDMARK_COLS: number = 28
 
-/** Coarse grid height in source pixels. */
+/** Wordmark grid height in source pixels (cropped to the ink bounds). */
 export const HERO_ART_WORDMARK_ROWS: number = 6
 
 /**
- * The `qialike` wordmark reduced to the COARSE grid, one string per source-pixel
- * row (6 x 28), left to right, top to bottom. This is the tier a
- * narrow terminal draws; the fine grid above is the wide one.
+ * The `qialike` wordmark, one string per source-pixel row
+ * (6 x 28), left to right, top to bottom.
  */
 export const HERO_ART_WORDMARK_TONES: readonly string[] = [
   'MMMM.M..MMM.B....B.B..B.BBBB',

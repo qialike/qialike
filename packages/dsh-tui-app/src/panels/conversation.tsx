@@ -56,7 +56,6 @@ import {
   HERO_TITLE,
   HERO_WORDMARK,
   heroArtCells,
-  heroArtFineCells,
   heroArtInkColors,
   heroArtMarkKind,
   heroArtMode,
@@ -1070,21 +1069,15 @@ function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
 /** `DSH_TUI_HERO_ART` override, read once at module load (auto by default). */
 const HERO_ART_MODE = heroArtMode(process.env.DSH_TUI_HERO_ART)
 
-/** The generated brand art, laid out as background-painted cells once, per
- *  pixel-art tier: `blocks` is the coarse reduction, `blocks-fine` the source's
- *  own grid (see {@link heroArtMarkKind}). */
-const HERO_ART_ROWS_CELLS = {
-  blocks: heroArtCells(),
-  'blocks-fine': heroArtFineCells(),
-}
+/** The generated brand art, laid out as background-painted cells once. */
+const HERO_ART_ROWS_CELLS = heroArtCells()
 
 /**
  * Brand mark the hero draws at this size: the generated pixel-art wordmark when
- * it fits (the fine tier on a wide terminal, its coarse reduction otherwise),
- * else the plain-`#` ASCII fallback, else nothing. The renderer and every
- * geometry mirror call this, so routing cannot disagree with what is painted. It
- * takes no glyph-width input any more: the art is drawn entirely with cell
- * backgrounds and spaces, so no ambiguous-width glyph is involved.
+ * it fits, else the plain-`#` ASCII fallback, else nothing. The renderer and
+ * every geometry mirror call this, so routing cannot disagree with what is
+ * painted. It takes no glyph-width input any more: the art is drawn entirely
+ * with cell backgrounds and spaces, so no ambiguous-width glyph is involved.
  */
 function heroMarkFor(rows: number, width: number): HeroMarkKind {
   return heroArtMarkKind({
@@ -2469,9 +2462,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const heroTitleGap = heroB?.titleGap ?? HERO_TITLE_CARD_GAP
   // Brand art colors follow the theme (theme.text blended toward theme.bg), so
   // a colorscheme switch restyles the mark with the rest of the chrome.
-  const heroArtInk = heroMark === 'blocks' || heroMark === 'blocks-fine'
-    ? heroArtInkColors(theme.text, theme.bg)
-    : []
+  const heroArtInk = heroMark === 'blocks' ? heroArtInkColors(theme.text, theme.bg) : []
   const hero = heroActive && heroB?.fits
     ? heroLayout({ rows: store.rows, boxH: heroBoxH, brandLines: heroB.brandLines, titleGap: heroB.titleGap, hintLines: heroB.hintLines })
     : null
@@ -3161,15 +3152,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           ) : (
           <>
           <Box flexShrink={0} height={hero?.topSpacer ?? 0} />
-          {heroMark === 'blocks' || heroMark === 'blocks-fine' ? (
+          {heroMark === 'blocks' ? (
             <Box flexDirection="column" flexShrink={0}>
-              {HERO_ART_ROWS_CELLS[heroMark].map((line, i) => {
+              {HERO_ART_ROWS_CELLS.map((line, i) => {
                 // Every art cell is exactly one column wide (it is a space with
                 // a background — see HERO_ART_CELLS_PER_PIXEL), so the row is
                 // centered by its own length: no glyph measurement can shift it.
                 const pad = ' '.repeat(Math.max(0, Math.floor((heroUsable - line.length) / 2)))
-                // Run-length the row: 56-112 cells carry only a handful of ink
-                // runs, and Ink rebuilds every node it is handed on every frame.
+                // Run-length the row: 56 cells carry only a handful of ink runs,
+                // and Ink rebuilds every node it is handed on every frame.
                 const runs: { ink: number; width: number }[] = []
                 for (const cell of line) {
                   const last = runs[runs.length - 1]
