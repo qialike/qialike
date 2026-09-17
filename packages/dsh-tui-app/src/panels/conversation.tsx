@@ -3363,10 +3363,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             own reasoning sits with its helper:
               loading      → sessionLoadingStatusText (live clock)
               compaction   → a manual `/compact` outranks the fold; Esc cancels
-              preparing    → two phases in one slot: the assembly clock, shown
-                             only once a tick proves the loop is free (`[stall]`
-                             otherwise), then `assembled in … · waiting for the
-                             model…` while the provider answers
+              preparing    → two phases in one slot, each with its own clock:
+                             the assembly's (`preparing the request… 4.4s`,
+                             shown only once a tick proves the loop is free —
+                             `[stall]` otherwise), then the provider wait's
+                             (`assembled in 21ms · waiting for the model… 12.3s`,
+                             counting from the moment the payload left)
               flash        → the user's own action, expires by itself
               history      → the long older-history fold's progress + counts
               error        → a failed load stays until retry / `/clear`
@@ -3384,7 +3386,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               // `noteRequest`) the assembly is over and what remains is the
               // provider's time-to-first-token — the tens of seconds the label
               // used to misreport as request preparation.
-              ? <Text color={theme.accent} wrap="truncate">{preparingRequestStatusText(store.preparingRequestStartedAt, Date.now(), store.preparingRequestTicked, store.assemblyMs)}</Text>
+              ? <Text color={theme.accent} wrap="truncate">{preparingRequestStatusText(store.preparingRequestStartedAt, Date.now(), store.preparingRequestTicked, store.assemblyMs, store.assemblyDoneAt)}</Text>
               : store.statusBarLeft === 'flash'
             ? <Text color={theme.success} wrap="truncate">{store.statusFlash!.text}</Text>
             : store.statusBarLeft === 'history'

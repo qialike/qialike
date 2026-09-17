@@ -477,7 +477,10 @@ export const PREPARING_ASSEMBLY_DEADLINE_MS = 30_000
  *  the deadline is re-armed when the assembly ends. */
 export const PREPARING_PROVIDER_DEADLINE_MS = 300_000
 
-/** Status-bar text once the request is OUT and the model has not answered yet.
+/** Status-bar text for the SECOND phase: the request is out and the model has
+ *  not answered yet. Prints both phases' numbers — what the assembly cost and how
+ *  long the provider has been thinking — so the wait stops reading as "still
+ *  preparing" (user request: each phase gets its own information AND clock).
  *
  *  Why the label is split in two: `assemblyMs` is the app's WHOLE synchronous
  *  assembly, reported by `llm.ts` the moment the payload string exists, while
@@ -488,12 +491,18 @@ export const PREPARING_PROVIDER_DEADLINE_MS = 300_000
  *  p90 3.0 s / max 11.8 s; the macOS session that filed the report saw the same
  *  asymmetry with waits above 100 s. One label ("preparing the request…") covered
  *  BOTH phases, so a two-minute model wait read as two minutes of request
- *  preparation. Printing the measured assembly time next to the phase names puts
- *  the number where it belongs and makes the rest of the wait legible as a wait.
- *  @param ms - measured assembly time in milliseconds.
+ *  preparation.
+ *
+ *  The wait clock needs no ticker gate: the assembly that could block the loop is
+ *  over and the request is in flight, so the seconds advance with the same 250 ms
+ *  ticker that keeps phase one honest.
+ *  @param assemblyMs - measured assembly time in milliseconds.
+ *  @param waitMs - milliseconds since the payload left, i.e. the provider wait.
  *  @returns the status-bar string. */
-export function assembledRequestStatusText(ms: number): string {
-  return `assembled in ${Math.max(0, Math.round(ms))}ms · waiting for the model…`
+export function assembledRequestStatusText(assemblyMs: number, waitMs: number): string {
+  const assembled = Math.max(0, Math.round(assemblyMs))
+  const waited = (Math.max(0, waitMs) / 1000).toFixed(1)
+  return `assembled in ${assembled}ms · waiting for the model… ${waited}s`
 }
 
 /** Status-bar text while a model request is being assembled: the base label,
@@ -511,15 +520,20 @@ export function assembledRequestStatusText(ms: number): string {
  *  @param now - current epoch ms (injectable for tests).
  *  @param ticked - whether the preparing ticker fired since the assembly began.
  *  @param assemblyMs - measured assembly time in ms, or null while still running.
+ *  @param assemblyDoneAt - epoch ms the payload left (phase two's clock origin),
+ *    or null when unknown.
  *  @returns the status-bar string. */
 export function preparingRequestStatusText(
   startedAt: number | null,
   now: number,
   ticked: boolean,
   assemblyMs: number | null = null,
+  assemblyDoneAt: number | null = null,
 ): string {
   if (startedAt === null) return PREPARING_REQUEST_LABEL
-  if (assemblyMs !== null) return assembledRequestStatusText(assemblyMs)
+  if (assemblyMs !== null) {
+    return assembledRequestStatusText(assemblyMs, assemblyDoneAt === null ? 0 : now - assemblyDoneAt)
+  }
   if (!ticked) return PREPARING_REQUEST_LABEL
   return `${PREPARING_REQUEST_LABEL} ${Math.max(0, (now - startedAt) / 1000).toFixed(1)}s`
 }
@@ -582,6 +596,11 @@ export class Store {
   /** Measured assembly time of the step in flight, or null while it is still
    *  being assembled (see {@link assembledRequestStatusText}). */
   private _assemblyMs: number | null = null
+  /** Epoch ms the payload left, i.e. phase two's clock origin, or null when the
+   *  assembly has not finished (or nothing is in flight). Taken at
+   *  {@link noteAssemblyElapsed} rather than derived from the assembly start, so
+   *  the wait clock does not inherit the submit → `step/start` gap. */
+  private _assemblyDoneAt: number | null = null
   /** Wall-clock deadline for the CURRENT preparing window, or null when idle.
    *  Armed for the assembly phase by {@link beginPreparingRequest}, re-armed for
    *  the provider phase by {@link noteAssemblyElapsed}, enforced (and cleared) by
@@ -1547,6 +1566,10 @@ export class Store {
    *  being assembled (see {@link assembledRequestStatusText}). */
   get assemblyMs(): number | null { return this._assemblyMs }
 
+  /** Epoch ms the payload left (phase two's clock origin), or null while the
+   *  assembly is still running (see {@link assembledRequestStatusText}). */
+  get assemblyDoneAt(): number | null { return this._assemblyDoneAt }
+
   /** Epoch ms the CURRENT preparing window's safety deadline expires, or null
    *  when idle (see {@link beginPreparingRequest} / {@link noteAssemblyElapsed}).
    *  Exposed for the window tests; the status bar never reads it. */
@@ -1566,6 +1589,7 @@ export class Store {
     this._preparingStartedAt = startedAt
     this._preparingTicked = false
     this._assemblyMs = null
+    this._assemblyDoneAt = null
     this._preparingDeadlineAt = Date.now() + PREPARING_ASSEMBLY_DEADLINE_MS
     this.notify()
   }
@@ -1580,6 +1604,9 @@ export class Store {
     if (!this._preparingRequest) return
     const rounded = Math.max(0, Math.round(ms))
     this._preparingDeadlineAt = Date.now() + PREPARING_PROVIDER_DEADLINE_MS
+    // Phase two's clock origin: taken HERE, not derived from the assembly start,
+    // so the wait seconds never inherit the submit → `step/start` gap.
+    this._assemblyDoneAt = Date.now()
     if (this._assemblyMs === rounded) return
     this._assemblyMs = rounded
     this.notify()
@@ -1608,6 +1635,7 @@ export class Store {
     this._preparingStartedAt = null
     this._preparingTicked = false
     this._assemblyMs = null
+    this._assemblyDoneAt = null
     this._preparingDeadlineAt = null
     this.notify()
   }
