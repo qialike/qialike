@@ -15,6 +15,9 @@
 
 import {
   HERO_ART_WORDMARK_COLS,
+  HERO_ART_WORDMARK_FINE_COLS,
+  HERO_ART_WORDMARK_FINE_ROWS,
+  HERO_ART_WORDMARK_FINE_TONES,
   HERO_ART_WORDMARK_ROWS,
   HERO_ART_WORDMARK_TONES,
 } from './hero-art.ts'
@@ -615,6 +618,26 @@ export const HERO_ART_MIN_WIDTH = HERO_ART_COLS + HERO_ART_MARGIN_COLS
  *  written for: the source grid is 28 x 6, and one source row is one cell row. */
 export const HERO_ART_MIN_ROWS = 23
 
+/* ------------------------------------------------------------------------- *
+ * The FINE tier (the source's own 56x12 grid — see `hero-art.ts`)
+ *
+ * The same encoding, one source pixel further in: the source was refined to a
+ * 3-unit grid, which at two columns per pixel needs twice the columns. It is
+ * therefore the tier a WIDE terminal draws, and the coarse constants above
+ * remain the narrow-terminal tier — the two differ only in how much of the
+ * artwork is resolved, never in footprint per source pixel.
+ * ------------------------------------------------------------------------- */
+
+/** Terminal columns the FINE brand art occupies. */
+export const HERO_ART_FINE_COLS = HERO_ART_WORDMARK_FINE_COLS * HERO_ART_CELLS_PER_PIXEL
+/** Rows the FINE brand art occupies (one cell row per fine source row). */
+export const HERO_ART_FINE_ROWS = HERO_ART_WORDMARK_FINE_ROWS
+/** Minimum terminal width for the FINE brand art. */
+export const HERO_ART_FINE_MIN_WIDTH = HERO_ART_FINE_COLS + HERO_ART_MARGIN_COLS
+/** Minimum terminal rows for the FINE brand art: the coarse gate's chrome
+ *  (everything that is not art) plus the extra art rows the fine grid adds. */
+export const HERO_ART_FINE_MIN_ROWS = HERO_ART_FINE_ROWS + (HERO_ART_MIN_ROWS - HERO_ART_ROWS)
+
 /** One rendered hero-art cell: one HALF of one source pixel, painted with a
  *  solid background (see {@link HERO_ART_CELLS_PER_PIXEL}). */
 export interface HeroArtCell {
@@ -632,20 +655,30 @@ export interface HeroArtCell {
  * grid, so there is no edge to classify, no coverage to threshold and no shadow
  * to invent: a source pixel is either ink (`B`/`M`) or empty, and a letter
  * counter is a real hole rather than a tinted fill.
- * @param tones - tone rows (defaults to the generated wordmark); a short row is
+ * @param tones - tone rows (defaults to the coarse wordmark); a short row is
  *   padded with empty columns, so a ragged grid cannot shift the mark.
+ * @param cols - source columns of `tones` (defaults to the coarse grid's; the
+ *   fine tier passes {@link HERO_ART_WORDMARK_FINE_COLS}).
  * @returns one array of cells per terminal row.
  */
-export function heroArtCells(tones: readonly string[] = HERO_ART_WORDMARK_TONES): HeroArtCell[][] {
+export function heroArtCells(
+  tones: readonly string[] = HERO_ART_WORDMARK_TONES,
+  cols: number = HERO_ART_WORDMARK_COLS,
+): HeroArtCell[][] {
   return tones.map((row) => {
     const line: HeroArtCell[] = []
-    for (let c = 0; c < HERO_ART_WORDMARK_COLS; c++) {
+    for (let c = 0; c < cols; c++) {
       const tone = row[c] ?? '.'
       const ink = tone === 'B' ? 0 : tone === 'M' ? 1 : -1
       for (let k = 0; k < HERO_ART_CELLS_PER_PIXEL; k++) line.push({ ink })
     }
     return line
   })
+}
+
+/** The FINE tier's cells: the source's own 56x12 grid, laid out as paintables. */
+export function heroArtFineCells(): HeroArtCell[][] {
+  return heroArtCells(HERO_ART_WORDMARK_FINE_TONES, HERO_ART_WORDMARK_FINE_COLS)
 }
 
 /** Parse `#rgb`/`#rrggbb`(aa) into 0–255 channels. */
@@ -692,21 +725,27 @@ export function heroArtInkColors(
   ]
 }
 
-/** Brand mark flavor the hero draws above its title. */
-export type HeroMarkKind = 'blocks' | 'ascii' | 'none'
+/** Brand mark flavor the hero draws above its title: `blocks-fine` is the
+ *  source's own (56x12) grid, `blocks` its coarse reduction (28x6) — see
+ *  {@link HERO_ART_FINE_COLS}. */
+export type HeroMarkKind = 'blocks-fine' | 'blocks' | 'ascii' | 'none'
 
 /** `DSH_TUI_HERO_ART` override: force a flavor instead of auto-selecting. */
 export type HeroArtMode = 'auto' | HeroMarkKind
 
 /**
  * Parse the `DSH_TUI_HERO_ART` override (`blocks`/`text`/`off`, anything else
- * = `auto`). `text` is the ASCII fallback mark, `off` draws no brand art.
+ * = `auto`). `text` is the ASCII fallback mark, `off` draws no brand art;
+ * `fine`/`coarse` pin one pixel-art tier (`fine` = the source's own grid,
+ * `coarse` = its reduction) for real-machine A/B.
  * @param raw - the environment value.
  * @returns the mode.
  */
 export function heroArtMode(raw: string | undefined): HeroArtMode {
   const value = (raw ?? '').trim().toLowerCase()
   if (value === 'blocks' || value === 'art') return 'blocks'
+  if (value === 'fine') return 'blocks-fine'
+  if (value === 'coarse') return 'blocks'
   if (value === 'text' || value === 'ascii') return 'ascii'
   if (value === 'off' || value === 'none') return 'none'
   return 'auto'
@@ -791,6 +830,7 @@ export function heroHintRows(olderLoading: boolean, providerReady: boolean | und
 
 /** Rows a mark occupies in the hero stack (0 for `none`). */
 export function heroMarkRows(kind: HeroMarkKind): number {
+  if (kind === 'blocks-fine') return HERO_ART_FINE_ROWS
   if (kind === 'blocks') return HERO_ART_ROWS
   if (kind === 'ascii') return HERO_WORDMARK.length
   return 0
@@ -809,6 +849,13 @@ export interface HeroArtMarkInput {
 /**
  * Which brand mark to draw, and whether at all.
  *
+ * Two pixel-art tiers, both painted from the same source grid: the FINE one (the
+ * source's own 56x12 grid, 112 columns) when the terminal is wide enough for it,
+ * else its COARSE reduction (28x6, 56 columns), else the plain-`#` ASCII
+ * wordmark, else nothing. The finer tier is preferred whenever it fits, so a
+ * wide terminal shows the source's details and a narrow one keeps the mark
+ * instead of losing it.
+ *
  * There is no `blockWidth` clause any more: the art is painted entirely with
  * cell BACKGROUNDS and a plain space, so it no longer depends on how this
  * terminal advances a block glyph. The old gate existed because the art was
@@ -816,15 +863,20 @@ export interface HeroArtMarkInput {
  * two columns overflowed the centered row — see
  * {@link HERO_ART_CELLS_PER_PIXEL}.
  * @param input - see {@link HeroArtMarkInput}.
- * @returns `blocks` for the generated pixel art, `ascii` for the plain-`#`
- *   fallback wordmark, `none` when only the title fits.
+ * @returns `blocks-fine`/`blocks` for the generated pixel art (the source grid
+ *   or its reduction), `ascii` for the plain-`#` fallback wordmark, `none` when
+ *   only the title fits.
  */
 export function heroArtMarkKind(input: HeroArtMarkInput): HeroMarkKind {
   const mode = input.mode ?? 'auto'
   if (mode === 'none') return 'none'
-  if (mode === 'blocks') return 'blocks'
+  const fineFits = input.width >= HERO_ART_FINE_MIN_WIDTH && input.rows >= HERO_ART_FINE_MIN_ROWS
+  const coarseFits = input.width >= HERO_ART_MIN_WIDTH && input.rows >= HERO_ART_MIN_ROWS
+  // The forced art modes still prefer the finer tier, but draw one even where
+  // the geometry says it does not fit (that is what "force" means here).
+  if (mode === 'blocks' || mode === 'blocks-fine') return fineFits ? 'blocks-fine' : 'blocks'
   if (mode === 'ascii') return heroWordmarkFits(input.rows, input.width) ? 'ascii' : 'none'
-  const artFits = input.width >= HERO_ART_MIN_WIDTH && input.rows >= HERO_ART_MIN_ROWS
-  if (artFits) return 'blocks'
+  if (fineFits) return 'blocks-fine'
+  if (coarseFits) return 'blocks'
   return heroWordmarkFits(input.rows, input.width) ? 'ascii' : 'none'
 }
