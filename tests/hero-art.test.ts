@@ -1,13 +1,12 @@
 /**
- * Tests for the hero BRAND ART: the generated `qialike` pixel-art wordmark
- * (`hero-art.ts`, read straight off the source SVGs by `svg/gen-hero-art.py`),
- * its background-only packing, its tone → theme color ramp and the fallback
- * ladder (art → ASCII wordmark → title only).
+ * Tests for the hero BRAND ART: the generated `embedcode` pixel-art wordmark
+ * (`hero-art.ts`, produced by `svg/gen-hero-art.py` from the workspace's
+ * `svg/embedcode-{dark,light}.svg`), its half-block packing, its tone → theme
+ * color ramp and the fallback ladder (art → ASCII wordmark → title only).
  *
- * The art is drawn with cell BACKGROUNDS and spaces only — no block glyph — so
- * its width is exactly `HERO_ART_COLS` on every terminal and these tests pin the
- * one invariant that makes it correct: one SOURCE pixel becomes
- * `HERO_ART_CELLS_PER_PIXEL` cells of the same ink, in one cell row.
+ * The art is drawn with `▀`, which is East-Asian-Ambiguous, so the ladder's
+ * `blockWidth` input is what keeps a 2-column terminal from overflowing the
+ * hero — these tests pin that behavior.
  *
  * Run with `bun test tests/hero-art.test.ts`.
  *
@@ -21,65 +20,45 @@ import {
   HERO_ART_WORDMARK_COLS,
   HERO_ART_WORDMARK_ROWS,
   HERO_ART_WORDMARK_TONES,
-  HERO_ART_WORDMARK_UNIT,
 } from '../packages/dsh-tui-app/src/hero-art.ts'
 import {
-  HERO_ART_CELLS_PER_PIXEL,
-  HERO_ART_COLS,
+  HERO_ART_CELL_GLYPH,
   HERO_ART_INK_ALPHA,
   HERO_ART_MARGIN_COLS,
   HERO_ART_MIN_ROWS,
   HERO_ART_MIN_WIDTH,
   HERO_ART_ROWS,
+  HERO_ART_SHADOW_ALPHA,
   HERO_WORDMARK,
   heroArtCells,
   heroArtInkColors,
   heroArtMarkKind,
   heroArtMode,
+  heroArtShadedTones,
   heroMarkRows,
 } from '../packages/dsh-tui-app/src/hero-layout.ts'
 
-/** Tone census of a grid, so a test can state a count instead of a shape. */
-const census = (grid: readonly string[]): Record<string, number> => {
-  const out: Record<string, number> = {}
-  for (const row of grid) for (const tone of row) out[tone] = (out[tone] ?? 0) + 1
-  return out
-}
-
 describe('generated brand art table', () => {
-  test('is the wordmark\'s OWN pixel grid — no resampling of it', () => {
-    // The source SVG draws on a 6-unit grid (168x42 viewBox = 28x7 cells one
-    // 6-unit pixel each); the table is that grid, cropped to the ink bounds, so
-    // every entry IS a source pixel. The previous generator rendered the same
-    // artwork onto a 48x12 grid — 48/28 = 1.714 — so a quarter of the cells
-    // landed on a pixel boundary and were resolved as "anti-aliased edge"
-    // instead of ink, which is what made the mark read as jagged.
-    expect(HERO_ART_WORDMARK_UNIT).toBe(6)
-    expect(HERO_ART_WORDMARK_COLS).toBe(28)
-    expect(HERO_ART_WORDMARK_ROWS).toBe(6)
+  test('is the 48x12 tone grid rasterized from the 168x42 wordmark viewBox', () => {
     expect(HERO_ART_WORDMARK_TONES).toHaveLength(HERO_ART_WORDMARK_ROWS)
+    expect(HERO_ART_WORDMARK_ROWS).toBe(12)
+    expect(HERO_ART_WORDMARK_COLS).toBe(48)
+    // 48:12 keeps the source's 168:42 (4:1) aspect, so the mark is not stretched.
+    expect(HERO_ART_WORDMARK_COLS / HERO_ART_WORDMARK_ROWS).toBe(4)
     for (const row of HERO_ART_WORDMARK_TONES) expect(row).toHaveLength(HERO_ART_WORDMARK_COLS)
   })
 
-  test('uses only the source\'s two inks, and both appear', () => {
+  test('uses only the documented tone alphabet and every tone appears', () => {
     const joined = HERO_ART_WORDMARK_TONES.join('')
-    expect(/^[.BM]+$/.test(joined)).toBe(true)
-    for (const tone of 'BM') expect(joined.includes(tone)).toBe(true)
-    // No `D` role at all: a two-ink pixel-art source has no anti-aliased edge.
-    expect(joined.includes('D')).toBe(false)
-    expect(census(HERO_ART_WORDMARK_TONES)).toEqual({ M: 34, B: 38, '.': 96 })
+    expect(/^[.BMD]+$/.test(joined)).toBe(true)
+    for (const tone of 'BMD') expect(joined.includes(tone)).toBe(true)
   })
 
-  test('keeps the letter counters open and the glyphs separated', () => {
-    const grid = HERO_ART_WORDMARK_TONES
-    // The `q` is a ring: a 4x5 box whose 2x3 centre is EMPTY. Filling it (the
-    // opencode-style counter tint the old shading pass applied) is what made the
-    // mark read as a row of solid blocks.
-    expect(grid[0]!.slice(0, 4)).toBe('MMMM')
-    expect(grid[4]!.slice(0, 4)).toBe('MMMM')
-    for (const y of [1, 2, 3]) expect(grid[y]!.slice(0, 4)).toBe('M..M')
-    // Every row below the cap line keeps gaps, i.e. the letters stay separated.
-    for (const row of grid) expect(row.includes('.')).toBe(true)
+  test('keeps the source top margin blank and letter gaps in every glyph row', () => {
+    // The rasterized wordmark carries the SVG's own top margin; below it every
+    // row keeps at least one empty cell, i.e. the letters stay separated.
+    expect(HERO_ART_WORDMARK_TONES[0]).toBe('.'.repeat(HERO_ART_WORDMARK_COLS))
+    for (const row of HERO_ART_WORDMARK_TONES.slice(1)) expect(row.includes('.')).toBe(true)
   })
 
   test('the `q` descender is the only ink below the baseline', () => {
@@ -101,117 +80,202 @@ describe('generated brand art table', () => {
   })
 })
 
-describe('background-only packing (one source pixel = two cells)', () => {
-  test('needs two columns per source pixel and one row per source row', () => {
-    // A terminal cell is ~2x as tall as it is wide, so two cells side by side are
-    // the square the source's 6x6 pixel asks for; the mark therefore keeps the
-    // source's aspect instead of being stretched.
-    expect(HERO_ART_CELLS_PER_PIXEL).toBe(2)
-    expect(HERO_ART_COLS).toBe(HERO_ART_WORDMARK_COLS * HERO_ART_CELLS_PER_PIXEL)
-    expect(HERO_ART_ROWS).toBe(HERO_ART_WORDMARK_ROWS)
+describe('half-block packing', () => {
+  test('packs two design rows per terminal row', () => {
     const cells = heroArtCells()
     expect(cells).toHaveLength(HERO_ART_ROWS)
-    for (const line of cells) expect(line).toHaveLength(HERO_ART_COLS)
+    expect(HERO_ART_ROWS).toBe(HERO_ART_WORDMARK_ROWS / 2)
+    for (const line of cells) expect(line).toHaveLength(HERO_ART_WORDMARK_COLS)
+    for (const line of cells) for (const cell of line) expect(' ▀▄█'.includes(cell.ch)).toBe(true)
   })
 
-  test('gives both cells of a source pixel the SAME ink', () => {
+  test('the descender rides the last cell line as a solid block', () => {
+    const line = heroArtCells()[HERO_ART_ROWS - 1]!
+    const lastRow = HERO_ART_WORDMARK_TONES[HERO_ART_WORDMARK_ROWS - 1]!
+    const columns = [...lastRow].flatMap((tone, index) => (tone === '.' ? [] : [index]))
+    expect(columns.length).toBeGreaterThan(0)
+    for (const c of columns) {
+      // The same ink on the last two tone rows packs into one solid half-block.
+      expect(line[c]!.ch).toBe('█')
+      expect(line[c]!.fg).toBeGreaterThanOrEqual(0)
+    }
+  })
+
+  test('maps each half to its own ink (both / upper / lower / empty)', () => {
+    const [line] = heroArtCells(['B.', '.M', 'DD', 'BM'])
+    expect(line!.map((c) => c.ch).join('')).toBe('▀▄')
+    expect(line![0]).toEqual({ ch: '▀', fg: 0, bg: -1 })
+    expect(line![1]).toEqual({ ch: '▄', fg: 1, bg: -1 })
+
+    const [same] = heroArtCells(['DD', 'DD'])
+    expect(same![0]).toEqual({ ch: '█', fg: 2, bg: -1 })
+
+    const [diff] = heroArtCells(['BM', 'MD'])
+    expect(diff![0]).toEqual({ ch: '▀', fg: 0, bg: 1 })
+    // The `D` under the `M` half IS the secondary ink's shadow (index 3), not a
+    // third ink: shadows belong to the stroke they hang from.
+    expect(diff![1]).toEqual({ ch: '▀', fg: 1, bg: 3 })
+
+    const [empty] = heroArtCells(['..', '..'])
+    expect(empty![0]).toEqual({ ch: ' ', fg: -1, bg: -1 })
+  })
+
+  test('drops a trailing unpaired row and tolerates ragged input', () => {
+    expect(heroArtCells(['B'])).toHaveLength(0)
+    expect(heroArtCells(['B', 'B', 'B'])).toHaveLength(1)
+    // Ragged input pads the SHORT row with empty halves (width = widest row).
+    const [ragged] = heroArtCells(['BMD', 'B'])
+    expect(ragged).toHaveLength(3)
+    expect(ragged![2]).toEqual({ ch: '▀', fg: 2, bg: -1 })
+  })
+})
+
+describe('anti-aliased edge -> shadow (opencode shading, 2026-09-15)', () => {
+  const census = (grid: readonly string[]): Record<string, number> => {
+    const out: Record<string, number> = {}
+    for (const row of grid) for (const tone of row) out[tone] = (out[tone] ?? 0) + 1
+    return out
+  }
+  const body = (grid: readonly string[], y: number, x: number): boolean =>
+    grid[y]?.[x] === 'B' || grid[y]?.[x] === 'M'
+
+  test('keeps only the shadow that does a job, and drops the rest of the edge', () => {
+    const src = census(HERO_ART_WORDMARK_TONES)
+    const out = census(heroArtShadedTones())
+    // Only the `D` cells change; the two inks are untouched.
+    expect(out['B']).toBe(src['B'])
+    expect(out['M']).toBe(src['M'])
+    expect(src['D']).toBe(139)
+    // 30 letter-counter fills + 45 cells under ink (37 of them the edge itself,
+    // 8 empty) survive; 90 outline cells are dropped.
+    expect(out['D']).toBe(75)
+    expect(out['.']).toBe(src['.']! + 90 - 26)
+  })
+
+  test('the grey row ABOVE the wordmark is gone (the reported ghost)', () => {
+    const src = HERO_ART_WORDMARK_TONES
+    const out = heroArtShadedTones()
+    // The rasterizer's top edge row sits directly above the first ink row.
+    expect(src[1]!.replace(/\./gu, '')).not.toBe('')
+    expect(out[1]!.replace(/\./gu, '')).toBe('')
+    // …and nothing else moved: the ink rows themselves are untouched.
+    for (let y = 2; y < src.length; y++) {
+      for (let x = 0; x < src[y]!.length; x++) {
+        if (body(src, y, x)) expect(out[y]![x], `(${y},${x})`).toBe(src[y]![x])
+      }
+    }
+  })
+
+  test('a kept edge cell is enclosed by the mark or sits under ink — never both-ish', () => {
+    const src = HERO_ART_WORDMARK_TONES
+    const out = heroArtShadedTones()
+    const height = src.length
+    const width = src[0]!.length
+    // Independent flood fill of the outside over non-body cells.
+    const outside = src.map(() => new Array<boolean>(width).fill(false))
+    const stack: [number, number][] = []
+    const visit = (y: number, x: number): void => {
+      if (y < 0 || y >= height || x < 0 || x >= width) return
+      if (outside[y]![x] || body(src, y, x)) return
+      outside[y]![x] = true
+      stack.push([y, x])
+    }
+    for (let x = 0; x < width; x++) { visit(0, x); visit(height - 1, x) }
+    for (let y = 0; y < height; y++) { visit(y, 0); visit(y, width - 1) }
+    while (stack.length > 0) {
+      const [y, x] = stack.pop()!
+      visit(y - 1, x); visit(y + 1, x); visit(y, x - 1); visit(y, x + 1)
+    }
+    let kept = 0
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const wanted = !body(src, y, x) && (!outside[y]![x] || (y > 0 && body(src, y - 1, x)))
+        expect(out[y]![x] === 'D', `(${y},${x})`).toBe(wanted)
+        if (wanted) kept += 1
+      }
+    }
+    expect(kept).toBe(75)
+  })
+
+  test('the shadow slot follows the stroke it hangs from', () => {
+    const cellOf = (grid: readonly string[]): unknown => heroArtCells(grid)[0]![0]
+    // Under an `M` stroke: the secondary shadow (3); under `B`: the primary (2).
+    expect(cellOf(['M', 'D'])).toEqual({ ch: '▀', fg: 1, bg: 3 })
+    expect(cellOf(['B', 'D'])).toEqual({ ch: '▀', fg: 0, bg: 2 })
+    // No body anywhere in the column: the primary shadow is the safe default.
+    expect(cellOf(['.', 'D'])).toEqual({ ch: '▄', fg: 2, bg: -1 })
+    // The generated grid resolves BOTH slots (40 + 35 shadow pixels).
     const cells = heroArtCells()
-    const inkOf = (tone: string): number => (tone === 'B' ? 0 : tone === 'M' ? 1 : -1)
-    for (let r = 0; r < HERO_ART_WORDMARK_ROWS; r++) {
-      for (let c = 0; c < HERO_ART_WORDMARK_COLS; c++) {
-        const want = inkOf(HERO_ART_WORDMARK_TONES[r]![c]!)
-        for (let k = 0; k < HERO_ART_CELLS_PER_PIXEL; k++) {
-          expect(cells[r]![c * HERO_ART_CELLS_PER_PIXEL + k]!.ink, `(${r},${c})`).toBe(want)
-        }
-      }
+    const halves = new Set<number>()
+    for (const line of cells) for (const cell of line) {
+      if (cell.fg >= 2) halves.add(cell.fg)
+      if (cell.bg >= 2) halves.add(cell.bg)
     }
-  })
-
-  test('paints every cell with a background and nothing else', () => {
-    // A cell carries ONE field. There is no glyph and no second (foreground)
-    // half, by construction: the mark's ink is always a cell background, which
-    // every terminal fills exactly — so no font anti-aliasing and no seam can
-    // appear, on any terminal (the old encoding needed `▄`, whose ink cannot
-    // reach a cell top on Apple Terminal's SF Mono).
-    for (const line of heroArtCells()) {
-      for (const cell of line) {
-        expect(Object.keys(cell)).toEqual(['ink'])
-        expect([-1, 0, 1]).toContain(cell.ink)
-      }
-    }
-  })
-
-  test('the drawn cells are the source pixels doubled, and nothing else', () => {
-    const flat = heroArtCells().flat()
-    const painted = flat.filter((cell) => cell.ink >= 0)
-    const source = census(HERO_ART_WORDMARK_TONES)
-    expect(painted.filter((c) => c.ink === 1).length).toBe(source['M']! * HERO_ART_CELLS_PER_PIXEL)
-    expect(painted.filter((c) => c.ink === 0).length).toBe(source['B']! * HERO_ART_CELLS_PER_PIXEL)
-    expect(flat.filter((c) => c.ink === -1).length).toBe(source['.']! * HERO_ART_CELLS_PER_PIXEL)
-  })
-
-  test('pads a short row instead of shifting the mark', () => {
-    const [line] = heroArtCells(['BM'])
-    expect(line).toHaveLength(HERO_ART_COLS)
-    expect(line!.slice(0, 4).map((c) => c.ink)).toEqual([0, 0, 1, 1])
-    for (const cell of line!.slice(4)) expect(cell.ink).toBe(-1)
+    expect([...halves].sort()).toEqual([2, 3])
   })
 })
 
 describe('ink palette', () => {
-  test('is the SVG two-ink design, blended toward the theme background', () => {
+  test('is the SVG two-ink design plus a 25% shadow of each ink', () => {
     expect(HERO_ART_INK_ALPHA).toEqual({ primary: 1, secondary: 0.7 })
-    expect(heroArtInkColors('#ffffff', '#000000')).toEqual(['#ffffff', '#b3b3b3'])
-    expect(heroArtInkColors('#000000', '#ffffff')).toEqual(['#000000', '#4d4d4d'])
-    // The default dark theme's two inks (the approved preview's colors).
-    expect(heroArtInkColors('#f9fafb', '#151517')).toEqual(['#f9fafb', '#b5b5b7'])
+    expect(HERO_ART_SHADOW_ALPHA).toBe(0.25)
+    expect(heroArtInkColors('#ffffff', '#000000')).toEqual(['#ffffff', '#b3b3b3', '#404040', '#2d2d2d'])
+    expect(heroArtInkColors('#000000', '#ffffff')).toEqual(['#000000', '#4d4d4d', '#bfbfbf', '#d3d3d3'])
+    // The default dark theme's four inks (the approved preview's colors).
+    expect(heroArtInkColors('#f9fafb', '#151517')).toEqual(['#f9fafb', '#b5b5b7', '#4e4e50', '#3d3d3f'])
   })
 
-  test('primary ink IS the theme text color', () => {
-    expect(heroArtInkColors('#f9fafb', '#151517')[0]).toBe('#f9fafb')
-    // The secondary sits between the ink and the page, so the two-ink hierarchy
-    // survives a light theme too (the light variant's own second ink does).
-    const [primary, secondary] = heroArtInkColors('#000000', '#ffffff')
-    expect(secondary).not.toBe(primary)
-    expect(secondary).not.toBe('#ffffff')
+  test('primary ink IS the theme text color, and the inks order away from the bg', () => {
+    const [text, bg] = ['#f9fafb', '#151517']
+    const inks = heroArtInkColors(text, bg)
+    expect(inks[0]).toBe(text)
+    const distance = (hex: string): number => {
+      const rgb = (h: string): number[] => [1, 3, 5].map((i) => Number.parseInt(h.slice(i, i + 2), 16))
+      const a = rgb(hex)
+      const b = rgb(bg)
+      return a.reduce((sum, v, i) => sum + Math.abs(v - b[i]!), 0)
+    }
+    const d = inks.map((ink) => distance(ink!))
+    for (let i = 1; i < d.length; i++) expect(d[i - 1]!).toBeGreaterThan(d[i]!)
   })
 
   test('accepts #rgb shorthand and survives junk input', () => {
     expect(heroArtInkColors('#fff', '#000')[0]).toBe('#ffffff')
-    expect(heroArtInkColors('nonsense', '#000')).toHaveLength(2)
+    expect(heroArtInkColors('nonsense', '#000')).toHaveLength(4)
   })
 })
 
 describe('mark selection ladder', () => {
-  const wide = { rows: 30, width: 100 }
+  const wide = { rows: 30, width: 100, blockWidth: 1 }
 
-  test('picks the art whenever it fits — no glyph-width clause any more', () => {
+  test('picks the art when it fits on a one-column-wide terminal', () => {
     expect(heroArtMarkKind(wide)).toBe('blocks')
-    expect(HERO_ART_MIN_WIDTH).toBe(HERO_ART_COLS + HERO_ART_MARGIN_COLS)
-    // The old ladder needed the terminal to measure `▄` as ONE column (it is
-    // East-Asian-Ambiguous). Nothing in the art is a glyph now, so the decision
-    // is pure geometry: the input carries no width input at all.
-    expect(Object.keys(wide)).toEqual(['rows', 'width'])
+    expect(HERO_ART_CELL_GLYPH).toBe('▀')
+    expect(HERO_ART_MIN_WIDTH).toBe(HERO_ART_WORDMARK_COLS + HERO_ART_MARGIN_COLS)
+  })
+
+  test('falls back to the ASCII wordmark when the block glyph is two columns', () => {
+    expect(heroArtMarkKind({ ...wide, blockWidth: 2 })).toBe('ascii')
+    expect(heroArtMarkKind({ ...wide, blockWidth: 0 })).toBe('ascii')
   })
 
   test('falls back on short or narrow terminals, then to nothing', () => {
     // 21 rows: too short for the 23-row art AND for the 22-row ASCII mark.
-    expect(heroArtMarkKind({ rows: 21, width: 100 })).toBe('none')
-    expect(heroArtMarkKind({ rows: HERO_ART_MIN_ROWS, width: 100 })).toBe('blocks')
+    expect(heroArtMarkKind({ rows: 21, width: 100, blockWidth: 1 })).toBe('none')
+    expect(heroArtMarkKind({ rows: HERO_ART_MIN_ROWS, width: 100, blockWidth: 1 })).toBe('blocks')
     // The band between the two gates: too short for the art, but the shorter
     // ASCII fallback still fits.
-    expect(heroArtMarkKind({ rows: 22, width: 100 })).toBe('ascii')
+    expect(heroArtMarkKind({ rows: 22, width: 100, blockWidth: 1 })).toBe('ascii')
     // Just below the art's width the ASCII mark cannot help either (it needs 80).
-    expect(heroArtMarkKind({ rows: 30, width: HERO_ART_MIN_WIDTH - 1 })).toBe('none')
+    expect(heroArtMarkKind({ rows: 30, width: HERO_ART_MIN_WIDTH - 1, blockWidth: 1 })).toBe('none')
     // Too small for even the ASCII wordmark (needs 22 rows / 80 columns).
-    expect(heroArtMarkKind({ rows: 20, width: 60 })).toBe('none')
-    expect(heroArtMarkKind({ rows: 30, width: 40 })).toBe('none')
+    expect(heroArtMarkKind({ rows: 20, width: 60, blockWidth: 2 })).toBe('none')
+    expect(heroArtMarkKind({ rows: 30, width: 40, blockWidth: 1 })).toBe('none')
   })
 
   test('the art reaches narrower terminals than the ASCII fallback needs', () => {
-    // 60 columns is below the ASCII wordmark's 80, but the art is only 56 wide.
-    expect(HERO_ART_COLS).toBe(56)
-    expect(heroArtMarkKind({ rows: 30, width: 60 })).toBe('blocks')
+    // 60 columns is below the ASCII wordmark's 80, but the art is only 45 wide.
+    expect(heroArtMarkKind({ rows: 30, width: 60, blockWidth: 1 })).toBe('blocks')
   })
 
   test('honors the DSH_TUI_HERO_ART override', () => {
@@ -239,7 +303,7 @@ describe('mark selection ladder', () => {
     expect(heroMarkRows('blocks')).toBe(HERO_ART_ROWS)
     expect(heroMarkRows('ascii')).toBe(HERO_WORDMARK.length)
     expect(heroMarkRows('none')).toBe(0)
-    // The pixel-art wordmark is TALLER than the ASCII fallback (6 vs 5 rows) —
+    // The rasterized wordmark is TALLER than the ASCII fallback (6 vs 5 rows) —
     // it used to be 4, which is why HERO_ART_MIN_ROWS moved 21 -> 23.
     expect(HERO_ART_ROWS).toBeGreaterThan(HERO_WORDMARK.length)
   })

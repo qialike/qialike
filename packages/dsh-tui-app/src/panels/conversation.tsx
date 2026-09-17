@@ -44,6 +44,7 @@ import {
 import { questionDockRows } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
 import {
+  HERO_ART_CELL_GLYPH,
   HERO_AREA_PADDING_Y,
   HERO_CAPTION_URL,
   HERO_COMPOSER_EXTRA_ROWS,
@@ -1069,20 +1070,21 @@ function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
 /** `DSH_TUI_HERO_ART` override, read once at module load (auto by default). */
 const HERO_ART_MODE = heroArtMode(process.env.DSH_TUI_HERO_ART)
 
-/** The generated brand art, laid out as background-painted cells once. */
+/** The generated brand art, packed into colored half-block cells once. */
 const HERO_ART_ROWS_CELLS = heroArtCells()
 
 /**
  * Brand mark the hero draws at this size: the generated pixel-art wordmark when
- * it fits, else the plain-`#` ASCII fallback, else nothing. The renderer and
- * every geometry mirror call this, so routing cannot disagree with what is
- * painted. It takes no glyph-width input any more: the art is drawn entirely
- * with cell backgrounds and spaces, so no ambiguous-width glyph is involved.
+ * it fits AND the terminal really advances `▀` one column (it is
+ * East-Asian-Ambiguous — see the charwidth calibration), else the plain-`#`
+ * ASCII fallback, else nothing. The renderer and every geometry mirror call
+ * this, so routing cannot disagree with what is painted.
  */
 function heroMarkFor(rows: number, width: number): HeroMarkKind {
   return heroArtMarkKind({
     rows,
     width,
+    blockWidth: visualWidth(HERO_ART_CELL_GLYPH),
     mode: HERO_ART_MODE,
   })
 }
@@ -3155,26 +3157,20 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           {heroMark === 'blocks' ? (
             <Box flexDirection="column" flexShrink={0}>
               {HERO_ART_ROWS_CELLS.map((line, i) => {
-                // Every art cell is exactly one column wide (it is a space with
-                // a background — see HERO_ART_CELLS_PER_PIXEL), so the row is
-                // centered by its own length: no glyph measurement can shift it.
-                const pad = ' '.repeat(Math.max(0, Math.floor((heroUsable - line.length) / 2)))
-                // Run-length the row: 56 cells carry only a handful of ink runs,
-                // and Ink rebuilds every node it is handed on every frame.
-                const runs: { ink: number; width: number }[] = []
-                for (const cell of line) {
-                  const last = runs[runs.length - 1]
-                  if (last !== undefined && last.ink === cell.ink) last.width += 1
-                  else runs.push({ ink: cell.ink, width: 1 })
-                }
+                // Center by MEASURED width: the art glyphs are
+                // East-Asian-Ambiguous, so their column count comes from the
+                // charwidth calibration rather than from a static table.
+                const artWidth = line.reduce((sum, cell) => sum + visualWidth(cell.ch), 0)
+                const pad = ' '.repeat(Math.max(0, Math.floor((heroUsable - artWidth) / 2)))
                 return (
                   <Text key={`art-${i}`} wrap="truncate">
                     {pad}
-                    {runs.map((run, r) => (
+                    {line.map((cell, c) => (
                       <Text
-                        key={`art-${i}-${r}`}
-                        backgroundColor={run.ink >= 0 ? heroArtInk[run.ink] : undefined}
-                      >{' '.repeat(run.width)}</Text>
+                        key={`art-${i}-${c}`}
+                        color={cell.fg >= 0 ? heroArtInk[cell.fg] : undefined}
+                        backgroundColor={cell.bg >= 0 ? heroArtInk[cell.bg] : undefined}
+                      >{cell.ch}</Text>
                     ))}
                   </Text>
                 )

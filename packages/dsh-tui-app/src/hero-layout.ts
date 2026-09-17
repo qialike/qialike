@@ -567,85 +567,169 @@ export function heroWordmarkFits(rows: number, width: number): boolean {
  * ------------------------------------------------------------------------- */
 
 /**
- * Terminal cells one SOURCE pixel of the brand art occupies.
- *
- * 2 is not a style choice, it is the source's own aspect ratio: the wordmark is
- * PIXEL ART on a grid of `HERO_ART_WORDMARK_UNIT` x `HERO_ART_WORDMARK_UNIT` SVG
- * units (see `hero-art.ts`), and a terminal cell is about twice as tall as it is
- * wide, so one source pixel needs TWO columns of ONE cell row to come out square
- * (measured on Apple Terminal's default 11 pt cell, 6.872 x 14 px: two cells are
- * 13.744 x 14 px for a 6 x 6 unit pixel).
- *
- * It is also why the art needs NO glyph at all: each of those two cells is
- * filled with a plain BACKGROUND, and a terminal fills a background across its
- * whole cell on every terminal. A font's block glyphs do not tile — SF Mono
- * draws `█`/`▀` strictly inside the line box (its `█` is 83.8% of the row tall
- * with the gap at the TOP), so every row drawn with one left a stripe of the
- * page colour across its top and a 1 px anti-aliased hairline at its joins, on
- * Apple Terminal only (google-gemini/gemini-cli#23919 is the same terminal
- * defect, worked around there with `▅`). Backgrounds have neither problem, and
- * because the grid is the source's own there is no resampling either.
+ * The half-block glyph the brand art is drawn with. `▀` (U+2580) carries a
+ * foreground color AND a background color in one cell, which is exactly two
+ * stacked tone pixels — so a rasterized cell stays square on a terminal cell that
+ * is about twice as tall as it is wide.
  */
-export const HERO_ART_CELLS_PER_PIXEL = 2
-
-/** Terminal columns the brand art occupies (one source pixel = two columns). */
-export const HERO_ART_COLS = HERO_ART_WORDMARK_COLS * HERO_ART_CELLS_PER_PIXEL
+export const HERO_ART_CELL_GLYPH = '▀'
 
 /** Ink weights per tone role of the design: `B` primary, `M` secondary. Blending
  *  `theme.text` toward `theme.bg` with these weights reproduces the art's
  *  hierarchy on a dark AND on a light theme — the source variants only swap
  *  palettes, the roles are identical.
  *
- *  Two slots, because the source is two-ink pixel art: it carries no
- *  anti-aliased edge to shade (the earlier `D` role and the 25% shadow tint that
- *  went with it existed only because the rasterizer produced partial cells — see
- *  the generator). */
+ *  The third weight is {@link HERO_ART_SHADOW_ALPHA}: the mark's shadow is not a
+ *  third *ink* but a 25% tint of the ink it hangs from, so it is derived from
+ *  these two rather than listed here. */
 export const HERO_ART_INK_ALPHA = { primary: 1, secondary: 0.7 } as const
 
-/** Rows the brand art occupies: ONE cell row per source-pixel row (the source
- *  pixel is square, so it needs no vertical packing either). */
-export const HERO_ART_ROWS = HERO_ART_WORDMARK_ROWS
+/** How far the shadow (and the letter-counter fill) is blended toward the
+ *  background — 25%, the same weight opencode's wordmark uses for its `~`
+ *  (bottom feather) and `_` (counter fill) marks. */
+export const HERO_ART_SHADOW_ALPHA = 0.25
+
+/** Rows the brand art occupies (two design-pixel rows per terminal row). */
+export const HERO_ART_ROWS = Math.ceil(HERO_ART_WORDMARK_ROWS / 2)
 
 /** Terminal columns the brand art needs (grid width + side margins). */
 export const HERO_ART_MARGIN_COLS = 4
 /** Minimum terminal width for the brand art. */
-export const HERO_ART_MIN_WIDTH = HERO_ART_COLS + HERO_ART_MARGIN_COLS
+export const HERO_ART_MIN_WIDTH = HERO_ART_WORDMARK_COLS + HERO_ART_MARGIN_COLS
 /** Minimum terminal rows for the brand art (art + title + context + composer
- *  + hints + footer + padding + status bar). It is the SIX-row art this gate was
- *  written for: the source grid is 28 x 6, and one source row is one cell row. */
+ *  + hints + footer + padding + status bar). Two rows above the 4-row art this
+ *  gate was written for: the rasterized wordmark packs SIX half-block rows. */
 export const HERO_ART_MIN_ROWS = 23
 
-/** One rendered hero-art cell: one HALF of one source pixel, painted with a
- *  solid background (see {@link HERO_ART_CELLS_PER_PIXEL}). */
+/** One rendered hero-art cell: the glyph plus which ink color paints each half. */
 export interface HeroArtCell {
-  /** Ink index into {@link heroArtInkColors}, or −1 for an empty source pixel
-   *  (nothing is painted at all, so the page shows through). */
-  ink: number
+  /** Glyph to print (`▀`/`▄`/`█`/space). */
+  ch: string
+  /** Upper-half ink index into {@link heroArtInkColors}, −1 = empty. */
+  fg: number
+  /** Lower-half ink index, −1 = none (the cell background stays clear). */
+  bg: number
+}
+
+/** Whether a tone cell is part of the mark's BODY (one of the two inks). */
+function heroArtBody(tone: string | undefined): boolean {
+  return tone === 'B' || tone === 'M'
 }
 
 /**
- * Lay the generated tone grid out as paintable cells: one source pixel becomes
- * {@link HERO_ART_CELLS_PER_PIXEL} cells of the SAME ink, side by side in one
- * cell row.
+ * The generated tone grid as RENDERED.
  *
- * Nothing else happens here on purpose. The grid is the artwork's own pixel
- * grid, so there is no edge to classify, no coverage to threshold and no shadow
- * to invent: a source pixel is either ink (`B`/`M`) or empty, and a letter
- * counter is a real hole rather than a tinted fill.
- * @param tones - tone rows (defaults to the generated wordmark); a short row is
- *   padded with empty columns, so a ragged grid cannot shift the mark.
+ * The SVG's `D` cells are its anti-aliased edge, and drawing all of them as a
+ * third, 25% ink put a grey ring around every stroke — brightest reading: a
+ * "ghost" halo, including a whole row of it ABOVE the wordmark (2026-09-15, user
+ * report). The edge is therefore no longer an outline. It is kept only where it
+ * does a job, following the idiom opencode's wordmark uses (`~` = a half block
+ * in the shadow colour below the ink, `_` = a letter counter filled with the
+ * shadow):
+ *
+ *  - a cell ENCLOSED by the body (a letter counter) → the shadow fill;
+ *  - a cell directly BELOW a body cell → the shadow's bottom feather.
+ *
+ * Every other `D` cell — above, left or right of the ink — is dropped; opencode
+ * never puts its shadow above the mark. Measured on the generated grid: 139 `D`
+ * cells → 49 kept (12 enclosed + 37 below) and 90 dropped, whole rows included.
+ * The dropped empty cells are replaced by shadow too where they are enclosed or
+ * sit below ink (26 of them), so the render grid carries 75 shadow cells.
+ * @param tones - the source tone rows (defaults to the generated wordmark).
+ * @returns rows of the same shape, using only `B`/`M`/`D`/`.` (`.` = no ink).
+ */
+export function heroArtShadedTones(tones: readonly string[] = HERO_ART_WORDMARK_TONES): string[] {
+  const height = tones.length
+  const width = tones.reduce((max, row) => Math.max(max, row.length), 0)
+  const at = (y: number, x: number): string => tones[y]?.[x] ?? '.'
+  // Flood-fill the OUTSIDE from the border across non-body cells: a non-body
+  // cell the fill never reaches is a letter counter (enclosed by the mark).
+  const outside: boolean[][] = tones.map(() => new Array<boolean>(width).fill(false))
+  const stack: [number, number][] = []
+  const visit = (y: number, x: number): void => {
+    if (y < 0 || y >= height || x < 0 || x >= width) return
+    if (outside[y]![x] || heroArtBody(at(y, x))) return
+    outside[y]![x] = true
+    stack.push([y, x])
+  }
+  for (let x = 0; x < width; x++) { visit(0, x); visit(height - 1, x) }
+  for (let y = 0; y < height; y++) { visit(y, 0); visit(y, width - 1) }
+  while (stack.length > 0) {
+    const [y, x] = stack.pop()!
+    visit(y - 1, x)
+    visit(y + 1, x)
+    visit(y, x - 1)
+    visit(y, x + 1)
+  }
+  return tones.map((_row, y) => {
+    let out = ''
+    for (let x = 0; x < width; x++) {
+      const tone = at(y, x)
+      if (heroArtBody(tone)) { out += tone; continue }
+      const enclosed = !outside[y]![x]
+      const underInk = y > 0 && heroArtBody(at(y - 1, x))
+      out += enclosed || underInk ? 'D' : '.'
+    }
+    return out
+  })
+}
+
+/**
+ * Ink index for one `D` half: the shadow belongs to the ink it hangs from, so
+ * the nearest body cell above it in the same column picks the slot — `M` strokes
+ * get the secondary shadow (index 3), everything else the primary one (index 2).
+ * Every shadow cell in the generated grid resolves this way (measured: no cell
+ * has body ink both above and below with disagreeing tones). A `D` with no body
+ * in its column at all (only reachable through an explicit test grid) falls back
+ * to the primary shadow.
+ */
+function heroArtShadowIndex(tones: readonly string[], y: number, x: number): number {
+  for (let up = y - 1; up >= 0; up--) {
+    const tone = tones[up]?.[x]
+    if (heroArtBody(tone)) return tone === 'M' ? 3 : 2
+  }
+  for (let down = y + 1; down < tones.length; down++) {
+    const tone = tones[down]?.[x]
+    if (heroArtBody(tone)) return tone === 'M' ? 3 : 2
+  }
+  return 2
+}
+
+/** Ink index of one half of a cell (`B`=0, `M`=1, shadow=2/3), −1 = no ink. */
+function heroArtInk(tones: readonly string[], y: number, x: number): number {
+  const tone = tones[y]?.[x]
+  if (tone === 'B') return 0
+  if (tone === 'M') return 1
+  if (tone === 'D') return heroArtShadowIndex(tones, y, x)
+  return -1
+}
+
+/**
+ * Pack the shaded tone grid into colored half-block cells: two stacked
+ * design-pixel rows become one terminal row.
+ * @param tones - tone rows (defaults to {@link heroArtShadedTones}, i.e. the
+ *   generated wordmark with the AA halo dropped and the counters/feather kept);
+ *   a trailing odd row is dropped, since a half-block cell needs both halves.
  * @returns one array of cells per terminal row.
  */
-export function heroArtCells(tones: readonly string[] = HERO_ART_WORDMARK_TONES): HeroArtCell[][] {
-  return tones.map((row) => {
+export function heroArtCells(tones: readonly string[] = heroArtShadedTones()): HeroArtCell[][] {
+  const width = tones.reduce((max, row) => Math.max(max, row.length), 0)
+  const out: HeroArtCell[][] = []
+  for (let r = 0; r + 1 < tones.length; r += 2) {
     const line: HeroArtCell[] = []
-    for (let c = 0; c < HERO_ART_WORDMARK_COLS; c++) {
-      const tone = row[c] ?? '.'
-      const ink = tone === 'B' ? 0 : tone === 'M' ? 1 : -1
-      for (let k = 0; k < HERO_ART_CELLS_PER_PIXEL; k++) line.push({ ink })
+    for (let c = 0; c < width; c++) {
+      const top = heroArtInk(tones, r, c)
+      const bottom = heroArtInk(tones, r + 1, c)
+      if (top >= 0 && bottom >= 0) {
+        // Same ink on both halves paints as one solid block (no background).
+        line.push(top === bottom ? { ch: '█', fg: top, bg: -1 } : { ch: '▀', fg: top, bg: bottom })
+      } else if (top >= 0) line.push({ ch: '▀', fg: top, bg: -1 })
+      else if (bottom >= 0) line.push({ ch: '▄', fg: bottom, bg: -1 })
+      else line.push({ ch: ' ', fg: -1, bg: -1 })
     }
-    return line
-  })
+    out.push(line)
+  }
+  return out
 }
 
 /** Parse `#rgb`/`#rrggbb`(aa) into 0–255 channels. */
@@ -658,38 +742,39 @@ function heroArtRgb(hex: string): [number, number, number] {
 }
 
 /**
- * Resolve the inks the brand art draws with, from a theme:
- * `[primary, secondary]`.
+ * Resolve the four inks the brand art draws with, from a theme:
+ * `[primary, secondary, shadowOfPrimary, shadowOfSecondary]`.
  *
  * `primary` is `theme.text` itself and `secondary` is it blended
  * {@link HERO_ART_INK_ALPHA}.secondary of the way toward `theme.bg` (the source
- * SVG's own second ink sits at the same weight on both of its variants), so a
- * dark theme gets a light-grey secondary and a light theme a dark-grey one, and
- * a colorscheme switch restyles the mark with the rest of the chrome.
- *
- * Two slots only: the source is two-ink pixel art, and an EMPTY source pixel
- * paints nothing at all (the page shows through), so there is no third ink and
- * no page slot to erase a glyph's other half with — see
- * {@link HERO_ART_CELLS_PER_PIXEL}.
+ * SVG's own second ink sits at the same weight); each shadow is its ink blended
+ * {@link HERO_ART_SHADOW_ALPHA} toward `theme.bg`, so a dark theme gets a dark
+ * shadow and a light theme a light one.
  * @param text - theme text color (`#rgb`/`#rrggbb`).
  * @param bg - theme background color.
- * @returns hex colors for the two ink slots, in index order.
+ * @returns hex colors for the four ink slots, in index order.
  */
 export function heroArtInkColors(
   text: string,
   bg: string,
   ink: { readonly primary: number; readonly secondary: number } = HERO_ART_INK_ALPHA,
-): [string, string] {
+  shadow = HERO_ART_SHADOW_ALPHA,
+): string[] {
   const [tr, tg, tb] = heroArtRgb(text)
   const [br, bgc, bb] = heroArtRgb(bg)
   const chan = (t: number, b: number, a: number): number =>
     Math.max(0, Math.min(255, Math.round(t * a + b * (1 - a))))
   const hex = (c: readonly [number, number, number]): string =>
     `#${c.map((v) => v.toString(16).padStart(2, '0')).join('')}`
-  return [
-    hex([chan(tr, br, ink.primary), chan(tg, bgc, ink.primary), chan(tb, bb, ink.primary)]),
-    hex([chan(tr, br, ink.secondary), chan(tg, bgc, ink.secondary), chan(tb, bb, ink.secondary)]),
+  type Rgb = readonly [number, number, number]
+  const primary: Rgb = [chan(tr, br, ink.primary), chan(tg, bgc, ink.primary), chan(tb, bb, ink.primary)]
+  const secondary: Rgb = [
+    chan(tr, br, ink.secondary),
+    chan(tg, bgc, ink.secondary),
+    chan(tb, bb, ink.secondary),
   ]
+  const tint = (c: Rgb): Rgb => [chan(c[0], br, shadow), chan(c[1], bgc, shadow), chan(c[2], bb, shadow)]
+  return [hex(primary), hex(secondary), hex(tint(primary)), hex(tint(secondary))]
 }
 
 /** Brand mark flavor the hero draws above its title. */
@@ -802,19 +887,16 @@ export interface HeroArtMarkInput {
   rows: number
   /** Terminal columns. */
   width: number
+  /** Measured display width of ONE art cell glyph ({@link HERO_ART_CELL_GLYPH})
+   *  on this terminal — `▀` is East-Asian-Ambiguous, so it is only safe to draw
+   *  the art when the terminal really advances it one column. */
+  blockWidth: number
   /** `DSH_TUI_HERO_ART` override (default `auto`). */
   mode?: HeroArtMode
 }
 
 /**
  * Which brand mark to draw, and whether at all.
- *
- * There is no `blockWidth` clause any more: the art is painted entirely with
- * cell BACKGROUNDS and a plain space, so it no longer depends on how this
- * terminal advances a block glyph. The old gate existed because the art was
- * drawn with `▄`/`▀` (East-Asian-Ambiguous) and a terminal that measured one as
- * two columns overflowed the centered row — see
- * {@link HERO_ART_CELLS_PER_PIXEL}.
  * @param input - see {@link HeroArtMarkInput}.
  * @returns `blocks` for the generated pixel art, `ascii` for the plain-`#`
  *   fallback wordmark, `none` when only the title fits.
@@ -824,7 +906,9 @@ export function heroArtMarkKind(input: HeroArtMarkInput): HeroMarkKind {
   if (mode === 'none') return 'none'
   if (mode === 'blocks') return 'blocks'
   if (mode === 'ascii') return heroWordmarkFits(input.rows, input.width) ? 'ascii' : 'none'
-  const artFits = input.width >= HERO_ART_MIN_WIDTH && input.rows >= HERO_ART_MIN_ROWS
+  const artFits = input.blockWidth === 1
+    && input.width >= HERO_ART_MIN_WIDTH
+    && input.rows >= HERO_ART_MIN_ROWS
   if (artFits) return 'blocks'
   return heroWordmarkFits(input.rows, input.width) ? 'ascii' : 'none'
 }
