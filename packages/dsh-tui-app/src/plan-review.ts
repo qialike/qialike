@@ -26,9 +26,12 @@ import type { AskUserQuestionItem, AskUserQuestionOption } from '@deepseek-ai/ds
 /** The harness tool name whose `plan` argument is the plan under review. */
 export const EXIT_PLAN_TOOL = 'exit_plan_mode'
 
-/** Is this ask-question a plan-review decision (`intent.kind === 'plan-review'`)? */
-export function isPlanReview(item: { readonly intent?: AskUserQuestionItem['intent'] } | null | undefined): boolean {
-  return item?.intent?.kind === 'plan-review'
+/** Is this ask-question a plan-review decision (`intent.kind === 'plan-review'`)?
+ *  A `multiSelect` question never is — the review is a bare
+ *  confirm/decline, so a question that accepts several options keeps the
+ *  generic dock (the same rule the harness's own `planReviewOf` applies). */
+export function isPlanReview(item: { readonly intent?: AskUserQuestionItem['intent']; readonly multiSelect?: boolean } | null | undefined): boolean {
+  return item?.intent?.kind === 'plan-review' && item.multiSelect !== true
 }
 
 /** Wording of the plan-review pinned question (the harness plan-mode's own EN

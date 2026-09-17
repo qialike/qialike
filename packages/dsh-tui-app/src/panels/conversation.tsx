@@ -41,7 +41,7 @@ import {
   dockedComposerTop,
   dockedFits,
 } from '../layout-budget.ts'
-import { questionDockRows } from '../question-layout.ts'
+import { questionDockRows, isMultiSelect, optionChecked } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
 import {
   HERO_ART_CELL_GLYPH,
@@ -2616,6 +2616,9 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       store.rows,
       q.questions.length > 1, // multi-question ask: +1 tab-bar row
       pres.showOther,
+      // Multi-select rows carry a 4-column `[x]`/`[ ]` box each; the panel
+      // wraps from the SAME checked state, so the reserved rows match.
+      isMultiSelect(q.item) ? optionChecked(pres.options, q.picks[q.active]) : undefined,
     )
   })()
   // The approval dock and the QUESTION dock both live IN-FLOW inside the

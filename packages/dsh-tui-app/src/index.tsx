@@ -60,6 +60,7 @@ import { theme, type ThemePalette } from './theme.ts'
 import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
+import { isMultiSelect } from './question-layout.ts'
 import { describeResumeFailure, isCorruptLogMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import { armPostExitNotices, flushPostExitNotices, postExitNotice } from './post-exit-notice.ts'
@@ -268,8 +269,10 @@ export interface PendingQuestion {
   readonly reject: (error: Error) => void
   /** Index of the question currently shown (0-based). */
   active: number
-  /** Committed answers per question (index-aligned); null = not answered yet. */
-  answers: ({ kind: 'option'; label: string } | { kind: 'custom'; text: string } | null)[]
+  /** Committed answers per question (index-aligned); null = not answered yet.
+   *  `multi` carries a multi-select question's checked labels (plus its typed
+   *  "Other" text, when any — the harness accepts both together). */
+  answers: ({ kind: 'option'; label: string } | { kind: 'multi'; labels: readonly string[]; custom?: string } | { kind: 'custom'; text: string } | null)[]
   /** Last highlighted row per question (option index; `options.length` = the
    *  "Other" row). */
   highlights: number[]
@@ -277,6 +280,10 @@ export interface PendingQuestion {
   drafts: string[]
   /** Whether the "Other" inline editor was open when the question was left. */
   draftOpen: boolean[]
+  /** Checked option LABELS per question — the LIVE multi-select draft, toggled
+   *  by Space/digits/a click and committed by Enter; navigating away and back
+   *  keeps it. Single-select questions never read or write it. */
+  picks: string[][]
   // ── active-question snapshot (== questions[active]) ──
   item: AskUserQuestionItem
   /** Highlighted row of the active question (`options.length` = "Other"). */
@@ -2072,6 +2079,17 @@ export class Store {
       q.index = at >= 0 ? at : Math.min(q.highlights[i] ?? 0, optsLen)
       q.custom = ''
       q.customMode = false
+    } else if (ans !== null && ans.kind === 'multi') {
+      // A committed multi-select answer maps back to its first checked row;
+      // the checks themselves are already in `picks[i]` (they are the live
+      // draft, not stashed state). A committed "Other" text reopens the inline
+      // editor, exactly as a custom answer does.
+      const at = item.options?.findIndex((o) => o.label === ans.labels[0]) ?? -1
+      q.index = at >= 0 ? at : Math.min(q.highlights[i] ?? 0, optsLen)
+      q.custom = ans.custom ?? ''
+      q.customMode = q.custom !== ''
+      q.drafts[i] = q.custom
+      q.draftOpen[i] = q.customMode
     } else {
       q.index = Math.min(q.highlights[i] ?? 0, optsLen)
       q.custom = q.drafts[i] ?? ''
@@ -2108,17 +2126,28 @@ export class Store {
   /** The primary "answer" action (Enter / click / digit): commit the active
    *  question (option or "Other" text) and advance to the next unanswered one,
    *  or submit the whole batch when every question is answered. Pressing Enter
-   *  on the OTHER row (with no text yet) opens the inline editor instead. */
+   *  on the OTHER row (with no text yet) opens the inline editor instead.
+   *
+   *  A MULTI-SELECT question commits its whole checked set (`picks[active]`)
+   *  and never advances on a toggle: Space/digits/click check options and
+   *  Enter answers (requiring at least one check — an empty set is not an
+   *  answer). Typing in its "Other" editor commits the checks AND the text,
+   *  which the harness answer carries together. */
   questionEnter(): void {
     const q = this._question
     if (q === null) return
     const opts = q.item.options ?? []
     const optsLen = opts.length
     const a = q.active
+    const multi = isMultiSelect(q.item)
     if (q.customMode) {
       const trimmed = q.custom.trim()
       if (trimmed === '') { this.flashStatus('type your answer first'); return }
-      q.answers[a] = { kind: 'custom', text: trimmed }
+      if (multi) {
+        q.answers[a] = { kind: 'multi', labels: [...(q.picks[a] ?? [])], custom: trimmed }
+      } else {
+        q.answers[a] = { kind: 'custom', text: trimmed }
+      }
       q.drafts[a] = q.custom
       q.draftOpen[a] = false
       q.customMode = false
@@ -2133,6 +2162,17 @@ export class Store {
       q.customMode = true
       q.customCursor = q.custom.length
       this.notify()
+      return
+    }
+    if (multi) {
+      const labels = [...(q.picks[a] ?? [])]
+      if (labels.length === 0) { this.flashStatus('check at least one option first (space)'); return }
+      q.answers[a] = { kind: 'multi', labels }
+      q.drafts[a] = ''
+      q.draftOpen[a] = false
+      q.highlights[a] = q.index
+      q.customMode = false
+      this.advanceAfterAnswer(q)
       return
     }
     const opt = opts[q.index]
@@ -2168,6 +2208,28 @@ export class Store {
     this._questionScroll = 0
     this.notify()
   }
+  /** Toggle one option of the active MULTI-SELECT question (Space / a digit /
+   *  a click): the checked label set is that question's live draft, committed
+   *  by Enter. The click/keystroke also moves the highlight to the toggled row.
+   *  A no-op on single-select questions and on the "Other…" row (index ===
+   *  options.length), which opens the inline editor instead. */
+  toggleQuestionPick(index: number): void {
+    const q = this._question
+    if (q === null) return
+    const opt = (q.item.options ?? [])[index]
+    if (opt === undefined) return
+    const picks = (q.picks[q.active] ??= [])
+    const at = picks.indexOf(opt.label)
+    if (at >= 0) picks.splice(at, 1)
+    else picks.push(opt.label)
+    // A changed check set invalidates the committed answer until Enter commits
+    // the new one (the tab bar's ✓ follows the committed state, not the
+    // draft); un-checking everything then leaves the question unanswered.
+    q.answers[q.active] = null
+    q.index = index
+    q.highlights[q.active] = index
+    this.notify()
+  }
   /** Submit the whole ask with every question's committed answer (in order),
    *  then close the dock. */
   private submitQuestion(): void {
@@ -2176,6 +2238,13 @@ export class Store {
     const answers: AskUserQuestionAnswerItem[] = q.questions.map((item, i) => {
       const ans = q.answers[i]
       if (ans === null) return { id: item.id, selected: [] } // guarded: all answered
+      if (ans.kind === 'multi') {
+        // The harness accepts checked labels and custom text together for a
+        // multi-select question (see AskUserQuestionAnswerItem).
+        return ans.custom === undefined
+          ? { id: item.id, selected: [...ans.labels] }
+          : { id: item.id, selected: [...ans.labels], custom: ans.custom }
+      }
       if (ans.kind === 'custom') return { id: item.id, selected: [], custom: ans.text }
       return { id: item.id, selected: [ans.label] }
     })
@@ -5278,8 +5347,11 @@ async function mostRecentlyActiveSession(workspace: string): Promise<string | un
  * The user-questions answerer: present the model's questions in-band as ONE
  * card dock: one question at a time inside the card, answers accumulated,
  * and the whole batch submits once every question is answered — then return
- * the human's answers. Single-select options plus a typeable "Other"
- * row whose editor opens inline under the option list — no second dialog.
+ * the human's answers. Options are single-select by default; a question the
+ * caller flags `multiSelect` paints `[x]`/`[ ]` boxes whose checks Space /
+ * digits / a click toggle and Enter commits. Both kinds offer a typeable
+ * "Other" row whose editor opens inline under the option list — no second
+ * dialog.
  * @param request - the ask_user_question request.
  * @returns the structured answers.
  */
@@ -5302,6 +5374,7 @@ async function askUser(request: AskUserQuestionRequest): Promise<AskUserQuestion
         highlights: questions.map(() => 0),
         drafts: questions.map(() => ''),
         draftOpen: questions.map(() => false),
+        picks: questions.map(() => []),
         item: questions[0]!,
         index: 0,
         custom: '',

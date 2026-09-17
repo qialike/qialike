@@ -57,6 +57,7 @@ function ask(
     highlights: questions.map(() => 0),
     drafts: questions.map(() => ''),
     draftOpen: questions.map(() => false),
+    picks: questions.map(() => []),
     item: questions[0]!,
     index: 0,
     custom: '',

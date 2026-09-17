@@ -72,11 +72,34 @@ export interface QuestionBodyRow {
   readonly option: number
 }
 
+/** Whether this question accepts MORE THAN ONE option (the harness
+ *  `multiSelect: true` flag). A multi-select question paints an `[x]`/`[ ]`
+ *  box on every option row, Space / digits / a click TOGGLE one option, and
+ *  Enter commits the whole checked set — single-select keeps its
+ *  answer-and-advance behaviour untouched. */
+export function isMultiSelect(item: { readonly multiSelect?: boolean }): boolean {
+  return item.multiSelect === true
+}
+
+/** The `[x]`/`[ ]` state of every option row of a multi-select question, in
+ *  option order: `picks` holds the checked LABELS, so rows are matched by
+ *  label. Call it with the OPTIONS AS PAINTED — plan-review re-labels its
+ *  options for display and is never multi-select (see `isPlanReview`). */
+export function optionChecked(
+  options: readonly { readonly label: string }[],
+  picks: readonly string[] | undefined,
+): boolean[] {
+  return options.map((o) => picks !== undefined && picks.includes(o.label))
+}
+
 /** An `ask_user_question` option exactly as the panel renders it: the number
  *  prefix is part of the wrapped paragraph, and the description (when present)
- *  hangs on the same line(s) after an em dash. */
-export function optionText(index: number, label: string, description?: string): string {
-  return `${index + 1}. ${label}${description !== undefined ? ` — ${description}` : ''}`
+ *  hangs on the same line(s) after an em dash. On a multi-select question a
+ *  `[x]`/`[ ]` box (always 4 columns — checking a row never re-wraps it)
+ *  precedes the number; `checked === undefined` means single-select (no box). */
+export function optionText(index: number, label: string, description?: string, checked?: boolean): string {
+  const prefix = checked === undefined ? `${index + 1}. ` : `[${checked ? 'x' : ' '}] ${index + 1}. `
+  return `${prefix}${label}${description !== undefined ? ` — ${description}` : ''}`
 }
 
 /** Build the dock's scrollable body: the detail block (dim), then every option
@@ -85,12 +108,17 @@ export function optionText(index: number, label: string, description?: string): 
  *  (plan-review: a bare confirm/decline dock, no free-text row) — the "Other…"
  *  row. One blank row separates the detail block from the options block
  *  (mirrors the margin the old layout used); blanks are ordinary content rows
- *  and scroll along. */
+ *  and scroll along.
+ *
+ *  `checked` (multi-select questions only, one entry per option) paints the
+ *  option rows' `[x]`/`[ ]` boxes; the "Other…" row never carries one — a
+ *  typed answer is a separate `custom` field, not a pick. */
 export function questionBody(
   detail: string | undefined,
   options: readonly { readonly label: string; readonly description?: string }[],
   dockInner: number,
   includeOther = true,
+  checked?: readonly boolean[],
 ): QuestionBodyRow[] {
   const rows: QuestionBodyRow[] = []
   const dText = detail ?? ''
@@ -98,7 +126,8 @@ export function questionBody(
   const optRows: QuestionBodyRow[] = []
   for (let i = 0; i < options.length; i++) {
     const o = options[i]!
-    for (const line of visualWrap(optionText(i, o.label, o.description), dockInner)) {
+    const box = checked === undefined ? undefined : checked[i] === true
+    for (const line of visualWrap(optionText(i, o.label, o.description, box), dockInner)) {
       optRows.push({ kind: 'option', text: line, option: i })
     }
   }
@@ -182,12 +211,13 @@ export function questionDockRows(
   terminalRows: number,
   showTabs = false,
   includeOther = true,
+  checked?: readonly boolean[],
 ): number {
   const windowRows = questionBodyWindowRows(terminalRows)
   const qRows = question === undefined || question === '' ? 0 : visualRowCount(question, dockInner)
   const chrome = 4 + 1 + 1 + 1 // border 2 + padding 2, title 1, hint margin 1, hint 1
   const qBlock = qRows > 0 ? 1 + qRows : 0
-  const body = questionBody(detail, options, dockInner, includeOther)
+  const body = questionBody(detail, options, dockInner, includeOther, checked)
   const shown = Math.min(body.length, windowRows)
   let rows = chrome + (showTabs ? 1 : 0) + qBlock + 1 + shown
   if (customMode) {

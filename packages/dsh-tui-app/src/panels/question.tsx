@@ -35,6 +35,8 @@ import {
   visualWrap,
   questionBody,
   bodyOptionRanges,
+  isMultiSelect,
+  optionChecked,
   QUESTION_INPUT_MAX_ROWS,
   type QuestionBodyRow,
 } from '../question-layout.ts'
@@ -399,9 +401,11 @@ export function inputWindow(
 /** The in-band user-question dock: header + pinned question (fully wrapped,
  *  never truncated) + a bounded scrollable body holding detail and every
  *  option's full multi-line text + the hint. Digits 1..N select directly,
- *  N+1 opens "Other". The body scrolls like the harness `.body` when content
- *  overflows: no option row is ever ellipsized — long options wrap and the
- *  window reveals the rest. */
+ *  N+1 opens "Other". A `multiSelect` question paints an `[x]`/`[ ]` box per
+ *  option row (checked rows in the success ink) and Space / digits / a click
+ *  TOGGLE instead of answering — Enter commits the checked set. The body
+ *  scrolls like the harness `.body` when content overflows: no option row is
+ *  ever ellipsized — long options wrap and the window reveals the rest. */
 function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element {
   const q = props.question
   const total = q.questions.length
@@ -453,9 +457,15 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   // The question sentence is external text: strip control bytes before wrap.
   const qText = stripTerminalControls(pres.question)
   const questionLines = qText === '' ? [] : visualWrap(qText, dockInner)
+  // Multi-select: the checked OPTION LABELS of this question — one `[x]`/`[ ]`
+  // box per option row (never the "Other…" row, whose typed text is a separate
+  // answer field). `undefined` on a single-select question keeps the plain
+  // numbered rows.
+  const multi = isMultiSelect(item)
+  const checked = multi ? optionChecked(pres.options, q.picks[q.active]) : undefined
   // Body rows: detail (if any) + every option's wrapped block + Other… row
   // (plan-review drops detail and the Other row — see questionPresentation).
-  const body = questionBody(pres.detail, pres.options, dockInner, pres.showOther)
+  const body = questionBody(pres.detail, pres.options, dockInner, pres.showOther, checked)
   const bodyRows = body.length
   const maxScroll = Math.max(0, bodyRows - windowRows)
   const scroll = Math.min(store.questionScroll, maxScroll)
@@ -547,14 +557,18 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
     if (!customMode) return
     const q2 = store.question
     if (q2 === null) return
-    const b = questionBody(q2.item.detail, q2.item.options ?? [], dockInnerWidth(store.width, store.sidebarMode ?? 'auto'))
+    const pres2 = questionPresentation(q2.item)
+    const checked2 = isMultiSelect(q2.item) ? optionChecked(pres2.options, q2.picks[q2.active]) : undefined
+    const b = questionBody(pres2.detail, pres2.options, dockInnerWidth(store.width, store.sidebarMode ?? 'auto'), pres2.showOther, checked2)
     const max = Math.max(0, b.length - questionBodyWindowRows(store.rows))
     if (store.questionScroll !== max) store.scrollQuestionTo(max)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- per editor open
   }, [customMode])
   const rowColor = (row: QuestionBodyRow): string | undefined => {
-    const sel = row.option === index
-    return sel ? theme.accent : undefined
+    if (row.option === index) return theme.accent
+    // A checked multi-select option is marked by its `[x]` box AND the success
+    // ink (the same "answered" colour the tab bar uses).
+    return checked !== undefined && row.option >= 0 && checked[row.option] === true ? theme.success : undefined
   }
   const rowInverse = (row: QuestionBodyRow): boolean => row.option === index
   // Plan-review dock = bare confirm/decline; keep its keys hint in Chinese to
@@ -562,14 +576,22 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   const hint = review
     ? `${msgScrollable ? 'wheel/PgUp/PgDn scroll · ' : ''}↑/↓ select · Enter confirm & run · Esc cancel (type an opinion in the input instead)`
     : customMode
-      ? `${overflow ? 'PgUp/PgDn scroll · ' : ''}type your answer · Enter = answer & next · Esc close`
-      : `${overflow ? 'PgUp/PgDn scroll · ' : ''}${
-          total > 1
-            ? tw.overflow
-              ? '←/→ page tabs · ↑/↓ choose · Enter answer & next · digits pick · Esc cancel'
-              : '↑/↓ choose · Enter answer & next · ←/→ or click a tab · digits pick · Esc cancel'
-            : 'number / ↑/↓ choose · Enter confirm · Esc cancel'
-        }`
+      ? `${overflow ? 'PgUp/PgDn scroll · ' : ''}type your answer${multi ? ' (checks kept)' : ''} · Enter = answer & next · Esc close`
+      : multi
+        ? `${overflow ? 'PgUp/PgDn scroll · ' : ''}${
+            total > 1
+              ? tw.overflow
+                ? '←/→ page tabs · ↑/↓ move · space / digits check · Enter answer & next · Esc cancel'
+                : '↑/↓ move · space / digits check · Enter answer & next · ←/→ or click a tab · Esc cancel'
+              : '↑/↓ move · space / digits check · Enter confirm · Esc cancel'
+          }`
+        : `${overflow ? 'PgUp/PgDn scroll · ' : ''}${
+            total > 1
+              ? tw.overflow
+                ? '←/→ page tabs · ↑/↓ choose · Enter answer & next · digits pick · Esc cancel'
+                : '↑/↓ choose · Enter answer & next · ←/→ or click a tab · digits pick · Esc cancel'
+              : 'number / ↑/↓ choose · Enter confirm · Esc cancel'
+          }`
   return (
     <Box ref={dockRef} flexShrink={0} marginLeft={3} marginRight={3} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={2} paddingY={1}>
       <Text color={theme.accent} bold wrap="truncate">{title}<Text dimColor> · waiting</Text></Text>
@@ -678,7 +700,8 @@ function revealOption(index: number): void {
   const options = q.item.options ?? []
   const pres = questionPresentation(q.item)
   const dockInner = dockInnerWidth(store.width, store.sidebarMode ?? 'auto')
-  const body = questionBody(pres.detail, pres.options, dockInner, pres.showOther)
+  const checked = isMultiSelect(q.item) ? optionChecked(pres.options, q.picks[q.active]) : undefined
+  const body = questionBody(pres.detail, pres.options, dockInner, pres.showOther, checked)
   const windowRows = questionBodyWindowRows(store.rows)
   const maxScroll = Math.max(0, body.length - windowRows)
   const ranges = bodyOptionRanges(body, options.length)
@@ -706,7 +729,9 @@ function revealOption(index: number): void {
  *  moves to the next (or submits when all are answered); ←/→ (or Tab) move
  *  between questions freely; selecting the "Other…" row opens its inline
  *  editor UNDER the option list (no second dialog); Esc cancels the whole ask
- *  (closing the inline editor first when it is open).
+ *  (closing the inline editor first when it is open). On a `multiSelect`
+ *  question Space / digits / a click check an option and Enter is the only
+ *  commit, so several options can be checked before advancing.
  *
  *  Mouse & wheel events are FIRST routed by the pointer's screen region (see
  *  the pointer block below): on the dock they drive the dock only (wheel is
@@ -836,14 +861,18 @@ function revealOption(index: number): void {
   if (k.mouseRelease) {
     if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') {
       // A click only acts when it lands on a real OPTION row (answers it —
-      // like Enter). Clicks anywhere else — including a stray click on the
+      // like Enter; on a multi-select question it CHECKS it instead, like
+      // Space). Clicks anywhere else — including a stray click on the
       // question text / detail / background — are consumed and keep the dock
       // open: only Esc cancels the whole ask.
       if (!question.customMode) {
         const owner = optionFromRow(k.mouseRelease.row)
         if (owner >= 0 && owner <= optsLen) {
-          store.setQuestionIndex(owner)
-          store.questionEnter()
+          if (isMultiSelect(question.item) && owner < optsLen) store.toggleQuestionPick(owner)
+          else {
+            store.setQuestionIndex(owner)
+            store.questionEnter()
+          }
         }
       }
     }
@@ -917,12 +946,26 @@ function revealOption(index: number): void {
   else if (k.return) store.questionEnter()
   else if (/^[1-9]$/.test(char)) {
     // Number keys answer the numbered option directly (1..N); N+1 = Other
-    // (plan-review has no Other row, so N+1 is ignored there).
+    // (plan-review has no Other row, so N+1 is ignored there). On a
+    // multi-select question 1..N CHECK that option instead of answering (a
+    // digit must not commit, or several could never be checked); N+1 still
+    // opens the Other editor.
     const digit = Number(char)
     if (digit <= optsLen + 1 && (!review || digit <= optsLen)) {
-      store.setQuestionIndex(digit - 1)
-      store.questionEnter()
+      if (isMultiSelect(question.item) && digit <= optsLen) store.toggleQuestionPick(digit - 1)
+      else {
+        store.setQuestionIndex(digit - 1)
+        store.questionEnter()
+      }
     }
+  }
+  else if (char === ' ' && isMultiSelect(question.item)) {
+    // Space is the toggle key of a multi-select question (typing a literal
+    // space is meaningless in answer text): it checks the highlighted option,
+    // and on the "Other…" row it opens the inline editor instead — a space
+    // there would otherwise become the first typed character.
+    if (question.index < optsLen) store.toggleQuestionPick(question.index)
+    else store.setQuestionCustom('', true)
   }
   else if (k.escape || (k.ctrl && char === 'c')) store.cancelQuestion()
   else if (char && !review) store.setQuestionCustom(char, true)

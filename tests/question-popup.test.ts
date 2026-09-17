@@ -33,6 +33,7 @@ function ask(qs: AskUserQuestionItem[]): PendingQuestion {
     highlights: qs.map(() => 0),
     drafts: qs.map(() => ''),
     draftOpen: qs.map(() => false),
+    picks: qs.map(() => []),
     item: qs[0]!,
     index: 0,
     custom: '',
