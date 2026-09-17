@@ -477,49 +477,51 @@ export const PREPARING_ASSEMBLY_DEADLINE_MS = 30_000
  *  the deadline is re-armed when the assembly ends. */
 export const PREPARING_PROVIDER_DEADLINE_MS = 300_000
 
-/** Status-bar text for the SECOND phase: the request is out and the model has
- *  not answered yet. Prints both phases' numbers — what the assembly cost and how
- *  long the provider has been thinking — so the wait stops reading as "still
- *  preparing" (user request: each phase gets its own information AND clock).
+/** The label of the SECOND phase: the request is out and the model has not
+ *  answered yet. */
+export const WAITING_FOR_MODEL_LABEL = 'waiting for the model…'
+
+/** Status-bar text for the SECOND phase, `waiting for the model… 12.3s`: this
+ *  phase's OWN information and clock, nothing else (user request: the two phases
+ *  are two parts, each showing its own).
  *
- *  Why the label is split in two: `assemblyMs` is the app's WHOLE synchronous
- *  assembly, reported by `llm.ts` the moment the payload string exists, while
- *  what the user actually waits is the provider's time-to-first-token
+ *  Why the phases are split at all: `assemblyMs` is the app's WHOLE synchronous
+ *  assembly, reported by `llm.ts` the moment the payload string exists, while what
+ *  the user actually waits next is the provider's time-to-first-token
  *  (`streamToChunk` in the same `[assembly]` log line). Measured on this
- *  workstation's `~/.dsh/dsh-tui.log` (731 records ending 2026-09-16):
- *  assembly median 9 ms / p90 29 ms / max 84 ms, `streamToChunk` median 1.4 s /
- *  p90 3.0 s / max 11.8 s; the macOS session that filed the report saw the same
- *  asymmetry with waits above 100 s. One label ("preparing the request…") covered
- *  BOTH phases, so a two-minute model wait read as two minutes of request
- *  preparation.
+ *  workstation's `~/.dsh/dsh-tui.log` (731 records ending 2026-09-16): assembly
+ *  median 9 ms / p90 29 ms / max 84 ms, `streamToChunk` median 1.4 s / p90 3.0 s /
+ *  max 11.8 s; the macOS session that filed the report saw the same asymmetry
+ *  with waits above 100 s. One label ("preparing the request…") covered BOTH
+ *  phases, so a two-minute model wait read as two minutes of request preparation.
+ *  The assembly's own cost is measured and logged (`[assembly] … assemblyMs=`),
+ *  and shown live by phase one; phase two does not repeat it.
  *
  *  The wait clock needs no ticker gate: the assembly that could block the loop is
  *  over and the request is in flight, so the seconds advance with the same 250 ms
  *  ticker that keeps phase one honest.
- *  @param assemblyMs - measured assembly time in milliseconds.
  *  @param waitMs - milliseconds since the payload left, i.e. the provider wait.
  *  @returns the status-bar string. */
-export function assembledRequestStatusText(assemblyMs: number, waitMs: number): string {
-  const assembled = Math.max(0, Math.round(assemblyMs))
-  const waited = (Math.max(0, waitMs) / 1000).toFixed(1)
-  return `assembled in ${assembled}ms · waiting for the model… ${waited}s`
+export function waitingForModelStatusText(waitMs: number): string {
+  return `${WAITING_FOR_MODEL_LABEL} ${(Math.max(0, waitMs) / 1000).toFixed(1)}s`
 }
 
-/** Status-bar text while a model request is being assembled: the base label,
- *  plus the elapsed seconds once the ticker has fired — or the two-phase
- *  {@link assembledRequestStatusText} once the assembly time is known.
+/** Status-bar text of the request's two phases: `preparing the request… 4.4s`
+ *  while the harness assembles this step's payload, then
+ *  {@link waitingForModelStatusText} once the payload exists — each phase showing
+ *  its own information and its own clock.
  *
- *  Why the ticker gates the clock: the frame carrying this label is flushed
- *  right before the harness may take the thread, so a clock printed at that
- *  moment would be frozen at `0.0s` and read as a hang. Only a tick proves the
- *  loop is servicing timers; otherwise the seconds appear once the block is over
- *  (and may be superseded at once by the step's first content). Once
- *  `assemblyMs` is known there is nothing left to gate: the assembly that could
- *  block the loop is over and the request is in flight.
+ *  Why the ticker gates PHASE ONE's clock: the frame carrying this label is
+ *  flushed right before the harness may take the thread, so a clock printed at
+ *  that moment would be frozen at `0.0s` and read as a hang. Only a tick proves
+ *  the loop is servicing timers; otherwise the seconds appear once the block is
+ *  over (and may be superseded at once by the step's first content). Phase two
+ *  needs no gate: the assembly that could block the loop is over.
  *  @param startedAt - epoch ms the assembly began, or null when idle.
  *  @param now - current epoch ms (injectable for tests).
  *  @param ticked - whether the preparing ticker fired since the assembly began.
- *  @param assemblyMs - measured assembly time in ms, or null while still running.
+ *  @param assemblyMs - measured assembly time in ms, or null while still running
+ *    (it is also what marks the switch to phase two).
  *  @param assemblyDoneAt - epoch ms the payload left (phase two's clock origin),
  *    or null when unknown.
  *  @returns the status-bar string. */
@@ -532,7 +534,7 @@ export function preparingRequestStatusText(
 ): string {
   if (startedAt === null) return PREPARING_REQUEST_LABEL
   if (assemblyMs !== null) {
-    return assembledRequestStatusText(assemblyMs, assemblyDoneAt === null ? 0 : now - assemblyDoneAt)
+    return waitingForModelStatusText(assemblyDoneAt === null ? 0 : now - assemblyDoneAt)
   }
   if (!ticked) return PREPARING_REQUEST_LABEL
   return `${PREPARING_REQUEST_LABEL} ${Math.max(0, (now - startedAt) / 1000).toFixed(1)}s`
@@ -594,7 +596,7 @@ export class Store {
   /** True once the preparing ticker fired (loop alive → show elapsed). */
   private _preparingTicked = false
   /** Measured assembly time of the step in flight, or null while it is still
-   *  being assembled (see {@link assembledRequestStatusText}). */
+   *  being assembled; it is also what switches the status bar to phase two. */
   private _assemblyMs: number | null = null
   /** Epoch ms the payload left, i.e. phase two's clock origin, or null when the
    *  assembly has not finished (or nothing is in flight). Taken at
@@ -1563,11 +1565,11 @@ export class Store {
   get preparingRequestTicked(): boolean { return this._preparingTicked }
 
   /** Measured assembly time of the step in flight, or null while it is still
-   *  being assembled (see {@link assembledRequestStatusText}). */
+   *  being assembled; it is also what switches the status bar to phase two. */
   get assemblyMs(): number | null { return this._assemblyMs }
 
   /** Epoch ms the payload left (phase two's clock origin), or null while the
-   *  assembly is still running (see {@link assembledRequestStatusText}). */
+   *  assembly is still running (phase two's clock starts at it). */
   get assemblyDoneAt(): number | null { return this._assemblyDoneAt }
 
   /** Epoch ms the CURRENT preparing window's safety deadline expires, or null
@@ -4672,7 +4674,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           // The payload string exists: the synchronous assembly is OVER, and
           // everything from here to the first chunk is the provider. Relabel the
           // status bar with the measured cost (see
-          // `assembledRequestStatusText`) so the model wait stops reading as
+          // `waitingForModelStatusText`) so the model wait stops reading as
           // request preparation.
           store.noteAssemblyElapsed(cur.streamAt - cur.startedAt)
         } else {

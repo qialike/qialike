@@ -3363,12 +3363,12 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             own reasoning sits with its helper:
               loading      → sessionLoadingStatusText (live clock)
               compaction   → a manual `/compact` outranks the fold; Esc cancels
-              preparing    → two phases in one slot, each with its own clock:
-                             the assembly's (`preparing the request… 4.4s`,
-                             shown only once a tick proves the loop is free —
-                             `[stall]` otherwise), then the provider wait's
-                             (`assembled in 21ms · waiting for the model… 12.3s`,
-                             counting from the moment the payload left)
+              preparing    → two phases in one slot, each showing its OWN
+                             information and clock: the assembly's
+                             (`preparing the request… 4.4s`, shown only once a
+                             tick proves the loop is free — `[stall]` otherwise),
+                             then the provider wait's (`waiting for the model…
+                             12.3s`, counting from the moment the payload left)
               flash        → the user's own action, expires by itself
               history      → the long older-history fold's progress + counts
               error        → a failed load stays until retry / `/clear`

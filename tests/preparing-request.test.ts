@@ -4,8 +4,8 @@
  * 4.4s`, gated on the ticker having fired, because the frame that carries the
  * label is flushed right before the harness may take the thread — a clock printed
  * there would freeze at `0.0s` and read as a hang) and the provider wait
- * (`assembled in 21ms · waiting for the model… 12.3s`, counting from the moment
- * the payload left). The same ticker also owns the window's safety deadline
+ * (`waiting for the model… 12.3s`, counting from the moment the payload left).
+ * Each phase shows only its OWN information and clock. The same ticker also owns the window's safety deadline
  * (assembly budget → re-armed provider budget), so the tests below pin all three.
  *
  * Run with `bun test tests/preparing-request.test.ts`.
@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import {
   PREPARING_REQUEST_LABEL,
   Store,
-  assembledRequestStatusText,
+  waitingForModelStatusText,
   preparingRequestStatusText,
 } from '../packages/dsh-tui-app/src/index.tsx'
 
@@ -42,26 +42,24 @@ describe('preparing-request status text', () => {
     expect(preparingRequestStatusText(5000, 1000, true)).toBe('preparing the request… 0.0s')
   })
 
-  test('once the assembly time is known the label names BOTH phases, each with its clock', () => {
-    // The whole point of the split: `assemblyMs` is the app's own synchronous
-    // assembly (this workstation's log: median 9 ms, max 84 ms), while the wait
-    // the user feels is the provider's time-to-first-token (`streamToChunk`
-    // median 1.4 s here, 100 s+ on the machine that filed the report) — one
-    // label for both made the model wait read as request preparation. Phase two
-    // therefore prints BOTH numbers: what the assembly cost and how long the
-    // provider has been thinking.
-    expect(assembledRequestStatusText(21, 0)).toBe('assembled in 21ms · waiting for the model… 0.0s')
-    expect(assembledRequestStatusText(21, 12_340)).toBe('assembled in 21ms · waiting for the model… 12.3s')
+  test('phase two shows the WAIT, its own clock, and no assembly number', () => {
+    // The two phases are two parts, each showing its own information and time
+    // (user request). Phase one's cost is measured and logged (`[assembly] …
+    // assemblyMs=`) and shown live while assembling; phase two must not repeat it.
+    expect(waitingForModelStatusText(0)).toBe('waiting for the model… 0.0s')
+    expect(waitingForModelStatusText(12_340)).toBe('waiting for the model… 12.3s')
     expect(preparingRequestStatusText(1_000, 90_000, true, 21, 77_660))
-      .toBe('assembled in 21ms · waiting for the model… 12.3s')
+      .toBe('waiting for the model… 12.3s')
     // No ticker gate any more: the assembly that could block the loop is over.
     expect(preparingRequestStatusText(1_000, 1_000, false, 124, 1_000))
-      .toBe('assembled in 124ms · waiting for the model… 0.0s')
-    // Fractional and negative values clamp to a whole non-negative count.
-    expect(assembledRequestStatusText(20.6, 0)).toBe('assembled in 21ms · waiting for the model… 0.0s')
-    expect(assembledRequestStatusText(-5, -900)).toBe('assembled in 0ms · waiting for the model… 0.0s')
+      .toBe('waiting for the model… 0.0s')
+    // Fractional and negative waits clamp to a non-negative count.
+    expect(waitingForModelStatusText(12_340.6)).toBe('waiting for the model… 12.3s')
+    expect(waitingForModelStatusText(-900)).toBe('waiting for the model… 0.0s')
     // An unknown origin cannot invent a wait.
-    expect(preparingRequestStatusText(1_000, 90_000, true, 21)).toBe('assembled in 21ms · waiting for the model… 0.0s')
+    expect(preparingRequestStatusText(1_000, 90_000, true, 21)).toBe('waiting for the model… 0.0s')
+    // The assembly measurement never leaks into phase two's text.
+    expect(preparingRequestStatusText(1_000, 90_000, true, 124, 77_660)).not.toContain('assembled')
     // Idle still wins over a stale measurement.
     expect(preparingRequestStatusText(null, 1000, true, 21, 1_000)).toBe(PREPARING_REQUEST_LABEL)
   })
@@ -87,19 +85,19 @@ describe('preparing-request store window', () => {
     expect(preparingRequestStatusText(store.preparingRequestStartedAt, 5_634, store.preparingRequestTicked))
       .toBe('preparing the request… 4.4s')
     // The payload exists (the LLM adapter's `noteRequest`): the second phase
-    // starts, the measured assembly time is published and the wait clock begins
-    // from THIS moment (not from the assembly start).
+    // starts: the wait clock begins from THIS moment (not from the assembly
+    // start), and the status bar switches to phase two.
     store.noteAssemblyElapsed(21)
     expect(store.assemblyMs).toBe(21)
     expect(store.assemblyDoneAt).not.toBeNull()
     const doneAt = store.assemblyDoneAt!
     expect(preparingRequestStatusText(store.preparingRequestStartedAt, doneAt + 12_340,
       store.preparingRequestTicked, store.assemblyMs, store.assemblyDoneAt))
-      .toBe('assembled in 21ms · waiting for the model… 12.3s')
+      .toBe('waiting for the model… 12.3s')
     // …and it keeps counting while the provider thinks.
     expect(preparingRequestStatusText(store.preparingRequestStartedAt, doneAt + 60_000,
       store.preparingRequestTicked, store.assemblyMs, store.assemblyDoneAt))
-      .toBe('assembled in 21ms · waiting for the model… 60.0s')
+      .toBe('waiting for the model… 60.0s')
 
     store.endPreparingRequest()
     expect(store.preparingRequest).toBe(false)
