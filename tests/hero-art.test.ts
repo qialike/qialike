@@ -22,6 +22,7 @@ import {
   HERO_ART_WORDMARK_TONES,
 } from '../packages/dsh-tui-app/src/hero-art.ts'
 import {
+  HERO_ART_BOTTOM_GLYPH,
   HERO_ART_CELL_GLYPH,
   HERO_ART_INK_ALPHA,
   HERO_ART_MARGIN_COLS,
@@ -31,6 +32,7 @@ import {
   HERO_ART_SHADOW_ALPHA,
   HERO_WORDMARK,
   heroArtCells,
+  heroArtEncoding,
   heroArtInkColors,
   heroArtMarkKind,
   heroArtMode,
@@ -306,5 +308,89 @@ describe('mark selection ladder', () => {
     // The rasterized wordmark is TALLER than the ASCII fallback (6 vs 5 rows) —
     // it used to be 4, which is why HERO_ART_MIN_ROWS moved 21 -> 23.
     expect(HERO_ART_ROWS).toBeGreaterThan(HERO_WORDMARK.length)
+  })
+})
+
+describe('half-block encoding (Apple Terminal seam fix)', () => {
+  test('macOS packs the bottom half into the glyph, everything else the top', () => {
+    expect(heroArtEncoding('darwin')).toBe('bottom')
+    expect(heroArtEncoding('linux')).toBe('top')
+    expect(heroArtEncoding('win32')).toBe('top')
+    // `DSH_TUI_HERO_ART_ENCODING` pins one for A/B on a single machine.
+    expect(heroArtEncoding('linux', 'bottom')).toBe('bottom')
+    expect(heroArtEncoding('darwin', 'top')).toBe('top')
+    expect(heroArtEncoding('darwin', ' BOTTOM ')).toBe('bottom')
+    expect(heroArtEncoding('darwin', 'glitter')).toBe('bottom')
+  })
+
+  test('the shipped encoding is byte-for-byte unchanged', () => {
+    // The default must stay exactly what 0.4.19 painted: `▀` carries the upper
+    // tone (fg) and the background the lower one, `█` when both halves match.
+    expect(heroArtCells(undefined, 'top')).toEqual(heroArtCells())
+    const [line] = heroArtCells(['B.', '.M', 'DD', 'BM'], 'top')
+    expect(line!.map((cell) => cell.ch).join('')).toBe('▀▄')
+    expect(line![0]).toEqual({ ch: '▀', fg: 0, bg: -1 })
+    expect(line![1]).toEqual({ ch: '▄', fg: 1, bg: -1 })
+  })
+
+  test('the bottom encoding moves the upper tone into the background', () => {
+    // A differing pair: background = UPPER tone, glyph = LOWER tone. Nothing is
+    // painted by a top-anchored glyph, which is what removes the page stripe.
+    const [bottomLine] = heroArtCells(['B', 'M'], 'bottom')
+    expect(bottomLine![0]).toEqual({ ch: HERO_ART_BOTTOM_GLYPH, fg: 1, bg: 0 })
+    // …and the shipped encoding is its exact complement.
+    const [topLine] = heroArtCells(['B', 'M'], 'top')
+    expect(topLine![0]).toEqual({ ch: HERO_ART_CELL_GLYPH, fg: 0, bg: 1 })
+  })
+
+  test('equal tones become a bare background — no glyph can seam', () => {
+    const [same] = heroArtCells(['B', 'B'], 'bottom')
+    expect(same![0]).toEqual({ ch: ' ', fg: -1, bg: 0 })
+    // …while the shipped encoding keeps its solid block there.
+    const [solid] = heroArtCells(['B', 'B'], 'top')
+    expect(solid![0]).toEqual({ ch: '█', fg: 0, bg: -1 })
+  })
+
+  test('an empty half is erased with the page colour, not left to the glyph', () => {
+    // Upper tone only: the background carries it and `▄` paints the PAGE (fg −1,
+    // which the renderer substitutes with theme.bg) over the bottom half.
+    const [upper] = heroArtCells(['B', '.'], 'bottom')
+    expect(upper![0]).toEqual({ ch: HERO_ART_BOTTOM_GLYPH, fg: -1, bg: 0 })
+    // Lower tone only: no background, the glyph carries the ink (also what the
+    // shipped encoding does).
+    const [lower] = heroArtCells(['.', 'B'], 'bottom')
+    expect(lower![0]).toEqual({ ch: HERO_ART_BOTTOM_GLYPH, fg: 0, bg: -1 })
+    // Empty: nothing at all.
+    const [empty] = heroArtCells(['.', '.'], 'bottom')
+    expect(empty![0]).toEqual({ ch: ' ', fg: -1, bg: -1 })
+  })
+
+  test('both encodings describe the SAME two tone halves', () => {
+    // The invariant that makes this a seam fix and not an art change: read each
+    // cell back as (upper, lower) and the two encodings must agree for every
+    // cell of the real grid. `top`: ▀ = (fg, bg), ▄ = (−1, fg), █ = (fg, fg).
+    // `bottom`: the background is the upper tone and `▄`'s fg the lower one.
+    const decode = (cell: { ch: string; fg: number; bg: number }, encoding: string): [number, number] => {
+      if (encoding === 'top') {
+        if (cell.ch === '█') return [cell.fg, cell.fg]
+        if (cell.ch === HERO_ART_CELL_GLYPH) return [cell.fg, cell.bg]
+        if (cell.ch === HERO_ART_BOTTOM_GLYPH) return [-1, cell.fg]
+        return [-1, -1]
+      }
+      if (cell.ch === HERO_ART_BOTTOM_GLYPH) return [cell.bg, cell.fg]
+      return [cell.bg, cell.bg]
+    }
+    const top = heroArtCells(undefined, 'top')
+    const bottom = heroArtCells(undefined, 'bottom')
+    expect(bottom).toHaveLength(top.length)
+    for (let r = 0; r < top.length; r++) {
+      expect(bottom[r]).toHaveLength(top[r]!.length)
+      for (let c = 0; c < top[r]!.length; c++) {
+        expect(decode(bottom[r]![c]!, 'bottom'), `(${r},${c})`).toEqual(decode(top[r]![c]!, 'top'))
+      }
+    }
+    // And the bottom encoding never uses a TOP-anchored glyph, which is the one
+    // that leaves the stripe on SF Mono.
+    for (const line of bottom) for (const cell of line) expect(cell.ch).not.toBe(HERO_ART_CELL_GLYPH)
   })
 })

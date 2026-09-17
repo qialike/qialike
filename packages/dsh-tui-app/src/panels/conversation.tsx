@@ -57,6 +57,7 @@ import {
   HERO_TITLE,
   HERO_WORDMARK,
   heroArtCells,
+  heroArtEncoding,
   heroArtInkColors,
   heroArtMarkKind,
   heroArtMode,
@@ -1070,8 +1071,14 @@ function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
 /** `DSH_TUI_HERO_ART` override, read once at module load (auto by default). */
 const HERO_ART_MODE = heroArtMode(process.env.DSH_TUI_HERO_ART)
 
+/** Which half the art's glyph carries, read once at module load: `bottom` on
+ *  macOS (Apple Terminal's SF Mono leaves a page stripe above a top-anchored
+ *  `▀` — see {@link heroArtEncoding}), `top` elsewhere.
+ *  `DSH_TUI_HERO_ART_ENCODING` pins one for A/B. */
+const HERO_ART_ENCODING = heroArtEncoding(process.platform, process.env.DSH_TUI_HERO_ART_ENCODING)
+
 /** The generated brand art, packed into colored half-block cells once. */
-const HERO_ART_ROWS_CELLS = heroArtCells()
+const HERO_ART_ROWS_CELLS = heroArtCells(undefined, HERO_ART_ENCODING)
 
 /**
  * Brand mark the hero draws at this size: the generated pixel-art wordmark when
@@ -3168,7 +3175,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
                     {line.map((cell, c) => (
                       <Text
                         key={`art-${i}-${c}`}
-                        color={cell.fg >= 0 ? heroArtInk[cell.fg] : undefined}
+                        // A glyph whose ink slot is −1 paints the PAGE colour: the
+                        // `bottom` encoding erases a half back to the background
+                        // that way (`▄` in theme.bg over the cell's upper tone), and
+                        // a top-anchored `▀` cannot do it without leaving a stripe.
+                        color={cell.fg >= 0 ? heroArtInk[cell.fg] : (cell.ch === ' ' ? undefined : theme.bg)}
                         backgroundColor={cell.bg >= 0 ? heroArtInk[cell.bg] : undefined}
                       >{cell.ch}</Text>
                     ))}

@@ -567,12 +567,57 @@ export function heroWordmarkFits(rows: number, width: number): boolean {
  * ------------------------------------------------------------------------- */
 
 /**
- * The half-block glyph the brand art is drawn with. `▀` (U+2580) carries a
- * foreground color AND a background color in one cell, which is exactly two
- * stacked tone pixels — so a rasterized cell stays square on a terminal cell that
- * is about twice as tall as it is wide.
+ * The half-block glyph the brand art is drawn with on most terminals. `▀`
+ * (U+2580) carries a foreground color AND a background color in one cell, which
+ * is exactly two stacked tone pixels — so a rasterized cell stays square on a
+ * terminal cell that is about twice as tall as it is wide.
  */
 export const HERO_ART_CELL_GLYPH = '▀'
+
+/**
+ * The BOTTOM-half glyph, used with the cell background as the upper tone on
+ * Apple Terminal — see {@link HeroArtEncoding}.
+ */
+export const HERO_ART_BOTTOM_GLYPH = '▄'
+
+/**
+ * How one cell's two stacked tone pixels are split between the glyph and the
+ * cell BACKGROUND.
+ *
+ * - `top` (the shipped encoding, used everywhere except Apple Terminal): the
+ *   upper tone is `▀`'s foreground, the lower one the cell background.
+ * - `bottom` (Apple Terminal): the WHOLE cell is filled with the upper tone as a
+ *   background and the lower tone is the bottom-anchored `▄`.
+ *
+ * Why the second encoding exists: SF Mono's block glyphs do not fill the row
+ * box. Its `█` covers 83.8% of the row with the gap at the TOP (measured on
+ * Apple Terminal, 2026-09-17), so a top-anchored `▀` leaves a stripe of the
+ * cell's background — i.e. of the WRONG tone — across the top of every row: the
+ * reported 横缝. A background always fills the whole cell, and the same
+ * measurement says the ink is bottom-aligned, so `▄` reaches the cell's bottom
+ * and the two tones meet with no page stripe anywhere. (google-gemini/gemini-cli
+ * #23919 works around the same terminal defect with `▅`.)
+ *
+ * On a terminal whose glyphs DO tile, the two encodings paint the same picture:
+ * `bg = upper` + `▄ = lower` is the complement of `▀ = upper` + `bg = lower`.
+ * Under `bottom`, cells whose two tones are equal become a plain background with
+ * NO glyph at all, which cannot seam on any terminal.
+ */
+export type HeroArtEncoding = 'top' | 'bottom'
+
+/**
+ * Which encoding this terminal needs: `bottom` on macOS (Apple Terminal's SF
+ * Mono is the defect this exists for), `top` elsewhere. `DSH_TUI_HERO_ART_ENCODING`
+ * (`top`/`bottom`) overrides it, so both can be A/B'd on one machine.
+ * @param platform - `process.platform`.
+ * @param override - the environment value, if any.
+ * @returns the encoding to pack the art with.
+ */
+export function heroArtEncoding(platform: string, override?: string): HeroArtEncoding {
+  const value = (override ?? '').trim().toLowerCase()
+  if (value === 'top' || value === 'bottom') return value
+  return platform === 'darwin' ? 'bottom' : 'top'
+}
 
 /** Ink weights per tone role of the design: `B` primary, `M` secondary. Blending
  *  `theme.text` toward `theme.bg` with these weights reproduces the art's
@@ -605,9 +650,13 @@ export const HERO_ART_MIN_ROWS = 23
 export interface HeroArtCell {
   /** Glyph to print (`▀`/`▄`/`█`/space). */
   ch: string
-  /** Upper-half ink index into {@link heroArtInkColors}, −1 = empty. */
+  /** Foreground ink index into {@link heroArtInkColors}. −1 means "no foreground"
+   *  for a space; for a GLYPH it means the PAGE colour, which the renderer
+   *  substitutes for `theme.bg` (the `bottom` encoding erases a half back to the
+   *  page that way). */
   fg: number
-  /** Lower-half ink index, −1 = none (the cell background stays clear). */
+  /** Lower-half ink index, −1 = none (the cell background stays clear, i.e. the
+   *  page shows through — or, under the `bottom` encoding, the upper tone). */
   bg: number
 }
 
@@ -707,12 +756,23 @@ function heroArtInk(tones: readonly string[], y: number, x: number): number {
 /**
  * Pack the shaded tone grid into colored half-block cells: two stacked
  * design-pixel rows become one terminal row.
+ *
+ * The two tone rows map to (glyph, background) differently per
+ * {@link HeroArtEncoding}: `top` draws the upper tone with `▀` and the lower one
+ * with the cell background; `bottom` fills the cell with the upper tone and
+ * draws the lower one with `▄`. Both paint the same picture on a terminal whose
+ * glyphs tile; see the type's doc for why Apple Terminal needs the second.
  * @param tones - tone rows (defaults to {@link heroArtShadedTones}, i.e. the
  *   generated wordmark with the AA halo dropped and the counters/feather kept);
  *   a trailing odd row is dropped, since a half-block cell needs both halves.
+ * @param encoding - which half the glyph carries (defaults to the shipped
+ *   `top`).
  * @returns one array of cells per terminal row.
  */
-export function heroArtCells(tones: readonly string[] = heroArtShadedTones()): HeroArtCell[][] {
+export function heroArtCells(
+  tones: readonly string[] = heroArtShadedTones(),
+  encoding: HeroArtEncoding = 'top',
+): HeroArtCell[][] {
   const width = tones.reduce((max, row) => Math.max(max, row.length), 0)
   const out: HeroArtCell[][] = []
   for (let r = 0; r + 1 < tones.length; r += 2) {
@@ -720,6 +780,15 @@ export function heroArtCells(tones: readonly string[] = heroArtShadedTones()): H
     for (let c = 0; c < width; c++) {
       const top = heroArtInk(tones, r, c)
       const bottom = heroArtInk(tones, r + 1, c)
+      if (encoding === 'bottom') {
+        // The background carries the UPPER tone (a background always fills the
+        // cell), and the bottom-anchored glyph carries the lower one — so no
+        // top-anchored ink can leave a page stripe above itself.
+        if (top === bottom) line.push({ ch: ' ', fg: -1, bg: top })
+        else if (top >= 0) line.push({ ch: HERO_ART_BOTTOM_GLYPH, fg: bottom, bg: top })
+        else line.push({ ch: HERO_ART_BOTTOM_GLYPH, fg: bottom, bg: -1 })
+        continue
+      }
       if (top >= 0 && bottom >= 0) {
         // Same ink on both halves paints as one solid block (no background).
         line.push(top === bottom ? { ch: '█', fg: top, bg: -1 } : { ch: '▀', fg: top, bg: bottom })
