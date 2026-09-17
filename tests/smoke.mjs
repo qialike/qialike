@@ -17,7 +17,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const bin = join(ROOT, 'dist/dsh-tui')
+// Bun appends `.exe` to `--compile --target bun` output on Windows, so the
+// single-file target lands as `dsh-tui.exe` there (the same rule the build's
+// own `targetBinaryPath()` encodes for the named targets).
+const bin = join(ROOT, 'dist', process.platform === 'win32' ? 'dsh-tui.exe' : 'dsh-tui')
 
 function run() {
   if (!existsSync(bin)) {

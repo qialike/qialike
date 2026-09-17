@@ -1557,11 +1557,40 @@ export default function stringWidth(string, options = {}) {
   }
 }
 
+/**
+ * The tui-app sources whose compiled `lib/` counterparts the package's `exports`
+ * map points at.
+ *
+ * Derived from the manifest rather than listed by hand: every `./lib/*.js`
+ * subpath the exports map exposes must be emitted here, because the SEA bundle
+ * resolves `@yourname/dsh-tui-app/<subpath>` through that map. A hand-written
+ * list silently went stale when `./file-reference` was added — `pluginSpecifiers()`
+ * picked the specifier up from the patch and `bun build --compile` then failed on
+ * an unresolvable import whose source had never been compiled.
+ *
+ * Exported so `tests/sidebar-goal-bar.test.ts` can pin the derivation against the
+ * manifest instead of grepping this file for a literal source path (which a
+ * hand-written list made meaningful and a derived one does not).
+ */
+export function bundleLibEntryPoints(pkgDir) {
+  const manifest = JSON.parse(readFileSync(join(pkgDir, 'package.json'), 'utf8'))
+  const entries = []
+  for (const [subpath, target] of Object.entries(manifest.exports ?? {})) {
+    const out = typeof target === 'string' ? target : target?.default
+    if (typeof out !== 'string' || !out.startsWith('./lib/') || !out.endsWith('.js')) continue
+    const base = join(pkgDir, 'src', out.slice('./lib/'.length, -'.js'.length))
+    const source = ['.tsx', '.ts'].map((ext) => base + ext).find((file) => existsSync(file))
+    if (source === undefined) throw new Error(`tui-app export "${subpath}" -> ${out} has no source at ${base}.ts[x]`)
+    entries.push(source)
+  }
+  return entries
+}
+
 /** Compile the tui-app source to `lib/` so the SEA bundle can resolve its exports. */
 async function buildBundleLib() {
   const pkgDir = join(ROOT, 'packages/dsh-tui-app')
   const result = await build({
-    entryPoints: [join(pkgDir, 'src/index.tsx'), join(pkgDir, 'src/startup.ts'), join(pkgDir, 'src/models.ts'), join(pkgDir, 'src/llm.ts'), join(pkgDir, 'src/opencode.ts'), join(pkgDir, 'src/china-gateways.ts'), join(pkgDir, 'src/foreign-gateways.ts'), join(pkgDir, 'src/azure.ts'), join(pkgDir, 'src/theme-plugin.ts'), join(pkgDir, 'src/sidebar-toggle.ts'), join(pkgDir, 'src/panels/conversation.tsx'), join(pkgDir, 'src/panels/approval.tsx'), join(pkgDir, 'src/panels/question.tsx'), join(pkgDir, 'src/panels/models.tsx'), join(pkgDir, 'src/sessions.tsx'), join(pkgDir, 'src/export.tsx'), join(pkgDir, 'src/new.ts'), join(pkgDir, 'src/goal.ts'), join(pkgDir, 'src/goal-bar.tsx'), join(pkgDir, 'src/plan.ts'), join(pkgDir, 'src/selftest.ts'), join(pkgDir, 'src/image-attach.ts'), join(pkgDir, 'src/invariant.ts')],
+    entryPoints: bundleLibEntryPoints(pkgDir),
     bundle: true,
     platform: 'node',
     format: 'esm',

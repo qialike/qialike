@@ -361,10 +361,27 @@ describe('the extension point is wired end to end', () => {
     expect(bar).not.toContain('commands.register')
   })
 
-  test('the package exports, build entry and patch row all name the plugin', () => {
+  test('the package exports, build entry and patch row all name the plugin', async () => {
     const pkg = JSON.parse(read(join(APP, 'package.json'))) as { exports: Record<string, unknown> }
     expect(pkg.exports['./goal-bar']).toBeDefined()
-    expect(read(join(REPO, 'apps', 'tui-bin', 'build.mjs'))).toContain('src/goal-bar.tsx')
+    // The lib entry points are DERIVED from this manifest (`bundleLibEntryPoints`)
+    // rather than hand-listed, so the invariant to pin is the derivation itself:
+    // every `./lib/*.js` subpath the exports map exposes must be compiled, because
+    // the SEA bundle resolves `@yourname/dsh-tui-app/<subpath>` through that map.
+    // The old hand-written list had gone stale (it omitted `./file-reference`,
+    // which the patch names, and the compile then failed on the unbuilt import).
+    const { bundleLibEntryPoints } = await import('../apps/tui-bin/build.mjs')
+    const entries: string[] = bundleLibEntryPoints(APP)
+    const libExports = Object.values(pkg.exports)
+      .map((target) => (typeof target === 'string' ? target : (target as { default?: string } | null)?.default))
+      .filter((out): out is string => typeof out === 'string' && out.startsWith('./lib/') && out.endsWith('.js'))
+    expect(libExports).toContain('./lib/goal-bar.js')
+    for (const subpath of ['goal-bar.tsx', 'file-reference.tsx']) {
+      expect(entries.some((file) => file.endsWith(join('src', subpath)))).toBe(true)
+    }
+    // One entry per exported `./lib/*.js` — no more (an extra source would not be
+    // reachable) and no fewer (a missing one is the unresolvable-import bug).
+    expect(entries).toHaveLength(libExports.length)
     const patch = read(join(APP, 'cordis.patch.yml'))
     expect(patch).toContain('tui-goal-bar')
     expect(patch).toContain("'@yourname/dsh-tui-app/goal-bar'")

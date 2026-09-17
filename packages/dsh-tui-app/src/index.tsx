@@ -459,20 +459,68 @@ export function sessionLoadErrorText(error: unknown): string {
  *  event of that step (chunk / tool call / settled message / turn end). */
 export const PREPARING_REQUEST_LABEL = 'preparing the request…'
 
+/** Safety deadline for the ASSEMBLY phase of a request: the synchronous assembly
+ *  runs on this thread and reports its end through `noteAssemblyElapsed` (`llm.ts`
+ *  `noteRequest`); if nothing ever answers, the label must not stick forever.
+ *  Enforced by the preparing ticker (`tickPreparingRequest`) rather than by a
+ *  timer of its own, so the deadline belongs to the window and cannot outlive it
+ *  (the old submit-scoped `setTimeout` was never cleared on success and could
+ *  cut a LATER window short). */
+export const PREPARING_ASSEMBLY_DEADLINE_MS = 30_000
+
+/** Safety deadline for the PROVIDER phase. Once the payload exists the remaining
+ *  wait is the provider's time-to-first-token, which is far longer than the
+ *  assembly budget — measured `streamToChunk` median 1.4 s on this workstation's
+ *  `~/.dsh/dsh-tui.log`, and tens of seconds on the machine that reported
+ *  "准备任务包需要的时间难以接受". Enforcing the assembly deadline across that
+ *  phase would reproduce the exact "preparing" misreport this split removes, so
+ *  the deadline is re-armed when the assembly ends. */
+export const PREPARING_PROVIDER_DEADLINE_MS = 300_000
+
+/** Status-bar text once the request is OUT and the model has not answered yet.
+ *
+ *  Why the label is split in two: `assemblyMs` is the app's WHOLE synchronous
+ *  assembly, reported by `llm.ts` the moment the payload string exists, while
+ *  what the user actually waits is the provider's time-to-first-token
+ *  (`streamToChunk` in the same `[assembly]` log line). Measured on this
+ *  workstation's `~/.dsh/dsh-tui.log` (731 records ending 2026-09-16):
+ *  assembly median 9 ms / p90 29 ms / max 84 ms, `streamToChunk` median 1.4 s /
+ *  p90 3.0 s / max 11.8 s; the macOS session that filed the report saw the same
+ *  asymmetry with waits above 100 s. One label ("preparing the request…") covered
+ *  BOTH phases, so a two-minute model wait read as two minutes of request
+ *  preparation. Printing the measured assembly time next to the phase names puts
+ *  the number where it belongs and makes the rest of the wait legible as a wait.
+ *  @param ms - measured assembly time in milliseconds.
+ *  @returns the status-bar string. */
+export function assembledRequestStatusText(ms: number): string {
+  return `assembled in ${Math.max(0, Math.round(ms))}ms · waiting for the model…`
+}
+
 /** Status-bar text while a model request is being assembled: the base label,
- *  plus the elapsed seconds once the ticker has fired.
+ *  plus the elapsed seconds once the ticker has fired — or the two-phase
+ *  {@link assembledRequestStatusText} once the assembly time is known.
  *
  *  Why the ticker gates the clock: the frame carrying this label is flushed
  *  right before the harness may take the thread, so a clock printed at that
  *  moment would be frozen at `0.0s` and read as a hang. Only a tick proves the
  *  loop is servicing timers; otherwise the seconds appear once the block is over
- *  (and may be superseded at once by the step's first content).
+ *  (and may be superseded at once by the step's first content). Once
+ *  `assemblyMs` is known there is nothing left to gate: the assembly that could
+ *  block the loop is over and the request is in flight.
  *  @param startedAt - epoch ms the assembly began, or null when idle.
  *  @param now - current epoch ms (injectable for tests).
  *  @param ticked - whether the preparing ticker fired since the assembly began.
+ *  @param assemblyMs - measured assembly time in ms, or null while still running.
  *  @returns the status-bar string. */
-export function preparingRequestStatusText(startedAt: number | null, now: number, ticked: boolean): string {
-  if (startedAt === null || !ticked) return PREPARING_REQUEST_LABEL
+export function preparingRequestStatusText(
+  startedAt: number | null,
+  now: number,
+  ticked: boolean,
+  assemblyMs: number | null = null,
+): string {
+  if (startedAt === null) return PREPARING_REQUEST_LABEL
+  if (assemblyMs !== null) return assembledRequestStatusText(assemblyMs)
+  if (!ticked) return PREPARING_REQUEST_LABEL
   return `${PREPARING_REQUEST_LABEL} ${Math.max(0, (now - startedAt) / 1000).toFixed(1)}s`
 }
 
@@ -531,6 +579,14 @@ export class Store {
   private _preparingStartedAt: number | null = null
   /** True once the preparing ticker fired (loop alive → show elapsed). */
   private _preparingTicked = false
+  /** Measured assembly time of the step in flight, or null while it is still
+   *  being assembled (see {@link assembledRequestStatusText}). */
+  private _assemblyMs: number | null = null
+  /** Wall-clock deadline for the CURRENT preparing window, or null when idle.
+   *  Armed for the assembly phase by {@link beginPreparingRequest}, re-armed for
+   *  the provider phase by {@link noteAssemblyElapsed}, enforced (and cleared) by
+   *  {@link tickPreparingRequest} / {@link endPreparingRequest}. */
+  private _preparingDeadlineAt: number | null = null
   /** In-flight manual `/compact` (status bar + Esc cancel), or null. */
   private _compaction: CompactionState | null = null
   /** True once the compaction ticker fired (loop alive → show elapsed). */
@@ -1487,32 +1543,72 @@ export class Store {
   /** Whether the preparing ticker ever fired (loop alive → show elapsed). */
   get preparingRequestTicked(): boolean { return this._preparingTicked }
 
+  /** Measured assembly time of the step in flight, or null while it is still
+   *  being assembled (see {@link assembledRequestStatusText}). */
+  get assemblyMs(): number | null { return this._assemblyMs }
+
+  /** Epoch ms the CURRENT preparing window's safety deadline expires, or null
+   *  when idle (see {@link beginPreparingRequest} / {@link noteAssemblyElapsed}).
+   *  Exposed for the window tests; the status bar never reads it. */
+  get preparingDeadlineAt(): number | null { return this._preparingDeadlineAt }
+
   /** Mark the assembly window: set on `step/start` (and on submit), i.e. right
    *  before the harness takes the thread. A second call inside the same window
    *  (submit → `step/start`) keeps the original clock, so the seconds measure
-   *  the wait the user actually experiences. */
+   *  the wait the user actually experiences.
+   *
+   *  The deadline is taken from the wall clock HERE rather than from `startedAt`:
+   *  `startedAt` is the timestamp the wait is DISPLAYED against (tests pass a
+   *  synthetic one), while the deadline is about when the ticker gives up. */
   beginPreparingRequest(startedAt: number = Date.now()): void {
     if (this._preparingRequest) return
     this._preparingRequest = true
     this._preparingStartedAt = startedAt
     this._preparingTicked = false
+    this._assemblyMs = null
+    this._preparingDeadlineAt = Date.now() + PREPARING_ASSEMBLY_DEADLINE_MS
     this.notify()
   }
 
-  /** Re-render so the elapsed seconds advance (firing proves the loop is free). */
-  tickPreparingRequest(): void {
+  /** The request payload now exists: the synchronous assembly is over (reported
+   *  by the LLM adapter, `llm.ts` `noteRequest`), so the status bar can name the
+   *  phase and print what it cost. Everything after this point is the
+   *  provider's time-to-first-token, which is what the label's second half says —
+   *  and which the assembly deadline must no longer cut short.
+   *  @param ms - measured assembly time (epoch-ms delta). */
+  noteAssemblyElapsed(ms: number): void {
     if (!this._preparingRequest) return
+    const rounded = Math.max(0, Math.round(ms))
+    this._preparingDeadlineAt = Date.now() + PREPARING_PROVIDER_DEADLINE_MS
+    if (this._assemblyMs === rounded) return
+    this._assemblyMs = rounded
+    this.notify()
+  }
+
+  /** Re-render so the elapsed seconds advance (firing proves the loop is free).
+   *  Also the only place the safety deadline is enforced: no frame can be painted
+   *  while the loop is blocked, so a tick is exactly the moment "nothing ever
+   *  answered" becomes observable.
+   *  @param now - current epoch ms (injectable for tests). */
+  tickPreparingRequest(now: number = Date.now()): void {
+    if (!this._preparingRequest) return
+    if (this._preparingDeadlineAt !== null && now >= this._preparingDeadlineAt) {
+      this.endPreparingRequest()
+      return
+    }
     this._preparingTicked = true
     this.notify()
   }
 
-  /** Leave it: the step produced content, the turn ended, or the safety timeout
-   *  fired. */
+  /** Leave it: the step produced content, the turn ended, or the safety deadline
+   *  expired. */
   endPreparingRequest(): void {
     if (!this._preparingRequest) return
     this._preparingRequest = false
     this._preparingStartedAt = null
     this._preparingTicked = false
+    this._assemblyMs = null
+    this._preparingDeadlineAt = null
     this.notify()
   }
 
@@ -4545,6 +4641,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           cur.streamAt = Date.now()
           cur.bytes = bytes
           cur.messages = messages
+          // The payload string exists: the synchronous assembly is OVER, and
+          // everything from here to the first chunk is the provider. Relabel the
+          // status bar with the measured cost (see
+          // `assembledRequestStatusText`) so the model wait stops reading as
+          // request preparation.
+          store.noteAssemblyElapsed(cur.streamAt - cur.startedAt)
         } else {
           cur.retries += 1
         }
@@ -4591,15 +4693,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     // followup call returns fast, but the turn's first request is assembled
     // synchronously right after, and no frame can be produced during it. The
     // state clears on the step's first content event (below), on a failed
-    // submit, and on a safety timeout.
+    // submit, or on the window's own safety deadline — armed by
+    // `beginPreparingRequest` and re-armed for the provider phase by
+    // `noteAssemblyElapsed`, so this call site owns no timer of its own.
     store.beginPreparingRequest()
-    const pendingTimeout = setTimeout(() => store.endPreparingRequest(), 30_000)
     void (async (): Promise<void> => {
       await paintBeforeBlock()
       try {
         agent.followup(createUserMessage({ content, source: { kind: 'user' } }))
       } catch (error) {
-        clearTimeout(pendingTimeout)
         store.endPreparingRequest()
         logErrorFileOnly('submit', error)
         return

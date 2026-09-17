@@ -44,7 +44,6 @@ import {
 import { questionDockRows } from '../question-layout.ts'
 import { questionPresentation } from '../plan-review.ts'
 import {
-  HERO_ART_CELL_GLYPH,
   HERO_AREA_PADDING_Y,
   HERO_CAPTION_URL,
   HERO_COMPOSER_EXTRA_ROWS,
@@ -1070,21 +1069,20 @@ function StepsBlock(props: { steps: readonly StepItem[] }): React.JSX.Element {
 /** `DSH_TUI_HERO_ART` override, read once at module load (auto by default). */
 const HERO_ART_MODE = heroArtMode(process.env.DSH_TUI_HERO_ART)
 
-/** The generated brand art, packed into colored half-block cells once. */
+/** The generated brand art, laid out as background-painted cells once. */
 const HERO_ART_ROWS_CELLS = heroArtCells()
 
 /**
  * Brand mark the hero draws at this size: the generated pixel-art wordmark when
- * it fits AND the terminal really advances `▀` one column (it is
- * East-Asian-Ambiguous — see the charwidth calibration), else the plain-`#`
- * ASCII fallback, else nothing. The renderer and every geometry mirror call
- * this, so routing cannot disagree with what is painted.
+ * it fits, else the plain-`#` ASCII fallback, else nothing. The renderer and
+ * every geometry mirror call this, so routing cannot disagree with what is
+ * painted. It takes no glyph-width input any more: the art is drawn entirely
+ * with cell backgrounds and spaces, so no ambiguous-width glyph is involved.
  */
 function heroMarkFor(rows: number, width: number): HeroMarkKind {
   return heroArtMarkKind({
     rows,
     width,
-    blockWidth: visualWidth(HERO_ART_CELL_GLYPH),
     mode: HERO_ART_MODE,
   })
 }
@@ -3157,20 +3155,26 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           {heroMark === 'blocks' ? (
             <Box flexDirection="column" flexShrink={0}>
               {HERO_ART_ROWS_CELLS.map((line, i) => {
-                // Center by MEASURED width: the art glyphs are
-                // East-Asian-Ambiguous, so their column count comes from the
-                // charwidth calibration rather than from a static table.
-                const artWidth = line.reduce((sum, cell) => sum + visualWidth(cell.ch), 0)
-                const pad = ' '.repeat(Math.max(0, Math.floor((heroUsable - artWidth) / 2)))
+                // Every art cell is exactly one column wide (it is a space with
+                // a background — see HERO_ART_CELLS_PER_PIXEL), so the row is
+                // centered by its own length: no glyph measurement can shift it.
+                const pad = ' '.repeat(Math.max(0, Math.floor((heroUsable - line.length) / 2)))
+                // Run-length the row: 56 cells carry only a handful of ink runs,
+                // and Ink rebuilds every node it is handed on every frame.
+                const runs: { ink: number; width: number }[] = []
+                for (const cell of line) {
+                  const last = runs[runs.length - 1]
+                  if (last !== undefined && last.ink === cell.ink) last.width += 1
+                  else runs.push({ ink: cell.ink, width: 1 })
+                }
                 return (
                   <Text key={`art-${i}`} wrap="truncate">
                     {pad}
-                    {line.map((cell, c) => (
+                    {runs.map((run, r) => (
                       <Text
-                        key={`art-${i}-${c}`}
-                        color={cell.fg >= 0 ? heroArtInk[cell.fg] : undefined}
-                        backgroundColor={cell.bg >= 0 ? heroArtInk[cell.bg] : undefined}
-                      >{cell.ch}</Text>
+                        key={`art-${i}-${r}`}
+                        backgroundColor={run.ink >= 0 ? heroArtInk[run.ink] : undefined}
+                      >{' '.repeat(run.width)}</Text>
                     ))}
                   </Text>
                 )
@@ -3352,8 +3356,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             own reasoning sits with its helper:
               loading      → sessionLoadingStatusText (live clock)
               compaction   → a manual `/compact` outranks the fold; Esc cancels
-              preparing    → assembly clock, shown only once a tick proves the
-                             loop is free (`[stall]` otherwise)
+              preparing    → two phases in one slot: the assembly clock, shown
+                             only once a tick proves the loop is free (`[stall]`
+                             otherwise), then `assembled in … · waiting for the
+                             model…` while the provider answers
               flash        → the user's own action, expires by itself
               history      → the long older-history fold's progress + counts
               error        → a failed load stays until retry / `/clear`
@@ -3363,11 +3369,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           : store.statusBarLeft === 'compaction'
             ? <Text color={theme.accent} wrap="truncate">{compactionStatusText(store.compaction!, Date.now(), store.compactionTicked)}</Text>
             : store.statusBarLeft === 'preparing'
-              // The harness assembles this step's request on this thread right
-              // after `step/start` (4-6 s on a giant session, `[stall]` in the
-              // log): the frame carrying this label is flushed BEFORE that block,
-              // so the clock stays hidden until a tick proves the loop is free.
-              ? <Text color={theme.accent} wrap="truncate">{preparingRequestStatusText(store.preparingRequestStartedAt, Date.now(), store.preparingRequestTicked)}</Text>
+              // Two phases behind one slot. The harness assembles this step's
+              // request on this thread right after `step/start` (4-6 s on a giant
+              // session, `[stall]` in the log): the frame carrying this label is
+              // flushed BEFORE that block, so the clock stays hidden until a tick
+              // proves the loop is free. Once the payload exists (`llm.ts`
+              // `noteRequest`) the assembly is over and what remains is the
+              // provider's time-to-first-token — the tens of seconds the label
+              // used to misreport as request preparation.
+              ? <Text color={theme.accent} wrap="truncate">{preparingRequestStatusText(store.preparingRequestStartedAt, Date.now(), store.preparingRequestTicked, store.assemblyMs)}</Text>
               : store.statusBarLeft === 'flash'
             ? <Text color={theme.success} wrap="truncate">{store.statusFlash!.text}</Text>
             : store.statusBarLeft === 'history'
