@@ -208,8 +208,12 @@ function renderBlock(node: MdNode, key: number | string, usable: number): React.
         <Box key={key} width="100%" borderStyle="round" borderColor={theme.borderSubtle} paddingX={1} flexDirection="column">
           {node.lang ? <Text dimColor>{node.lang}</Text> : null}
           {/* Each code line as its own Text so wrapped lines are counted in the
-              box height (a single joined Text overflows the border when wrapping). */}
-          {lines.map((line, i) => <Text key={i} color={theme.text} wrap="truncate">{line}</Text>)}
+              box height (a single joined Text overflows the border when wrapping).
+              Wrapped, not clipped: a code block is text the user COPIES out, and
+              `truncate` dropped the tail behind an `…` (a 149-column command lost
+              its end in a ~120-column terminal). `blockRows`' code branch wraps at
+              this same inner width, so the estimate still equals the paint. */}
+          {lines.map((line, i) => <Text key={i} color={theme.text} wrap="wrap">{line}</Text>)}
         </Box>
       )
     }
@@ -431,7 +435,7 @@ export function countWrappedLines(text: string, usable: number): number {
  * Estimate the rows `MarkdownText` will actually render for `text` at the
  * conversation width. Walks the same mdast tree the renderer uses so the
  * estimate matches the real layout: paragraphs/headings wrap at `usable`,
- * code lines are truncated to one row each (plus border + lang), tables pad
+ * code lines wrap at the code frame's inner width (plus border + lang), tables pad
  * cells, and the root `gap={1}` separates blocks.
  * @param text - the Markdown source.
  * @param usable - text columns available for the conversation area.
@@ -466,8 +470,13 @@ function blockRows(node: MdNode, usable: number): number {
     case 'thematicBreak':
       return 1
     case 'code': {
-      const lines = (node.value ?? '').split('\n')
-      return 2 + (node.lang ? 1 : 0) + lines.length
+      // The frame is a round-bordered Box with paddingX={1}, so its text wraps 4
+      // columns narrower than `usable` — and each source line wraps on its own
+      // (the renderer emits one <Text> per line). Mirrors that code branch.
+      const inner = Math.max(1, usable - 4)
+      let rows = 0
+      for (const line of (node.value ?? '').split('\n')) rows += countWrappedLines(line, inner)
+      return 2 + (node.lang ? 1 : 0) + rows
     }
     case 'list': {
       const ordered = node.ordered === true

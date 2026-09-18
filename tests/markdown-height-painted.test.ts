@@ -68,6 +68,37 @@ async function paintedHeight(text: string, usable: number): Promise<number> {
   return height
 }
 
+/** Everything Ink WROTE for one assistant row — the painted frame, escapes and
+ *  all. {@link paintedHeight} reads yoga's computed height; this reads the bytes
+ *  the terminal receives, which is what a clip shows up in. */
+async function paintedFrame(text: string, usable: number): Promise<string> {
+  const chunks: string[] = []
+  class CaptureStdout extends FakeStdout {
+    _write(chunk: unknown, _enc: unknown, cb: () => void): void {
+      chunks.push(String(chunk))
+      cb()
+    }
+  }
+  const element = React.createElement(
+    Box,
+    { width: usable, flexDirection: 'column' },
+    React.createElement(
+      Box,
+      { width: '100%', paddingLeft: 3, paddingRight: 3 },
+      React.createElement(MarkdownText, { text, usable: usable - 6 }),
+    ),
+  )
+  const instance = render(element, {
+    stdout: new CaptureStdout(usable + 20, 40) as unknown as NodeJS.WriteStream,
+    stdin: process.stdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  instance.unmount()
+  return chunks.join('')
+}
+
 const COLUMNS = 100
 /** Mirror of `convUsableWidth(width, sidebarVisibleFor(width))`: the message
  *  column's CONTENT width (the outer paddingX=1 already removed) at 100 cols
@@ -82,6 +113,11 @@ const samples: Record<string, string> = {
   'bullet list': Array.from({ length: 40 }, (_, i) => `- 列表项 ${i}: 一些说明文字,足够长以触发折行`).join('\n'),
   'numbered list': Array.from({ length: 40 }, (_, i) => `${i + 1}. 编号项 ${i}: 一些说明文字,足够长以触发折行`).join('\n'),
   'fenced code': ['```ts', ...Array.from({ length: 40 }, (_, i) => `const value${i} = compute(${i}) // 注释`), '```'].join('\n'),
+  // Over-wide lines: pin that the paint AND the estimate both wrap them. These
+  // two agree even when the line is clipped (both used to count one row), so the
+  // clip itself is pinned by the painted-bytes test below, not by the height.
+  'fenced code, over-wide ASCII line': ['```bash', `python3 -c "${'import socket,time;t=time.time();'.repeat(4)}"`, 'echo done', '```'].join('\n'),
+  'fenced code, over-wide CJK line': ['```text', '这是一行很长的中文说明文字,用来验证代码块内的宽字符折行与高度估算一致,长度需要超过代码框的内宽。'.repeat(2), '```'].join('\n'),
   blockquote: Array.from({ length: 20 }, (_, i) => `> 引用第 ${i} 行:一段被引用的说明文字`).join('\n\n'),
   table: ['| 序号 | 值 |', '| --- | --- |', ...Array.from({ length: 20 }, (_, i) => `| ${i} | 值 ${i} |`)].join('\n'),
   mixed: ['## 小标题', '', '先说结论:双进程被移除了,取舍如下。', '', '- 其一', '- 其二', '', '```ts', 'const a = 1', '```', ''].join('\n').repeat(10),
@@ -99,5 +135,18 @@ describe('estimateMarkdownHeight equals the painted row height', () => {
     // wrapped line used to be cut off below the transcript viewport.
     const answer = `${'双进程的复杂度每天都付,而巨型会话是少数场景。'.repeat(60)}\n\n要我把上面那两处残留(陈旧注释 + 死代码 source 参数)也清掉吗?这属于纯内部清理,不影响行为。`
     expect(estimateMarkdownHeight(answer, USABLE - 6)).toBe(await paintedHeight(answer, USABLE))
+  })
+
+  test('an over-wide code line is painted in FULL, not clipped', async () => {
+    // `wrap="truncate"` kept only the frame's inner width and replaced the tail
+    // with `…`, so a copied command silently lost its end (reported on a
+    // 149-column one-liner in a ~120-column terminal). The estimate was never
+    // wrong here — the LINE was missing — so only the painted bytes can pin it.
+    const run = 'x'.repeat(140)
+    const frame = await paintedFrame(['```bash', `echo ${run}`, '```'].join('\n'), USABLE)
+    // CSI sequences (SGR, cursor moves, DEC private modes) carry no `x`, so the
+    // count is exact either way; stripping keeps a failure readable.
+    const painted = frame.replace(/\x1b\[[0-9;?<]*[A-Za-z]/g, '')
+    expect(painted.split('x').length - 1).toBe(run.length)
   })
 })
