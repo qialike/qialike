@@ -245,7 +245,8 @@ qialike uninstall        # 从二进制内部卸载：清空整个 harness home�
 qialike web [flags]      # 打开 DeepSeek Harness 浏览器 UI（转发已安装的 `dsh web` CLI，Web
                          #   界面保持为 harness 自有实现）：需要 `dsh` 在 PATH 上
                          #   （`npm install -g @deepseek-ai/dsh`）或设置 $QIALIKE_DSH；
-                         #   web 参数（--host/--port/--no-open/...）原样透传
+                         #   web 参数（--port/--no-open/...）原样透传
+                         #   （--host 0.0.0.0 会被 web profile 拒绝）
 pnpm uninstall:local     # （历史遗留）移除旧版 scripts/install.sh 创建的
                          #   ~/.local/bin/qialike 软链
 ```
@@ -256,30 +257,43 @@ pnpm uninstall:local     # （历史遗留）移除旧版 scripts/install.sh 创
 
 `qialike web` 运行已安装的 `dsh` CLI，其版本应不低于本 qialike 构建内嵌的 harness 版本：
 两端读写同一份 `~/.dsh/sessions` 日志，更旧的 `dsh` 读取器会把新版范围压缩的
-`sourceEventSeqs` 误判为损坏历史（`SessionPersistenceCorruptionError`）。
+`sourceEventSeqs` 误判为损坏历史（`SessionPersistenceCorruptionError`）。启动前会先核对
+`dsh`：未安装或版本与本 qialike 内嵌不一致时，告警并打印安装命令（版本不一致时不启动 web、
+直接退出）。
 
-`qialike web` 启动前会核对 `dsh`：未安装或版本与本 qialike 内嵌不一致时，告警并打印安装命令（版本不一致时不启动 web、直接退出）。
-
-`qialike web` 运行已安装的 `dsh` CLI，其版本应不低于本 qialike 构建内嵌的 harness 版本：
-两端读写同一份 `~/.dsh/sessions` 日志，更旧的 `dsh` 读取器会把新版范围压缩的
-`sourceEventSeqs` 误判为损坏历史（`SessionPersistenceCorruptionError`）。
+`dsh web` 绑定 `127.0.0.1:3080`，启动后打印一条**带本次运行认证 token 的 URL**
+（`http://127.0.0.1:3080/?token=…`）并用默认浏览器打开它。请**就用那条 URL**：不带 token
+访问会得到 `401 dsh web authentication required; reopen the URL printed by dsh web.`；
+它种下的认证 cookie 只对签发时的那一个 authority 有效（`127.0.0.1:3080` 与
+`localhost:3080` 是两个不同的 authority），所以选定一个主机名后别再换。`--port <n>` 可换端口；
+若端口已被占用，第二个服务会以 `EADDRINUSE` 退出，而浏览器仍在跟旧的那个服务说话——它的
+token 你并没有。
 
 ### 无头 / 远程访问：本机跑服务，别机浏览器访问
 
-`dsh web` 默认只监听 `127.0.0.1`。要在**本机（含无桌面/纯终端 Linux）跑服务、另一台机器的浏览器访问**：
+服务端保持默认回环绑定，从**有浏览器的那台机器**做 SSH 隧道即可。`--host 0.0.0.0`
+**不可用**——web profile 会直接拒绝（`error: --host 0.0.0.0 is intentionally not supported yet
+for safety: it would expose remote code execution to the network; use 127.0.0.1 instead`）：
 
 ```sh
-qialike web --host 0.0.0.0 --no-open   # 监听所有网卡；无头机无本地浏览器故加 --no-open
-```
+# 无头 / 纯终端主机上（无本地浏览器，故加 --no-open）
+qialike web --no-open                  # 记下打印出的 http://127.0.0.1:3080/?token=… 这条 URL
 
-然后在别机浏览器打开 `http://<这台机器IP>:3080`（默认端口 3080，可用 `--port <n>` 修改；
-记得在防火墙/安全组放行端口）。**仅建议在可信网络/内网/VPN 下使用**——绑定 `0.0.0.0` 即对网络开放服务。
-更稳妥的方式：服务端保持默认回环绑定，从你的机器做 SSH 隧道：
-
-```sh
+# 在有浏览器的机器上
 ssh -L 3080:localhost:3080 user@headless-host
-# 再在本机浏览器打开 http://localhost:3080
+# 然后在本机浏览器打开上面那条打印出来的 URL（http://127.0.0.1:3080/?token=…）
 ```
+
+3080 被占用时两端都用 `--port <n>`；**仅建议在可信网络/内网/VPN 下使用**。
+
+### 从 `dsh-tui` 升级
+
+命令已改名：`dsh-tui` 不再存在——仓库目录是 `qialike/`、二进制是 `dist/qialike`。状态文件、
+设置与环境变量会自动迁移，但**命令名不会**：shell profile 或脚本里若仍写着 `dsh-tui`，只会得到
+`dsh-tui: command not found`；指向旧检出目录的 PATH 行同样解析不到任何东西。`bash scripts/install`
+发现**生效中**的旧 PATH 行时会告警并指出要改的文件与行号，其余的用
+`grep -n 'dsh-tui' ~/.bashrc ~/.zshrc` 找。改完请**新开一个终端**——`export PATH=…` 只对重新
+读取 profile 的 shell 生效，已开着的终端仍旧用旧 PATH。
 
 ## 作为插件 bundle 安装
 

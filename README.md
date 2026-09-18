@@ -447,7 +447,8 @@ qialike uninstall        # uninstall from inside the binary: clears the whole ha
 qialike web [flags]      # serve the DeepSeek Harness browser UI (alias of the installed
                          #   `dsh web` CLI, so the Web surface stays the harness's own):
                          #   needs `dsh` on PATH (`npm install -g @deepseek-ai/dsh`) or
-                         #   $QIALIKE_DSH; web flags (--host/--port/--no-open/...) pass through
+                         #   $QIALIKE_DSH; web flags (--port/--no-open/...) pass through
+                         #   (--host 0.0.0.0 is refused by the web profile)
 pnpm uninstall:local     # (legacy) remove the ~/.local/bin/qialike symlink of older
                          #   dev installs created by the removed scripts/install.sh
 ```
@@ -460,33 +461,47 @@ state, settings, and credentials live under `~/.dsh`.
 `qialike web` runs the installed `dsh` CLI, which should be at least the harness version
 embedded in this qialike build: both sides write and read the same `~/.dsh/sessions` logs,
 and an older `dsh` reader rejects the newer range-compressed `sourceEventSeqs` as corrupt
-history (`SessionPersistenceCorruptionError`).
+history (`SessionPersistenceCorruptionError`). It preflights `dsh` first: when the CLI is
+missing, or its version differs from the one embedded in this qialike build, a warning prints
+the matching install command and (on a version mismatch) the command exits instead of starting
+the web server.
 
-`qialike web` preflights `dsh` first: when it is missing, or its version differs from the one embedded in this qialike build, a warning prints the matching install command and (on a version mismatch) the command exits instead of starting the web server.
-
-`qialike web` runs the installed `dsh` CLI, which should be at least the harness version
-embedded in this qialike build: both sides write and read the same `~/.dsh/sessions` logs,
-and an older `dsh` reader rejects the newer range-compressed `sourceEventSeqs` as corrupt
-history (`SessionPersistenceCorruptionError`).
+`dsh web` binds to `127.0.0.1:3080`, prints one URL carrying a per-run auth token
+(`http://127.0.0.1:3080/?token=…`) and opens it in the default browser. Open **that** URL:
+without the token the server answers `401 dsh web authentication required; reopen the URL
+printed by dsh web.`, and the auth cookie is valid only for the exact authority it was issued
+for (`127.0.0.1:3080` and `localhost:3080` are different authorities), so pick one hostname and
+stay on it. `--port <n>` moves the port; if the port is already taken, the second server exits
+with `EADDRINUSE` while your browser keeps talking to the older one, whose token you do not have.
 
 ### Serving the web UI to another machine (headless / remote)
 
-`dsh web` binds to `127.0.0.1` by default. To run the server on one machine — including a
-headless / terminal-only Linux — and open it in a browser on another machine:
+Keep the default loopback binding and tunnel from the machine that has the browser. `--host
+0.0.0.0` is **not** available — the web profile refuses it outright (`error: --host 0.0.0.0 is
+intentionally not supported yet for safety: it would expose remote code execution to the
+network; use 127.0.0.1 instead`):
 
 ```sh
-qialike web --host 0.0.0.0 --no-open   # serve on all interfaces; no local browser on a headless box
-```
+# on the headless / terminal-only host (no local browser, so no --open)
+qialike web --no-open                  # copy the printed http://127.0.0.1:3080/?token=… URL
 
-then visit `http://<host-ip>:3080` from the other machine (default port 3080, change with
-`--port <n>`; allow the port in the firewall / security group). Only do this on a trusted
-network / VPN — binding `0.0.0.0` exposes the server. A safer alternative when the server is
-reachable over SSH: keep the default loopback binding and tunnel from your machine:
-
-```sh
+# from the machine with the browser
 ssh -L 3080:localhost:3080 user@headless-host
-# then open http://localhost:3080 locally
+# then open the printed URL (`http://127.0.0.1:3080/?token=…`) in the local browser
 ```
+
+Use `--port <n>` on both sides if 3080 is taken, and only do this on a trusted network / VPN.
+
+### Upgrading from `dsh-tui`
+
+The command was renamed: `dsh-tui` no longer exists — the checkout is `qialike/` and the binary
+is `dist/qialike`. Saved state, settings and environment variables are migrated automatically,
+but the command NAME is not: a shell profile or script that still says `dsh-tui` fails with
+`dsh-tui: command not found`, and a PATH entry pointing at the old checkout resolves nowhere.
+`bash scripts/install` warns when it finds a live pre-rename PATH entry and names the file and
+line to fix; `grep -n 'dsh-tui' ~/.bashrc ~/.zshrc` finds the rest. Then open a **new**
+terminal — `export PATH=…` only reaches shells that read the profile again, so an existing one
+keeps the old PATH.
 
 ## Install as a plugin bundle
 
