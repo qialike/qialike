@@ -1,10 +1,10 @@
 {
-  "name": "@yourname/dsh-tui-bin",
+  "name": "@yourname/qialike-bin",
   "version": "0.4.21-beta",
   "private": true,
   "type": "module",
   "license": "MIT",
   "dependencies": {
-    "@yourname/dsh-tui-app": "workspace:^"
+    "@yourname/qialike-app": "workspace:^"
   }
 }

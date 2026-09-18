@@ -2,7 +2,7 @@
  * Source guards for the STABLE embedded-profile directory (`bin.ts`).
  *
  * The bug this locks down (review item P2): `materializeProfile()` wrote the
- * three embedded layers into `mkdtempSync($TMPDIR/dsh-tui-*)` — a FRESH random
+ * three embedded layers into `mkdtempSync($TMPDIR/qialike-*)` — a FRESH random
  * directory on every launch — and nothing ever removed it (the only `rmSync`
  * calls in `bin.ts` belong to `uninstall`). So every launch leaked a directory,
  * and no user layer could ever live next to the materialized files.
@@ -60,7 +60,7 @@ describe('embedded profile directory', () => {
 
   test('④ the legacy temp dirs are swept, but never a live one', () => {
     const sweep = BIN.slice(BIN.indexOf('function sweepLegacyProfiles('), BIN.indexOf('\n}\n', BIN.indexOf('function sweepLegacyProfiles(')))
-    expect(sweep, 'targets the old prefix').toContain("name.startsWith('dsh-tui-')")
+    expect(sweep, 'targets the old prefix').toContain("name.startsWith('qialike-')")
     expect(sweep, 'only removes dirs older than a day').toContain('24 * 60 * 60 * 1000')
     // A running launch of the same binary still owns its directory…
     expect(sweep, 'skips young entries').toContain('continue')

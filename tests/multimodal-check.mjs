@@ -1,7 +1,7 @@
 // Multimodal serialization check for tui-llm: image blocks become OpenAI
 // image_url parts and Anthropic base64 source blocks.
 import { createUserMessage, createAssistantMessage } from '@deepseek-ai/dsh-llm'
-import { serializeMessagesOpenAI, serializeMessagesAnthropic } from '../packages/dsh-tui-app/src/llm.ts'
+import { serializeMessagesOpenAI, serializeMessagesAnthropic } from '../packages/qialike-app/src/llm.ts'
 
 const fakeCtx = {
   get(name) {

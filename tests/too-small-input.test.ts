@@ -19,8 +19,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
-const INDEX = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf-8')
-const PANEL = readFileSync(new URL('../packages/dsh-tui-app/src/panels/conversation.tsx', import.meta.url), 'utf-8')
+const INDEX = readFileSync(new URL('../packages/qialike-app/src/index.tsx', import.meta.url), 'utf-8')
+const PANEL = readFileSync(new URL('../packages/qialike-app/src/panels/conversation.tsx', import.meta.url), 'utf-8')
 
 describe('terminal-too-small input gate', () => {
   test('① the store owns a notify-free suppression flag', () => {

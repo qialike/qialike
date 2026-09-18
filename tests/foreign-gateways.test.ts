@@ -1,15 +1,15 @@
 /**
  * Unit tests for the foreign gateway plugin (`tui-foreign-gateways`): the
  * aggregation gateways it registers through `tuiLlmTemplates`, and the
- * `dsh-tui-foreign-gateways.enabled: false` wholesale unload.
+ * `qialike-foreign-gateways.enabled: false` wholesale unload.
  *
  * Run with `bun test tests/foreign-gateways.test.ts`.
  *
- * @module dsh-tui/foreign-gateways-test
+ * @module qialike/foreign-gateways-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { FOREIGN_GATEWAY_TEMPLATES, apply, name } from '../packages/dsh-tui-app/src/foreign-gateways.ts'
+import { FOREIGN_GATEWAY_TEMPLATES, apply, name } from '../packages/qialike-app/src/foreign-gateways.ts'
 
 function runApply(settingsValue: unknown): { added: { route: string }[]; hidden: string[] } {
   const added: { route: string }[] = []

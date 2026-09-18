@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-tui — the full single-file SEA boot for the TUI terminal surface.
+ * qialike — the full single-file SEA boot for the TUI terminal surface.
  *
  * Not the binary's entry point: {@link ./main.ts} is. That thin entry resolves
  * `--version` and a lone `--help` without loading this module's static graph,
@@ -19,7 +19,7 @@
  * over an empty root config, with the same command-line, environment, and
  * fail-loud guards.
  *
- * @module @yourname/dsh-tui/bin
+ * @module @yourname/qialike/bin
  */
 
 import { basename, dirname, join, resolve, sep } from 'node:path'
@@ -27,6 +27,10 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
 import { constants, homedir, tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+// FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto
+// `QIALIKE_*` at module load, before this file's own module-scope env reads
+// (SPLASH_DELAY_MS) and before any other module's.
+import { migrateLegacyHomeFiles, LEGACY_PRODUCT } from '@yourname/qialike-app/src/legacy-names.ts'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context, FiberState } from '@deepseek-ai/cordis'
@@ -38,38 +42,49 @@ import { assertEntriesActivated, installFailLoud, loadLayeredEnv, loadOptionalPa
 import { DSH_HOME_DIR_NAME, dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generated/config-embed.js'
-import { PLUGIN_BUILTINS } from '../generated/plugins.js'
+import { PLUGIN_BUILTINS, LEGACY_PLUGIN_ALIASES } from '../generated/plugins.js'
 import pkg from '../../../package.json' with { type: 'json' }
 import { PLUGIN_MODE, UNINSTALL_MODE, WEB_MODE } from './launcher-modes.ts'
 import { classifyProjectLayer } from './project-overlay.ts'
 import type { ProjectRowProblem } from './project-overlay.ts'
 
-const NAME = 'dsh-tui'
+const NAME = 'qialike'
+
+/** Names bundled as-is, plus the pre-rename aliases of the app package (an
+ *  overlay written before the rename names `@yourname/dsh-tui-app*`). */
+function bundledPlugin(name: string): unknown {
+  return PLUGIN_BUILTINS[name] ?? LEGACY_PLUGIN_ALIASES[name]
+}
+
+/** Whether this single-file build can resolve `name` without a local plugin. */
+function isBundledPlugin(name: string): boolean {
+  return name in PLUGIN_BUILTINS || name in LEGACY_PLUGIN_ALIASES
+}
 
 /** How long a launch may stay silent before the splash line is worth showing.
  *  Measured: a normal start paints its first frame at ~0.6 s (hero or the
  *  file-backed transcript), so 1.2 s keeps the splash out of the way of every
  *  normal launch and still covers a genuinely slow machine or cold cache.
- *  `DSH_TUI_SPLASH_MS` overrides the delay; a NEGATIVE value forces the line out
+ *  `QIALIKE_SPLASH_MS` overrides the delay; a NEGATIVE value forces the line out
  *  (the positive control — see `drawSplash`). */
-const SPLASH_DELAY_MS = Number(process.env.DSH_TUI_SPLASH_MS ?? 1200)
+const SPLASH_DELAY_MS = Number(process.env.QIALIKE_SPLASH_MS ?? 1200)
 
 // ── `web` subcommand preflight ───────────────────────────────────────────────
-// The harness CLI the `dsh-tui web` forwarder spawns shares `~/.dsh` session
+// The harness CLI the `qialike web` forwarder spawns shares `~/.dsh` session
 // logs with this TUI, so a missing CLI or a version older than the embedded
 // harness produces confusing failures later (e.g. history that will not load).
 // Warn up front, print the exact install command, and let the user proceed.
 
-/** Which `dsh` the web forwarder will launch (`$DSH_TUI_DSH` overrides PATH). */
+/** Which `dsh` the web forwarder will launch (`$QIALIKE_DSH` overrides PATH). */
 function webDshCommand(): string {
-  // `||`, not `??`: an EMPTY override (`DSH_TUI_DSH= dsh-tui web`) means "unset".
+  // `||`, not `??`: an EMPTY override (`QIALIKE_DSH= qialike web`) means "unset".
   // spawnSync('') throws a TypeError, so `??` surfaced a stack trace instead of
   // the documented "install the CLI" guidance and its 127 exit code.
-  return process.env.DSH_TUI_DSH || 'dsh'
+  return process.env.QIALIKE_DSH || 'dsh'
 }
 
 /** Windows needs the shell to resolve npm `.cmd`/`.bat` shims — both when the
- *  command comes from PATH and when an explicit `$DSH_TUI_DSH` points at a
+ *  command comes from PATH and when an explicit `$QIALIKE_DSH` points at a
  *  `.cmd`/`.bat` file. POSIX never uses the shell (arguments stay safe). */
 function winShellFor(explicit: string | undefined): boolean {
   if (process.platform !== 'win32') return false
@@ -94,8 +109,8 @@ function preflightWebDsh(): 'ok' | 'missing' | 'mismatch' {
   const probe = spawnSync(command, ['--version'], {
     encoding: 'utf8',
     // Windows resolves npm `.cmd`/`.bat` shims through the shell (PATH or an
-    // explicit $DSH_TUI_DSH pointing at one); POSIX stays shell-free.
-    shell: winShellFor(process.env.DSH_TUI_DSH),
+    // explicit $QIALIKE_DSH pointing at one); POSIX stays shell-free.
+    shell: winShellFor(process.env.QIALIKE_DSH),
     timeout: 5000,
   })
   if (probe.error !== undefined || probe.status === null || probe.status !== 0) {
@@ -295,7 +310,7 @@ function referencedLocalPlugins(layers: readonly (readonly PatchOptions[])[]): s
     for (const entry of entries) {
       if (typeof entry !== 'object' || entry === null) continue
       const row = entry as { name?: unknown; insert?: unknown }
-      if (typeof row.name === 'string' && !(row.name in PLUGIN_BUILTINS) && !row.name.startsWith('cordis:')) {
+      if (typeof row.name === 'string' && !isBundledPlugin(row.name) && !row.name.startsWith('cordis:')) {
         names.add(row.name)
       }
       if (Array.isArray(row.insert)) walk(row.insert)
@@ -438,7 +453,7 @@ function loadLocalPlugin(local: { dir: string; entry: string }): unknown {
  */
 class SeaInclude extends Include {
   override import(name: string, getOuterStack?: () => string[]): unknown {
-    const builtin = PLUGIN_BUILTINS[name]
+    const builtin = bundledPlugin(name)
     if (builtin !== undefined) return builtin
     if (name.startsWith('cordis:')) return super.import(name, getOuterStack)
     const local = resolveLocalPlugin(name)
@@ -447,7 +462,8 @@ class SeaInclude extends Include {
       return loadLocalPlugin(local)
     }
     throw new Error(`${NAME}: cannot resolve plugin "${name}": it is not one of the`
-      + ` ${Object.keys(PLUGIN_BUILTINS).length} plugins bundled into this build,`
+      + ` ${Object.keys(PLUGIN_BUILTINS).length} plugins bundled into this build`
+      + ` (plus ${Object.keys(LEGACY_PLUGIN_ALIASES).length} pre-rename aliases),`
       + ` and no local plugin of that name is installed under ${localRoot()}`
       + ` (add one there and run \`${NAME} plugin trust ${name}\`)`)
   }
@@ -522,7 +538,7 @@ function mountDetail(error: unknown): string {
  * The directory the embedded composition is materialized into: a STABLE
  * per-user path under the harness home, not a fresh temp dir.
  *
- * It used to be `mkdtempSync($TMPDIR/dsh-tui-*)`, which leaked one directory per
+ * It used to be `mkdtempSync($TMPDIR/qialike-*)`, which leaked one directory per
  * launch (the only `rmSync` calls in this file belong to `uninstall`) and could
  * never be extended by the user. This is the harness's own profile namespace
  * (`dsh --profile tui`), which is exactly where a user patch layer belongs — the
@@ -556,7 +572,9 @@ function sweepLegacyProfiles(): void {
   try {
     const now = Date.now()
     for (const name of readdirSync(tmp)) {
-      if (!name.startsWith('dsh-tui-')) continue
+      // `qialike-*` is ours now; `dsh-tui-*` is swept too so a pre-rename
+      // crash leaves no directory behind.
+      if (!name.startsWith('qialike-') && !name.startsWith(`${LEGACY_PRODUCT}-`)) continue
       const path = join(tmp, name)
       try {
         if (now - statSync(path).mtimeMs < 24 * 60 * 60 * 1000) continue
@@ -680,7 +698,7 @@ function validateUserLayer(user: readonly PatchOptions[], known: ReadonlySet<str
       if (inserted) {
         if (typeof row.name !== 'string') {
           problems.push(`inserted row ${id} has no \`name\``)
-        } else if (!(row.name in PLUGIN_BUILTINS) && !row.name.startsWith('cordis:')
+        } else if (!isBundledPlugin(row.name) && !row.name.startsWith('cordis:')
           && localPluginTarget(row.name) === undefined) {
           problems.push(`inserted row ${id} names "${row.name}", which this single-file build does not`
             + ` bundle and no local plugin under ${localRoot()} provides`)
@@ -747,7 +765,7 @@ function dumpConfig(layers: readonly { label: string; file: string; patches: rea
   process.stdout.write(out.join('\n') + '\n')
 }
 
-const PLUGIN_HELP = `Usage: dsh-tui plugin <command> [options]
+const PLUGIN_HELP = `Usage: qialike plugin <command> [options]
 
 Inspect and edit the layers this binary composes. The embedded (base + tui)
 layers are read-only; the OVERLAYS are the extension point:
@@ -855,7 +873,7 @@ function removeMcpRowText(text: string, serverName: string): string | undefined 
 }
 
 /**
- * `dsh-tui plugin …` — the overlay CLI (a launcher mode: it never boots the TUI).
+ * `qialike plugin …` — the overlay CLI (a launcher mode: it never boots the TUI).
  * @param argv - the whole invocation, `plugin` first.
  * @returns the process exit code.
  */
@@ -880,8 +898,11 @@ function runPlugin(argv: readonly string[]): number {
     ]
     dumpConfig(layers)
     const names = Object.keys(PLUGIN_BUILTINS).sort()
+    const aliases = Object.keys(LEGACY_PLUGIN_ALIASES).sort()
     process.stdout.write(`  bundled plugins: ${names.length}`
       + `${positional.includes('--available') ? `\n      ${names.join('\n      ')}` : ' (pass --available to list them)'}\n`)
+    process.stdout.write(`  pre-rename aliases: ${aliases.length}`
+      + `${positional.includes('--available') ? `\n      ${aliases.join('\n      ')}` : ''}\n`)
     const ledger = readTrustLedger()
     const referenced = referencedLocalPlugins([layers[1]!.patches, layers[2]!.patches, layers[3]!.patches])
     const all = [...new Set([...referenced, ...Object.keys(ledger)])].sort()
@@ -1010,7 +1031,7 @@ function runPlugin(argv: readonly string[]): number {
     // A safety row makes the whole layer unusable: trust cannot buy it, so the
     // launch is refused no matter what the ledger says. Recording it as trusted
     // anyway would report success for something that cannot start (a script doing
-    // `trust-overlay && dsh-tui` would see exit 0 and then a refused boot), and the
+    // `trust-overlay && qialike` would see exit 0 and then a refused boot), and the
     // record is worthless besides — removing the safety row changes the file's hash
     // and invalidates it. So: name the rows, write NOTHING, and fail. This holds for
     // a MIXED layer too (safety + execution rows): the earlier shape returned 1 only
@@ -1034,10 +1055,10 @@ function runPlugin(argv: readonly string[]): number {
     writeOverlayTrust(ledger)
     process.stdout.write(`${NAME}: trusted the project overlay for harness ${HARNESS_VERSION}\n`
       + `  file:  ${file}\n  rows:  ${execution.map((p) => p.id).join(', ')}\n  hash:  ${hash}\n`
-      + '  Its commands now run when dsh-tui starts in this repository.\n')
+      + '  Its commands now run when qialike starts in this repository.\n')
     return 0
   }
-  process.stderr.write(`${NAME}: unknown plugin command "${command}" (see \`dsh-tui plugin --help\`)\n`)
+  process.stderr.write(`${NAME}: unknown plugin command "${command}" (see \`qialike plugin --help\`)\n`)
   return 1
 }
 
@@ -1076,7 +1097,7 @@ function readEmbeddedLayer(binName: string, file: string): PatchOptions[] {
  * screen buffer, where it lingers above the shell prompt. The leave is owned
  * by the exit handlers instead: the guarded backstop in main() covers
  * pre-mount exits, and once the app mounts, its own exit handler (see
- * dsh-tui-app's start()) writes the leave after every other exit handler.
+ * qialike-app's start()) writes the leave after every other exit handler.
  */
 function installShutdown(ctx: { current?: Context }): { shutdown(): Promise<void> } {
   let stopping: Promise<void> | undefined
@@ -1116,25 +1137,25 @@ function canClearHome(dir: string): boolean {
 }
 
 /**
- * What `dsh-tui uninstall --help` explains instead of removing anything.
+ * What `qialike uninstall --help` explains instead of removing anything.
  *
  * `uninstall` ignores the rest of the line (that is what makes it safe to run
  * from an installer), so `--help` has to be answered before the removal: asking
  * what a destructive command does must never be the thing that runs it.
  */
-const UNINSTALL_HELP = `${NAME} uninstall — remove dsh-tui and the state it created
+const UNINSTALL_HELP = `${NAME} uninstall — remove qialike and the state it created
 
 Clears the harness home ($DSH_HOME, default ~/.dsh): settings, sessions,
 attachments, exports, caches, custom themes, and ~/.dsh/bin. Removes the PATH
-line the installer appended to ~/.bashrc / ~/.zshrc. The dsh-tui checkout is
+line the installer appended to ~/.bashrc / ~/.zshrc. The qialike checkout is
 never touched, and every cleared item is regenerated on the next run.
 
-usage: dsh-tui uninstall [--help]
+usage: qialike uninstall [--help]
 `
 
 /**
- * Uninstall dsh-tui completely: clear the entire harness home
- * (`$DSH_HOME`, default `~/.dsh`) — every dsh-tui-owned file (config, logs,
+ * Uninstall qialike completely: clear the entire harness home
+ * (`$DSH_HOME`, default `~/.dsh`) — every qialike-owned file (config, logs,
  * title/activity/pinned caches, custom themes) **and** the harness/dsh shared
  * data under the same root (settings.yaml, sessions, profiles, storages,
  * attachments, exports). All of it is optional user state, never required for
@@ -1183,23 +1204,29 @@ function uninstallSelf(): number {
     }
   }
 
-  // The dev-install symlink at ~/.local/bin (created by scripts/install). It is
-  // not the production copy, so it can be unlinked directly.
-  const localLink = join(homedir(), '.local', 'bin', NAME)
-  try {
-    const stat = lstatSync(localLink)
-    if (stat.isFile() || stat.isSymbolicLink()) {
-      rmSync(localLink, { force: true })
-      process.stdout.write(`${NAME}: removed ${localLink}\n`)
-      removed += 1
+  // The dev-install symlink (created by scripts/install) under ~/.local/bin and
+  // ~/.dsh/bin, under the current name and the pre-rename one. Not the
+  // production copy, so it can be unlinked directly.
+  for (const dir of [join(homedir(), '.local', 'bin'), join(homedir(), '.dsh', 'bin')]) {
+    for (const name of [NAME, LEGACY_PRODUCT]) {
+      const localLink = join(dir, name)
+      try {
+        const stat = lstatSync(localLink)
+        if (stat.isFile() || stat.isSymbolicLink()) {
+          rmSync(localLink, { force: true })
+          process.stdout.write(`${NAME}: removed ${localLink}\n`)
+          removed += 1
+        }
+      } catch {
+        // Not installed under this name.
+      }
     }
-  } catch {
-    // No dev symlink installed.
   }
 
   // The PATH export line the repo-root `install` script appends to the shell
-  // profiles. Drop it together with its `# dsh-tui` marker comment and the
-  // blank line before it, so uninstall restores the profiles it touched.
+  // profiles. Drop it together with its marker comment (`# qialike`, or the
+  // pre-rename `# dsh-tui`) and the blank line before it, so uninstall restores
+  // the profiles it touched.
   const pathLine = 'export PATH="$HOME/.dsh/bin:$PATH"'
   for (const rc of [join(homedir(), '.bashrc'), join(homedir(), '.zshrc')]) {
     let text: string
@@ -1213,7 +1240,7 @@ function uninstallSelf(): number {
     for (const line of text.split('\n')) {
       if (line === pathLine) {
         dropped = true
-        if (kept.at(-1) === '# dsh-tui') kept.pop()
+        if (kept.at(-1) === '# qialike' || kept.at(-1) === '# dsh-tui') kept.pop()
         if (kept.at(-1)?.trim() === '') kept.pop()
         continue
       }
@@ -1251,18 +1278,18 @@ function uninstallSelf(): number {
  * a single-file SEA cannot re-host its disk-backed mechanisms (agent-preset
  * files, per-client plugin bundles, the static dist), so this terminal
  * launcher delegates instead of re-implementing the surface. The `dsh` binary
- * must therefore be on PATH (or pointed to by `$DSH_TUI_DSH`).
+ * must therefore be on PATH (or pointed to by `$QIALIKE_DSH`).
  * @param args - the full invocation arguments ({@link WEB_MODE} first), forwarded
- * verbatim: `dsh-tui web --port 8080 --no-open` runs `dsh web --port 8080 --no-open`.
+ * verbatim: `qialike web --port 8080 --no-open` runs `dsh web --port 8080 --no-open`.
  * @returns the child process exit code.
  */
 function runWeb(args: string[]): Promise<number> {
   return new Promise<number>((resolve) => {
-    const explicit = process.env.DSH_TUI_DSH
+    const explicit = process.env.QIALIKE_DSH
     const child = spawn(explicit ?? 'dsh', args, {
       stdio: 'inherit',
       // Windows resolves npm `.cmd`/`.bat` shims through the shell — from PATH
-      // or an explicit $DSH_TUI_DSH pointing at one (kept in sync with the
+      // or an explicit $QIALIKE_DSH pointing at one (kept in sync with the
       // preflight probe above). POSIX never uses the shell.
       shell: winShellFor(explicit),
     })
@@ -1296,6 +1323,10 @@ function runWeb(args: string[]): Promise<number> {
 }
 
 async function main(): Promise<void> {
+  // Rename any pre-rename `$DSH_HOME` state file onto its current name before
+  // a single read or append, so nothing writes the old file back.
+  migrateLegacyHomeFiles()
+
   // Launcher flags are handled before the app owns the command line. Their
   // names live in `launcher-modes.ts` because `main.ts` (the thin entry) must
   // hand these positionals over before it validates the mode — see that module.
@@ -1329,7 +1360,7 @@ async function main(): Promise<void> {
   // modes — never boots the tree or touches the terminal.
   if (args[0] === PLUGIN_MODE) process.exit(runPlugin(args))
   // `--dump-config` is a DIAGNOSTIC: it must not touch the terminal at all (a
-  // piped `dsh-tui --dump-config > file` has to stay free of screen escapes), so
+  // piped `qialike --dump-config > file` has to stay free of screen escapes), so
   // it runs before the alternate screen, the splash and every terminal probe.
   // It materializes the layers (that is what it reports) and never boots.
   if (args.includes('--dump-config')) {
@@ -1351,7 +1382,7 @@ async function main(): Promise<void> {
   // normal screen buffer and stays there as residue — the stderr-mirrored exit
   // log line, Ink's unmount frame/cursor restore, and any frame the mounted
   // app re-renders while the tree disposes. Once the app mounts, its own exit
-  // handler (dsh-tui-app's start()) is registered after every other exit-time
+  // handler (qialike-app's start()) is registered after every other exit-time
   // writer and issues the leave; this backstop only covers exits before that
   // handler exists (boot failure, early fatal errors), which is why it is a
   // no-op once `appMounted` is set.
@@ -1378,7 +1409,7 @@ async function main(): Promise<void> {
   const interactiveLaunch = !wantsHelp && process.stdout.isTTY === true
   if (!interactiveLaunch) process.stdout.write('\x1b[?1049h')
   if (interactiveLaunch) {
-    // DEFERRED splash: `dsh-tui <version> — starting…` used to be written
+    // DEFERRED splash: `qialike <version> — starting…` used to be written
     // immediately, so a normal launch showed a grey status line and then
     // replaced it with the hero ~0.6 s later — a flash where the user asked for
     // the hero. It is a slow-boot indicator now: drawn only if the app has not
@@ -1421,9 +1452,9 @@ async function main(): Promise<void> {
   const userFile = userPatchPath()
   const user = loadOptionalPatches(NAME, userFile) ?? []
   // The repository layer is skipped entirely by `--no-project-overlay` (or
-  // DSH_TUI_NO_PROJECT_OVERLAY=1): the escape hatch for a repository whose
+  // QIALIKE_NO_PROJECT_OVERLAY=1): the escape hatch for a repository whose
   // overlay this build refuses, and for anyone who does not want repo config.
-  const skipProject = args.includes('--no-project-overlay') || process.env.DSH_TUI_NO_PROJECT_OVERLAY === '1'
+  const skipProject = args.includes('--no-project-overlay') || process.env.QIALIKE_NO_PROJECT_OVERLAY === '1'
   const projectFile = projectPatchPath(process.cwd())
   const project = skipProject ? [] : loadOptionalPatches(NAME, projectFile) ?? []
   // Both overlays are hand-written, and the loader is silent about every way they
@@ -1442,7 +1473,7 @@ async function main(): Promise<void> {
   // Tell the app about the repository layer so the status bar can name it: the
   // layer is applied without any prompt, and silence is what makes it dangerous.
   if (existsSync(projectFile)) {
-    process.env.DSH_TUI_PROJECT_OVERLAY = JSON.stringify({
+    process.env.QIALIKE_PROJECT_OVERLAY = JSON.stringify({
       file: projectFile,
       rows: project.length,
       skipped: skipProject,

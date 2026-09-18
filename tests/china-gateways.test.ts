@@ -1,16 +1,16 @@
 /**
  * Unit tests for the China gateway plugin (`tui-china-gateways`,
- * `packages/dsh-tui-app/src/china-gateways.ts` + its data file
+ * `packages/qialike-app/src/china-gateways.ts` + its data file
  * `china-gateway-templates.json`): Qiniu / SiliconFlow templates register
- * through `tuiLlmTemplates`, unloaded wholesale by `dsh-tui-china-gateways.enabled: false`.
+ * through `tuiLlmTemplates`, unloaded wholesale by `qialike-china-gateways.enabled: false`.
  *
  * Run with `bun test tests/china-gateways.test.ts`.
  *
- * @module dsh-tui/china-gateways-test
+ * @module qialike/china-gateways-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { CHINA_GATEWAY_TEMPLATES, apply, name } from '../packages/dsh-tui-app/src/china-gateways.ts'
+import { CHINA_GATEWAY_TEMPLATES, apply, name } from '../packages/qialike-app/src/china-gateways.ts'
 
 function runApply(settingsValue: unknown): { added: { route: string }[]; hidden: string[] } {
   const added: { route: string }[] = []

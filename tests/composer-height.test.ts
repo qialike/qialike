@@ -1,6 +1,6 @@
 /**
  * Direct assertions for the composer's saturation bound
- * (`composerHeightSaturated`, `packages/dsh-tui-app/src/panels/conversation.tsx`).
+ * (`composerHeightSaturated`, `packages/qialike-app/src/panels/conversation.tsx`).
  *
  * `composerHeight` itself needs the live module store, so the branch that makes
  * a large draft cheap is pinned here as a pure function: it is the whole reason
@@ -8,10 +8,10 @@
  *
  * Run with `bun test tests/composer-height.test.ts`.
  *
- * @module dsh-tui/composer-height-test
+ * @module qialike/composer-height-test
  */
 import { describe, expect, test } from 'bun:test'
-import { composerHeightSaturated } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
+import { composerHeightSaturated } from '../packages/qialike-app/src/panels/conversation.tsx'
 
 describe('the height bound saturates exactly when the clamp binds', () => {
   // min=3, cap=20 (a docked card on an 28-row terminal): the exact height is

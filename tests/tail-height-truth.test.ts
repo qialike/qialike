@@ -1,6 +1,6 @@
 /**
  * Regression tests for "the last wrapped line of the answer is never painted"
- * (dsh-tui-development §2.5.51).
+ * (qialike-development §2.5.51).
  *
  * Root cause: the transcript viewport is laid out from a per-row height, and
  * the newest (still growing) row's height is the one that decides whether the
@@ -24,17 +24,17 @@
  *
  * Run with `bun test tests/tail-height-truth.test.ts`.
  *
- * @module dsh-tui/tail-height-truth-test
+ * @module qialike/tail-height-truth-test
  */
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import { resolveRowHeight, shouldStoreMeasured } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
-import { estimateMarkdownHeight } from '../packages/dsh-tui-app/src/markdown.tsx'
+import { resolveRowHeight, shouldStoreMeasured } from '../packages/qialike-app/src/panels/conversation.tsx'
+import { estimateMarkdownHeight } from '../packages/qialike-app/src/markdown.tsx'
 
-const panel = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/panels/conversation.tsx'), 'utf8')
-const app = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
+const panel = readFileSync(join(process.cwd(), 'packages/qialike-app/src/panels/conversation.tsx'), 'utf8')
+const app = readFileSync(join(process.cwd(), 'packages/qialike-app/src/index.tsx'), 'utf8')
 
 describe('shouldStoreMeasured: the final one-row growth must be stored', () => {
   test('an authoritative reading that differs by one row IS stored (the clipped tail)', () => {

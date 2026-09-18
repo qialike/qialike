@@ -7,11 +7,11 @@
  *
  * Run with `bun test tests/question-card.test.ts`.
  *
- * @module dsh-tui/question-card-test
+ * @module qialike/question-card-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { Store, type PendingQuestion } from '../packages/dsh-tui-app/src/index.tsx'
+import { Store, type PendingQuestion } from '../packages/qialike-app/src/index.tsx'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 
 function ask(

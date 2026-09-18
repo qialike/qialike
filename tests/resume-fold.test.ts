@@ -12,7 +12,7 @@
  *
  * Run with `bun test tests/resume-fold.test.ts`.
  *
- * @module dsh-tui/resume-fold-test
+ * @module qialike/resume-fold-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -22,7 +22,7 @@ import {
   planResumeFold,
   safeBoundaries,
   tailSlice,
-} from '../packages/dsh-tui-app/src/resume-fold.ts'
+} from '../packages/qialike-app/src/resume-fold.ts'
 
 /** Build one planner event. */
 function ev(type: string): { type: string } {

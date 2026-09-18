@@ -1,15 +1,15 @@
 /**
- * The shared composer arithmetic (`packages/dsh-tui-app/src/composer-metrics.ts`)
+ * The shared composer arithmetic (`packages/qialike-app/src/composer-metrics.ts`)
  * — the numbers the conversation panel and the dock pointer mirror must agree on.
  *
  * Run with `bun test tests/composer-metrics.test.ts`.
  *
- * @module dsh-tui/composer-metrics-test
+ * @module qialike/composer-metrics-test
  */
 import { describe, expect, test } from 'bun:test'
 import {
   composerCap, composerHeightFor, composerHeightSaturated, composerUsableFor,
-} from '../packages/dsh-tui-app/src/composer-metrics.ts'
+} from '../packages/qialike-app/src/composer-metrics.ts'
 
 describe('the shared arithmetic', () => {
   test('usable width floors at 10 and subtracts the card chrome', () => {

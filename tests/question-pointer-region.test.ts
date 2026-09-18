@@ -15,11 +15,11 @@
  *
  * Run with `bun test tests/question-pointer-region.test.ts`.
  *
- * @module dsh-tui/question-pointer-region-test
+ * @module qialike/question-pointer-region-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { questionPointerRegion, composerStripRows } from '../packages/dsh-tui-app/src/panels/question.tsx'
+import { questionPointerRegion, composerStripRows } from '../packages/qialike-app/src/panels/question.tsx'
 
 /** A measured dock occupying screen rows 12..20 (9 rows). */
 const dock = { top: 12, height: 9 }

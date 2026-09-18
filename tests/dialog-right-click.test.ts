@@ -22,7 +22,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-const APP = join(import.meta.dir, '..', 'packages', 'dsh-tui-app', 'src')
+const APP = join(import.meta.dir, '..', 'packages', 'qialike-app', 'src')
 const read = (file: string): string => readFileSync(join(APP, file), 'utf8')
 const sources = readdirSync(APP, { withFileTypes: true })
   .filter((e) => e.isFile() && /\.tsx?$/u.test(e.name))

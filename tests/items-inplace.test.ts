@@ -20,8 +20,8 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
-const INDEX = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf-8')
-const PANEL = readFileSync(new URL('../packages/dsh-tui-app/src/panels/conversation.tsx', import.meta.url), 'utf-8')
+const INDEX = readFileSync(new URL('../packages/qialike-app/src/index.tsx', import.meta.url), 'utf-8')
+const PANEL = readFileSync(new URL('../packages/qialike-app/src/panels/conversation.tsx', import.meta.url), 'utf-8')
 
 const count = (haystack: string, needle: string): number => haystack.split(needle).length - 1
 /** Occurrences of a /g pattern. `String.match` ignores `lastIndex`, so the

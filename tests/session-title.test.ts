@@ -4,13 +4,13 @@
  * remember → read round-trip, user rename (Ctrl+R) wins over the auto title,
  * forgetting removes it, and unknown/never-titled sessions read as undefined.
  *
- * The title cache persists to `$DSH_HOME/dsh-tui-titles.json`, so the tests
+ * The title cache persists to `$DSH_HOME/qialike-titles.json`, so the tests
  * point DSH_HOME at a throwaway temp directory BEFORE the first lazy cache
  * load and never touch the real `~/.dsh`.
  *
  * Run with `bun test tests/session-title.test.ts`.
  *
- * @module dsh-tui/session-title-test
+ * @module qialike/session-title-test
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -24,11 +24,11 @@ import {
   rememberTitle,
   renameTitle,
   sessionDisplayTitle,
-} from '../packages/dsh-tui-app/src/session-titles.ts'
+} from '../packages/qialike-app/src/session-titles.ts'
 
 // Isolate the title cache before any session-titles call triggers the lazy
 // disk load (ensureDiskLoaded) against the real harness home.
-const home = mkdtempSync(join(tmpdir(), 'dsh-tui-title-test-'))
+const home = mkdtempSync(join(tmpdir(), 'qialike-title-test-'))
 process.env.DSH_HOME = home
 
 afterAll(() => {

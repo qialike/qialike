@@ -17,23 +17,23 @@
  *
  * Run with `bun test tests/sessions-list-failure.test.ts`.
  *
- * @module dsh-tui/sessions-list-failure-test
+ * @module qialike/sessions-list-failure-test
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
-import { apply } from '../packages/dsh-tui-app/src/sessions.tsx'
-import { projectKey } from '../packages/dsh-tui-app/src/session-files.ts'
+import { Store } from '../packages/qialike-app/src/index.tsx'
+import { apply } from '../packages/qialike-app/src/sessions.tsx'
+import { projectKey } from '../packages/qialike-app/src/session-files.ts'
 
 const WORKSPACE = '/home/pipo/deepseek'
 let home: string
 let realHome: string | undefined
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), 'dsh-tui-list-failure-'))
+  home = mkdtempSync(join(tmpdir(), 'qialike-list-failure-'))
   realHome = process.env.DSH_HOME
   process.env.DSH_HOME = home
 })

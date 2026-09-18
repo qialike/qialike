@@ -15,23 +15,23 @@
  *
  * Run with `bun test tests/read-only-attach.test.ts`.
  *
- * @module dsh-tui/read-only-attach-test
+ * @module qialike/read-only-attach-test
  */
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
-import type { Session, TranscriptItem } from '../packages/dsh-tui-app/src/index.tsx'
+import type { Session, TranscriptItem } from '../packages/qialike-app/src/index.tsx'
 import {
   ATTACH_DEFERRED_COMMANDS,
   READ_ONLY_HINT,
   READ_ONLY_OLDER_HISTORY,
   Store,
   oversizedResumeWarning,
-} from '../packages/dsh-tui-app/src/index.tsx'
+} from '../packages/qialike-app/src/index.tsx'
 
-const source = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
-const conversation = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/panels/conversation.tsx'), 'utf8')
+const source = readFileSync(join(process.cwd(), 'packages/qialike-app/src/index.tsx'), 'utf8')
+const conversation = readFileSync(join(process.cwd(), 'packages/qialike-app/src/panels/conversation.tsx'), 'utf8')
 
 const item = (kind: TranscriptItem['kind'], text: string): TranscriptItem => ({ key: 0, kind, text })
 

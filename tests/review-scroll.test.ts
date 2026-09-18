@@ -10,12 +10,12 @@
  *
  * Run with `bun test tests/review-scroll.test.ts`.
  *
- * @module dsh-tui/review-scroll-test
+ * @module qialike/review-scroll-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { reviewScrollCommand } from '../packages/dsh-tui-app/src/panels/question.tsx'
-import type { RawKey } from '../packages/dsh-tui-app/src/stdin.ts'
+import { reviewScrollCommand } from '../packages/qialike-app/src/panels/question.tsx'
+import type { RawKey } from '../packages/qialike-app/src/stdin.ts'
 
 /** A RawKey carrying exactly one flag (like the stdin decoder emits). */
 function key(flag: keyof RawKey): RawKey {

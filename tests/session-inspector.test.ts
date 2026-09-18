@@ -3,7 +3,7 @@
  * no longer exists.
  *
  * Harness 0.1.3 replaced `SessionPersistence.inspect` with the per-session
- * handle API (`open`/`read`), so on the 0.1.5 composition dsh-tui now binds,
+ * handle API (`open`/`read`), so on the 0.1.5 composition qialike now binds,
  * the persistence service answers `list()` but has NO `inspect`. The launch
  * reuse guarded on `persistence.inspect !== undefined`, so on 0.1.5 it
  * silently skipped and EVERY flat launch minted a fresh empty session —
@@ -16,7 +16,7 @@
  *
  * Run with `bun test tests/session-inspector.test.ts`.
  *
- * @module dsh-tui/session-inspector-test
+ * @module qialike/session-inspector-test
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -24,10 +24,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { sessionDir, sessionInspector, type SessionInspectService } from '../packages/dsh-tui-app/src/session-files.ts'
-import { findReusableBlank } from '../packages/dsh-tui-app/src/session-titles.ts'
+import { sessionDir, sessionInspector, type SessionInspectService } from '../packages/qialike-app/src/session-files.ts'
+import { findReusableBlank } from '../packages/qialike-app/src/session-titles.ts'
 
-const home = mkdtempSync(join(tmpdir(), 'dsh-tui-session-inspector-'))
+const home = mkdtempSync(join(tmpdir(), 'qialike-session-inspector-'))
 process.env.DSH_HOME = home
 
 afterAll(() => {

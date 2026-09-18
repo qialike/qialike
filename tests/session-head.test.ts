@@ -9,7 +9,7 @@
  *
  * Run with `bun test tests/session-head.test.ts`.
  *
- * @module dsh-tui/session-head-test
+ * @module qialike/session-head-test
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -17,8 +17,8 @@ import { mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import zlib from 'node:zlib'
-import { bunZstd, completeZstdFrames, firstZstdFrameEnd, foldSessionHead, probeSessionHead } from '../packages/dsh-tui-app/src/session-head.ts'
-import { sessionDir } from '../packages/dsh-tui-app/src/session-files.ts'
+import { bunZstd, completeZstdFrames, firstZstdFrameEnd, foldSessionHead, probeSessionHead } from '../packages/qialike-app/src/session-head.ts'
+import { sessionDir } from '../packages/qialike-app/src/session-files.ts'
 
 /** One checksummed zstd frame from JSONL lines — exactly what the harness
  *  writer produces (one frame per append flush). */
@@ -106,7 +106,7 @@ describe('zstd frame walk', () => {
 })
 
 describe('probeSessionHead', () => {
-  const home = mkdtempSync(join(tmpdir(), 'dsh-tui-session-head-'))
+  const home = mkdtempSync(join(tmpdir(), 'qialike-session-head-'))
   process.env.DSH_HOME = home
   const CWD = '/work/probe'
   const ID = 'session-11111111-2222-3333-4444-555555555555'

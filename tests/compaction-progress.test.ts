@@ -6,7 +6,7 @@ import {
   compactionStatusText,
   formatCompactTokens,
   type CompactionState,
-} from '../packages/dsh-tui-app/src/index.tsx'
+} from '../packages/qialike-app/src/index.tsx'
 
 /** One compaction state with defaults a test can override. */
 function state(over: Partial<CompactionState> = {}): CompactionState {

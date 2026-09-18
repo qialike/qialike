@@ -1,5 +1,5 @@
 /**
- * The composer's cached row model (`packages/dsh-tui-app/src/composer-rows.ts`).
+ * The composer's cached row model (`packages/qialike-app/src/composer-rows.ts`).
  *
  * Two things must hold or the whole bounded-layout refactor is a regression:
  *   1. the cached model is EXACTLY the old full wrap (`composerRowsReference`),
@@ -13,13 +13,13 @@
  *
  * Run with `bun test tests/composer-rows.test.ts`.
  *
- * @module dsh-tui/composer-rows-test
+ * @module qialike/composer-rows-test
  */
 import { describe, expect, test } from 'bun:test'
 import {
   composerCaretGlobalRow, composerCaretMoveVisual, composerCells, composerRowBuilds, composerRows,
   composerRowsReference, composerWindow, resetComposerRowBuilds, resetComposerRowsCache, resetComposerWidthCache,
-} from '../packages/dsh-tui-app/src/composer-rows.ts'
+} from '../packages/qialike-app/src/composer-rows.ts'
 
 /**
  * Independent reference caret row: linear scan of the FULL painted row list.

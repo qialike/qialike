@@ -5,12 +5,12 @@
  *
  * Run with `bun test tests/session-loading.test.ts`.
  *
- * @module dsh-tui/session-loading-test
+ * @module qialike/session-loading-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { PREPARING_REQUEST_LABEL, COMPACT_HINT_EVENTS, OVERSIZED_LOG_BYTES, STATS_FULL_SCAN_MAX, Store, oversizedResumeNotice, oversizedResumeWarning, estimatedSessionHeapMb, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/dsh-tui-app/src/index.tsx'
-import type { SessionLoadingState } from '../packages/dsh-tui-app/src/index.tsx'
+import { PREPARING_REQUEST_LABEL, COMPACT_HINT_EVENTS, OVERSIZED_LOG_BYTES, STATS_FULL_SCAN_MAX, Store, oversizedResumeNotice, oversizedResumeWarning, estimatedSessionHeapMb, compactHintText, formatByteSize, sessionLoadBar, sessionLoadPercent, sessionLoadingStatusText, sessionLoadingText } from '../packages/qialike-app/src/index.tsx'
+import type { SessionLoadingState } from '../packages/qialike-app/src/index.tsx'
 
 const BASE: SessionLoadingState = { id: 'session-3c1c6602-1ddc-40ee-a295-f34348c87153', title: 'fix the tests', bytes: 19_300_000, startedAt: 1_000 }
 

@@ -11,13 +11,13 @@
  *
  * Run with `bun test tests/question-multi-select.test.ts`.
  *
- * @module dsh-tui/question-multi-select-test
+ * @module qialike/question-multi-select-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { Store, type PendingQuestion } from '../packages/dsh-tui-app/src/index.tsx'
+import { Store, type PendingQuestion } from '../packages/qialike-app/src/index.tsx'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 import {
   isMultiSelect,
@@ -25,8 +25,8 @@ import {
   optionText,
   questionBody,
   questionDockRows,
-} from '../packages/dsh-tui-app/src/question-layout.ts'
-import { isPlanReview, questionPresentation } from '../packages/dsh-tui-app/src/plan-review.ts'
+} from '../packages/qialike-app/src/question-layout.ts'
+import { isPlanReview, questionPresentation } from '../packages/qialike-app/src/plan-review.ts'
 
 function ask(
   store: Store,
@@ -276,7 +276,7 @@ describe('multi-select key wiring (source guards)', () => {
   const read = (path: string): string => readFileSync(join(import.meta.dir, '..', path), 'utf8')
 
   test('space, digits and a click toggle instead of answering', () => {
-    const src = read('packages/dsh-tui-app/src/panels/question.tsx')
+    const src = read('packages/qialike-app/src/panels/question.tsx')
     expect(src).toContain("else if (char === ' ' && isMultiSelect(question.item))")
     expect(src).toContain('if (question.index < optsLen) store.toggleQuestionPick(question.index)')
     expect(src).toContain('if (isMultiSelect(question.item) && digit <= optsLen) store.toggleQuestionPick(digit - 1)')
@@ -284,14 +284,14 @@ describe('multi-select key wiring (source guards)', () => {
   })
 
   test('the dock-height estimate and the painted body share one checked state', () => {
-    expect(read('packages/dsh-tui-app/src/panels/conversation.tsx')).toContain(
+    expect(read('packages/qialike-app/src/panels/conversation.tsx')).toContain(
       'isMultiSelect(q.item) ? optionChecked(pres.options, q.picks[q.active]) : undefined')
-    expect(read('packages/dsh-tui-app/src/panels/question.tsx')).toContain(
+    expect(read('packages/qialike-app/src/panels/question.tsx')).toContain(
       'const checked = multi ? optionChecked(pres.options, q.picks[q.active]) : undefined')
   })
 
   test('the store submits checked labels as the answer\'s selected list', () => {
-    const src = read('packages/dsh-tui-app/src/index.tsx')
+    const src = read('packages/qialike-app/src/index.tsx')
     expect(src).toContain('q.answers[a] = { kind: \'multi\', labels: [...(q.picks[a] ?? [])]')
     expect(src).toContain('? { id: item.id, selected: [...ans.labels] }')
   })

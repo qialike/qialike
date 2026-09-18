@@ -5,14 +5,14 @@
  *
  * Run with `bun test tests/theme-picker.test.ts`.
  *
- * @module dsh-tui/theme-picker-test
+ * @module qialike/theme-picker-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import {
   clampIndex, filterSchemes, openThemePicker, themePickerKey, type ThemePickerApi,
-} from '../packages/dsh-tui-app/src/theme-picker.tsx'
-import type { Store } from '../packages/dsh-tui-app/src/index.tsx'
+} from '../packages/qialike-app/src/theme-picker.tsx'
+import type { Store } from '../packages/qialike-app/src/index.tsx'
 
 function fakeStore(): Store & { calls: string[] } {
   const calls: string[] = []

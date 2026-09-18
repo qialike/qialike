@@ -11,16 +11,16 @@
  *
  * Run with `bun test tests/markdown-estimate-debounce.test.ts`.
  *
- * @module dsh-tui/markdown-estimate-debounce-test
+ * @module qialike/markdown-estimate-debounce-test
  */
 
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { estimateMarkdownHeight } from '../packages/dsh-tui-app/src/markdown.tsx'
+import { estimateMarkdownHeight } from '../packages/qialike-app/src/markdown.tsx'
 import {
   clearMarkdownHeightCache,
   estimateMarkdownHeightDebounced,
   markdownHeightReparseDue,
-} from '../packages/dsh-tui-app/src/panels/conversation.tsx'
+} from '../packages/qialike-app/src/panels/conversation.tsx'
 
 const W = 40
 const GEN = 7

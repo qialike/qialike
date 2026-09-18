@@ -24,9 +24,9 @@ import {
   dialogListIndexFromRow,
   outsideOpenDialogList,
   setDialogListGeometry,
-} from '../packages/dsh-tui-app/src/list-geometry.ts'
+} from '../packages/qialike-app/src/list-geometry.ts'
 
-const APP = join(import.meta.dir, '..', 'packages', 'dsh-tui-app', 'src')
+const APP = join(import.meta.dir, '..', 'packages', 'qialike-app', 'src')
 const read = (file: string): string => readFileSync(join(APP, file), 'utf8')
 
 describe('a dialog owns the mouse only inside its list box', () => {

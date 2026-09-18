@@ -16,7 +16,7 @@
  *
  * Run with `bun test tests/title-cache-sharing.test.ts`.
  *
- * @module dsh-tui/title-cache-sharing-test
+ * @module qialike/title-cache-sharing-test
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -27,13 +27,13 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const TITLE_SRC = join(HERE, '../packages/dsh-tui-app/src/session-titles.ts')
+const TITLE_SRC = join(HERE, '../packages/qialike-app/src/session-titles.ts')
 
 // Isolate the title cache before any lazy disk load.
-const home = mkdtempSync(join(tmpdir(), 'dsh-tui-title-share-'))
+const home = mkdtempSync(join(tmpdir(), 'qialike-title-share-'))
 process.env.DSH_HOME = home
 
-const outDir = mkdtempSync(join(tmpdir(), 'dsh-tui-title-share-bundle-'))
+const outDir = mkdtempSync(join(tmpdir(), 'qialike-title-share-bundle-'))
 const bundleA = join(outDir, 'a.mjs')
 const bundleB = join(outDir, 'b.mjs')
 

@@ -12,17 +12,17 @@
  *
  * Run with `bun test tests/sessions-dialog-highlight.test.ts`.
  *
- * @module dsh-tui/sessions-dialog-highlight-test
+ * @module qialike/sessions-dialog-highlight-test
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { SessionSummary } from '../packages/dsh-tui-app/src/index.tsx'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
+import type { SessionSummary } from '../packages/qialike-app/src/index.tsx'
+import { Store } from '../packages/qialike-app/src/index.tsx'
 
-const home = mkdtempSync(join(tmpdir(), 'dsh-tui-dialog-highlight-'))
+const home = mkdtempSync(join(tmpdir(), 'qialike-dialog-highlight-'))
 process.env.DSH_HOME = home
 
 afterAll(() => {

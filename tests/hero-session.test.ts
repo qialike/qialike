@@ -1,8 +1,8 @@
 /**
  * Tests for the hero/docked launch split (web parity):
- *  - `dsh-tui` (no argument) never auto-resumes: it opens an unused New
+ *  - `qialike` (no argument) never auto-resumes: it opens an unused New
  *    Session placeholder and shows the HERO screen;
- *  - `dsh-tui resume` continues the newest session WITH CONTENT and lands
+ *  - `qialike resume` continues the newest session WITH CONTENT and lands
  *    directly in the conversation view (docked);
  *  - the store's hero predicate flips on the first submit's own frame.
  *
@@ -11,7 +11,7 @@
  *
  * Run with `bun test tests/hero-session.test.ts`.
  *
- * @module dsh-tui/hero-session-test
+ * @module qialike/hero-session-test
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -20,13 +20,13 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import { parseResumeMode, tuiCommand } from '../packages/dsh-tui-app/src/startup.ts'
+import { parseResumeMode, tuiCommand } from '../packages/qialike-app/src/startup.ts'
 import { Store,
   orderResumeCandidates,
-} from '../packages/dsh-tui-app/src/index.tsx'
-import { rememberBlank } from '../packages/dsh-tui-app/src/session-titles.ts'
+} from '../packages/qialike-app/src/index.tsx'
+import { rememberBlank } from '../packages/qialike-app/src/session-titles.ts'
 
-const home = mkdtempSync(join(tmpdir(), 'dsh-tui-hero-test-'))
+const home = mkdtempSync(join(tmpdir(), 'qialike-hero-test-'))
 process.env.DSH_HOME = home
 
 afterAll(() => {
@@ -58,7 +58,7 @@ describe('resume mode parsing', () => {
 
 describe('store hero predicate while a launch is opening', () => {
   test('a blank-landing launch keeps the hero; a /sessions switch does not', () => {
-    // `dsh-tui` with no args can only land on an unused blank session, so the
+    // `qialike` with no args can only land on an unused blank session, so the
     // hero must be the FIRST frame — before this it painted the docked chrome
     // (status bar + `Load session:`) for the ~0.4 s the host needed, then
     // replaced it (measured on a real terminal: DOCK at t=0.68 s, HERO at 1.04 s).
@@ -152,7 +152,7 @@ describe('leaveHero (explicit session actions)', () => {
 })
 
 describe('resume targets the most recently active session, content or not', () => {
-  const source = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('../packages/qialike-app/src/index.tsx', import.meta.url), 'utf8')
 
   test('the picker has no content filter any more', () => {
     // Requiring >32 events fell through to an older session the user was not
@@ -165,7 +165,7 @@ describe('resume targets the most recently active session, content or not', () =
   })
 })
 
-describe('orderResumeCandidates (what `dsh-tui resume` continues)', () => {
+describe('orderResumeCandidates (what `qialike resume` continues)', () => {
   test('activity (log mtime) wins over creation time', () => {
     // The daily driver is OLD but still in use; freshly created throwaways are
     // newer. Before this rule `resume` continued the throwaway.
@@ -188,7 +188,7 @@ describe('orderResumeCandidates (what `dsh-tui resume` continues)', () => {
 })
 
 describe('the /new wiring', () => {
-  const appSource = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf8')
+  const appSource = readFileSync(new URL('../packages/qialike-app/src/index.tsx', import.meta.url), 'utf8')
 
   test('`/new` leaves the hero before it can land on a blank session', () => {
     // The hero predicate keys on a BLANK session, and `/new` always lands on one

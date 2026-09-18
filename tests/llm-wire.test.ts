@@ -7,7 +7,7 @@
  *
  * Run with `bun test tests/llm-wire.test.ts`.
  *
- * @module dsh-tui/llm-wire-test
+ * @module qialike/llm-wire-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -21,8 +21,8 @@ import {
   serializeRequestResponses,
   translateGoogle,
   translateResponses,
-} from '../packages/dsh-tui-app/src/llm.ts'
-import { OPENCODE_TEMPLATES } from '../packages/dsh-tui-app/src/opencode.ts'
+} from '../packages/qialike-app/src/llm.ts'
+import { OPENCODE_TEMPLATES } from '../packages/qialike-app/src/opencode.ts'
 
 describe('filterDynamicModels', () => {
   const ids = ['gpt-5.4-mini', 'gpt-5', 'grok-4.6', 'muse-spark-1.2', 'claude-sonnet-5', 'deepseek-v4-flash']

@@ -16,12 +16,12 @@
  *
  * Run with `bun test tests/approval-pointer-region.test.ts`.
  *
- * @module dsh-tui/approval-pointer-region-test
+ * @module qialike/approval-pointer-region-test
  */
 
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { setDialogRowGeometry, dialogRowIndexFromCol } from '../packages/dsh-tui-app/src/list-geometry.ts'
-import { pointerRegion, composerStripRows, messageRightFor } from '../packages/dsh-tui-app/src/pointer-region.ts'
+import { setDialogRowGeometry, dialogRowIndexFromCol } from '../packages/qialike-app/src/list-geometry.ts'
+import { pointerRegion, composerStripRows, messageRightFor } from '../packages/qialike-app/src/pointer-region.ts'
 
 /** Options row on grid row 6 (0-based → 1-based screen row 7), 0-based left
  *  edge 4; the three options occupy cols 5..5+len-1 (Deny=3, Allow always=12,

@@ -12,7 +12,7 @@
  *
  * Run with `bun test tests/session-blank.test.ts`.
  *
- * @module dsh-tui/session-blank-test
+ * @module qialike/session-blank-test
  */
 
 import { afterAll, describe, expect, test } from 'bun:test'
@@ -28,9 +28,9 @@ import {
   rememberTitle,
   sessionBlank,
   type SessionTitlesPersistence,
-} from '../packages/dsh-tui-app/src/session-titles.ts'
+} from '../packages/qialike-app/src/session-titles.ts'
 
-const home = mkdtempSync(join(tmpdir(), 'dsh-tui-session-blank-test-'))
+const home = mkdtempSync(join(tmpdir(), 'qialike-session-blank-test-'))
 process.env.DSH_HOME = home
 
 afterAll(() => {
@@ -46,7 +46,7 @@ const preset = (type: string): { type: string } => ({ type })
 describe('a conversation without turn markers is NOT blank', () => {
   test('messages alone rule out the blank/"unused session" state', () => {
     // A `/fork` child's seed drops turn/start|end while keeping the whole
-    // transcript. Before this, `dsh-tui resume` on such a session rendered the
+    // transcript. Before this, `qialike resume` on such a session rendered the
     // hero over a real conversation, and the same bit let `/new` adopt it as the
     // blank placeholder and `/sessions` hide it.
     expect(foldSessionBlank([

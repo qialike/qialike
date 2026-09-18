@@ -10,7 +10,7 @@
  *
  * Run with `bun test tests/hero-art.test.ts`.
  *
- * @module dsh-tui/hero-art-test
+ * @module qialike/hero-art-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -20,7 +20,7 @@ import {
   HERO_ART_WORDMARK_COLS,
   HERO_ART_WORDMARK_ROWS,
   HERO_ART_WORDMARK_TONES,
-} from '../packages/dsh-tui-app/src/hero-art.ts'
+} from '../packages/qialike-app/src/hero-art.ts'
 import {
   HERO_ART_BOTTOM_GLYPH,
   HERO_ART_CELL_GLYPH,
@@ -38,7 +38,7 @@ import {
   heroArtMode,
   heroArtShadedTones,
   heroMarkRows,
-} from '../packages/dsh-tui-app/src/hero-layout.ts'
+} from '../packages/qialike-app/src/hero-layout.ts'
 
 describe('generated brand art table', () => {
   test('is the 48x12 tone grid rasterized from the 168x42 wordmark viewBox', () => {
@@ -280,7 +280,7 @@ describe('mark selection ladder', () => {
     expect(heroArtMarkKind({ rows: 30, width: 60, blockWidth: 1 })).toBe('blocks')
   })
 
-  test('honors the DSH_TUI_HERO_ART override', () => {
+  test('honors the QIALIKE_HERO_ART override', () => {
     expect(heroArtMarkKind({ ...wide, mode: 'blocks' })).toBe('blocks')
     expect(heroArtMarkKind({ ...wide, mode: 'ascii' })).toBe('ascii')
     expect(heroArtMarkKind({ ...wide, mode: 'none' })).toBe('none')
@@ -316,7 +316,7 @@ describe('half-block encoding (Apple Terminal seam fix)', () => {
     expect(heroArtEncoding('darwin')).toBe('bottom')
     expect(heroArtEncoding('linux')).toBe('top')
     expect(heroArtEncoding('win32')).toBe('top')
-    // `DSH_TUI_HERO_ART_ENCODING` pins one for A/B on a single machine.
+    // `QIALIKE_HERO_ART_ENCODING` pins one for A/B on a single machine.
     expect(heroArtEncoding('linux', 'bottom')).toBe('bottom')
     expect(heroArtEncoding('darwin', 'top')).toBe('top')
     expect(heroArtEncoding('darwin', ' BOTTOM ')).toBe('bottom')

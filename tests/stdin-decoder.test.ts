@@ -1,19 +1,19 @@
 /**
  * Unit tests for the raw-stdin decoder (`StdinDecoder`).
  *
- * The decoder is the robustness guarantee for dsh-tui's mouse/keyboard input:
+ * The decoder is the robustness guarantee for qialike's mouse/keyboard input:
  * recognized sequences decode precisely, and **any unknown escape sequence is
  * consumed whole and discarded** so stray bytes can never leak into the
  * composer as typed text. These tests pin that contract.
  *
  * Run with `bun test tests/stdin-decoder.test.ts`.
  *
- * @module dsh-tui/stdin-decoder-test
+ * @module qialike/stdin-decoder-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { sanitizeTerminalText } from '../packages/dsh-tui-app/src/terminal-safe.ts'
-import { StdinDecoder } from '../packages/dsh-tui-app/src/stdin.ts'
+import { sanitizeTerminalText } from '../packages/qialike-app/src/terminal-safe.ts'
+import { StdinDecoder } from '../packages/qialike-app/src/stdin.ts'
 
 const esc = (hex: string): Uint8Array => Buffer.from(hex.split(' ').map((h) => Number.parseInt(h, 16)))
 

@@ -13,7 +13,7 @@
  * §2.5.51 is exactly a visible row left with a too-small placeholder).
  */
 import { describe, expect, test } from 'bun:test'
-import { windowRefineOrder } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
+import { windowRefineOrder } from '../packages/qialike-app/src/panels/conversation.tsx'
 
 describe('windowRefineOrder (S1b parse order)', () => {
   test('visible rows come first, in top-to-bottom order', () => {

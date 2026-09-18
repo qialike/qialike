@@ -13,14 +13,14 @@
  *
  * Run with `bun test tests/assistant-stream.test.ts`.
  *
- * @module dsh-tui/assistant-stream-test
+ * @module qialike/assistant-stream-test
  */
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 
-const source = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
+const source = readFileSync(join(process.cwd(), 'packages/qialike-app/src/index.tsx'), 'utf8')
 
 describe('live model deltas reach the transcript in-process', () => {
   test('the client subscribes to `agent/assistant-stream` itself', () => {

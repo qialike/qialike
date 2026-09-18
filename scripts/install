@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# Install dsh-tui into ~/.dsh/bin: copy the single-file binary there and make
-# sure ~/.dsh/bin is on PATH so `dsh-tui` runs from any directory.
+# Install qialike into ~/.dsh/bin: copy the single-file binary there and make
+# sure ~/.dsh/bin is on PATH so `qialike` runs from any directory.
 #
 # Usage: bash scripts/install   (from the repo root, or from the workspace root
-#                                where the repo lives at ./dsh-tui)
+#                                where the repo lives at ./qialike)
 set -euo pipefail
 
-NAME="dsh-tui"
+NAME="qialike"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 INSTALL_DIR="${HOME}/.dsh/bin"
 DEST="$INSTALL_DIR/$NAME"
 
 # Locate the binary. Candidates cover running from the repo root (./dist) and
-# from the workspace root (./dsh-tui/dist), both the single-target build
-# (dist/dsh-tui) and the platform dirs (dist/linux-x64/dsh-tui, ...).
+# from the workspace root (./qialike/dist), both the single-target build
+# (dist/qialike) and the platform dirs (dist/linux-x64/qialike, ...).
 find_binary() {
   local base
   for base in "$REPO_ROOT" "$(pwd)"; do
@@ -39,32 +39,41 @@ find_binary() {
 }
 
 BIN="$(find_binary)" || {
-  echo "dsh-tui: binary not found under $REPO_ROOT/dist (or ./dsh-tui/dist); run \`pnpm build --single\` first" >&2
+  echo "qialike: binary not found under $REPO_ROOT/dist (or ./qialike/dist); run \`pnpm build --single\` first" >&2
   exit 1
 }
 
 mkdir -p "$INSTALL_DIR"
 cp "$BIN" "$DEST"
 chmod +x "$DEST"
-echo "dsh-tui: installed  $DEST"
+echo "qialike: installed  $DEST"
+
+# A copy installed under the pre-rename name would otherwise keep shadowing this
+# one on PATH (`dsh-tui` still resolves, and runs the old build). Remove it and
+# say so, instead of leaving two commands for one program.
+LEGACY_DEST="$INSTALL_DIR/dsh-tui"
+if [[ -e "$LEGACY_DEST" ]]; then
+  rm -f "$LEGACY_DEST"
+  echo "qialike: removed pre-rename binary $LEGACY_DEST"
+fi
 
 # Make sure ~/.dsh/bin is on PATH for future shells (and tell the user how to
 # enable it in the current one).
 PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
 if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
-  echo "dsh-tui: $INSTALL_DIR is already on PATH"
+  echo "qialike: $INSTALL_DIR is already on PATH"
 else
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     if [[ -f "$rc" ]] && ! grep -qsF "$PATH_LINE" "$rc"; then
-      printf '\n# dsh-tui\n%s\n' "$PATH_LINE" >> "$rc"
-      echo "dsh-tui: appended to $rc: $PATH_LINE"
+      printf '\n# qialike\n%s\n' "$PATH_LINE" >> "$rc"
+      echo "qialike: appended to $rc: $PATH_LINE"
     fi
   done
-  echo "dsh-tui: $INSTALL_DIR is not on PATH in this shell; run the following now,"
+  echo "qialike: $INSTALL_DIR is not on PATH in this shell; run the following now,"
   echo "          or open a new terminal:"
   echo "            source $HOME/.bashrc"
   echo "            or"
   echo "            $PATH_LINE"
 fi
 
-echo "dsh-tui: installed. Run 'dsh-tui' (or 'dsh-tui uninstall')."
+echo "qialike: installed. Run 'qialike' (or 'qialike uninstall')."

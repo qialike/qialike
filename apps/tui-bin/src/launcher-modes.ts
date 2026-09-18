@@ -3,7 +3,7 @@
  * owns the command line, as opposed to `resume`, which the TUI command
  * definition parses like any other mode.
  *
- * They are positionals in argv (`dsh-tui web …`), so the thin entry
+ * They are positionals in argv (`qialike web …`), so the thin entry
  * (`main.ts`) must hand the whole line over BEFORE it validates the positional:
  *
  *  - {@link WEB_MODE} forwards the remaining arguments to the installed `dsh`
@@ -14,12 +14,12 @@
  *
  * This list is the single source of truth for both entry points because the two
  * used to drift: F5 (`v0.4.9-beta`) validated the positional against `resume`
- * alone and thereby rejected both launcher commands (`dsh-tui web` read like a
+ * alone and thereby rejected both launcher commands (`qialike web` read like a
  * typo). Keeping one list — and a regression assertion per mode in the pty
  * suite's `cli-errors` scenario — is what makes that failure mode impossible to
  * reintroduce silently.
  *
- * @module @yourname/dsh-tui/launcher-modes
+ * @module @yourname/qialike/launcher-modes
  */
 
 /** Clears the harness home (`$DSH_HOME`) and the PATH line the install added. */

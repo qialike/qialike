@@ -1,15 +1,15 @@
 /**
  * Unit tests for the Azure provider plugin (`tui-azure`,
- * `packages/dsh-tui-app/src/azure.ts` + `azure-templates.json`): registers the
- * Azure deployment-configured template; `dsh-tui-azure.enabled: false` unloads it.
+ * `packages/qialike-app/src/azure.ts` + `azure-templates.json`): registers the
+ * Azure deployment-configured template; `qialike-azure.enabled: false` unloads it.
  *
  * Run with `bun test tests/azure.test.ts`.
  *
- * @module dsh-tui/azure-test
+ * @module qialike/azure-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { AZURE_TEMPLATES, apply, name } from '../packages/dsh-tui-app/src/azure.ts'
+import { AZURE_TEMPLATES, apply, name } from '../packages/qialike-app/src/azure.ts'
 
 function runApply(settingsValue: unknown): { added: { route: string }[]; hidden: string[] } {
   const added: { route: string }[] = []

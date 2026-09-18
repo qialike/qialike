@@ -12,14 +12,14 @@
  *
  * Run with `bun test tests/dialog-clear-line.test.ts`.
  *
- * @module dsh-tui/dialog-clear-line-test
+ * @module qialike/dialog-clear-line-test
  */
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { openThemePicker, themePickerKey } from '../packages/dsh-tui-app/src/theme-picker.tsx'
+import { openThemePicker, themePickerKey } from '../packages/qialike-app/src/theme-picker.tsx'
 
-const APP = join(import.meta.dir, '..', 'packages', 'dsh-tui-app', 'src')
+const APP = join(import.meta.dir, '..', 'packages', 'qialike-app', 'src')
 const read = (file: string): string => readFileSync(join(APP, file), 'utf8')
 
 describe('Ctrl+U clears the whole line in dialog inputs', () => {

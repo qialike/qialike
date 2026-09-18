@@ -1,18 +1,18 @@
-# dsh-tui — an Ink/React terminal surface for DeepSeek Harness
+# qialike — an Ink/React terminal surface for DeepSeek Harness
 
-> **Document scope:** This document is a **user manual** and mainly describes **how to use dsh-tui**.
+> **Document scope:** This document is a **user manual** and mainly describes **how to use qialike**.
 
-`dsh-tui` is a full-screen terminal TUI for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
+`qialike` is a full-screen terminal TUI for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness):
 an interactive single-agent session with live token streaming, driven through the harness's own
 Cordis plugin extension points. The DeepSeek Harness core is **not modified**; this repo is a new
-bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
+bundle (`qialike-app`) plus a Bun-compiled single-file launcher.
 
 ## What it is
 
-- A Cordis **bundle** (`@yourname/dsh-tui-app`): a `cordis.patch.yml` layer over `dsh-base` plus a
+- A Cordis **bundle** (`@yourname/qialike-app`): a `cordis.patch.yml` layer over `dsh-base` plus a
   runtime glue plugin that creates one `Agent`, streams its `session/event`s into an Ink
   transcript, and drives user input back via `agent.followup()` / `agent.steer()`.
-- A **single-file binary** (`dist/dsh-tui`) produced by `bun build --compile`, which bundles the
+- A **single-file binary** (`dist/qialike`) produced by `bun build --compile`, which bundles the
   whole harness + the TUI bundle. Everything the composition references by name is resolved from
   bundled `lib/` outputs, so a single file boots the full tree with no runtime `node_modules`.
 
@@ -20,7 +20,7 @@ bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
 
 - Node.js `^22.19 || >=24` (for `pnpm` build tooling)
 - bun (for `bun build --compile` in `pnpm build` and `bun test` in `pnpm test:unit`; version not pinned — install the latest, v1.3.14 is a verified reference)
-- A DeepSeek Harness checkout (`DSH_HARNESS`, default `../deepseek-harness`; needed only for `pnpm build` — running the compiled `dist/dsh-tui` needs no checkout)
+- A DeepSeek Harness checkout (`DSH_HARNESS`, default `../deepseek-harness`; needed only for `pnpm build` — running the compiled `dist/qialike` needs no checkout)
 - `DEEPSEEK_API_KEY` (via the environment, `~/.dsh` settings, or `.env`) when running a real session
 - **Memory** (measured 2026-09-14 on `0.4.15-beta`; whole process tree, 12 s
   settle): the compiled single-file executable peaks at ~**250–290 MB** while
@@ -38,16 +38,16 @@ bundle (`dsh-tui-app`) plus a Bun-compiled single-file launcher.
   installed on the host, and it needs a kernel with unprivileged user namespaces. Without it the app
   still boots and every non-shell tool works, but each `workspace-write` / `read-only` bash call
   fails closed (`SANDBOX_UNAVAILABLE`); only `danger-full-access` (unconfined) runs. macOS uses the
-  built-in Seatbelt; Windows has no OS-level process sandbox. **LandLock is not used** by dsh-tui:
+  built-in Seatbelt; Windows has no OS-level process sandbox. **LandLock is not used** by qialike:
   the single-file build stubs the native launcher as unusable, so Linux always takes the bwrap rung
   (the harness itself is bwrap → Landlock).
 
 ### Terminal colour depth
 
-dsh-tui paints hex colours through Ink/chalk, and chalk decides how many colours
+qialike paints hex colours through Ink/chalk, and chalk decides how many colours
 your terminal can show from the environment. **GNOME Terminal/VTE on Ubuntu 24.04
 is 24-bit capable but exports no `COLORTERM`**, so chalk falls back to 256 colours;
-dsh-tui therefore maps the palette itself at that depth (keeping the page, the
+qialike therefore maps the palette itself at that depth (keeping the page, the
 raised panels and the composer card on distinct colours — without that mapping,
 five of the built-in schemes painted the card the same colour as the page). If
 your terminal really is 24-bit and you want the exact hexes:
@@ -55,14 +55,14 @@ your terminal really is 24-bit and you want the exact hexes:
 ```sh
 export COLORTERM=truecolor      # the standard signal, understood by every tool
 # or, per run:
-DSH_TUI_COLOR=24bit dsh-tui
+QIALIKE_COLOR=24bit qialike
 ```
 
-`DSH_TUI_COLOR` also accepts `256` and `16` (useful to preview how a
+`QIALIKE_COLOR` also accepts `256` and `16` (useful to preview how a
 lower-colour terminal renders a scheme). At **16 colours** the card and the page
 are both black on a dark scheme — the palette has no second near-black to offer,
 so that mode is degraded by design; see
-`dsh-tui-color-depth-fix-design.md` in the workspace for the measurements.
+`qialike-color-depth-fix-design.md` in the workspace for the measurements.
 
 ### Frame repaints (cursor + synchronized output)
 
@@ -74,14 +74,14 @@ repaint — opening the command palette measures ~5.5 KB at 120×30 and ~7.4 KB 
 240×30 — and a pty hands writes larger than its ~4095-byte line-discipline buffer
 to the terminal in instalments, so without the mode a half-painted frame is
 briefly visible (the composer card's chrome showing through the popup). Terminals
-that do not know the mode ignore it; if one mishandles it, `DSH_TUI_NO_SYNC=1`
+that do not know the mode ignore it; if one mishandles it, `QIALIKE_NO_SYNC=1`
 writes plain frames.
 
 ## Build
 
 ```sh
 pnpm install
-pnpm build        # dist/dsh-tui  (single-file executable)
+pnpm build        # dist/qialike  (single-file executable)
 pnpm test         # boots the composed tree and parses the TUI command (keyless smoke)
 pnpm typecheck
 ```
@@ -94,22 +94,22 @@ third-party deps from the harness pnpm store, then `bun build --compile`s `apps/
 ## Run
 
 ```sh
-dist/dsh-tui                              # start a NEW session on the hero screen (never auto-resumes)
-dist/dsh-tui resume                       # continue the newest session in this directory
-dist/dsh-tui --workspace ~/proj           # operate in ~/proj (its own sessions)
-dist/dsh-tui --resume <sessionId>         # resume a specific persisted session
-dist/dsh-tui --model deepseek-flash       # pick a model (DeepSeek V4.1 Flash)
-dist/dsh-tui --help
+dist/qialike                              # start a NEW session on the hero screen (never auto-resumes)
+dist/qialike resume                       # continue the newest session in this directory
+dist/qialike --workspace ~/proj           # operate in ~/proj (its own sessions)
+dist/qialike --resume <sessionId>         # resume a specific persisted session
+dist/qialike --model deepseek-flash       # pick a model (DeepSeek V4.1 Flash)
+dist/qialike --help
 ```
 
-A bare `dsh-tui` starts a **new session** and shows the hero screen — it never
-auto-resumes. `dsh-tui resume` continues the most recently used session **in the
+A bare `qialike` starts a **new session** and shows the hero screen — it never
+auto-resumes. `qialike resume` continues the most recently used session **in the
 same directory** (last-activity first) and lands directly in the conversation
 view; when no session in that directory has content yet it still opens the session
 view rather than the hero. Resuming a session or messaging it marks it
 most-recently-used, and the status line marks the resume `(resumed)`. An explicit
 `--resume <sessionId>` always wins. Auto-resume on **every** launch is opt-in: set
-`resume_last: true` in `~/.dsh/dsh-tui.json` (or `DSH_TUI_RESUME_LAST=1`) — the
+`resume_last: true` in `~/.dsh/qialike.json` (or `QIALIKE_RESUME_LAST=1`) — the
 default is `false`, i.e. every launch starts fresh.
 
 ### Surface features
@@ -166,7 +166,7 @@ default is `false`, i.e. every launch starts fresh.
   preselection, the Ctrl+T cycle, and the request all follow that model's own
   declaration (each level id rides verbatim as `reasoning_effort`; the
   no-thinking level is flagged in the declaration, with `off` as the
-  conventional spelling). dsh-tui also bundles a models.dev-style **effort
+  conventional spelling). qialike also bundles a models.dev-style **effort
   catalog snapshot** (`src/effort-catalog.ts`, vocabulary
   `none/minimal/low/medium/high/xhigh/max`) as a fallback data source: static
   declarations always win, and the catalog only fills in models whose route
@@ -180,7 +180,7 @@ default is `false`, i.e. every launch starts fresh.
   (`Model: DeepSeek · DeepSeek V4 Flash · Max`). The picker shows only providers whose
   API key is set; on the first level press **`Ctrl+D`** (or **`Alt+D`**) to
   deactivate the highlighted provider — it removes the provider's API key AND
-  drops it from the /models list (the hidden list persists in `dsh-tui.json`
+  drops it from the /models list (the hidden list persists in `qialike.json`
   `hidden_providers`; an environment-supplied key cannot be deleted, which is
   reported, and the hidden list keeps it off the picker anyway). To re-add,
   pick the provider in the "＋ Add provider" list and set its API key again —
@@ -196,21 +196,21 @@ default is `false`, i.e. every launch starts fresh.
   Databricks and Snowflake Cortex in the catalog; Azure and the Cloudflare rows
   are provided by loadable plugins) flagged `endpoint required`; **OpenCode Zen / Go are
   provided by the loadable `tui-opencode-gateways` sub-plugin** — set
-  `dsh-tui-opencode: { enabled: false }` in the config to unload them entirely
+  `qialike-opencode: { enabled: false }` in the config to unload them entirely
   (templates AND already-configured routes leave the /models dialog and the
   adapter; enabled by default); **the China gateways Qiniu (`qiniu-ai`) and
   SiliconFlow (`siliconflow` / `siliconflow-cn`) are provided by the loadable
-  `tui-china-gateways` sub-plugin** (`dsh-tui-china-gateways.enabled: false`
+  `tui-china-gateways` sub-plugin** (`qialike-china-gateways.enabled: false`
   unloads them); **the international model gateways / hosting platforms —
   OpenRouter, Vercel AI Gateway, Cloudflare (AI Gateway + Workers AI),
   Hugging Face, Baseten, Fireworks AI, Together AI, Nvidia, Groq, Cerebras —
   are provided by the loadable `tui-foreign-gateways` sub-plugin**
-  (`dsh-tui-foreign-gateways.enabled: false` unloads them); the official DeepSeek
+  (`qialike-foreign-gateways.enabled: false` unloads them); the official DeepSeek
   endpoint is not in the catalog — the built-in `deepseek-official` default
   route serves it (3 models, ready out of the box); OpenCode Zen / Go are the
   opencode team's OpenAI-compatible model gateways — keys from opencode.ai/auth
   (Zen pay-per-use, Go US$10/mo), set a key to activate) — plus routes declared
-  in the `dsh-tui-llm:` settings
+  in the `qialike-llm:` settings
   section — with its key status (`✓ key set` / `no key`).
   Configured OpenAI-compatible providers show the gateway's **live model list**
   in the picker: the adapter fetches `GET {baseURL}/models` (falling back to the
@@ -226,7 +226,7 @@ default is `false`, i.e. every launch starts fresh.
   **replaces** its API key (the key dialog shows "replaces the current key" when
   a key exists); setting a key on a dormant template route activates it on the
   spot (writes the template's profile — endpoint and model catalog — into the
-  `dsh-tui-llm` settings section and hot-registers the route, so its models
+  `qialike-llm` settings section and hot-registers the route, so its models
   appear in the picker). The list scrolls to keep the highlight in view.
   Color schemes (vim-style `:colorscheme`): bare `/theme` opens a theme
   **picker dialog**: ↑/↓ to move, type to filter,
@@ -246,7 +246,7 @@ default is `false`, i.e. every launch starts fresh.
   mapped from an MIT vim colorscheme;
   the whole set is MIT/permissive — see
   `classic-schemes.ts` and THIRD_PARTY_NOTICES.md) —
-  plus user files in `~/.dsh/themes/*.json`; `dsh-tui-theme: { colorscheme:
+  plus user files in `~/.dsh/themes/*.json`; `qialike-theme: { colorscheme:
   light }` persists the
   choice. The scheme's `bg` is painted full-screen and
   glyph cells are filled by the patched frame writer, so switching recolors the
@@ -258,7 +258,7 @@ default is `false`, i.e. every launch starts fresh.
   (a provider-template dropdown — any of the 61 catalog entries, or custom —
   pre-filling route/display name/base URL; then route id / display name / base URL /
   API key / model ids) that writes an
-  OpenAI-compatible provider into the `dsh-tui-llm` settings section and its key
+  OpenAI-compatible provider into the `qialike-llm` settings section and its key
   into the credentials store, hot-registered by the adapter; keys are stored under
   their provider's reference in `~/.dsh/.credentials.yaml` and resolved per
   request. The key never reaches the transcript/model. (If a key is already in
@@ -296,7 +296,7 @@ default is `false`, i.e. every launch starts fresh.
   `/sidebar` cycles `auto → on → off`, `/sidebar on|off|auto` sets a mode directly — and so does a
   **left-click on the Steps title bar**. `auto` follows the width, `on` forces it visible (even in
   narrow windows), `off` hides it (the message column and input box widen as in a narrow window).
-  The choice persists in `~/.dsh/dsh-tui.json` (`sidebar_mode`, default `auto`); every geometry —
+  The choice persists in `~/.dsh/qialike.json` (`sidebar_mode`, default `auto`); every geometry —
   message-column/composer width, wrapping, caret cell, mouse clicks, selection guards — follows the
   same visibility rule, so layout and caret never misalign when the panel is shown or hidden.
 - **Layout**: a conversation column (transcript + bottom input dock) with the Steps
@@ -307,7 +307,7 @@ default is `false`, i.e. every launch starts fresh.
   `answering · Ns` while text streams, the current **tool name** (parallel calls collapse to `name ×n`),
   and `Ns since last event` once the agent stays silent ≥4s. If the render loop itself ever stalls
   (the agent keeps working in the background), a built-in watchdog force-repaints at two levels and
-  logs a `[watchdog]` line to `~/.dsh/dsh-tui.log`; pressing any key revives the screen immediately.
+  logs a `[watchdog]` line to `~/.dsh/qialike.log`; pressing any key revives the screen immediately.
   A single message whose rendering throws degrades only that row to a `⚠ row dropped` warning
   (`[row]` log) instead of freezing the whole UI. Settled tool rows are now collapsed **summary cards** (per-tool summaries derived from the
   arguments — `✓ bash · ls -la …`, `✓ todo_write · 3/5` — with ok/error coloring and a `…`
@@ -357,12 +357,12 @@ Two channels take plain data files — no build step, no install step:
 
   Once mounted, the server's tools reach the model as `mcp__github__<tool>`.
 
-`dsh-tui plugin` drives those files for you:
+`qialike plugin` drives those files for you:
 
 ```sh
-dsh-tui plugin list [--available]   # layers + rows; --available lists every bundled plugin
-dsh-tui plugin add-mcp <name> <command> [args...] [--project]
-dsh-tui plugin remove-mcp <name> [--project]
+qialike plugin list [--available]   # layers + rows; --available lists every bundled plugin
+qialike plugin add-mcp <name> <command> [args...] [--project]
+qialike plugin remove-mcp <name> [--project]
 ```
 
 `--project` targets the repository overlay (`<repo>/.dsh/tui.cordis.patch.yml`)
@@ -370,14 +370,14 @@ instead of the personal one. Enabling/disabling needs no command: a row without
 `insert` that says `disabled: true` re-configures a built-in row by id.
 
 **The repository overlay is applied automatically at boot, so it has a policy of
-its own.** A repository is not you: `git clone <repo> && dsh-tui` must not be able
+its own.** A repository is not you: `git clone <repo> && qialike` must not be able
 to run a process or lift your sandbox in silence. Two consequences:
 
 - **Rows that spawn a process need a per-repository decision.** An MCP server row
-  starts its `command` when dsh-tui boots, so it is honoured only when that exact
-  file is trusted — `dsh-tui plugin trust-overlay` (inside the repository),
+  starts its `command` when qialike boots, so it is honoured only when that exact
+  file is trusted — `qialike plugin trust-overlay` (inside the repository),
   recorded in `<profile>/overlays.trust.json` with its content hash and harness
-  version. Any edit to the file re-asks, and `dsh-tui plugin list` shows the
+  version. Any edit to the file re-asks, and `qialike plugin list` shows the
   state. Untrusted, the launch **refuses** and names the fix.
 - **Safety-critical rows are refused outright.** Rows that change `sandbox`,
   `sandbox-policy`, `fs-sandbox`, `bash-sandbox`, `pwsh-sandbox`, `approval`,
@@ -386,8 +386,8 @@ to run a process or lift your sandbox in silence. Two consequences:
   not buy them.
 
 When a repository overlay is in play the hero says so (`⚠ repo overlay applied:
-…`), and `--no-project-overlay` (or `DSH_TUI_NO_PROJECT_OVERLAY=1`) ignores the
-layer for one run. `dsh-tui plugin list` prints the layer, the rows that run
+…`), and `--no-project-overlay` (or `QIALIKE_NO_PROJECT_OVERLAY=1`) ignores the
+layer for one run. `qialike plugin list` prints the layer, the rows that run
 processes and the trust state.
 
 The overlays can only mount plugins **bundled** into this binary. To run your own
@@ -399,7 +399,7 @@ plugin, install it as an ordinary package inside the profile and trust it:
 #    module.exports = { name: 'my-plugin', inject: [], apply(ctx) { … } }
 # 2. name it from an overlay:  - insert: [{ id: my-plugin, name: 'my-plugin' }]
 # 3. review it, then record the decision (hash + harness version)
-dsh-tui plugin trust my-plugin
+qialike plugin trust my-plugin
 ```
 
 The loader enforces three things: the plugin must live **inside**
@@ -410,13 +410,13 @@ trust. Its `node_modules/` and `.git/` are deliberately outside that hash
 (reinstalling a dependency is not tampering), so the hash covers the code you
 reviewed, not the dependency tree it pulls in. A local plugin runs
 **in this process with full privileges**, which is why trust is explicit,
-per-plugin and revocable (`dsh-tui plugin untrust <name>`).
+per-plugin and revocable (`qialike plugin untrust <name>`).
 
 Your overlay is applied **last**, so a row *without* `insert` can also
 re-configure a built-in row by its `id` (change a persona, disable a tool). Two
 mistakes are rejected with a message — the plugin loader itself ignores both in
 silence: an `insert` naming a plugin this build does not bundle, and a row `id`
-that matches no built-in row. `dsh-tui --dump-config` prints the composed layers
+that matches no built-in row. `qialike --dump-config` prints the composed layers
 and which layer contributed each plugin.
 
 The surface is composed of Cordis plugins (like the harness): `tui-startup`
@@ -428,44 +428,44 @@ against the `tui` service — `tui-panel-conversation` (main surface),
 dialog), `tui-sessions` (`/sessions` dialog), `tui-export` (`/export` dialog),
 `tui-new` (`/new` in-place session switch). Third-party plugins consume
 `ctx.get('tui')` (`panels.register`, `commands.register`, `notify`) and
-`ctx.get('tuiStore')`; see `packages/dsh-tui-app/src/panels/` for the plugin
+`ctx.get('tuiStore')`; see `packages/qialike-app/src/panels/` for the plugin
 contract and an example.
 
 ## Install as a command
 
 ```sh
-bash scripts/install      # copy dist/dsh-tui into ~/.dsh/bin and put ~/.dsh/bin on PATH
-# (equivalent: pnpm install:local; from the workspace root: bash dsh-tui/scripts/install)
-dsh-tui                  # now runnable from any directory
-dsh-tui --help
-dsh-tui uninstall        # uninstall from inside the binary: clears the whole harness
+bash scripts/install      # copy dist/qialike into ~/.dsh/bin and put ~/.dsh/bin on PATH
+# (equivalent: pnpm install:local; from the workspace root: bash qialike/scripts/install)
+qialike                  # now runnable from any directory
+qialike --help
+qialike uninstall        # uninstall from inside the binary: clears the whole harness
                          #   home ($DSH_HOME, default ~/.dsh — config, logs, themes,
                          #   settings.yaml, sessions, profiles, storages, attachments,
                          #   exports, and any local ~/.dsh/bin copy) and removes the
-                         #   ~/.local/bin/dsh-tui dev symlink and the PATH export line
+                         #   ~/.local/bin/qialike dev symlink and the PATH export line
                          #   the install script added to ~/.bashrc/~/.zshrc
-dsh-tui web [flags]      # serve the DeepSeek Harness browser UI (alias of the installed
+qialike web [flags]      # serve the DeepSeek Harness browser UI (alias of the installed
                          #   `dsh web` CLI, so the Web surface stays the harness's own):
                          #   needs `dsh` on PATH (`npm install -g @deepseek-ai/dsh`) or
-                         #   $DSH_TUI_DSH; web flags (--host/--port/--no-open/...) pass through
-pnpm uninstall:local     # (legacy) remove the ~/.local/bin/dsh-tui symlink of older
+                         #   $QIALIKE_DSH; web flags (--host/--port/--no-open/...) pass through
+pnpm uninstall:local     # (legacy) remove the ~/.local/bin/qialike symlink of older
                          #   dev installs created by the removed scripts/install.sh
 ```
 
-The binary embeds DeepSeek Harness at build time, so `dsh-tui` needs no harness checkout, no
+The binary embeds DeepSeek Harness at build time, so `qialike` needs no harness checkout, no
 `pnpm`, and no `node_modules` at runtime — only an API key for the provider in use
 (env / `~/.dsh` settings / `.env`) and a workspace (default `cwd`, or `--workspace`). Session
 state, settings, and credentials live under `~/.dsh`.
 
-`dsh-tui web` runs the installed `dsh` CLI, which should be at least the harness version
-embedded in this dsh-tui build: both sides write and read the same `~/.dsh/sessions` logs,
+`qialike web` runs the installed `dsh` CLI, which should be at least the harness version
+embedded in this qialike build: both sides write and read the same `~/.dsh/sessions` logs,
 and an older `dsh` reader rejects the newer range-compressed `sourceEventSeqs` as corrupt
 history (`SessionPersistenceCorruptionError`).
 
-`dsh-tui web` preflights `dsh` first: when it is missing, or its version differs from the one embedded in this dsh-tui build, a warning prints the matching install command and (on a version mismatch) the command exits instead of starting the web server.
+`qialike web` preflights `dsh` first: when it is missing, or its version differs from the one embedded in this qialike build, a warning prints the matching install command and (on a version mismatch) the command exits instead of starting the web server.
 
-`dsh-tui web` runs the installed `dsh` CLI, which should be at least the harness version
-embedded in this dsh-tui build: both sides write and read the same `~/.dsh/sessions` logs,
+`qialike web` runs the installed `dsh` CLI, which should be at least the harness version
+embedded in this qialike build: both sides write and read the same `~/.dsh/sessions` logs,
 and an older `dsh` reader rejects the newer range-compressed `sourceEventSeqs` as corrupt
 history (`SessionPersistenceCorruptionError`).
 
@@ -475,7 +475,7 @@ history (`SessionPersistenceCorruptionError`).
 headless / terminal-only Linux — and open it in a browser on another machine:
 
 ```sh
-dsh-tui web --host 0.0.0.0 --no-open   # serve on all interfaces; no local browser on a headless box
+qialike web --host 0.0.0.0 --no-open   # serve on all interfaces; no local browser on a headless box
 ```
 
 then visit `http://<host-ip>:3080` from the other machine (default port 3080, change with
@@ -490,11 +490,11 @@ ssh -L 3080:localhost:3080 user@headless-host
 
 ## Install as a plugin bundle
 
-Once the harness is released, `@yourname/dsh-tui-app` can be added to a profile as an out-of-tree
+Once the harness is released, `@yourname/qialike-app` can be added to a profile as an out-of-tree
 bundle:
 
 ```sh
-dsh plugin --profile tui add @yourname/dsh-tui-app
+dsh plugin --profile tui add @yourname/qialike-app
 dsh --profile tui --workspace ~/proj
 ```
 
@@ -504,7 +504,7 @@ dsh --profile tui --workspace ~/proj
 ## Layout
 
 ```
-packages/dsh-tui-app/   the bundle: cordis.patch.yml + startup/index/invariant plugins
+packages/qialike-app/   the bundle: cordis.patch.yml + startup/index/invariant plugins
 apps/tui-bin/           src/bin.ts (SEA/bun launcher) + build.mjs
 examples/cordis.yml     a deploy overlay pinning model + workspace
 tests/smoke.mjs          keyless REAL-composition boot smoke

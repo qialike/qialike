@@ -1,8 +1,8 @@
 /**
- * Regression tests for the dsh-tui "token 超额自动中止" (context-overflow
+ * Regression tests for the qialike "token 超额自动中止" (context-overflow
  * auto-abort) bug.
  *
- * Root cause: the TUI's own LLM adapter (`tui-llm`, @yourname/dsh-tui-app/llm)
+ * Root cause: the TUI's own LLM adapter (`tui-llm`, @yourname/qialike-app/llm)
  * replaced the harness `llm-deepseek` adapter (cordis.patch.yml disables
  * `llm-deepseek`/`llm-pi-ai`), but its `fetchOrThrow` only surfaced the raw
  * provider `error.code`/`error.type` (e.g. `invalid_request_error`) or
@@ -22,7 +22,7 @@
  *
  * Run with `bun test tests/tui-llm-context-overflow.test.ts`.
  *
- * @module dsh-tui/tui-llm-context-overflow-test
+ * @module qialike/tui-llm-context-overflow-test
  */
 
 import { describe, expect, test } from 'bun:test'

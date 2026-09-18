@@ -9,5 +9,5 @@
 # release-archive.sh archives with `--worktree-attributes`, so these rules also
 # apply when packaging an older tag whose tree predates this file.
 # ---------------------------------------------------------------------------
-/packages/dsh-tui-app/repro-*.mjs       export-ignore
-/packages/dsh-tui-app/verify-fixes.mjs  export-ignore
+/packages/qialike-app/repro-*.mjs       export-ignore
+/packages/qialike-app/verify-fixes.mjs  export-ignore

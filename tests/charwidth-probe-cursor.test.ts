@@ -16,10 +16,10 @@
  *
  * Run with `bun test tests/charwidth-probe-cursor.test.ts`.
  *
- * @module dsh-tui/charwidth-probe-cursor-test
+ * @module qialike/charwidth-probe-cursor-test
  */
 import { afterEach, describe, expect, test } from 'bun:test'
-import { measureOne } from '../packages/dsh-tui-app/src/charwidth.ts'
+import { measureOne } from '../packages/qialike-app/src/charwidth.ts'
 
 const writes: string[] = []
 let handlers: Array<(chunk: unknown) => void> = []

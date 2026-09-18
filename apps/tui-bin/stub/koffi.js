@@ -1,6 +1,6 @@
 /**
  * A minimal, pure-JS `koffi` replacement built on `bun:ffi` for the single-file
- * dsh-tui bundle.
+ * qialike bundle.
  *
  * Real koffi is a native N-API addon (its `.node` ships in the
  * `@koromix/koffi-win32-x64` optional dependency), which a `bun build
@@ -12,7 +12,7 @@
  * touches on Windows, backed by Bun's built-in FFI (`bun:ffi`). Unsupported
  * constructs fail loud with a clear message instead of silently no-op'ing.
  *
- * @module dsh-tui/koffi-shim
+ * @module qialike/koffi-shim
  */
 
 import { dlopen, FFIType, ptr } from 'bun:ffi'

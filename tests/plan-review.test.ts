@@ -10,11 +10,11 @@
  *
  * Run with `bun test tests/plan-review.test.ts`.
  *
- * @module dsh-tui/plan-review-test
+ * @module qialike/plan-review-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { Store, type PendingQuestion } from '../packages/dsh-tui-app/src/index.tsx'
+import { Store, type PendingQuestion } from '../packages/qialike-app/src/index.tsx'
 import {
   EXIT_PLAN_TOOL,
   extractPlanMarkdown,
@@ -22,8 +22,8 @@ import {
   PLAN_REVIEW_QUESTION,
   planReviewOptionLabel,
   questionPresentation,
-} from '../packages/dsh-tui-app/src/plan-review.ts'
-import { questionBody, questionDockRows } from '../packages/dsh-tui-app/src/question-layout.ts'
+} from '../packages/qialike-app/src/plan-review.ts'
+import { questionBody, questionDockRows } from '../packages/qialike-app/src/question-layout.ts'
 import type { AskUserQuestionAnswerItem, AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
 
 const PLAN_MD = '# Ship v0.3\n\n1. bump version\n2. run tests\n'

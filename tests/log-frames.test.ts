@@ -6,14 +6,14 @@
  *
  * Run with `bun test tests/log-frames.test.ts`.
  *
- * @module dsh-tui/log-frames-test
+ * @module qialike/log-frames-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { SessionLogReader, scanFrameTable } from '../packages/dsh-tui-app/src/log-frames.ts'
+import { SessionLogReader, scanFrameTable } from '../packages/qialike-app/src/log-frames.ts'
 
 /** One zstd frame from a list of JSON lines (what one append flush produces). */
 function frame(lines: readonly unknown[]): Uint8Array {

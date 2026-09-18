@@ -10,12 +10,12 @@
  *
  * Run with `bun test tests/main-surface-region.test.ts`.
  *
- * @module dsh-tui/main-surface-region-test
+ * @module qialike/main-surface-region-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { surfaceRegion, composerStripRows, sidebarContentBand } from '../packages/dsh-tui-app/src/pointer-region.ts'
-import { composerCaretMoveVisual } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
+import { surfaceRegion, composerStripRows, sidebarContentBand } from '../packages/qialike-app/src/pointer-region.ts'
+import { composerCaretMoveVisual } from '../packages/qialike-app/src/panels/conversation.tsx'
 
 /** 24-row / 80-col terminal, sidebar visible → message column ends at col 56.
  *  Composer: borderless card 17..21 (2 half-row fill edges + 3 content rows),

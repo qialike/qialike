@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-tui — thin process entry (the compiled single-file binary's first
+ * qialike — thin process entry (the compiled single-file binary's first
  * module). It resolves the cheap, self-contained invocations before the
  * ~111-module plugin graph (`generated/plugins.ts` → every embedded harness +
  * TUI plugin) loads, so `--version` and a lone `--help` return in tens of
@@ -30,14 +30,18 @@
  * `--help` shape carries the enter; narrowing the promise here beats claiming a
  * parity the mixed shape does not have.
  *
- * @module @yourname/dsh-tui/main
+ * @module @yourname/qialike/main
  */
 
 import pkg from '../../../package.json' with { type: 'json' }
-import { tuiCommand } from '@yourname/dsh-tui-app/src/startup.ts'
+// FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto
+// `QIALIKE_*` at module load, before this file's own module-scope env reads
+// (SPLASH_DELAY_MS) and before any other module's.
+import { migrateLegacyHomeFiles } from '@yourname/qialike-app/src/legacy-names.ts'
+import { tuiCommand } from '@yourname/qialike-app/src/startup.ts'
 import { isLauncherMode } from './launcher-modes.ts'
 
-const NAME = 'dsh-tui'
+const NAME = 'qialike'
 
 /** Whether a thrown value is commander's own control-flow error (help shown,
  *  parse rejected) — detected structurally, as dsh-cmdline does, because the
@@ -51,10 +55,13 @@ function isCommanderExit(error: unknown): error is { code: string; exitCode: num
 }
 
 async function main(): Promise<void> {
+  // Same first step as bin.ts's full boot: the pre-rename `$DSH_HOME` state
+  // files must move before this process reads or appends to any of them.
+  migrateLegacyHomeFiles()
   const args = process.argv.slice(2)
 
   // `--version` is launcher-owned, resolved before the app owns the command
-  // line: same condition and bytes as bin.ts's own check, so `dsh-tui --model
+  // line: same condition and bytes as bin.ts's own check, so `qialike --model
   // x --version` prints the version here exactly as the full boot would.
   if (args.includes('--version') || args.includes('-V') || args.includes('-v')) {
     process.stdout.write(`${NAME} ${(pkg as { version?: string }).version ?? '0.0.0'}\n`)
@@ -86,7 +93,7 @@ async function main(): Promise<void> {
 
   // Launcher modes own their ENTIRE command line, so they hand over before the
   // positional check below — twice over: that check would reject the mode
-  // itself (F5's regression made `dsh-tui web` read like a typo), and
+  // itself (F5's regression made `qialike web` read like a typo), and
   // `tuiCommand()` does not declare `web`'s options, so parsing would reject
   // `--host` before the check ever ran. `bin.ts` runs `uninstall` itself and
   // forwards `web` (with its own flags) to the `dsh` CLI.
@@ -97,9 +104,9 @@ async function main(): Promise<void> {
 
   // A positional MODE other than `resume` is a typo and must read like one. It
   // used to be validated inside the `tui-startup` plugin, i.e. while the plugin
-  // tree was loading, so `dsh-tui frobnicate` surfaced as
-  //   dsh-tui: Error: dsh-tui: plugin tree failed to load: … failed to apply
-  //   loader entry tui-startup (@yourname/dsh-tui-app/startup): unknown argument
+  // tree was loading, so `qialike frobnicate` surfaced as
+  //   qialike: Error: qialike: plugin tree failed to load: … failed to apply
+  //   loader entry tui-startup (@yourname/qialike-app/startup): unknown argument
   //   "frobnicate" — did you mean "resume"? (see --help)
   // plus a Bun stack trace (F5) — the right hint, framed as a crash. Validating
   // HERE, with the SAME commander program the full boot parses with, keeps the

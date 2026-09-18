@@ -5,13 +5,13 @@
  *
  * Run with `bun test tests/selftest.test.ts`.
  *
- * @module dsh-tui/selftest-test
+ * @module qialike/selftest-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { clampIndex, filterSchemes } from '../packages/dsh-tui-app/src/theme-picker.tsx'
-import { syncChecks, formatReport, findRepo } from '../packages/dsh-tui-app/src/selftest.ts'
-import type { CheckResult } from '../packages/dsh-tui-app/src/selftest.ts'
+import { clampIndex, filterSchemes } from '../packages/qialike-app/src/theme-picker.tsx'
+import { syncChecks, formatReport, findRepo } from '../packages/qialike-app/src/selftest.ts'
+import type { CheckResult } from '../packages/qialike-app/src/selftest.ts'
 
 function fakeDeps(overrides?: {
   commands?: string[]

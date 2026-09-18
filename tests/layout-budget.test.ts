@@ -9,10 +9,10 @@ import {
   dockedFits,
   dockedTranscriptRows,
   tooSmallNoticeLines,
-} from '../packages/dsh-tui-app/src/layout-budget.ts'
-import { heroTooSmallLines } from '../packages/dsh-tui-app/src/hero-layout.ts'
-import { composerStripRows } from '../packages/dsh-tui-app/src/pointer-region.ts'
-import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
+} from '../packages/qialike-app/src/layout-budget.ts'
+import { heroTooSmallLines } from '../packages/qialike-app/src/hero-layout.ts'
+import { composerStripRows } from '../packages/qialike-app/src/pointer-region.ts'
+import { visualWidth } from '../packages/qialike-app/src/markdown.tsx'
 
 describe('docked minimum height (conversation view)', () => {
   test('is derived, not hard-coded: card + chrome above it + status bar + transcript rows', () => {

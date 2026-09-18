@@ -2,18 +2,18 @@
  * Unit tests for the stderr log mirror's sanitization (`sanitizeStderrChunk`).
  *
  * The mirror in `log.ts` appends every non-debug stderr line to
- * `~/.dsh/dsh-tui.log` so real crashes are captured there. Terminal control
+ * `~/.dsh/qialike.log` so real crashes are captured there. Terminal control
  * sequences written to stderr by cursor libraries (cli-cursor's `\x1b[?25l`
  * hide / `\x1b[?25h` show, Ink's frame caret parking) are NOT errors and must
  * not pollute the log — these tests pin that contract.
  *
  * Run with `bun test tests/log-mirror.test.ts`.
  *
- * @module dsh-tui/log-mirror-test
+ * @module qialike/log-mirror-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { sanitizeStderrChunk } from '../packages/dsh-tui-app/src/log.ts'
+import { sanitizeStderrChunk } from '../packages/qialike-app/src/log.ts'
 
 const ESC = '\u001b'
 

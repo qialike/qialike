@@ -14,11 +14,11 @@
  *
  * Run with `bun test tests/markdown-table.test.ts`.
  *
- * @module dsh-tui/markdown-table-test
+ * @module qialike/markdown-table-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { tableGrid, tableSeparator, estimateMarkdownHeight, markdownPlain, visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
+import { tableGrid, tableSeparator, estimateMarkdownHeight, markdownPlain, visualWidth } from '../packages/qialike-app/src/markdown.tsx'
 
 const md = (t: string) => t.replace(/^ +/gm, '').trim()
 

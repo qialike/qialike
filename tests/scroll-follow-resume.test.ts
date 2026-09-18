@@ -13,11 +13,11 @@
  *
  * Run with `bun test tests/scroll-follow-resume.test.ts`.
  *
- * @module dsh-tui/scroll-follow-resume-test
+ * @module qialike/scroll-follow-resume-test
  */
 import { describe, expect, test } from 'bun:test'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
-import { WHEEL_STEP } from '../packages/dsh-tui-app/src/config.ts'
+import { Store } from '../packages/qialike-app/src/index.tsx'
+import { WHEEL_STEP } from '../packages/qialike-app/src/config.ts'
 
 const CONTENT = 100
 const VIEWPORT = 10

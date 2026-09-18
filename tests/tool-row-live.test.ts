@@ -7,13 +7,13 @@
  *
  * Run with `bun test tests/tool-row-live.test.ts` (after `pnpm run build`).
  *
- * @module dsh-tui/tool-row-live-test
+ * @module qialike/tool-row-live-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
-import { toolRowHeader } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
-import type { TranscriptItem } from '../packages/dsh-tui-app/src/index.tsx'
+import { visualWidth } from '../packages/qialike-app/src/markdown.tsx'
+import { toolRowHeader } from '../packages/qialike-app/src/panels/conversation.tsx'
+import type { TranscriptItem } from '../packages/qialike-app/src/index.tsx'
 
 /** Header width the renderer caps at: max(8, usable - 6) (see
  *  MESSAGE_TEXT_WIDTH in conversation.tsx) — every header must fit it. */

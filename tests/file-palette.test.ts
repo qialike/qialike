@@ -1,5 +1,5 @@
 /**
- * Unit tests for the `@file` palette's pure half (`packages/dsh-tui-app/src/
+ * Unit tests for the `@file` palette's pure half (`packages/qialike-app/src/
  * file-palette.ts`): the token grammar around the caret, the mention text, the
  * token-replacement edit and the fetch-generation guard.
  *
@@ -10,13 +10,13 @@
  *
  * Run with `bun test tests/file-palette.test.ts`.
  *
- * @module dsh-tui/file-palette-test
+ * @module qialike/file-palette-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import {
   activeFileToken, applyFileMention, FileQuery, fileMentionText, fileRowLabel,
-} from '../packages/dsh-tui-app/src/file-palette.ts'
+} from '../packages/qialike-app/src/file-palette.ts'
 
 describe('activeFileToken: where the @ token is, in draft coordinates', () => {
   test('a plain token at the caret', () => {

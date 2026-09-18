@@ -1,5 +1,5 @@
 /**
- * Source guards for `dsh-tui plugin …` and the PROJECT overlay.
+ * Source guards for `qialike plugin …` and the PROJECT overlay.
  *
  * Step 4 of the composition follow-up (research/ai-agent-code-loading-survey.md
  * §7.8) productizes the overlay: `plugin list` for discovery, `add-mcp` /
@@ -54,7 +54,7 @@ describe('plugin CLI', () => {
     // Measured before the fix: a layer with a safety row AND an execution row made
     // the command print "this layer will be REJECTED at boot", write the trust
     // ledger and exit 0 — while the boot with that ledger exited 1. A script doing
-    // `trust-overlay && dsh-tui` saw success and then a refused launch, and the
+    // `trust-overlay && qialike` saw success and then a refused launch, and the
     // record was worthless anyway (removing the safety row changes the file hash).
     const from = BIN.indexOf("if (command === 'trust-overlay'")
     // Slice to the END of the command block (the next command's dispatch), so the

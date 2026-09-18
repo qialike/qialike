@@ -21,7 +21,8 @@ const body = (marker: string): string => BIN.slice(BIN.indexOf(marker), BIN.inde
 describe('local (T1) plugins', () => {
   test('① the ladder keeps bundled names first, then local, then loud', () => {
     const ladder = body('class SeaInclude extends Include {')
-    const order = ['PLUGIN_BUILTINS[name]', "name.startsWith('cordis:')", 'resolveLocalPlugin(name)', 'throw new Error']
+    const order = ['bundledPlugin(name)', "name.startsWith('cordis:')",
+      'resolveLocalPlugin(name)', 'throw new Error']
     let at = -1
     for (const step of order) {
       const next = ladder.indexOf(step)
@@ -29,6 +30,10 @@ describe('local (T1) plugins', () => {
       expect(next, `${step} comes after the previous rung`).toBeGreaterThan(at)
       at = next
     }
+    // The bundled rung consults the pre-rename alias table too, so a profile
+    // overlay written before the rename still resolves.
+    expect(BIN, 'the bundled rung accepts pre-rename specifiers')
+      .toContain('return PLUGIN_BUILTINS[name] ?? LEGACY_PLUGIN_ALIASES[name]')
     // The failure names BOTH places tried (bundle + local root) and the fix.
     expect(ladder, 'the loud failure offers the fix').toContain('plugin trust')
   })

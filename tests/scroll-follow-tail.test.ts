@@ -22,14 +22,14 @@
  *
  * Run with `bun test tests/scroll-follow-tail.test.ts`.
  *
- * @module dsh-tui/scroll-follow-tail-test
+ * @module qialike/scroll-follow-tail-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import wrapAnsi from 'wrap-ansi'
 import stringWidth from 'string-width'
-import { resolveRowHeight } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
-import { countWrappedLines, estimateMarkdownHeight } from '../packages/dsh-tui-app/src/markdown.tsx'
+import { resolveRowHeight } from '../packages/qialike-app/src/panels/conversation.tsx'
+import { countWrappedLines, estimateMarkdownHeight } from '../packages/qialike-app/src/markdown.tsx'
 
 /** The exact rows Ink paints for `text` at `usable` columns (Ink wrap="wrap"). */
 function inkWrappedRows(text: string, usable: number): number {

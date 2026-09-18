@@ -19,7 +19,7 @@
  *
  * Run with `bun test tests/paint-wide-glyphs.test.ts`.
  *
- * @module dsh-tui/paint-wide-glyphs-test
+ * @module qialike/paint-wide-glyphs-test
  */
 
 import { readFileSync } from 'node:fs'
@@ -43,8 +43,8 @@ function advance(s: string, width: (t: string) => number): number {
 
 /** Render one line through the patched Ink (fake TTY) and return it decoded. */
 async function renderLine(text: string): Promise<string> {
-  const React = (await import('../packages/dsh-tui-app/node_modules/react/index.js')).default
-  const { Box, Text, render } = await import('../packages/dsh-tui-app/node_modules/ink/build/index.js')
+  const React = (await import('../packages/qialike-app/node_modules/react/index.js')).default
+  const { Box, Text, render } = await import('../packages/qialike-app/node_modules/ink/build/index.js')
   const chunks: string[] = []
   class Sink extends Writable {
     columns = 60
@@ -92,7 +92,7 @@ describe('PAINT_WIDE covers the reported paint-wide glyphs (source level)', () =
 describe('the reserved second cell is a real space (render level)', () => {
   test('⏸ Paused reserves two columns so the text cannot cram against the glyph', async () => {
     await ensureFarmPatched()
-    const stringWidth = (await import('../packages/dsh-tui-app/node_modules/string-width/index.js')).default
+    const stringWidth = (await import('../packages/qialike-app/node_modules/string-width/index.js')).default
     if (stringWidth('⚠') !== 2) {
       // Unbuilt farm in this process (the patch cannot retarget a module that
       // was already imported by another test file): the source-level block above
@@ -110,7 +110,7 @@ describe('the reserved second cell is a real space (render level)', () => {
 
   test('☀️ gets its VS16 cell turned into a space, so a table row cannot drift', async () => {
     await ensureFarmPatched()
-    const stringWidth = (await import('../packages/dsh-tui-app/node_modules/string-width/index.js')).default
+    const stringWidth = (await import('../packages/qialike-app/node_modules/string-width/index.js')).default
     if (stringWidth('⚠') !== 2) {
       expect(stringWidth('⚠')).toBe(1)
       return
@@ -133,7 +133,7 @@ describe('the reserved second cell is a real space (render level)', () => {
 
   test('the pre-existing member (⚠) keeps its reservation', async () => {
     await ensureFarmPatched()
-    const stringWidth = (await import('../packages/dsh-tui-app/node_modules/string-width/index.js')).default
+    const stringWidth = (await import('../packages/qialike-app/node_modules/string-width/index.js')).default
     if (stringWidth('⚠') !== 2) {
       expect(stringWidth('⚠')).toBe(1)
       return
@@ -145,7 +145,7 @@ describe('the reserved second cell is a real space (render level)', () => {
 
   test('a PRESENT but EMPTY calibration map still reserves (the startup window)', async () => {
     await ensureFarmPatched()
-    const stringWidth = (await import('../packages/dsh-tui-app/node_modules/string-width/index.js')).default
+    const stringWidth = (await import('../packages/qialike-app/node_modules/string-width/index.js')).default
     if (stringWidth('⚠') !== 2) {
       expect(stringWidth('⚠')).toBe(1)
       return
@@ -174,14 +174,14 @@ describe('the reserved second cell is a real space (render level)', () => {
 
   test('the real markdown table from the reported session renders aligned', async () => {
     await ensureFarmPatched()
-    const stringWidth = (await import('../packages/dsh-tui-app/node_modules/string-width/index.js')).default
+    const stringWidth = (await import('../packages/qialike-app/node_modules/string-width/index.js')).default
     if (stringWidth('⚠') !== 2) {
       expect(stringWidth('⚠')).toBe(1)
       return
     }
-    const { MarkdownText, tableGrid } = await import('../packages/dsh-tui-app/src/markdown.tsx')
-    const React = (await import('../packages/dsh-tui-app/node_modules/react/index.js')).default
-    const { Box, render } = await import('../packages/dsh-tui-app/node_modules/ink/build/index.js')
+    const { MarkdownText, tableGrid } = await import('../packages/qialike-app/src/markdown.tsx')
+    const React = (await import('../packages/qialike-app/node_modules/react/index.js')).default
+    const { Box, render } = await import('../packages/qialike-app/node_modules/ink/build/index.js')
     // The weather table as it appeared in session-4ad2e9af-… (the ☀️ cell).
     const source = ['| 项目 | 数据 |', '| --- | --- |', '| 天气 | ☀️ 晴 |', '| 气温 | 32°C |'].join('\n')
     const chunks: string[] = []

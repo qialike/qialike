@@ -1,6 +1,6 @@
 /**
  * Regression tests for the "Other editor cursor flashes then disappears" bug
- * (reported on GNOME Terminal / VTE, `dist/dsh-tui`).
+ * (reported on GNOME Terminal / VTE, `dist/qialike`).
  *
  * Mechanism: the conversation frame suffix parks the hardware cursor ONLY while
  * the question panel's `questionCaretCell` returns a non-null cell; a null cell
@@ -20,12 +20,12 @@
  *
  * Run with `bun test tests/question-caret-cell.test.ts`.
  *
- * @module dsh-tui/question-caret-cell-test
+ * @module qialike/question-caret-cell-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { inputWindow, inputVisualRows, caretRowIndex } from '../packages/dsh-tui-app/src/panels/question.tsx'
-import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
+import { inputWindow, inputVisualRows, caretRowIndex } from '../packages/qialike-app/src/panels/question.tsx'
+import { visualWidth } from '../packages/qialike-app/src/markdown.tsx'
 
 /** Replicates questionCaretCell's current (fixed) computation: fresh
  *  caret-following window + measured absolute top/left. */

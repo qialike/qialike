@@ -11,16 +11,16 @@
  *
  * Run with `bun test tests/composer-mirror.test.ts`.
  *
- * @module dsh-tui/composer-mirror-test
+ * @module qialike/composer-mirror-test
  */
 import { describe, expect, test } from 'bun:test'
 import stringWidth from 'string-width'
 import wrapAnsi from 'wrap-ansi'
-import { composerStripRows } from '../packages/dsh-tui-app/src/pointer-region.ts'
+import { composerStripRows } from '../packages/qialike-app/src/pointer-region.ts'
 import {
   composerCap, composerHeightFor, composerHeightSaturated, composerUsableFor,
-} from '../packages/dsh-tui-app/src/composer-metrics.ts'
-import { COMPOSER_MIN_HEIGHT } from '../packages/dsh-tui-app/src/layout-budget.ts'
+} from '../packages/qialike-app/src/composer-metrics.ts'
+import { COMPOSER_MIN_HEIGHT } from '../packages/qialike-app/src/layout-budget.ts'
 
 /** The exact wrapped-row count, the number the saturation bound must equal once
  *  it binds (and the thing a big draft must NOT pay for). */

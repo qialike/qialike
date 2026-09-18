@@ -15,7 +15,7 @@ import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 
 const src = readFileSync(
-  join(import.meta.dir, '..', 'packages', 'dsh-tui-app', 'src', 'charwidth.ts'),
+  join(import.meta.dir, '..', 'packages', 'qialike-app', 'src', 'charwidth.ts'),
   'utf8',
 )
 

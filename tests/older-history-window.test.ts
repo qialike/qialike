@@ -6,12 +6,12 @@
  *
  * Run with `bun test tests/older-history-window.test.ts`.
  *
- * @module dsh-tui/older-history-window-test
+ * @module qialike/older-history-window-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { TranscriptItem } from '../packages/dsh-tui-app/src/index.tsx'
-import { Store, olderItemCap, RESUME_OLDER_ITEM_CAP } from '../packages/dsh-tui-app/src/index.tsx'
+import type { TranscriptItem } from '../packages/qialike-app/src/index.tsx'
+import { Store, olderItemCap, RESUME_OLDER_ITEM_CAP } from '../packages/qialike-app/src/index.tsx'
 
 const item = (kind: TranscriptItem['kind'], text: string): TranscriptItem => ({ key: 0, kind, text })
 const texts = (store: Store): string[] => store.getItems().map((it) => it.text)

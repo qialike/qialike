@@ -6,11 +6,11 @@
  *
  * Run with `bun test tests/composer-caret-row.test.ts`.
  *
- * @module dsh-tui/composer-caret-row-test
+ * @module qialike/composer-caret-row-test
  */
 import { describe, expect, test } from 'bun:test'
 import wrapAnsi from 'wrap-ansi'
-import { composerCaretGlobalRow } from '../packages/dsh-tui-app/src/panels/conversation.tsx'
+import { composerCaretGlobalRow } from '../packages/qialike-app/src/panels/conversation.tsx'
 
 /** Reference: rows of the whole draft, then the caret's index among them. */
 function referenceRow(input: string, cursor: number, usable: number): number {

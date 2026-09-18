@@ -14,11 +14,11 @@
  *
  * Run with `bun test tests/status-bar-priority.test.ts`.
  *
- * @module dsh-tui/status-bar-priority-test
+ * @module qialike/status-bar-priority-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
+import { Store } from '../packages/qialike-app/src/index.tsx'
 
 /** A store sitting in the read-only phase: marker set, nothing will settle it. */
 function readOnlyPhase(): Store {

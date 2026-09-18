@@ -14,7 +14,7 @@ import {
   flushPostExitNotices,
   postExitNotice,
   resetPostExitNotices,
-} from '../packages/dsh-tui-app/src/post-exit-notice.ts'
+} from '../packages/qialike-app/src/post-exit-notice.ts'
 
 const written: string[] = []
 const capture = (text: string): void => {
@@ -73,9 +73,9 @@ describe('post-exit notices', () => {
 })
 
 describe('the wiring in index.tsx', () => {
-  const appSource = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf8')
+  const appSource = readFileSync(new URL('../packages/qialike-app/src/index.tsx', import.meta.url), 'utf8')
   const noticesSource = readFileSync(
-    new URL('../packages/dsh-tui-app/src/post-exit-notice.ts', import.meta.url), 'utf8',
+    new URL('../packages/qialike-app/src/post-exit-notice.ts', import.meta.url), 'utf8',
   )
 
   // The leave WRITE expression, anchored on `writeSync(1, '…1049l')` rather than
@@ -111,8 +111,8 @@ describe('the wiring in index.tsx', () => {
   test('the fatal start path queues the notice instead of writing stderr directly', () => {
     // Writing stderr directly is the P2 bug: while the read-only screen is up,
     // that line lands in the alternate buffer and is discarded with it.
-    expect(appSource).toContain('postExitNotice(`dsh-tui: ${message}\\n`)')
-    expect(appSource).not.toContain('process.stderr.write(`dsh-tui: ${message}\\n`)')
+    expect(appSource).toContain('postExitNotice(`qialike: ${message}\\n`)')
+    expect(appSource).not.toContain('process.stderr.write(`qialike: ${message}\\n`)')
   })
 
   test('the hard-crash handler queues its one line too, and keeps the stack in the file', () => {

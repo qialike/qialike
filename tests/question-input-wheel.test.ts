@@ -12,11 +12,11 @@
  *
  * Run with `bun test tests/question-input-wheel.test.ts`.
  *
- * @module dsh-tui/question-input-wheel-test
+ * @module qialike/question-input-wheel-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { inputWheelScrollsAt } from '../packages/dsh-tui-app/src/panels/question.tsx'
+import { inputWheelScrollsAt } from '../packages/qialike-app/src/panels/question.tsx'
 
 // Measured input-box geometry (as the panel records it per frame): content
 // starts at 1-based SGR (top+1, left+1); the window shows `count` rows.

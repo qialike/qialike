@@ -7,12 +7,12 @@
  *
  * Run with `bun test tests/provider-templates.test.ts`.
  *
- * @module dsh-tui/provider-templates-test
+ * @module qialike/provider-templates-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { PROVIDER_TEMPLATES, validateProviderTemplates } from '../packages/dsh-tui-app/src/llm.ts'
-import fileData from '../packages/dsh-tui-app/src/provider-templates.json' with { type: 'json' }
+import { PROVIDER_TEMPLATES, validateProviderTemplates } from '../packages/qialike-app/src/llm.ts'
+import fileData from '../packages/qialike-app/src/provider-templates.json' with { type: 'json' }
 
 describe('bundled provider-templates.json', () => {
   test('loads every row the file declares', () => {

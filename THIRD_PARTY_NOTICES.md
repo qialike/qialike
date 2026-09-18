@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-The bundled executable and the `@yourname/dsh-tui-app` bundle draw on third-party packages. This
+The bundled executable and the `@yourname/qialike-app` bundle draw on third-party packages. This
 file lists the ones this repository adds directly; the DeepSeek Harness core and its vendored Cordis
 dependencies carry their own notices in the harness checkout (see its `THIRD_PARTY_NOTICES.md`),
 and the Bun runtime embeds its own license with the compiled binary.
@@ -12,14 +12,14 @@ and the Bun runtime embeds its own license with the compiled binary.
 | [ink](https://www.npmjs.com/package/ink) | 4.x | MIT | Terminal UI rendering |
 | [react](https://www.npmjs.com/package/react) | 18.x | MIT | Ink component model |
 | [commander](https://www.npmjs.com/package/commander) | 15.x | MIT | TUI command-line parsing |
-| [esbuild](https://www.npmjs.com/package/esbuild) | 0.25.x | MIT | Compiling `dsh-tui-app` source to `lib/` |
+| [esbuild](https://www.npmjs.com/package/esbuild) | 0.25.x | MIT | Compiling `qialike-app` source to `lib/` |
 | [Bun](https://bun.sh) | 1.x | MIT | Single-file compilation (`bun build --compile`) |
 | [js-yaml](https://www.npmjs.com/package/js-yaml) | 4.x | MIT | (dev) YAML parsing in the build |
 
 ## Classic colorschemes
 
-The 13 classic colorschemes bundled in `packages/dsh-tui-app/src/classic-schemes.ts` are color
-palettes from MIT upstream projects; dsh-tui bundles only **resolved hex values** plus its own
+The 13 classic colorschemes bundled in `packages/qialike-app/src/classic-schemes.ts` are color
+palettes from MIT upstream projects; qialike bundles only **resolved hex values** plus its own
 17-role mapping — no upstream source code is copied. 12 of them (catppuccin, dracula,
 everforest, falcon, flexoki, gruvbox, kanagawa, nord, panda, rosepine, solarized,
 solarized-light) are the
@@ -51,10 +51,10 @@ The rows below list the verified licenses.
 
 ## Default colorscheme (`dark` / `light`) and Atom skin (`one-dark`)
 
-The built-in default scheme `dark` (`packages/dsh-tui-app/src/theme.ts`) mirrors the **dark** web
+The built-in default scheme `dark` (`packages/qialike-app/src/theme.ts`) mirrors the **dark** web
 UI of the sibling MIT project [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 (Copyright (c) 2026 DeepSeek): the `body[data-ds-dark-theme]` alias block of
-`design-platform.css`. dsh-tui bundles only **resolved hex values** plus its own 17-role mapping —
+`design-platform.css`. qialike bundles only **resolved hex values** plus its own 17-role mapping —
 no CSS source is copied. Every hex comes from one of its static ramps (background layers
 `neutral-bluish 950/900/850`, borders composited from the alias white alpha ramps over each
 background, text `neutral-bluish 50`, muted `neutral-bluish 600`, brand `deepseek 300/400/450`,
@@ -65,7 +65,7 @@ The built-in default `light` is **Atom's One Light** — the former `one-light` 
 promoted to the default light name. Hues come from Atom's official repos by GitHub Inc.
 ([atom/one-light-syntax](https://github.com/atom/one-light-syntax) +
 [atom/one-light-ui](https://github.com/atom/one-light-ui), both archived, which does not affect
-their MIT grant); dsh-tui bundles only **resolved hex values** plus its own 17-role mapping — no
+their MIT grant); qialike bundles only **resolved hex values** plus its own 17-role mapping — no
 upstream source code is copied. Structure steps are cross-checked against
 [navarasu/onedark.nvim](https://github.com/navarasu/onedark.nvim) (MIT). Hexes are kept verbatim;
 like every non-dark skin, `light` is deliberately not held to the AA bar `dark` is (muted

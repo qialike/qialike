@@ -10,7 +10,7 @@
  *
  * Run with `bun test tests/clipboard.test.ts`.
  *
- * @module dsh-tui/clipboard-test
+ * @module qialike/clipboard-test
  */
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -21,9 +21,9 @@ import {
   handleDialogPaste,
   pastedText,
   readClipboardText,
-} from '../packages/dsh-tui-app/src/clipboard.ts'
+} from '../packages/qialike-app/src/clipboard.ts'
 
-const APP = join(import.meta.dir, '..', 'packages', 'dsh-tui-app', 'src')
+const APP = join(import.meta.dir, '..', 'packages', 'qialike-app', 'src')
 const read = (file: string): string => readFileSync(join(APP, file), 'utf8')
 
 describe('pastedText: sanitising one paste', () => {

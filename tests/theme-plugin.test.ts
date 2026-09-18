@@ -1,17 +1,17 @@
 /**
  * Unit tests for the vim-style color-scheme plugin (`tui-theme`,
- * `packages/dsh-tui-app/src/theme-plugin.ts`).
+ * `packages/qialike-app/src/theme-plugin.ts`).
  *
  * Run with `bun test tests/theme-plugin.test.ts`.
  *
- * @module dsh-tui/theme-plugin-test
+ * @module qialike/theme-plugin-test
  */
 
 import { describe, expect, test, afterEach } from 'bun:test'
-import { theme } from '../packages/dsh-tui-app/src/theme.ts'
+import { theme } from '../packages/qialike-app/src/theme.ts'
 import {
   BUILTIN_SCHEMES, DEFAULT_SCHEME, applyScheme, resolveScheme, schemeRegistry, apply,
-} from '../packages/dsh-tui-app/src/theme-plugin.ts'
+} from '../packages/qialike-app/src/theme-plugin.ts'
 
 const ORIGINAL = { ...theme }
 

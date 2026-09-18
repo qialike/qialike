@@ -1,5 +1,5 @@
 /**
- * Unit tests for the colour-depth module (`packages/dsh-tui-app/src/
+ * Unit tests for the colour-depth module (`packages/qialike-app/src/
  * color-depth.ts`) — the fix for "the composer card merges into the page".
  *
  * The bug (reported on Ubuntu 24.04): the terminal speaks 24-bit colour but
@@ -10,7 +10,7 @@
  *
  * Run with `bun test tests/color-depth.test.ts`.
  *
- * @module dsh-tui/color-depth-test
+ * @module qialike/color-depth-test
  */
 
 import { describe, expect, test, afterEach } from 'bun:test'
@@ -18,18 +18,18 @@ import { readFileSync } from 'node:fs'
 import {
   ANSI256_RGB, FILL_KEYS, REACHABLE_ENTRIES, colorLevel, colorOverride, cubeRound, nearestEntry,
   parseHex, quantizePalette, rgbDistance, rgbToHex,
-} from '../packages/dsh-tui-app/src/color-depth.ts'
-import { BUILTIN_SCHEMES, DEFAULT_SCHEME, applyScheme, schemeRegistry } from '../packages/dsh-tui-app/src/theme-plugin.ts'
-import { theme } from '../packages/dsh-tui-app/src/theme.ts'
+} from '../packages/qialike-app/src/color-depth.ts'
+import { BUILTIN_SCHEMES, DEFAULT_SCHEME, applyScheme, schemeRegistry } from '../packages/qialike-app/src/theme-plugin.ts'
+import { theme } from '../packages/qialike-app/src/theme.ts'
 
 afterEach(() => { applyScheme(DEFAULT_SCHEME) })
 
 describe('colorLevel', () => {
-  test('DSH_TUI_COLOR overrides everything', () => {
-    expect(colorLevel({ DSH_TUI_COLOR: '24bit', TERM: 'xterm-256color' })).toBe(3)
-    expect(colorLevel({ DSH_TUI_COLOR: '256', TERM: 'xterm-kitty' })).toBe(2)
-    expect(colorLevel({ DSH_TUI_COLOR: '16', COLORTERM: 'truecolor' })).toBe(1)
-    expect(colorLevel({ DSH_TUI_COLOR: ' 256 ' })).toBe(2)
+  test('QIALIKE_COLOR overrides everything', () => {
+    expect(colorLevel({ QIALIKE_COLOR: '24bit', TERM: 'xterm-256color' })).toBe(3)
+    expect(colorLevel({ QIALIKE_COLOR: '256', TERM: 'xterm-kitty' })).toBe(2)
+    expect(colorLevel({ QIALIKE_COLOR: '16', COLORTERM: 'truecolor' })).toBe(1)
+    expect(colorLevel({ QIALIKE_COLOR: ' 256 ' })).toBe(2)
   })
 
   test('follows chalk/supports-color otherwise', () => {
@@ -50,7 +50,7 @@ describe('colorLevel', () => {
 describe('the Ink-side override table cannot drift', () => {
   // The SGR form is chosen by code injected into Ink's output.js, in a bundle
   // that owns the chalk instance (see the note on `colorOverride`). That copy
-  // duplicates the `DSH_TUI_COLOR` table, so this test extracts it from the build
+  // duplicates the `QIALIKE_COLOR` table, so this test extracts it from the build
   // script and compares — the duplication is intentional, its drift is not.
   const source = readFileSync(new URL('../apps/tui-bin/build.mjs', import.meta.url), 'utf8')
   const body = /const __dshColorOverride = \(env\) => \{([\s\S]*?)\n\};/.exec(source)?.[1]
@@ -64,7 +64,7 @@ describe('the Ink-side override table cannot drift', () => {
   test('both tables answer identically for every spelling', () => {
     const build = new Function('env', body!) as (env: Record<string, string>) => number | null
     for (const value of ['24bit', 'truecolor', '256', '16', '', '  256 ', 'TRUEcolor', 'nonsense', '24']) {
-      const env = { DSH_TUI_COLOR: value }
+      const env = { QIALIKE_COLOR: value }
       expect(build(env), `build side: ${JSON.stringify(value)}`).toBe(colorOverride(env))
       if (colorOverride(env) !== null) {
         expect(colorLevel(env), `both sides agree: ${JSON.stringify(value)}`).toBe(build(env)!)
@@ -72,7 +72,7 @@ describe('the Ink-side override table cannot drift', () => {
     }
     // Unset must mean "chalk decides", not some level.
     expect(build({})).toBeNull()
-    expect(build({ DSH_TUI_COLOR: '256' })).toBe(2)
+    expect(build({ QIALIKE_COLOR: '256' })).toBe(2)
   })
 })
 
@@ -292,9 +292,9 @@ describe('applyScheme wiring', () => {
   test('a 256-colour terminal gets the quantized palette on the shared object', () => {
     // The env flip and the assertions are synchronous, so no other test file can
     // observe the temporary override.
-    const previous = process.env.DSH_TUI_COLOR
+    const previous = process.env.QIALIKE_COLOR
     try {
-      process.env.DSH_TUI_COLOR = '256'
+      process.env.QIALIKE_COLOR = '256'
       applyScheme('kanagawa')
       const expected = { ...BUILTIN_SCHEMES.kanagawa } as Record<string, string>
       quantizePalette(expected, 2)
@@ -302,27 +302,27 @@ describe('applyScheme wiring', () => {
       expect(theme.element).toBe(expected.element)
       expect(theme.bg).not.toBe(theme.element)
     } finally {
-      if (previous === undefined) delete process.env.DSH_TUI_COLOR
-      else process.env.DSH_TUI_COLOR = previous
+      if (previous === undefined) delete process.env.QIALIKE_COLOR
+      else process.env.QIALIKE_COLOR = previous
     }
   })
 
   test('per-role overrides are quantized too (they bypass the scheme)', () => {
-    const previous = process.env.DSH_TUI_COLOR
+    const previous = process.env.QIALIKE_COLOR
     try {
-      process.env.DSH_TUI_COLOR = '256'
+      process.env.QIALIKE_COLOR = '256'
       applyScheme('dark', { accent: '#ff8800' })
       const expected = { accent: '#ff8800' } as Record<string, string>
       quantizePalette(expected, 2)
       expect(theme.accent).toBe(expected.accent)
     } finally {
-      if (previous === undefined) delete process.env.DSH_TUI_COLOR
-      else process.env.DSH_TUI_COLOR = previous
+      if (previous === undefined) delete process.env.QIALIKE_COLOR
+      else process.env.QIALIKE_COLOR = previous
     }
   })
 
   test('the unit suite preload pins 24-bit, so tests see authored hexes', () => {
-    expect(process.env.DSH_TUI_COLOR).toBe('24bit')
+    expect(process.env.QIALIKE_COLOR).toBe('24bit')
     applyScheme('light')
     expect(theme.bg).toBe(BUILTIN_SCHEMES.light.bg)
   })

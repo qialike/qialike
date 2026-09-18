@@ -6,7 +6,7 @@
  *
  * Run with `bun test tests/hero-layout.test.ts`.
  *
- * @module dsh-tui/hero-layout-test
+ * @module qialike/hero-layout-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -49,9 +49,9 @@ import {
   heroHintLine,
   heroHintText,
   heroWordmarkFits,
-} from '../packages/dsh-tui-app/src/hero-layout.ts'
-import { visualWidth } from '../packages/dsh-tui-app/src/markdown.tsx'
-import { COMPOSER_MIN_HEIGHT } from '../packages/dsh-tui-app/src/layout-budget.ts'
+} from '../packages/qialike-app/src/hero-layout.ts'
+import { visualWidth } from '../packages/qialike-app/src/markdown.tsx'
+import { COMPOSER_MIN_HEIGHT } from '../packages/qialike-app/src/layout-budget.ts'
 
 const BASE = { rows: 30, boxH: 5, brandLines: HERO_WORDMARK.length + 1, hintLines: 1 }
 

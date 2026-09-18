@@ -3,7 +3,7 @@
  * and the shared list in step.
  *
  * Context (v0.4.10-beta): F5 taught the thin entry to validate the positional
- * mode, but only `resume` was allowed, so `dsh-tui web` and `dsh-tui uninstall`
+ * mode, but only `resume` was allowed, so `qialike web` and `qialike uninstall`
  * — both launcher-owned positionals handled in `bin.ts` — were rejected as
  * typos, and `web`'s own options (`--host`) were rejected by commander before
  * that. The fix hands the whole line over when `args[0]` is a launcher mode;
@@ -47,7 +47,7 @@ describe('launcher modes', () => {
   test('main.ts hands launcher modes over BEFORE it validates the positional', () => {
     // Order is the whole fix: the validation block parses with `tuiCommand()`,
     // which does not declare `web`'s options, so reaching it at all breaks
-    // `dsh-tui web --host …` even after the mode itself is allowed.
+    // `qialike web --host …` even after the mode itself is allowed.
     const handover = mainSource.indexOf('isLauncherMode(args[0])')
     const validation = mainSource.indexOf("mode !== 'resume'")
     expect(handover).toBeGreaterThan(-1)

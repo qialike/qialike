@@ -1,21 +1,21 @@
 /**
  * Unit tests for the /export destination containment guard (fix 2,
- * dsh-tui-security.md): a custom `--output`/dialog name is resolved against
+ * qialike-security.md): a custom `--output`/dialog name is resolved against
  * the workspace root and refused when it would escape it (`../` segments or an
  * absolute path), while names inside the workspace — including subdirectories
  * — keep working.
  *
  * Run with `bun test tests/export-containment.test.ts`.
  *
- * @module dsh-tui/export-containment-test
+ * @module qialike/export-containment-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { resolveExportDestination } from '../packages/dsh-tui-app/src/export.tsx'
+import { resolveExportDestination } from '../packages/qialike-app/src/export.tsx'
 
-const workspace = join(tmpdir(), 'dsh-tui-export-root')
+const workspace = join(tmpdir(), 'qialike-export-root')
 
 describe('resolveExportDestination accepts in-workspace names', () => {
   test('plain file name resolves under the workspace root', () => {

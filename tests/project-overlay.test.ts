@@ -15,12 +15,12 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { classifyProjectLayer, PROJECT_FORBIDDEN_IDS, PROJECT_FORBIDDEN_PLUGINS } from '../apps/tui-bin/src/project-overlay.ts'
-import { heroHintRows, heroNoticeText } from '../packages/dsh-tui-app/src/hero-layout.ts'
+import { heroHintRows, heroNoticeText } from '../packages/qialike-app/src/hero-layout.ts'
 
 const read = (relative: string): string => readFileSync(new URL(`../${relative}`, import.meta.url), 'utf8')
 const BIN = read('apps/tui-bin/src/bin.ts')
-const STARTUP = read('packages/dsh-tui-app/src/startup.ts')
-const APP = read('packages/dsh-tui-app/src/index.tsx')
+const STARTUP = read('packages/qialike-app/src/startup.ts')
+const APP = read('packages/qialike-app/src/index.tsx')
 
 /** A base-layer row, as the classifier sees it. */
 const base = [{ insert: [{ id: 'sandbox-policy', name: '@deepseek-ai/dsh-sandbox-policy' }] }]
@@ -129,12 +129,12 @@ describe('repository overlay policy', () => {
   test('⑧ the escape hatch is a declared option that skips the layer', () => {
     expect(STARTUP).toContain("'--no-project-overlay'")
     expect(BIN).toContain("args.includes('--no-project-overlay')")
-    expect(BIN).toContain("process.env.DSH_TUI_NO_PROJECT_OVERLAY === '1'")
+    expect(BIN).toContain("process.env.QIALIKE_NO_PROJECT_OVERLAY === '1'")
     expect(BIN).toContain('const project = skipProject ? [] : loadOptionalPatches')
   })
 
   test('⑨ the applied layer is visible: launch env → hero, status bar, transcript', () => {
-    expect(BIN).toContain('DSH_TUI_PROJECT_OVERLAY')
+    expect(BIN).toContain('QIALIKE_PROJECT_OVERLAY')
     expect(APP).toContain('projectOverlayNotice()')
     expect(APP).toContain('setRepoOverlayNotice')
     expect(APP).toContain('store.flashStatus(`⚠ ${overlayNotice}`')

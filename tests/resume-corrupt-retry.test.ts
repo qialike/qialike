@@ -10,7 +10,7 @@
  *
  * Run with `bun test tests/resume-corrupt-retry.test.ts`.
  *
- * @module dsh-tui/resume-corrupt-retry-test
+ * @module qialike/resume-corrupt-retry-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -18,7 +18,7 @@ import {
   describeResumeFailure,
   isCorruptLogMessage,
   withResumeCorruptRetry,
-} from '../packages/dsh-tui-app/src/resume-fold.ts'
+} from '../packages/qialike-app/src/resume-fold.ts'
 
 describe('isCorruptLogMessage', () => {
   test('recognizes both corrupt classes', () => {

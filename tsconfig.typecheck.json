@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.base.json",
-  "include": ["packages/dsh-tui-app/src/**/*.ts", "packages/dsh-tui-app/src/**/*.tsx"],
+  "include": ["packages/qialike-app/src/**/*.ts", "packages/qialike-app/src/**/*.tsx"],
   "compilerOptions": {
     "paths": {
       "@deepseek-ai/cordis": ["../deepseek-harness/vendor/cordis/lib/types/index.d.ts"],

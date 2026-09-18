@@ -12,14 +12,14 @@
  *
  * Run with `bun test tests/host-bash-policy.test.ts`.
  *
- * @module dsh-tui/host-bash-policy-test
+ * @module qialike/host-bash-policy-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { bashMutates, readOnlyBashDecision } from '../packages/dsh-tui-app/src/bash-policy.ts'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
+import { bashMutates, readOnlyBashDecision } from '../packages/qialike-app/src/bash-policy.ts'
+import { Store } from '../packages/qialike-app/src/index.tsx'
 
 describe('bashMutates detects filesystem mutations', () => {
   test('write-ish commands are mutations', () => {
@@ -82,7 +82,7 @@ describe('readOnlyBashDecision fences bash only under read-only', () => {
 
 describe('the fence is shared, not duplicated', () => {
   test('index.tsx applies the shared rule (no second copy of the regexes)', () => {
-    const client = readFileSync(join(process.cwd(), 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
+    const client = readFileSync(join(process.cwd(), 'packages/qialike-app/src/index.tsx'), 'utf8')
     expect(client).toContain('readOnlyBashDecision')
     expect(client).not.toMatch(/function bashMutates/)
   })

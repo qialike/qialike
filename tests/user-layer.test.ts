@@ -1,7 +1,7 @@
 /**
  * Source guards for the USER overlay — `$DSH_HOME/profiles/tui/cordis.patch.yml`.
  *
- * This is the one layer dsh-tui does not own, and the extension point of the
+ * This is the one layer qialike does not own, and the extension point of the
  * single-file build: an `insert` row can mount any BUNDLED plugin (the MCP
  * client is bundled rowless for exactly that — one file cannot resolve a name it
  * never bundled). The loader is SILENT about both ways a hand-written layer goes
@@ -14,7 +14,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
 const BIN = readFileSync(new URL('../apps/tui-bin/src/bin.ts', import.meta.url), 'utf-8')
-const STARTUP = readFileSync(new URL('../packages/dsh-tui-app/src/startup.ts', import.meta.url), 'utf-8')
+const STARTUP = readFileSync(new URL('../packages/qialike-app/src/startup.ts', import.meta.url), 'utf-8')
 const BUILD = readFileSync(new URL('../apps/tui-bin/build.mjs', import.meta.url), 'utf-8')
 
 const body = (source: string, marker: string): string =>
@@ -31,7 +31,7 @@ describe('user overlay', () => {
 
   test('② a wrong layer fails loud instead of no-opping', () => {
     const validate = body(BIN, 'function validateUserLayer(')
-    expect(validate, 'unbundled names are rejected against the bundle map').toContain('in PLUGIN_BUILTINS')
+    expect(validate, 'unbundled names are rejected against the bundle map').toContain('!isBundledPlugin(row.name)')
     expect(validate, 'cordis: builtins stay allowed').toContain("startsWith('cordis:')")
     expect(validate, 'rows without insert must match a built-in id').toContain('known.has(row.id)')
     // The file is a PARAMETER (the same validator guards the project overlay)

@@ -5,7 +5,7 @@
  *
  * Run with `bun test tests/session-stats.test.ts`.
  *
- * @module dsh-tui/session-stats-test
+ * @module qialike/session-stats-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -17,7 +17,7 @@ import {
   formatStatDuration,
   formatStatTokens,
   type SessionStatsEventLike,
-} from '../packages/dsh-tui-app/src/session-stats.ts'
+} from '../packages/qialike-app/src/session-stats.ts'
 
 describe('foldSessionStats', () => {
   const msg = (turn: number, usage?: { inputTokens?: number; outputTokens?: number }): SessionStatsEventLike => ({

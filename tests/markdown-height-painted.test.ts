@@ -8,7 +8,7 @@
  * measurement was dropped, falls back to `estimateMarkdownHeight`. A silent
  * undercount there puts the newest wrapped line below the viewport (the
  * "answer's tail never shows up; End does not help" report — see
- * dsh-tui-development §2.5.51). The two sides of this test are the real
+ * qialike-development §2.5.51). The two sides of this test are the real
  * renderer (`<MarkdownText>`, measured through Ink's `measureElement`) and the
  * real estimator, at the geometry `conversation.tsx` uses:
  *
@@ -19,14 +19,14 @@
  *
  * Run with `bun test tests/markdown-height-painted.test.ts`.
  *
- * @module dsh-tui/markdown-height-painted-test
+ * @module qialike/markdown-height-painted-test
  */
 
 import { Writable } from 'node:stream'
 import { describe, expect, test } from 'bun:test'
-import React from '../packages/dsh-tui-app/node_modules/react/index.js'
-import { Box, measureElement, render } from '../packages/dsh-tui-app/node_modules/ink/build/index.js'
-import { MarkdownText, estimateMarkdownHeight } from '../packages/dsh-tui-app/src/markdown.tsx'
+import React from '../packages/qialike-app/node_modules/react/index.js'
+import { Box, measureElement, render } from '../packages/qialike-app/node_modules/ink/build/index.js'
+import { MarkdownText, estimateMarkdownHeight } from '../packages/qialike-app/src/markdown.tsx'
 
 /** A TTY-shaped sink: Ink's layout only needs columns/rows/isTTY. */
 class FakeStdout extends Writable {

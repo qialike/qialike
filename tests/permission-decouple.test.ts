@@ -1,5 +1,5 @@
 /**
- * Decoupling contract for the composer Tab key (fix 3, dsh-tui-security.md):
+ * Decoupling contract for the composer Tab key (fix 3, qialike-security.md):
  * Tab cycles the FILE SANDBOX MODE only — it must never flip the approval
  * policy to `never` as a side effect of reaching danger-full-access, or one
  * Tab press would silently disable both the file boundary and tool approval.
@@ -14,13 +14,13 @@
  *
  * Run with `bun test tests/permission-decouple.test.ts`.
  *
- * @module dsh-tui/permission-decouple-test
+ * @module qialike/permission-decouple-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { PERMISSION_LABEL, SANDBOX_CYCLE, Store } from '../packages/dsh-tui-app/src/index.tsx'
+import { PERMISSION_LABEL, SANDBOX_CYCLE, Store } from '../packages/qialike-app/src/index.tsx'
 
 describe('Tab sandbox cycle keeps cycling modes', () => {
   test('cyclePermission walks the full SANDBOX_CYCLE incl. danger-full-access', () => {
@@ -46,7 +46,7 @@ describe('approval policy is decoupled from the sandbox mode', () => {
     // (danger-full-access → 'never'). Fix 3 removed it; approvals can only be
     // turned off by an explicit human action (dock "Allow always").
     const src = readFileSync(
-      join(process.cwd(), 'packages/dsh-tui-app/src/panels/conversation.tsx'),
+      join(process.cwd(), 'packages/qialike-app/src/panels/conversation.tsx'),
       'utf8',
     )
     expect(src).not.toMatch(/setApprovalPolicy/)

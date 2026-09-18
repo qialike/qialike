@@ -1,5 +1,5 @@
 /**
- * Unit tests for `stripTerminalControls` (fix 1, dsh-tui-security.md): the
+ * Unit tests for `stripTerminalControls` (fix 1, qialike-security.md): the
  * render-entry guard that strips terminal control bytes from untrusted model /
  * tool / question text before it reaches a <Text>/<MarkdownText> boundary.
  *
@@ -11,17 +11,17 @@
  *
  * Run with `bun test tests/terminal-safe.test.ts`.
  *
- * @module dsh-tui/terminal-safe-test
+ * @module qialike/terminal-safe-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { sanitizeTerminalText, stripAnsiSequences, stripTerminalControls } from '../packages/dsh-tui-app/src/terminal-safe.ts'
-import { Store } from '../packages/dsh-tui-app/src/index.tsx'
+import { sanitizeTerminalText, stripAnsiSequences, stripTerminalControls } from '../packages/qialike-app/src/terminal-safe.ts'
+import { Store } from '../packages/qialike-app/src/index.tsx'
 
 describe('stripTerminalControls keeps display text intact', () => {
   test('plain text passes through unchanged', () => {
-    const s = 'hello world — 你好，dsh-tui！'
+    const s = 'hello world — 你好，qialike！'
     expect(stripTerminalControls(s)).toBe(s)
   })
 
@@ -127,10 +127,10 @@ describe('the composer draft is a sanitized boundary too', () => {
     // Two independent gates, because either one alone is one careless edit away
     // from reopening the hole (the batch that added dialog paste shipped exactly
     // such a silent deletion once).
-    const stdin = readFileSync(new URL('../packages/dsh-tui-app/src/stdin.ts', import.meta.url), 'utf-8')
+    const stdin = readFileSync(new URL('../packages/qialike-app/src/stdin.ts', import.meta.url), 'utf-8')
     const pastePush = stdin.slice(stdin.indexOf('out.push({ paste:'), stdin.indexOf('\n', stdin.indexOf('out.push({ paste:')))
     expect(pastePush, 'stdin.ts sanitizes the paste it emits').toContain('sanitizeTerminalText(')
-    const index = readFileSync(new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf-8')
+    const index = readFileSync(new URL('../packages/qialike-app/src/index.tsx', import.meta.url), 'utf-8')
     const insert = index.slice(index.indexOf('insertAtCursor(text: string): void {'),
                                index.indexOf('backspaceAtCursor(): void {'))
     expect(insert, 'insertAtCursor sanitizes too (belt and braces)').toContain('sanitizeTerminalText(')
@@ -205,14 +205,14 @@ describe('the render-entry policy is pinned (machine output vs authored text)', 
   // (`[1m`/`[0m` litter in every coloured command's output). Pin the policy, and
   // pin the reason it is safe: the sequence pass must stay LAYERED, so the
   // machine-output path still ends in the byte floor.
-  const source = readFileSync(new URL('../packages/dsh-tui-app/src/panels/conversation.tsx', import.meta.url), 'utf-8')
+  const source = readFileSync(new URL('../packages/qialike-app/src/panels/conversation.tsx', import.meta.url), 'utf-8')
 
   test('tool bodies are machine output → whole sequences; authored text keeps the floor', () => {
     expect(source).toContain("item.kind === 'tool' ? sanitizeTerminalText(item.text) : stripTerminalControls(item.text)")
   })
 
   test('the composite used for machine output ends in the byte floor', () => {
-    const guard = readFileSync(new URL('../packages/dsh-tui-app/src/terminal-safe.ts', import.meta.url), 'utf-8')
+    const guard = readFileSync(new URL('../packages/qialike-app/src/terminal-safe.ts', import.meta.url), 'utf-8')
     expect(guard).toContain('return stripTerminalControls(stripAnsiSequences(text))')
   })
 })

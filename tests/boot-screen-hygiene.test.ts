@@ -8,10 +8,10 @@
  * screen they asked for. Three sources did exactly that (all reported by the
  * user as "闪了一下屏" / "should start on the hero"):
  *
- *   1. the lifecycle breadcrumb `dsh-tui started` was mirrored to stderr;
+ *   1. the lifecycle breadcrumb `qialike started` was mirrored to stderr;
  *   2. the stderr CAPTURE wrapper echoed every captured chunk back to stderr;
  *   3. `charwidth`'s "terminal does not answer CPR" diagnostic went to stderr;
- *   4. the `dsh-tui <version> — starting…` splash was drawn immediately.
+ *   4. the `qialike <version> — starting…` splash was drawn immediately.
  *
  * The invariant is a policy at three call sites, which unit tests cannot reach
  * (they would have to boot the SEA binary on a pty), so it is pinned at the
@@ -19,21 +19,21 @@
  *
  * Run with `bun test tests/boot-screen-hygiene.test.ts`.
  *
- * @module dsh-tui/boot-screen-hygiene-test
+ * @module qialike/boot-screen-hygiene-test
  */
 
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
 const app = (relative: string): string =>
-  readFileSync(new URL(`../packages/dsh-tui-app/src/${relative}`, import.meta.url), 'utf8')
+  readFileSync(new URL(`../packages/qialike-app/src/${relative}`, import.meta.url), 'utf8')
 const bin = readFileSync(new URL('../apps/tui-bin/src/bin.ts', import.meta.url), 'utf8')
 
 describe('boot log lines stay in the log file', () => {
   test('the start breadcrumb is not mirrored to stderr', () => {
     const log = app('log.ts')
-    expect(log).toContain("writeLine('dsh-tui started', false)")
-    expect(log).not.toContain("writeLine('dsh-tui started')")
+    expect(log).toContain("writeLine('qialike started', false)")
+    expect(log).not.toContain("writeLine('qialike started')")
   })
 
   test('the stderr capture does not echo what it captured back to stderr', () => {
@@ -102,7 +102,7 @@ describe('the splash is a slow-boot indicator, not a first-frame placeholder', (
   test('its delay is overridable, with a force value for the positive control', () => {
     // A 0 ms delay cannot prove the draw path is alive: the timer waits for the
     // thread to yield, by which time Ink has usually flushed its first frame.
-    expect(bin).toContain('DSH_TUI_SPLASH_MS')
+    expect(bin).toContain('QIALIKE_SPLASH_MS')
     expect(bin).toContain('if (SPLASH_DELAY_MS < 0)')
   })
 

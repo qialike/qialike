@@ -12,23 +12,23 @@
  *
  * Run with `bun test tests/sidebar-goal-bar.test.ts`.
  *
- * @module dsh-tui/sidebar-goal-bar-test
+ * @module qialike/sidebar-goal-bar-test
  */
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import wrapAnsi from 'wrap-ansi'
-import { sidebarStepPlan, sidebarFits, SIDEBAR_STATUS_BAR_ROWS, type SidebarSectionBudget } from '../packages/dsh-tui-app/src/pointer-region.ts'
-import { goalBarRows, goalBarTitle } from '../packages/dsh-tui-app/src/goal-bar.tsx'
+import { sidebarStepPlan, sidebarFits, SIDEBAR_STATUS_BAR_ROWS, type SidebarSectionBudget } from '../packages/qialike-app/src/pointer-region.ts'
+import { goalBarRows, goalBarTitle } from '../packages/qialike-app/src/goal-bar.tsx'
 import type { GoalView } from '@deepseek-ai/dsh-goal'
 
 const REPO = join(import.meta.dir, '..')
-const APP = join(REPO, 'packages', 'dsh-tui-app')
+const APP = join(REPO, 'packages', 'qialike-app')
 const SRC = join(APP, 'src')
 const read = (path: string): string => readFileSync(path, 'utf8')
 
 const SESSION_ID = 'session-675efa95-12d1-4821-87bd-a680c4d1693f'
-const FOOTER = ['deepseek-harness: 0.1.5-rc.2', 'dsh-tui: 0.4.16-beta']
+const FOOTER = ['deepseek-harness: 0.1.5-rc.2', 'qialike: 0.4.16-beta']
 const STEPS = ['✓ one', '✓ two', '→ three', '· four']
 const SECTION: SidebarSectionBudget = { id: 'goal-bar', order: 10, full: 2, compact: 1 }
 
@@ -367,7 +367,7 @@ describe('the extension point is wired end to end', () => {
     // The lib entry points are DERIVED from this manifest (`bundleLibEntryPoints`)
     // rather than hand-listed, so the invariant to pin is the derivation itself:
     // every `./lib/*.js` subpath the exports map exposes must be compiled, because
-    // the SEA bundle resolves `@yourname/dsh-tui-app/<subpath>` through that map.
+    // the SEA bundle resolves `@yourname/qialike-app/<subpath>` through that map.
     // The old hand-written list had gone stale (it omitted `./file-reference`,
     // which the patch names, and the compile then failed on the unbuilt import).
     const { bundleLibEntryPoints } = await import('../apps/tui-bin/build.mjs')
@@ -384,6 +384,6 @@ describe('the extension point is wired end to end', () => {
     expect(entries).toHaveLength(libExports.length)
     const patch = read(join(APP, 'cordis.patch.yml'))
     expect(patch).toContain('tui-goal-bar')
-    expect(patch).toContain("'@yourname/dsh-tui-app/goal-bar'")
+    expect(patch).toContain("'@yourname/qialike-app/goal-bar'")
   })
 })

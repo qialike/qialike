@@ -6,7 +6,7 @@ import {
   isCompactionCheckpoint,
   formatCompactTokens,
   type CompactionRowFacts,
-} from '../packages/dsh-tui-app/src/index.tsx'
+} from '../packages/qialike-app/src/index.tsx'
 
 /** A real checkpoint message body, framed exactly like the harness writes it
  *  (`CHECKPOINT_PREAMBLE` + `<compacted-summary>…</compacted-summary>`). */

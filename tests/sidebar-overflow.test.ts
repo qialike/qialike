@@ -14,15 +14,15 @@
  *
  * Run with `bun test tests/sidebar-overflow.test.ts`.
  *
- * @module dsh-tui/sidebar-overflow-test
+ * @module qialike/sidebar-overflow-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import { sidebarFits, sidebarStepPlan, SIDEBAR_STATUS_BAR_ROWS } from '../packages/dsh-tui-app/src/pointer-region.ts'
+import { sidebarFits, sidebarStepPlan, SIDEBAR_STATUS_BAR_ROWS } from '../packages/qialike-app/src/pointer-region.ts'
 
 const SESSION_ID = 'session-675efa95-12d1-4821-87bd-a680c4d1693f'
-const TITLE = 'dsh-tui修复Bug'
-const FOOTER = ['deepseek-harness: 0.1.5-rc.2', 'dsh-tui: 0.4.9-beta']
+const TITLE = 'qialike修复Bug'
+const FOOTER = ['deepseek-harness: 0.1.5-rc.2', 'qialike: 0.4.9-beta']
 const STEPS = [
   '✓ Fix README.md launch semantics',
   '✓ Fix README.zh.md launch semantics',

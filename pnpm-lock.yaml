@@ -35,11 +35,11 @@ importers:
 
   apps/tui-bin:
     dependencies:
-      '@yourname/dsh-tui-app':
+      '@yourname/qialike-app':
         specifier: workspace:^
-        version: link:../../packages/dsh-tui-app
+        version: link:../../packages/qialike-app
 
-  packages/dsh-tui-app:
+  packages/qialike-app:
     dependencies:
       commander:
         specifier: ^15.0.0

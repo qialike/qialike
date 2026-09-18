@@ -1,10 +1,10 @@
 /**
- * Regression test: exiting dsh-tui must leave NO visible residue on the normal
+ * Regression test: exiting qialike must leave NO visible residue on the normal
  * screen buffer.
  *
  * The TUI runs inside the alternate screen buffer (`\x1b[?1049h`); on exit the
  * leave sequence (`\x1b[?1049l`) must be the process's LAST visible terminal
- * write. Every earlier write — the stderr-mirrored `dsh-tui exited` log line,
+ * write. Every earlier write — the stderr-mirrored `qialike exited` log line,
  * Ink's unmount frame/cursor restore, frames re-rendered while the tree
  * disposes — lands in the alternate buffer and is discarded when the buffer is
  * switched back. A stray `\x1b[?25h` cursor-show may follow the leave
@@ -17,7 +17,7 @@
  *
  * Run with `bun test tests/exit-terminal-state.test.ts` (after `pnpm run build`).
  *
- * @module dsh-tui/exit-terminal-state-test
+ * @module qialike/exit-terminal-state-test
  */
 
 import { spawn } from 'node:child_process'
@@ -28,18 +28,18 @@ import { fileURLToPath } from 'node:url'
 import { test, expect } from 'bun:test'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const bin = join(ROOT, 'dist/dsh-tui')
+const bin = join(ROOT, 'dist/qialike')
 const BOOT_MS = 6000 // let the composition mount before typing /exit
 const EXIT_TIMEOUT_MS = 30_000
 
 // The boot delay plus the pty session need well beyond bun's default 5s.
-test('exiting dsh-tui writes nothing visible after the alternate-screen leave', async () => {
+test('exiting qialike writes nothing visible after the alternate-screen leave', async () => {
   if (process.platform === 'win32') return // script(1) is not available
   if (!existsSync(bin)) throw new Error(`missing ${bin}; run \`pnpm run build\` first`)
 
-  const out = join(tmpdir(), `dsh-tui-exit-${process.pid}.typescript`)
+  const out = join(tmpdir(), `qialike-exit-${process.pid}.typescript`)
   // Declare a NORMAL pty size inside the session: with stdin piped, script(1)
-  // hands the child a 0x0 tty (measured `stty size` → "0 0"), and dsh-tui PAUSES
+  // hands the child a 0x0 tty (measured `stty size` → "0 0"), and qialike PAUSES
   // every key below the 14-row minimum (the "terminal too small" notice keeps
   // only Ctrl+C) — so `/exit` would never arrive and this test would die on its
   // timeout. The size is irrelevant to what this test asserts (the exit byte
@@ -65,7 +65,7 @@ test('exiting dsh-tui writes nothing visible after the alternate-screen leave', 
   let text = readFileSync(out, 'utf8')
   rmSync(out, { force: true })
   // Strip script's own envelope: the "Script started/done" header/footer lines
-  // are written by script(1), not by dsh-tui.
+  // are written by script(1), not by qialike.
   const footer = text.lastIndexOf('Script done')
   if (footer !== -1) text = text.slice(0, footer)
 
@@ -74,7 +74,7 @@ test('exiting dsh-tui writes nothing visible after the alternate-screen leave', 
   const after = text.slice(lastLeave + '\x1b[?1049l'.length)
   expect(after, 'nothing visible may follow the leave sequence').toMatch(/^(?:\x1b\[\?25h|\s)*$/)
 
-  const exitedAt = text.indexOf('dsh-tui exited (code 0)')
+  const exitedAt = text.indexOf('qialike exited (code 0)')
   expect(exitedAt, 'the exit log line must be written').toBeGreaterThan(-1)
   expect(exitedAt, 'the exit log line must precede the leave (it is discarded with the alt buffer)').toBeLessThan(lastLeave)
 }, 60_000)
@@ -86,7 +86,7 @@ test('exiting dsh-tui writes nothing visible after the alternate-screen leave', 
 // source instead: the exit handler installs a synchronous frame writer before
 // unmounting, and the patched Ink frame writer honours it.
 test('the exit path makes Ink\'s last frame write synchronously', () => {
-  const app = readFileSync(join(ROOT, 'packages/dsh-tui-app/src/index.tsx'), 'utf8')
+  const app = readFileSync(join(ROOT, 'packages/qialike-app/src/index.tsx'), 'utf8')
   const hook = app.indexOf('__dshTuiSyncFrameWriter')
   const unmount = app.indexOf('void app.unmount()')
   expect(hook, 'the exit handler must install the synchronous frame writer').toBeGreaterThan(-1)

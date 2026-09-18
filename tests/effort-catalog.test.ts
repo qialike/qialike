@@ -6,7 +6,7 @@
  *
  * Run with `bun test tests/effort-catalog.test.ts`.
  *
- * @module dsh-tui/effort-catalog-test
+ * @module qialike/effort-catalog-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -17,9 +17,9 @@ import {
   effortsFor,
   validateEffortCatalog,
   type EffortCatalogFile,
-} from '../packages/dsh-tui-app/src/effort-catalog.ts'
-import { REASONING_EFFORTS, effectiveProfile, modelReasoning, serializeRequestOpenAI, validateProviderTemplates } from '../packages/dsh-tui-app/src/llm.ts'
-import fileData from '../packages/dsh-tui-app/src/effort-catalog.json' with { type: 'json' }
+} from '../packages/qialike-app/src/effort-catalog.ts'
+import { REASONING_EFFORTS, effectiveProfile, modelReasoning, serializeRequestOpenAI, validateProviderTemplates } from '../packages/qialike-app/src/llm.ts'
+import fileData from '../packages/qialike-app/src/effort-catalog.json' with { type: 'json' }
 
 /** A synthetic snapshot shaped like the models.dev reasoning_options subset. */
 const synthetic: EffortCatalogFile = {

@@ -1,8 +1,8 @@
 /**
- * Build the single-file executable (`dist/dsh-tui`).
+ * Build the single-file executable (`dist/qialike`).
  *
  * The entry (`src/bin.ts`) boots the same profile composition the npm bundle
- * ships (dsh-base + dsh-tui-app patch layers) through the Cordis Loader, but a
+ * ships (dsh-base + qialike-app patch layers) through the Cordis Loader, but a
  * single file cannot resolve plugin modules by name at runtime. So this builder:
  *  1. scans the DeepSeek Harness checkout for `@deepseek-ai/*` packages,
  *  2. reads the base + tui patch layers to find every plugin the composition
@@ -19,7 +19,7 @@
  * the OS sandbox rows, so their (native) modules never activate; a stub keeps
  * the bundler from following the `.node` import.
  *
- * @module dsh-tui/build
+ * @module qialike/build
  */
 
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -35,10 +35,10 @@ const OUT_DIR = join(ROOT, 'dist')
 const GEN_DIR = join(ROOT, 'apps/tui-bin/generated')
 const STUB_DIR = join(ROOT, 'apps/tui-bin/stub-native')
 const ENTRY = join(ROOT, 'apps/tui-bin/src/main.ts')
-/** Runtime-visible harness version: the app sidebar shows it above the dsh-tui
+/** Runtime-visible harness version: the app sidebar shows it above the qialike
  *  version. Regenerated on every build from the detected harness checkout, so
  *  it can never drift from what was actually embedded. */
-const HARNESS_VERSION_FILE = join(ROOT, 'packages/dsh-tui-app/src/harness-version.ts')
+const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-version.ts')
 
 /**
  * deepseek-harness versions this TUI is compatible with: the current version
@@ -109,9 +109,9 @@ const NATIVE_STUB_SOURCE = {
   // enough on Linux/macOS — same rule as the Windows ACL entry above.
   '@deepseek-ai/dsh-win32-process': [
     'export class Win32Error extends Error {}',
-    'export const loadWin32ProcessBindings = () => { throw new Error("win32 process bindings are not available in dsh-tui") }',
+    'export const loadWin32ProcessBindings = () => { throw new Error("win32 process bindings are not available in qialike") }',
     'export const probeCurrentTokenJobSupport = () => ({ supported: false })',
-    'export const spawnCurrentTokenJobProcess = () => { throw new Error("win32 process spawning is not available in dsh-tui") }',
+    'export const spawnCurrentTokenJobProcess = () => { throw new Error("win32 process spawning is not available in qialike") }',
     'export const closeHandleChecked = () => {}',
     'export const isJobEmpty = () => true',
     'export const pollProcessExit = () => undefined',
@@ -135,7 +135,7 @@ const NATIVE_STUB_SOURCE = {
  * the JSONL backend's in-process write claim already excludes every writer, and
  * the kernel lease is new in 0.1.5 — 0.1.2-rc.1 had no lock at all — so a TUI
  * host that never takes it is not losing a protection it previously had. Two
- * `dsh-tui` hosts on the SAME session are consequently no longer kept apart by
+ * `qialike` hosts on the SAME session are consequently no longer kept apart by
  * a kernel lock; nothing else changes (a single host still serializes writes).
  */
 const NATIVE_SUBPATH_STUB_SOURCE = {
@@ -185,7 +185,7 @@ function patchBunSeaWorkflowWorker() {
     rmSync(out, { force: true })
     run('bun', ['build', '--target=bun', '--format=cjs', '--outfile', out, entry])
   } catch (error) {
-    console.log(`dsh-tui: workflow worker re-bundle failed (${
+    console.log(`qialike: workflow worker re-bundle failed (${
       error instanceof Error ? error.message.split('\n')[0] : String(error)}); workflow stays unavailable`)
     return
   }
@@ -194,7 +194,7 @@ function patchBunSeaWorkflowWorker() {
   const text = readFileSync(host, 'utf8')
   const entryLine = 'entry: fileURLToPath(new URL("./worker.cjs", import.meta.url)),'
   if (!text.includes(entryLine)) {
-    console.log('dsh-tui: workflow worker spawn shape changed; leaving it patched as-is')
+    console.log('qialike: workflow worker spawn shape changed; leaving it patched as-is')
     return
   }
   const preamble = [
@@ -202,13 +202,13 @@ function patchBunSeaWorkflowWorker() {
     'import { tmpdir as __dshWfTmp } from "node:os";',
     'import { join as __dshWfJoin } from "node:path";',
     'import { createHash as __dshWfHash } from "node:crypto";',
-    '/* dsh-tui patch: materialize the embedded workflow worker (see build.mjs). */',
+    '/* qialike patch: materialize the embedded workflow worker (see build.mjs). */',
     `const __dshWorkflowWorkerSource = ${JSON.stringify(source)};`,
     'let __dshWorkflowWorkerPathCache;',
     'function __dshWorkflowWorkerPath() {',
     '  if (__dshWorkflowWorkerPathCache !== undefined) return __dshWorkflowWorkerPathCache;',
     '  const digest = __dshWfHash("sha256").update(__dshWorkflowWorkerSource).digest("hex").slice(0, 16);',
-    '  const dir = __dshWfJoin(__dshWfTmp(), "dsh-tui-workflow");',
+    '  const dir = __dshWfJoin(__dshWfTmp(), "qialike-workflow");',
     '  const file = __dshWfJoin(dir, `worker-${digest}.cjs`);',
     '  try {',
     '    if (!__dshWfExists(file)) {',
@@ -223,7 +223,7 @@ function patchBunSeaWorkflowWorker() {
   ].join('\n')
   writeFileSync(host, preamble + text.replace(entryLine, 'entry: __dshWorkflowWorkerPath(),'))
   const bare = /require\("@deepseek-ai\//.test(bundled.toString('utf8'))
-  console.log(`dsh-tui: embedded workflow worker (${(bundled.length / 1024).toFixed(0)} KB)`
+  console.log(`qialike: embedded workflow worker (${(bundled.length / 1024).toFixed(0)} KB)`
     + `${bare ? ' — WARNING: bundle still requires @deepseek-ai/* by name' : ''}`)
 }
 
@@ -259,7 +259,7 @@ function detectHarnessVersion() {
   } catch { /* not a git checkout with tags; fall back to the root manifest */ }
   const version = readJson(join(HARNESS, 'package.json')).version
   if (typeof version !== 'string' || version.length === 0) {
-    throw new Error(`dsh-tui: cannot determine the deepseek-harness version at ${HARNESS}`)
+    throw new Error(`qialike: cannot determine the deepseek-harness version at ${HARNESS}`)
   }
   return version.replace(/^dsh-v/, '')
 }
@@ -280,14 +280,14 @@ function assertHarnessCompatible() {
   // wrongly reject every historical 0.1.x version.
   if (!(semver.gte(version, HARNESS_VERSION_MIN) && semver.lte(version, HARNESS_VERSION_MAX))) {
     throw new Error(
-      `dsh-tui: deepseek-harness ${version} is outside the supported range `
+      `qialike: deepseek-harness ${version} is outside the supported range `
       + `(${HARNESS_VERSION_MIN} .. ${HARNESS_VERSION_MAX}). The TUI is only compatible with the `
       + `current and historical harness versions; after upgrading the harness checkout and `
       + `re-validating the TUI against it, raise HARNESS_VERSION_MAX in apps/tui-bin/build.mjs. `
       + `Otherwise point DSH_HARNESS at a compatible checkout.`,
     )
   }
-  console.log(`dsh-tui: deepseek-harness ${version} (supported ${HARNESS_VERSION_MIN}..${HARNESS_VERSION_MAX})`)
+  console.log(`qialike: deepseek-harness ${version} (supported ${HARNESS_VERSION_MIN}..${HARNESS_VERSION_MAX})`)
   // Publish the embedded version as a compile-time constant for the app (the
   // single-file SEA has no on-disk package.json to read at runtime).
   writeFileSync(
@@ -434,7 +434,7 @@ function pluginSpecifiers() {
   const specifiers = new Set()
   const patchFiles = [
     join(HARNESS, 'packages/bundle/base/cordis.patch.yml'),
-    join(ROOT, 'packages/dsh-tui-app/cordis.patch.yml'),
+    join(ROOT, 'packages/qialike-app/cordis.patch.yml'),
   ]
   // The patch files use `!!js` scalars (the include's YAML dialect), so a
   // standard YAML schema cannot parse them; for specifier collection only the
@@ -445,8 +445,8 @@ function pluginSpecifiers() {
     const content = readFileSync(file, 'utf8')
     for (const match of content.matchAll(nameRe)) specifiers.add(match[1])
   }
-  specifiers.add('@yourname/dsh-tui-app')
-  specifiers.add('@yourname/dsh-tui-app/startup')
+  specifiers.add('@yourname/qialike-app')
+  specifiers.add('@yourname/qialike-app/startup')
   for (const name of [
     '@deepseek-ai/cordis-plugin-loader',
     '@deepseek-ai/cordis-plugin-include',
@@ -531,7 +531,7 @@ function createResolveFarm() {
     mkdirSync(target, { recursive: true })
     writeFileSync(join(target, 'package.json'), JSON.stringify({ name: 'koffi', type: 'module', main: 'index.js' }, null, 2))
     writeFileSync(join(target, 'index.js'), readFileSync(join(ROOT, 'apps/tui-bin/stub/koffi.js'), 'utf8'))
-    console.log('dsh-tui: installed bun:ffi koffi shim')
+    console.log('qialike: installed bun:ffi koffi shim')
   }
   // No-op stubs so the native/optional deps bundle and resolve (they are never
   // activated by a text coding-agent TUI). Created before the mirror so the
@@ -539,7 +539,7 @@ function createResolveFarm() {
   // the single source of truth; each stub is logged for auditability.
   for (const name of STUB_PACKAGES) {
     stubPackage(name)
-    console.log(`dsh-tui: stubbed ${name}`)
+    console.log(`qialike: stubbed ${name}`)
   }
 
   // Windows FFI: the bundled harness needs a WORKING koffi for durable
@@ -608,7 +608,7 @@ function createResolveFarm() {
       } else {
         symlinkSync(STUB_DIR, target, 'dir')
       }
-      console.log(`dsh-tui: stubbed native ${name}`)
+      console.log(`qialike: stubbed native ${name}`)
     } else {
       symlinkSync(dir, target, 'dir')
     }
@@ -623,7 +623,7 @@ function createResolveFarm() {
   for (const [name, dir] of scanPackages()) {
     link(name, transformPackageCopy(name, dir))
   }
-  link('@yourname/dsh-tui-app', join(ROOT, 'packages/dsh-tui-app'))
+  link('@yourname/qialike-app', join(ROOT, 'packages/qialike-app'))
 
   // Two native-addon stubs live under the harness's `native/` tree, which
   // scanPackages() does not walk, so the link loop above never re-created them
@@ -647,7 +647,7 @@ function createResolveFarm() {
       rmSync(target, { recursive: true, force: true })
       mkdirSync(dirname(target), { recursive: true })
       symlinkSync(dir, target, 'dir')
-      console.log('dsh-tui: stubbed native ' + stubName)
+      console.log('qialike: stubbed native ' + stubName)
     }
   }
   for (const [stubName, subpaths] of Object.entries(NATIVE_SUBPATH_STUB_SOURCE)) {
@@ -666,7 +666,7 @@ function createResolveFarm() {
     rmSync(target, { recursive: true, force: true })
     mkdirSync(dirname(target), { recursive: true })
     symlinkSync(dir, target, 'dir')
-    console.log(`dsh-tui: stubbed native ${stubName} (${Object.keys(subpaths).join(', ')})`)
+    console.log(`qialike: stubbed native ${stubName} (${Object.keys(subpaths).join(', ')})`)
   }
 
   // On Windows, pnpm creates directory symlinks with relative targets (e.g.
@@ -689,7 +689,7 @@ function createResolveFarm() {
       }
     }
     fixShadowLinks(join(ROOT, 'apps/tui-bin/node_modules/@yourname'))
-    fixShadowLinks(join(ROOT, 'packages/dsh-tui-app/node_modules'))
+    fixShadowLinks(join(ROOT, 'packages/qialike-app/node_modules'))
   }
 
   // Bun gaps in the Node builtins the bundled harness uses (see the function).
@@ -750,7 +750,7 @@ function patchBunNodeUtilGaps() {
     writeFileSync(file, next)
     patched += 1
   }
-  if (patched > 0) console.log(`dsh-tui: patched Bun node:util gaps in ${patched} bundled file(s)`)
+  if (patched > 0) console.log(`qialike: patched Bun node:util gaps in ${patched} bundled file(s)`)
 }
 
 /**
@@ -807,7 +807,7 @@ function patchBunSeaWorkerEntries() {
     const replacement = [
       'function runVerificationWorker(path, compression, expectedId, expectedEventCount, expectedPrefix, signal) {',
       '\tsignal?.throwIfAborted();',
-      '\t/* dsh-tui patch: verify in-process; the SEA has no worker entry (see build.mjs). */',
+      '\t/* qialike patch: verify in-process; the SEA has no worker entry (see build.mjs). */',
       '\treturn defaultGenerationRuntime.verify(path, compression, expectedId, expectedEventCount, expectedPrefix);',
       '}',
       '',
@@ -815,7 +815,7 @@ function patchBunSeaWorkerEntries() {
     writeFileSync(file, text.slice(0, start) + replacement + text.slice(end + 1))
     patched += 1
   }
-  if (patched > 0) console.log(`dsh-tui: patched Bun SEA worker entry in ${patched} bundled file(s)`)
+  if (patched > 0) console.log(`qialike: patched Bun SEA worker entry in ${patched} bundled file(s)`)
 }
 
 /** Symlink every entry of the harness virtual-store `node_modules` we don't own. */
@@ -887,15 +887,35 @@ function patchInkYoga(nm) {
  * internals move so the patch is never silently skipped.
  * @param nm - the resolve-farm `node_modules` root.
  */
+/** Index of a patch marker, accepting the pre-rename spelling of its comment.
+ *
+ *  Every patch below is idempotent by finding the comment marker of a previous
+ *  injection and replacing that block. A farm patched by the pre-rename build
+ *  carries the old comment (`// dsh-tui patch: …`), so a guard that only knows
+ *  the current spelling would miss it and inject a SECOND copy — which makes
+ *  Ink's own declarations collide. Accepting both spellings turns that stale
+ *  farm back into a clean replace.
+ *  @param text - the file being patched.
+ *  @param marker - the current marker comment.
+ *  @returns the earliest index of either spelling, or -1. */
+function legacyMarkerIndex(text, marker) {
+  const legacy = marker.replace('qialike patch:', 'dsh-tui patch:')
+  const current = text.indexOf(marker)
+  const old = legacy === marker ? -1 : text.indexOf(legacy)
+  if (current === -1) return old
+  if (old === -1) return current
+  return Math.min(current, old)
+}
+
 export function patchInkFullScreen(nm) {
   const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
   if (dirs.length === 0) {
-    throw new Error('dsh-tui: no ink package found in the resolve farm to patch')
+    throw new Error('qialike: no ink package found in the resolve farm to patch')
   }
   const anchor = "import App from './components/App.js';"
-  const helperStart = '// dsh-tui patch: overwrite full-screen frames in place'
+  const helperStart = '// qialike patch: overwrite full-screen frames in place'
   const helperEnd = 'const isCi ='
-  const helper = `// dsh-tui patch: overwrite full-screen frames in place (no clearTerminal flash),
+  const helper = `// qialike patch: overwrite full-screen frames in place (no clearTerminal flash),
 // rewriting only the lines that changed (line-level diff), so a keystroke in the
 // composer repaints just the composer instead of the whole screen. A per-frame
 // suffix hook lets the app park the real terminal cursor at the composer caret -
@@ -949,15 +969,15 @@ const __dshAnsi256ToAnsi = (code) => {
     if (value === 2) result += 60;
     return result;
 };
-// Colour-depth override (DSH_TUI_COLOR): the table is a deliberate DUPLICATE of
-// colorOverride() in packages/dsh-tui-app/src/color-depth.ts, and it lives here
+// Colour-depth override (QIALIKE_COLOR): the table is a deliberate DUPLICATE of
+// colorOverride() in packages/qialike-app/src/color-depth.ts, and it lives here
 // because this is the copy that owns Ink's chalk instance — the palette decision
 // happens in a separate plugin bundle, and forcing only there left chalk at level
 // 2, rendering the unmapped hexes back into the collapse the override exists to
 // escape (measured: page #000000, card #5f5f5f). tests/color-depth.test.ts
 // extracts this snippet and fails if the two tables drift.
 const __dshColorOverride = (env) => {
-    const v = String((env && env.DSH_TUI_COLOR) || '').trim().toLowerCase();
+    const v = String((env && env.QIALIKE_COLOR) || '').trim().toLowerCase();
     if (v === '24bit' || v === 'truecolor') return 3;
     if (v === '256') return 2;
     if (v === '16') return 1;
@@ -1081,7 +1101,7 @@ const __dshWriteFrame = (stdout, frame) => {
 // answer: the terminal buffers everything between the pair and presents it in one
 // go, so a split delivery stops being visible at ANY frame size. Terminals
 // without the mode ignore it (an unrecognized DEC private mode is ignored), and
-// DSH_TUI_NO_SYNC=1 opts out. Hiding the cursor for the paint also costs
+// QIALIKE_NO_SYNC=1 opts out. Hiding the cursor for the paint also costs
 // nothing: the suffix appended below decides the final state, so the caret still
 // ends up exactly where the app wants it. Only applied when a suffix will follow,
 // so a build without the hook can never leave the cursor hidden or the terminal
@@ -1095,7 +1115,7 @@ const __dshFrameEnvelope = (frame, suffix) => {
     // visible caret while the draft was edited correctly underneath: the reported
     // "arrows / Home / End / mouse caret do nothing".
     if (!suffix) return frame;
-    const sync = (typeof process !== 'undefined' && process.env && process.env.DSH_TUI_NO_SYNC === '1') ? '' : '\\x1b[?2026h';
+    const sync = (typeof process !== 'undefined' && process.env && process.env.QIALIKE_NO_SYNC === '1') ? '' : '\\x1b[?2026h';
     return sync + '\\x1b[?25l' + frame + suffix + (sync ? '\\x1b[?2026l' : '');
 };
 // Whether a frame carries any visible text (background fills and SGR-only rows
@@ -1205,12 +1225,12 @@ globalThis.__dshTuiRepaintLastFrame = () => {
     if (!existsSync(inkJs)) continue
     let text = readFileSync(inkJs, 'utf8')
     if (!text.includes(anchor)) {
-      throw new Error(`dsh-tui: cannot patch Ink (import anchor missing in ${inkJs})`)
+      throw new Error(`qialike: cannot patch Ink (import anchor missing in ${inkJs})`)
     }
     let changed = false
     // (Re)install the helper block: replace any previous version between the
     // marker comment and the following `const isCi` declaration.
-    const s = text.indexOf(helperStart)
+    const s = legacyMarkerIndex(text, helperStart)
     const e = text.indexOf(helperEnd)
     if (s !== -1 && e !== -1 && e > s) {
       const next = text.slice(0, s) + helper + text.slice(e)
@@ -1219,24 +1239,24 @@ globalThis.__dshTuiRepaintLastFrame = () => {
       const next = text.replace(anchor, anchor + helper)
       if (next !== text) { text = next; changed = true }
     } else {
-      throw new Error(`dsh-tui: cannot locate the Ink patch insertion point in ${inkJs} (Ink internals changed?)`)
+      throw new Error(`qialike: cannot locate the Ink patch insertion point in ${inkJs} (Ink internals changed?)`)
     }
     if (branchRe.test(text)) {
       text = text.replace(branchRe, branchNew)
       changed = true
     } else if (!text.includes('writeFullScreenFrame(this.options.stdout, output);')) {
-      throw new Error(`dsh-tui: cannot patch Ink onRender branch in ${inkJs} (Ink internals changed?)`)
+      throw new Error(`qialike: cannot patch Ink onRender branch in ${inkJs} (Ink internals changed?)`)
     }
     if (changed) {
       writeFileSync(inkJs, text)
-      console.log(`dsh-tui: patched Ink full-screen render path (${dir})`)
+      console.log(`qialike: patched Ink full-screen render path (${dir})`)
     }
   }
 }
 
 /** Ink composites every frame into a cell grid in Output.get() (each cell
  *  { value, fullWidth, styles }) but discards the grid after serialization and
- *  never exposes it. Patch it so dsh-tui can (a) read the composited grid
+ *  never exposes it. Patch it so qialike can (a) read the composited grid
  *  (`cells: output`) and (b) bake a mouse-selection highlight onto the exact
  *  selected cells BEFORE serialization — inverse SGR (7/27), which stacks over
  *  any existing fg/bg without stripping it, so code/panel/diff backgrounds and
@@ -1246,11 +1266,11 @@ globalThis.__dshTuiRepaintLastFrame = () => {
 export function patchInkFrameController(nm) {
   const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
   if (dirs.length === 0) {
-    throw new Error('dsh-tui: no ink package found to patch (frame controller)')
+    throw new Error('qialike: no ink package found to patch (frame controller)')
   }
-  const marker = '// dsh-tui patch: bake a selection highlight'
+  const marker = '// qialike patch: bake a selection highlight'
   const anchor = '        const generatedOutput = output'
-  const injection = `// dsh-tui patch: bake a selection highlight onto the composited cell grid
+  const injection = `// qialike patch: bake a selection highlight onto the composited cell grid
     // BEFORE serialization (keeps every cell's own styles; only the selected
     // cells gain a highlight). Read from globalThis.__dshFrameController. Each
     // selected cell gets a NEW styles array (never mutate in place: a shared
@@ -1310,10 +1330,10 @@ export function patchInkFrameController(nm) {
     if (!existsSync(outputJs)) continue
     let text = readFileSync(outputJs, 'utf8')
     if (!text.includes(anchor)) {
-      throw new Error(`dsh-tui: cannot patch Ink output.js (anchor missing) in ${outputJs}`)
+      throw new Error(`qialike: cannot patch Ink output.js (anchor missing) in ${outputJs}`)
     }
     let changed = false
-    const s = text.indexOf(marker)
+    const s = legacyMarkerIndex(text, marker)
     const a = text.indexOf(anchor)
     if (s !== -1 && a !== -1 && a > s) {
       // Already patched: replace the previous injection (marker..anchor) in place.
@@ -1329,7 +1349,7 @@ export function patchInkFrameController(nm) {
     }
     if (changed) {
       writeFileSync(outputJs, text)
-      console.log(`dsh-tui: patched Ink frame controller (${dir})`)
+      console.log(`qialike: patched Ink frame controller (${dir})`)
     }
   }
 }
@@ -1359,13 +1379,13 @@ export function patchInkFrameController(nm) {
 export function patchInkWideChar(nm) {
   const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
   if (dirs.length === 0) {
-    throw new Error('dsh-tui: no ink package found in the resolve farm to patch (wide char)')
+    throw new Error('qialike: no ink package found in the resolve farm to patch (wide char)')
   }
   const regionRe = /const characters = styledCharsFromTokens\(tokenize\(line\)\);[\s\S]*?offsetX \+= isWideCharacter \? 2 : 1;\n\s+}/
   const region = [
     'const characters = styledCharsFromTokens(tokenize(line));',
     '                    let offsetX = x;',
-    '                    // dsh-tui patch: per-glyph width placement (see charwidth.ts).',
+    '                    // qialike patch: per-glyph width placement (see charwidth.ts).',
     '                    // A glyph the terminal PAINTS two columns wide but whose CURSOR advance',
     '                    // is only ONE column (⚠ / ⚠️ / 🏷️ … on VTE: wcwidth counts 1, the color-emoji',
     '                    // glyph paints 2) needs its reserved second cell to be a REAL space so',
@@ -1417,10 +1437,10 @@ export function patchInkWideChar(nm) {
     // an older patch is always rewritten.
     if (text.includes('const __padFlags = [];') && text.includes('__cw.get(__cp) !== 2')) continue
     if (!regionRe.test(text)) {
-      throw new Error(`dsh-tui: cannot patch Ink wide-char placement in ${outputJs} (Ink internals changed?)`)
+      throw new Error(`qialike: cannot patch Ink wide-char placement in ${outputJs} (Ink internals changed?)`)
     }
     writeFileSync(outputJs, text.replace(regionRe, region))
-    console.log(`dsh-tui: patched Ink wide-char placement (${dir})`)
+    console.log(`qialike: patched Ink wide-char placement (${dir})`)
   }
 }
 
@@ -1434,7 +1454,7 @@ export function patchInkWideChar(nm) {
  * Semantics: upstream EAW by default (text dingbats such as ✓ ✗ ☑ ⚙ stay one
  * column — no per-glyph guess list, so nothing regresses on EAW terminals), plus
  * a runtime per-code-point override table (`globalThis.__dshCharWidths`) filled
- * by the CPR calibration probe (packages/dsh-tui-app/src/charwidth.ts). The
+ * by the CPR calibration probe (packages/qialike-app/src/charwidth.ts). The
  * probe measures each glyph's REAL rendered width on the actual terminal+font
  * via `ESC[6n`, so a terminal that draws ⚠ two columns wide (color-emoji
  * fallback) is honoured while a terminal that draws it narrow is measured narrow
@@ -1446,12 +1466,12 @@ export function patchInkWideChar(nm) {
 export function patchStringWidthEmojiBlocks(nm) {
   const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('string-width@'))
   if (dirs.length === 0) {
-    throw new Error('dsh-tui: no string-width package found in the resolve farm to patch (runtime calibration)')
+    throw new Error('qialike: no string-width package found in the resolve farm to patch (runtime calibration)')
   }
-  const source = `// dsh-tui: runtime-calibrated string-width (replaced at build time).
+  const source = `// qialike: runtime-calibrated string-width (replaced at build time).
 // Upstream EAW semantics by default; per-code-point overrides measured on the
 // REAL terminal via CPR (ESC[6n) live in globalThis.__dshCharWidths (a Map set
-// up by packages/dsh-tui-app/src/charwidth.ts). No static guess list: a glyph
+// up by packages/qialike-app/src/charwidth.ts). No static guess list: a glyph
 // the terminal draws narrow stays narrow, a glyph it draws wide is widened.
 import stripAnsi from 'strip-ansi';
 import eastAsianWidth from 'eastasianwidth';
@@ -1459,7 +1479,7 @@ import emojiRegex from 'emoji-regex';
 
 const widths = () => (typeof globalThis !== 'undefined' && globalThis.__dshCharWidths instanceof Map) ? globalThis.__dshCharWidths : null;
 
-// dsh-tui paint-wide glyphs: color-emoji terminals draw these as a two-cell
+// qialike paint-wide glyphs: color-emoji terminals draw these as a two-cell
 // pictograph even though the cursor only advances ONE column (CPR measures the
 // cursor advance, not the painted extent, so a measured width of 1 for ⚠ on
 // VTE/Noto Color Emoji still leaves the glyph overrunning its cell and the next
@@ -1560,7 +1580,7 @@ export default function stringWidth(string, options = {}) {
     if (!existsSync(indexJs)) continue
     if (readFileSync(indexJs, 'utf8') === source) continue
     writeFileSync(indexJs, source)
-    console.log(`dsh-tui: rewrote string-width with runtime-calibrated widths (${dir})`)
+    console.log(`qialike: rewrote string-width with runtime-calibrated widths (${dir})`)
   }
 }
 
@@ -1570,7 +1590,7 @@ export default function stringWidth(string, options = {}) {
  *
  * Derived from the manifest rather than listed by hand: every `./lib/*.js`
  * subpath the exports map exposes must be emitted here, because the SEA bundle
- * resolves `@yourname/dsh-tui-app/<subpath>` through that map. A hand-written
+ * resolves `@yourname/qialike-app/<subpath>` through that map. A hand-written
  * list silently went stale when `./file-reference` was added — `pluginSpecifiers()`
  * picked the specifier up from the patch and `bun build --compile` then failed on
  * an unresolvable import whose source had never been compiled.
@@ -1595,7 +1615,7 @@ export function bundleLibEntryPoints(pkgDir) {
 
 /** Compile the tui-app source to `lib/` so the SEA bundle can resolve its exports. */
 async function buildBundleLib() {
-  const pkgDir = join(ROOT, 'packages/dsh-tui-app')
+  const pkgDir = join(ROOT, 'packages/qialike-app')
   const result = await build({
     entryPoints: bundleLibEntryPoints(pkgDir),
     bundle: true,
@@ -1631,22 +1651,34 @@ function generate(specifiers) {
   lines.push('export const PLUGIN_BUILTINS = {')
   for (const spec of used) lines.push(`  ${JSON.stringify(spec)}: ${bySpec.get(spec)},`)
   lines.push('}')
+  // Pre-rename specifiers: a profile overlay written by the old build names
+  // `@yourname/dsh-tui-app[/<subpath>]`. The same module namespaces answer
+  // those names, so an existing user overlay loads unchanged. They stay OUT of
+  // PLUGIN_BUILTINS on purpose: the bundled-plugin count and the
+  // `--dump-config` listing describe the current names only.
+  lines.push('')
+  lines.push('export const LEGACY_PLUGIN_ALIASES = {')
+  for (const spec of used) {
+    const legacy = spec.replace(/^@yourname\/qialike-app/, '@yourname/dsh-tui-app')
+    if (legacy !== spec) lines.push(`  ${JSON.stringify(legacy)}: ${bySpec.get(spec)},`)
+  }
+  lines.push('}')
   writeFileSync(join(GEN_DIR, 'plugins.ts'), lines.join('\n') + '\n')
   writeFileSync(join(GEN_DIR, 'config-embed.ts'), [
     '// Generated at build time; see apps/tui-bin/build.mjs.',
     `export const PROFILE_ROOT = ${JSON.stringify('[]\n')}`,
     `export const HARNESS_VERSION = ${JSON.stringify(HARNESS_VERSION_CURRENT || detectHarnessVersion())}`,
     `export const BASE_PATCH = ${JSON.stringify(readFileSync(join(HARNESS, 'packages/bundle/base/cordis.patch.yml'), 'utf8'))}`,
-    `export const TUI_PATCH = ${JSON.stringify(readFileSync(join(ROOT, 'packages/dsh-tui-app/cordis.patch.yml'), 'utf8'))}`,
+    `export const TUI_PATCH = ${JSON.stringify(readFileSync(join(ROOT, 'packages/qialike-app/cordis.patch.yml'), 'utf8'))}`,
     '',
   ].join('\n'))
 }
 
-/** Per-target binary path: `dist/<name>/dsh-tui[.exe]` (generic binary name, no
+/** Per-target binary path: `dist/<name>/qialike[.exe]` (generic binary name, no
  *  platform/arch suffix; the arch lives in the parent dir / package name). */
 function targetBinaryPath(name) {
   const exe = name.startsWith('windows') ? '.exe' : ''
-  return join(OUT_DIR, name, `dsh-tui${exe}`)
+  return join(OUT_DIR, name, `qialike${exe}`)
 }
 
 /** Compile one target: `name` is an ALL_TARGETS key, or `null` for the host (`bun`). */
@@ -1655,44 +1687,44 @@ function compileTarget(name, outfile) {
   mkdirSync(dirname(outfile), { recursive: true })
   rmSync(outfile, { force: true })
   run('bun', ['build', '--compile', '--target', bunTarget, '--outfile', outfile, ENTRY])
-  console.log(`dsh-tui: built ${outfile}`)
+  console.log(`qialike: built ${outfile}`)
 }
 
 /** Archive one target's binary into `dist/`: linux -> tar.gz, others -> zip.
- *  Package file names keep the platform/arch (`dsh-tui-<name>.tar.gz/.zip`); the
+ *  Package file names keep the platform/arch (`qialike-<name>.tar.gz/.zip`); the
  *  archive contains just the generic-named binary. */
 function packageBinary(name) {
   const bin = targetBinaryPath(name)
   if (name.startsWith('linux')) {
-    run('tar', ['-czf', join(OUT_DIR, `dsh-tui-${name}.tar.gz`), '-C', join(OUT_DIR, name), 'dsh-tui'])
+    run('tar', ['-czf', join(OUT_DIR, `qialike-${name}.tar.gz`), '-C', join(OUT_DIR, name), 'qialike'])
   } else {
-    run('zip', ['-j', join(OUT_DIR, `dsh-tui-${name}.zip`), bin])
+    run('zip', ['-j', join(OUT_DIR, `qialike-${name}.zip`), bin])
   }
-  console.log(`dsh-tui: packaged ${name}`)
+  console.log(`qialike: packaged ${name}`)
 }
 
 /**
  * Bundle the entry with Bun into single self-contained binaries.
  *
  * Target selection:
- *   - `DSH_TUI_TARGETS=linux-x64,darwin-arm64` -> build exactly those;
- *   - `--single` -> build only the current platform, output `dist/dsh-tui`;
+ *   - `QIALIKE_TARGETS=linux-x64,darwin-arm64` -> build exactly those;
+ *   - `--single` -> build only the current platform, output `dist/qialike`;
  *   - otherwise -> build every target in ALL_TARGETS.
- * Cross-target binaries land in per-target dirs `dist/<name>/dsh-tui[.exe]` (so
- * both Windows arches can keep the generic `dsh-tui.exe` name). Packaging:
- * `--package` archives them into `dist/dsh-tui-<name>.tar.gz/.zip`, mirroring
+ * Cross-target binaries land in per-target dirs `dist/<name>/qialike[.exe]` (so
+ * both Windows arches can keep the generic `qialike.exe` name). Packaging:
+ * `--package` archives them into `dist/qialike-<name>.tar.gz/.zip`, mirroring
  * the project's release gating. `--single` skips packaging.
  */
 function bundle() {
   const args = process.argv.slice(2)
   const single = args.includes('--single')
   const pack = args.includes('--package')
-  const requested = (process.env.DSH_TUI_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const requested = (process.env.QIALIKE_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
   if (requested.length > 0) {
     for (const t of requested) {
       if (BUN_TARGET[t] === undefined) {
-        throw new Error(`unknown DSH_TUI_TARGETS entry "${t}" (allowed: ${ALL_TARGETS.join(', ')})`)
+        throw new Error(`unknown QIALIKE_TARGETS entry "${t}" (allowed: ${ALL_TARGETS.join(', ')})`)
       }
     }
     for (const name of requested) {
@@ -1703,7 +1735,7 @@ function bundle() {
   }
 
   if (single) {
-    compileTarget(null, join(OUT_DIR, 'dsh-tui'))
+    compileTarget(null, join(OUT_DIR, 'qialike'))
     return
   }
 
@@ -1734,7 +1766,7 @@ async function main() {
   await buildBundleLib()
   generate(specifiers)
   bundle()
-  console.log(`dsh-tui: build complete (${specifiers.size} plugin specifiers)`)
+  console.log(`qialike: build complete (${specifiers.size} plugin specifiers)`)
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1]).href) await main()

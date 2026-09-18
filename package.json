@@ -1,15 +1,15 @@
 {
-  "name": "@yourname/dsh-tui-root",
+  "name": "@yourname/qialike-root",
   "version": "0.4.21-beta",
   "license": "MIT",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "bin": {
-    "dsh-tui": "dist/dsh-tui"
+    "qialike": "dist/qialike"
   },
   "files": [
-    "dist/dsh-tui",
+    "dist/qialike",
     "README.md",
     "README.zh.md",
     "LICENSE",

@@ -8,14 +8,14 @@
  *
  * Run with `bun test tests/composer-geometry.test.ts`.
  *
- * @module dsh-tui/composer-geometry-test
+ * @module qialike/composer-geometry-test
  */
 import { describe, expect, test } from 'bun:test'
 import stringWidth from 'string-width'
 import {
   composerCaretCellIn, composerInputIndexIn, composerSelectionBounds,
-} from '../packages/dsh-tui-app/src/panels/conversation.tsx'
-import { composerRows, composerRowsReference, resetComposerRowsCache } from '../packages/dsh-tui-app/src/composer-rows.ts'
+} from '../packages/qialike-app/src/panels/conversation.tsx'
+import { composerRows, composerRowsReference, resetComposerRowsCache } from '../packages/qialike-app/src/composer-rows.ts'
 
 const BAND_TOP = 5
 const BAND_LEFT = 1

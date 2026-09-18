@@ -13,14 +13,14 @@
  *
  * Run with `bun test tests/question-popup.test.ts`.
  *
- * @module dsh-tui/question-popup-test
+ * @module qialike/question-popup-test
  */
 
 import { describe, expect, test } from 'bun:test'
-import type { PendingQuestion } from '../packages/dsh-tui-app/src/index.tsx'
+import type { PendingQuestion } from '../packages/qialike-app/src/index.tsx'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
-import { questionDockRows } from '../packages/dsh-tui-app/src/question-layout.ts'
-import { questionTabWindow } from '../packages/dsh-tui-app/src/panels/question.tsx'
+import { questionDockRows } from '../packages/qialike-app/src/question-layout.ts'
+import { questionTabWindow } from '../packages/qialike-app/src/panels/question.tsx'
 
 /** A plausible multi-question ask with `n` questions (numbered headers). */
 function ask(qs: AskUserQuestionItem[]): PendingQuestion {

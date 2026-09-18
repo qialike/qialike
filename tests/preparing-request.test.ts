@@ -10,7 +10,7 @@
  *
  * Run with `bun test tests/preparing-request.test.ts`.
  *
- * @module dsh-tui/preparing-request-test
+ * @module qialike/preparing-request-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -21,7 +21,7 @@ import {
   Store,
   waitingForModelStatusText,
   preparingRequestStatusText,
-} from '../packages/dsh-tui-app/src/index.tsx'
+} from '../packages/qialike-app/src/index.tsx'
 
 describe('preparing-request status text', () => {
   test('no clock before the ticker fired (the label frame must not freeze at 0.0s)', () => {
@@ -187,13 +187,13 @@ describe('preparing-request wiring (source level)', () => {
   const read = (path: string): string => readFileSync(join(import.meta.dir, '..', path), 'utf8')
 
   test('the status bar hands BOTH clocks to the label', () => {
-    expect(read('packages/dsh-tui-app/src/panels/conversation.tsx')).toContain(
+    expect(read('packages/qialike-app/src/panels/conversation.tsx')).toContain(
       'preparingRequestStatusText(store.preparingRequestStartedAt, Date.now(), '
       + 'store.preparingRequestTicked, store.assemblyMs, store.assemblyDoneAt)')
   })
 
   test('the store takes phase two\'s origin when the assembly ends, and clears it', () => {
-    const source = read('packages/dsh-tui-app/src/index.tsx')
+    const source = read('packages/qialike-app/src/index.tsx')
     const note = source.slice(source.indexOf('noteAssemblyElapsed(ms: number)'),
                               source.indexOf('tickPreparingRequest(now'))
     expect(note, 'the payload moment is recorded').toContain('this._assemblyDoneAt = Date.now()')

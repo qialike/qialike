@@ -8,7 +8,7 @@
  *
  * Run with `bun test tests/files-changed.test.ts`.
  *
- * @module dsh-tui/files-changed-test
+ * @module qialike/files-changed-test
  */
 import { describe, expect, test } from 'bun:test'
 import {
@@ -17,7 +17,7 @@ import {
   FilesChangedLedger,
   filesChangedLine,
   mutationPath,
-} from '../packages/dsh-tui-app/src/files-changed.ts'
+} from '../packages/qialike-app/src/files-changed.ts'
 
 describe('mutationPath: which tool calls wrote a file', () => {
   test('write counts only with a string body and a usable path', () => {
@@ -161,7 +161,7 @@ describe('filesChangedLine: the row itself', () => {
  *   turn/end    → {turn, reason:{kind}}
  * Only the fields the fold reads are filled in.
  */
-import { foldHistoryEvents } from '../packages/dsh-tui-app/src/index.tsx'
+import { foldHistoryEvents } from '../packages/qialike-app/src/index.tsx'
 
 const call = (turn: number, seq: number, callId: string, name: string, args: unknown): unknown => ({
   type: 'tool/call', seq, time: seq, data: { turn, step: 1, callId, name, arguments: JSON.stringify(args) },

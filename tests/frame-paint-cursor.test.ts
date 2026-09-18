@@ -35,7 +35,7 @@
  *
  * Run with `bun test tests/frame-paint-cursor.test.ts`.
  *
- * @module dsh-tui/frame-paint-cursor-test
+ * @module qialike/frame-paint-cursor-test
  */
 
 import { describe, expect, test } from 'bun:test'
@@ -43,7 +43,7 @@ import { readFileSync } from 'node:fs'
 
 const build = readFileSync(new URL('../apps/tui-bin/build.mjs', import.meta.url), 'utf8')
 const panel = readFileSync(
-  new URL('../packages/dsh-tui-app/src/panels/conversation.tsx', import.meta.url), 'utf8')
+  new URL('../packages/qialike-app/src/panels/conversation.tsx', import.meta.url), 'utf8')
 
 describe('the frame writer hides the cursor for the paint', () => {
   test('① the hide-before-paint helper exists and is wired into EVERY write path', () => {
@@ -83,7 +83,7 @@ describe('the frame writer hides the cursor for the paint', () => {
     expect(env('LINES', 'SUF'), 'both modes closed').toMatch(/\x1b\[\?2026l$/)
     expect(env('LINES', ''), 'no suffix → frame untouched').toBe('LINES')
     expect(env('', ''), 'nothing at all → nothing').toBe('')
-    const off = make({ DSH_TUI_NO_SYNC: '1' })
+    const off = make({ QIALIKE_NO_SYNC: '1' })
     expect(off('LINES', 'SUF'), 'opt-out drops the sync pair').toBe('\x1b[?25lLINESSUF')
     expect(off('', 'SUF'), 'the caret park survives the opt-out').toBe('\x1b[?25lSUF')
   })
@@ -104,11 +104,11 @@ describe('the frame writer hides the cursor for the paint', () => {
     expect(helper, 'opens the mode').toContain('\\x1b[?2026h')
     expect(helper, 'closes the mode').toContain('\\x1b[?2026l')
     expect(helper, 'the close is gated on the same flag as the open').toMatch(/\(sync \? '[^']*2026l' : ''\)/)
-    expect(helper, 'an opt-out exists').toContain('DSH_TUI_NO_SYNC')
+    expect(helper, 'an opt-out exists').toContain('QIALIKE_NO_SYNC')
     // The exit path must also close the mode, so a frame interrupted mid-write
     // cannot strand the terminal.
     const index = readFileSync(
-      new URL('../packages/dsh-tui-app/src/index.tsx', import.meta.url), 'utf8')
+      new URL('../packages/qialike-app/src/index.tsx', import.meta.url), 'utf8')
     expect(index, 'exit closes the mode').toContain("'\\x1b[?2026l\\x1b[0 q")
   })
 })
