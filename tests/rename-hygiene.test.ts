@@ -50,7 +50,7 @@ const LEGACY_ALLOWLIST: Readonly<Record<string, readonly [count: number, reason:
   'apps/tui-bin/src/bin.ts': [5, 'pre-rename rc marker, temp-dir sweep, alias resolution comment'],
   'apps/tui-bin/src/main.ts': [1, 'comment on the first import that mirrors legacy env vars'],
   'apps/tui-bin/build.mjs': [4, 'legacy patch markers and the alias-specifier mapping'],
-  'scripts/install': [2, 'removes a pre-rename installed binary'],
+  'scripts/install': [3, 'removes a pre-rename installed binary and reports a stale pre-rename PATH entry'],
   'scripts/uninstall.sh': [1, 'removes a pre-rename dev symlink'],
 }
 
