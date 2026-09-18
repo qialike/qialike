@@ -1373,6 +1373,10 @@ export function patchInkWideChar(nm) {
     '                    // of the row (the sidebar border included) prints one column LEFT.',
     '                    // ⚠️ / 🏷️ / ☀️ arrive as base + U+FE0F: keep the base narrow so the VS16 cell (a',
     '                    // space here) carries the glyph\'s second column; never a third cell.',
+    '                    // An ABSENT map entry means UNKNOWN, not "advances two": the map exists',
+    '                    // (empty) from charwidth.ts\' `ensureMap()` until the sentinels are measured,',
+    '                    // and the first screen is painted inside that window. Only a MEASURED 2 skips',
+    '                    // the reserved cell — anything else reserves, matching the width oracle below.',
     "                    const __pw = (typeof globalThis !== 'undefined' && globalThis.__dshPaintWide instanceof Set) ? globalThis.__dshPaintWide : new Set([0x23f8, 0x2600, 0x26a0, 0x1f3f7, 0x1f6e0]);",
     "                    const __cw = (typeof globalThis !== 'undefined' && globalThis.__dshCharWidths instanceof Map) ? globalThis.__dshCharWidths : null;",
     '                    const __padFlags = [];',
@@ -1381,7 +1385,7 @@ export function patchInkWideChar(nm) {
     '                        const __next = characters[__i + 1];',
     "                        const __cp = typeof character.value === 'string' ? character.value.codePointAt(0) : -1;",
     "                        const __isVS = character.type === 'char' && character.value === '\uFE0F';",
-    '                        const __pad = __pw.has(__cp) && (__cw === null || __cw.get(__cp) === 1);',
+    '                        const __pad = __pw.has(__cp) && (__cw === null || __cw.get(__cp) !== 2);',
     '                        __padFlags[__i] = __pad;',
     '                        if (__isVS && __padFlags[__i - 1]) {',
     "                            currentLine[offsetX] = { type: 'char', value: ' ', fullWidth: false, styles: character.styles };",
@@ -1405,10 +1409,13 @@ export function patchInkWideChar(nm) {
     const outputJs = join(nm, '.pnpm', dir, 'node_modules', 'ink', 'build', 'output.js')
     if (!existsSync(outputJs)) continue
     let text = readFileSync(outputJs, 'utf8')
-    // Idempotent: skip only when the current fallback set is already in place
-    // (a stale patch — e.g. a narrower PAINT_WIDE list — MUST be re-applied so
-    // newly paint-wide glyphs get their reserved second cell too).
-    if (text.includes('const __padFlags = [];') && text.includes('0x2600')) continue
+    // Idempotent: skip only when the CURRENT pad rule is already in place. A
+    // stale patch MUST be re-applied — a narrower PAINT_WIDE list, or the old
+    // rule that keyed the reservation on `__cw.get(cp) === 1` and therefore
+    // dropped it whenever the calibration map was published but still empty
+    // (the first screen paints in that window). The marker IS the new rule, so
+    // an older patch is always rewritten.
+    if (text.includes('const __padFlags = [];') && text.includes('__cw.get(__cp) !== 2')) continue
     if (!regionRe.test(text)) {
       throw new Error(`dsh-tui: cannot patch Ink wide-char placement in ${outputJs} (Ink internals changed?)`)
     }

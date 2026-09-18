@@ -81,9 +81,11 @@ describe('PAINT_WIDE covers the reported paint-wide glyphs (source level)', () =
     for (const cp of ['0x23f8', '0x2600', '0x26a0']) expect(paintWide[0]).toContain(cp)
   })
 
-  test('a stale patch is re-applied (the guard looks for a new member)', () => {
-    expect(BUILD).toContain("text.includes('const __padFlags = [];') && text.includes('0x2600')")
-    expect(BUILD).not.toContain("text.includes('const __padFlags = [];') && text.includes('0x1f6e0')")
+  test('a stale patch is re-applied (the guard keys on the CURRENT pad rule)', () => {
+    expect(BUILD).toContain("text.includes('const __padFlags = [];') && text.includes('__cw.get(__cp) !== 2')")
+    // The old rule skipped the reservation whenever the calibration map existed
+    // without the code point; a farm patched with it MUST be rewritten.
+    expect(BUILD).not.toContain('__cw.get(__cp) === 1')
   })
 })
 
@@ -139,6 +141,35 @@ describe('the reserved second cell is a real space (render level)', () => {
     const out = await renderLine('⚠ warn')
     expect(out).toContain('⚠  warn')
     expect(advance(out, stringWidth)).toBe(stringWidth('⚠ warn'))
+  })
+
+  test('a PRESENT but EMPTY calibration map still reserves (the startup window)', async () => {
+    await ensureFarmPatched()
+    const stringWidth = (await import('../packages/dsh-tui-app/node_modules/string-width/index.js')).default
+    if (stringWidth('⚠') !== 2) {
+      expect(stringWidth('⚠')).toBe(1)
+      return
+    }
+    // charwidth.ts publishes `__dshCharWidths` at the START of calibration, and
+    // `mountUi()` + `paintFileFirstScreen()` paint the first screen before the
+    // sentinels are measured — so on a real start the map is present and empty
+    // while rows are already on screen. An absent entry must mean UNKNOWN
+    // (reserve), never "the terminal already advances two columns": reading it
+    // the second way dropped the reserved cell, and because the frame writer
+    // diffs line-by-line the short row stayed on screen after calibration.
+    const host = globalThis as { __dshCharWidths?: Map<number, number> }
+    const prev = host.__dshCharWidths
+    try {
+      host.__dshCharWidths = new Map()
+      for (const text of ['⚠️ warn', '⚠ warn']) {
+        const out = await renderLine(text)
+        expect(out).not.toContain('\uFE0F')
+        expect(advance(out, stringWidth)).toBe(stringWidth(text))
+      }
+    } finally {
+      if (prev === undefined) delete host.__dshCharWidths
+      else host.__dshCharWidths = prev
+    }
   })
 
   test('the real markdown table from the reported session renders aligned', async () => {

@@ -261,14 +261,21 @@ function scan(lines: readonly string[]): void {
  *  false when the terminal does not answer CPR — calibration is disabled and
  *  pure EAW semantics stay in effect (no repeated 300 ms timeouts). */
 async function fingerprint(): Promise<boolean> {
-  const map = ensureMap()
+  // Measure into a LOCAL map and publish it only once the sentinels are in.
+  // `ensureMap()` used to publish an EMPTY `__dshCharWidths` before the first
+  // probe returned, and the Ink placement patch reads that map directly: with a
+  // present-but-empty map an absent code point looked like "the terminal already
+  // advances two columns", so every paint-wide glyph lost its reserved second
+  // cell — and the first screen is painted inside that window (see
+  // `patchInkWideChar` in apps/tui-bin/build.mjs).
+  const measured = new Map<number, number>()
   const current: Array<number | null> = []
   const ok = await withLock(async () => {
     for (const cp of SENTINELS) {
       const w = await measureOne(cp, 200)
       if (w === null && current.length === 0) return false // no CPR support: stop probing
       current.push(w)
-      if (w !== null) map.set(cp, w)
+      if (w !== null) measured.set(cp, w)
     }
     return true
   })
@@ -278,6 +285,8 @@ async function fingerprint(): Promise<boolean> {
   // them (the flag stays false while the probe runs — see
   // `initCharWidthCalibration`).
   supported = true
+  const map = ensureMap()
+  for (const [cp, w] of measured) map.set(cp, w)
   const file = cacheFile()
   if (existsSync(file)) {
     try {
