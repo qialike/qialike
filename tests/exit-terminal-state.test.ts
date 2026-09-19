@@ -34,11 +34,12 @@ const EXIT_TIMEOUT_MS = 30_000
 
 // The boot delay plus the pty session need well beyond bun's default 5s.
 //
-// Skipped, not failed, when the artifact is absent: an ALL / `--package` build
-// writes `dist/<target>/qialike[.exe]` and never `dist/qialike`, so a
-// cross-platform build is a legitimate tree in which this case has nothing to
-// exercise. `pnpm build --single` — what the release gate runs — writes it, and
-// that is where this case carries its weight.
+// Skipped, not failed, when the artifact is absent. `dist/qialike` is the
+// `--single` (host-only) artifact; the ALL / `--package` and `QIALIKE_TARGETS`
+// paths write `dist/<target>/qialike[.exe]`, and a tree holding one of those is
+// a legitimate tree in which this case has nothing to exercise. `pnpm build
+// --single` — what the release gate runs — writes it, and that is where this
+// case carries its weight.
 test.skipIf(!existsSync(bin))('exiting qialike writes nothing visible after the alternate-screen leave', async () => {
   if (process.platform === 'win32') return // script(1) is not available
 
