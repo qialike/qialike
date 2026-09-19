@@ -104,12 +104,13 @@ describe('fitReason bounds the reason by ROWS, not characters', () => {
 })
 
 describe('the dock height the transcript reserves matches what the dock paints', () => {
-  test('a one-row reason paints the historical 11-row dock, a targeted one 12', () => {
+  test('a one-row reason paints the historical 11-row dock, a targeted one 13', () => {
     // 10 = border 2 + vertical padding 2 + title 1 + reason margin 1 + actions
-    // margin 1 + actions row 1 + hint margin 1 + hint row 1; +1 for the optional
-    // `Requests access:` block; + the reason's rows.
+    // margin 1 + actions row 1 + hint margin 1 + hint row 1; +2 for the optional
+    // `Requests access:` block (its margin row AND its text row); + the reason's
+    // rows. Measured against the real Ink render below, which paints 13.
     expect(approvalDialogRows(1, false)).toBe(11)
-    expect(approvalDialogRows(1, true)).toBe(12)
+    expect(approvalDialogRows(1, true)).toBe(13)
   })
 
   test('every wrapped reason row adds exactly one dock row', () => {
@@ -227,6 +228,25 @@ describe('the reserved height equals the height Ink paints', () => {
     expect(Math.abs(painted - layout.dockRows)).toBeLessThanOrEqual(1)
     // And it is genuinely taller than the one-line dock this used to paint.
     expect(painted).toBeGreaterThan(11)
+  })
+
+  test('a targeted dock with a one-row reason reserves at least what it paints', async () => {
+    // The `Requests access:` block is a margin row PLUS its text row, so a dock
+    // carrying a target paints TWO rows more than the same dock without one.
+    // Neither case above isolates that: the first has no target, and the second's
+    // extra estimated wrap row cancels the missing margin. This one has a target,
+    // a reason that fits on a single row, and no compensating row — so an
+    // under-reserving estimate shows up here as a clipped dock's bottom edge.
+    const req = {
+      toolName: 'pwsh',
+      reason: 'escalate sandbox to danger-full-access: Run the workspace test suite.',
+    } as const
+    const layout = approvalReasonLayout(req.reason, req.toolName, 120, 'auto')
+    expect(layout.target).toBe('danger-full-access')
+    expect(layout.rows).toBe(1)
+    const painted = await paintedDockRows(120, req)
+    // Over-reserving costs one row of transcript; under-reserving clips the dock.
+    expect(layout.dockRows).toBeGreaterThanOrEqual(painted)
   })
 
   test('no reason at all paints exactly the reserved height', async () => {

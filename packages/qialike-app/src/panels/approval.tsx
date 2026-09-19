@@ -67,7 +67,8 @@ const REASON_TAIL = ' … (full text below the prompt)'
  * The dock's fixed chrome measured 10 rows with Ink (border 2 + vertical padding
  * 2 + title 1 + the reason block's margin 1 + the actions row's margin 1 + the
  * actions row 1 + the hint's margin 1 + the hint row 1); the optional
- * `Requests access:` block adds 1, and the reason adds its own wrapped rows.
+ * `Requests access:` block adds 2 — its own margin row plus its text row, just
+ * like the reason block — and the reason adds its own wrapped rows.
  *
  * {@link conversation} reserves this many transcript rows, and a one-row reason
  * is the 11-row dock this panel has always painted — the number a hard-coded 11
@@ -83,7 +84,7 @@ const REASON_TAIL = ' … (full text below the prompt)'
  * @returns the dock's estimated painted rows.
  */
 export function approvalDialogRows(reasonRows: number, hasTarget: boolean): number {
-  return 10 + (hasTarget ? 1 : 0) + Math.max(1, reasonRows)
+  return 10 + (hasTarget ? 2 : 0) + Math.max(1, reasonRows)
 }
 
 /** One approval reason, split into its escalation target and its prose. */
