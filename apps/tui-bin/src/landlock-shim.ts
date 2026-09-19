@@ -80,6 +80,17 @@ const LL_ABI1_MASK = LL_FS_REFER - 1n
 /** Newest ABI this build knows; negotiation scales the actual mask down. */
 const MAX_ABI = 5
 
+/**
+ * The ABI the PATH-based workspace-write promise needs: `REFER` (ABI 2) and
+ * `TRUNCATE` (ABI 3) are the rights a path grant actually relies on. `MAX_ABI`
+ * is what the launcher can USE, not what the policy NEEDS — the only gap above
+ * this floor is ABI 5's `LANDLOCK_ACCESS_FS_IOCTL_DEV`, which device ioctl
+ * restriction a path-based write policy never claimed. Reporting "partial" for
+ * that gap printed a line on every confined run (and every tool result's
+ * stderr) without describing a weaker boundary.
+ */
+const REQUIRED_ABI = 3
+
 // `syscall()` is variadic and each Landlock call has a different argument
 // shape, so each call site gets its own declared signature over its own
 // dlopen handle (the library itself is opened once by Bun's loader).
@@ -253,8 +264,9 @@ export function runLandlockLauncher(args: readonly string[]): void {
   }
 
   try {
-    const { partial } = restrictSelfWith(cli.grants)
-    if (partial) process.stderr.write(`${PARTIAL_NOTICE}\n`)
+    const { partial, abi } = restrictSelfWith(cli.grants)
+    // Quiet unless the host is below what the policy needs; `partial` (ABI < MAX_ABI) is what `--probe` still reports, so the harness's enforcement classification is unchanged.
+    if (partial && abi < REQUIRED_ABI) process.stderr.write(`${PARTIAL_NOTICE}\n`)
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error))
   }
