@@ -2065,10 +2065,27 @@ function packageBinary(name) {
  * per-target assets (the ripgrep binary today) must match the artifacts this run
  * will actually produce.
  */
+/**
+ * The targets this invocation builds: `[null]` for the host-only `--single`
+ * artifact, else the explicit `QIALIKE_TARGETS` list, else every target.
+ *
+ * The ONE resolution both the embedded assets and {@link bundle} read. They used
+ * to resolve separately, in opposite order: `bundle` took `--single` first while
+ * this took `QIALIKE_TARGETS` first, so `--single` with a leftover
+ * `QIALIKE_TARGETS` in the environment embedded every target's assets into the
+ * host-only artifact. The two flags contradict each other, so they are refused
+ * together rather than resolved by an order nobody wrote down.
+ */
 function buildTargets() {
   const args = process.argv.slice(2)
   const requested = (process.env.QIALIKE_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
   if (requested.length > 0) {
+    if (args.includes('--single')) {
+      throw new Error(
+        `qialike: --single and QIALIKE_TARGETS=${requested.join(',')} contradict each other; `
+        + `pass one of them. Unset QIALIKE_TARGETS to build the host-only dist/qialike artifact.`,
+      )
+    }
     for (const t of requested) {
       if (BUN_TARGET[t] === undefined) {
         throw new Error(`unknown QIALIKE_TARGETS entry "${t}" (allowed: ${ALL_TARGETS.join(', ')})`)
@@ -2092,26 +2109,12 @@ function buildTargets() {
  * the project's release gating. `--single` skips packaging.
  */
 function bundle() {
-  const args = process.argv.slice(2)
-  const pack = args.includes('--package')
-
-  if (args.includes('--single')) {
-    compileTarget(null, join(OUT_DIR, 'qialike'))
-    return
-  }
-
-  const requested = (process.env.QIALIKE_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-  if (requested.length > 0) {
-    for (const name of requested) {
-      compileTarget(name, targetBinaryPath(name))
-      if (pack) packageBinary(name)
-    }
-    return
-  }
-
-  for (const name of ALL_TARGETS) {
-    compileTarget(name, targetBinaryPath(name))
-    if (pack) packageBinary(name)
+  const pack = process.argv.slice(2).includes('--package')
+  // Iterates the ONE resolved list rather than re-deciding the flags: a second
+  // resolution is what let the embedded assets and the compiled targets disagree.
+  for (const name of BUILD_TARGETS) {
+    compileTarget(name, name === null ? join(OUT_DIR, 'qialike') : targetBinaryPath(name))
+    if (pack && name !== null) packageBinary(name)
   }
 }
 
@@ -2151,14 +2154,15 @@ async function main() {
   assertHarnessCompatible()
   assertBunVersion()
   publishBuildMode()
+  // Resolved — and so VALIDATED — before dist is touched: a mistyped
+  // `QIALIKE_TARGETS` entry, or `--single` beside it, must not clear the tree
+  // and then fail. Same reason the bun gate runs first.
+  BUILD_TARGETS = buildTargets()
   // Fresh dist: every previous artifact (cross-target dirs, tarballs) is stale
   // for this build and would otherwise linger.
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const specifiers = pluginSpecifiers()
-  // Resolved before the farm: the per-target assets embedded below must match the
-  // artifacts this invocation produces.
-  BUILD_TARGETS = buildTargets()
   createResolveFarm()
   await buildBundleLib()
   generate(specifiers)
