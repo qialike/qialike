@@ -29,6 +29,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { lastSandboxMode, readOnlyBashDecision, unconfinedShellAskDecision, type SandboxMode } from './bash-policy.ts'
 import { blockedReadDecision } from './read-policy.ts'
+import { turnEndNotice, type TurnEndReasonLike } from './turn-end-notice.ts'
 import { BUILD_MODE } from './build-mode.ts'
 import { versionFooterSuffix } from './version-footer.ts'
 import { SessionLogReader } from './log-frames.ts'
@@ -4585,24 +4586,22 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       }
       case 'turn/end': {
         store.endPreparingRequest()
+        const turn = (event.data as { turn?: number }).turn ?? 0
         // Turn tail (web parity): the paths this turn WROTE, listed before the
-        // max-tokens notice so the notice stays the last word on the turn.
-        store.fileTurnEnd((event.data as { turn?: number }).turn ?? 0)
-        const reason = (event.data as { reason?: { kind?: string } }).reason
-        if (reason?.kind === 'max-tokens') {
-          if (!textSinceThisTurn) {
-            // The whole output budget went to reasoning (no body text yet).
-            store.append('status',
-              '⚠ Previous turn hit the output length cap (usually spent on reasoning) and produced no text — send any message to continue; for long tasks lower the reasoning effort with Ctrl+T.',
-              true)
-          } else {
-            // Harness-web parity: output was truncated but kept — tell the
-            // user to send "continue" so the model resumes from it.
-            store.append('status',
-              '⚠ Response truncated: the output token cap was reached; everything generated so far is kept — send "continue" to let the model carry on.',
-              true)
-          }
-        }
+        // turn's closing notice so the notice stays the last word on the turn.
+        store.fileTurnEnd(turn)
+        // Every ending is either explained or deliberately quiet — see the
+        // module. `stepped` is read off this turn's own step keys: an ending
+        // that never reached a model call is the one that used to look like a
+        // hang, because nothing at all was rendered for it.
+        const notice = turnEndNotice(
+          (event.data as { reason?: TurnEndReasonLike }).reason,
+          {
+            textProduced: textSinceThisTurn,
+            stepped: [...stepStartAt.keys()].some((key) => key.startsWith(`${turn}:`)),
+          },
+        )
+        if (notice !== undefined) store.append('status', notice, true)
         // A turn just finished: the title service may have appended its
         // session/title event during the run. The session/title case above
         // only fires for events this listener sees, so fold the live log when
