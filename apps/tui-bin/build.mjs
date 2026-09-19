@@ -52,6 +52,21 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-versio
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
 const HARNESS_VERSION_MAX = '0.1.5-rc.2'
 
+/**
+ * The oldest bun whose runtime may be baked into an artifact.
+ *
+ * `bun build --compile` embeds the BUILD HOST's bun runtime in every target it
+ * produces; `--target` selects the target PLATFORM, not another version of the
+ * runtime. So the bun on the build host is part of the artifact's identity, and
+ * a cross-build silently inherits it.
+ *
+ * 1.3.14 is the floor because its WINDOWS runtime ends every turn before the
+ * first model call (measured 2026-09-19: `qialike.log` stops at `[submit]`, no
+ * `[llm]`, no `[assembly] turn=… step=…`). The same source built on Windows with
+ * bun 1.4.2 worked, and a Linux cross-build at 1.4.2 worked too.
+ */
+const BUN_VERSION_MIN = '1.4.2'
+
 /** Cross-compile targets (`name` -> `bun build --compile --target` value). */
 const ALL_TARGETS = [
   'linux-x64',
@@ -2107,11 +2122,34 @@ function run(command, args) {
   return result.stdout ?? ''
 }
 
+/**
+ * Assert the bun that will do the bundling and compiling, and report it.
+ *
+ * Resolved through PATH because that is the `bun` {@link run} invokes for both
+ * `bun build` and `bun build --compile` — a stale bun earlier on PATH is the
+ * exact failure this guards, so the check must read the same one the build uses.
+ * Runs before the build clears `dist/`, so a rejected build destroys nothing.
+ */
+function assertBunVersion() {
+  const version = run('bun', ['--version']).trim()
+  if (!semver.valid(version) || !semver.gte(version, BUN_VERSION_MIN)) {
+    throw new Error(
+      `qialike: bun ${version} is older than the required ${BUN_VERSION_MIN}. Every artifact embeds the `
+      + `BUILD HOST's bun runtime, so this version would become the shipped runtime; bun 1.3.14's Windows `
+      + `runtime ends each turn before its first model call (reported as "submitted a task, no response"). `
+      + `Upgrade the build host's bun, and check that no stale bun earlier on PATH shadows it `
+      + `(\`which -a bun\`).`,
+    )
+  }
+  console.log(`qialike: bun ${version} (minimum ${BUN_VERSION_MIN}; baked into every artifact)`)
+}
+
 async function main() {
   if (!existsSync(join(HARNESS, 'package.json'))) {
     throw new Error(`DSH_HARNESS not found at ${HARNESS}; set DSH_HARNESS to the deepseek-harness checkout`)
   }
   assertHarnessCompatible()
+  assertBunVersion()
   publishBuildMode()
   // Fresh dist: every previous artifact (cross-target dirs, tarballs) is stale
   // for this build and would otherwise linger.
