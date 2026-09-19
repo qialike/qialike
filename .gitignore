@@ -26,3 +26,14 @@ build.log
 # git worktrees here). It contains its own `.git`, so an unignored `git add -A`
 # in the release scripts would try to commit a 2 MB foreign repository.
 /.scan/
+
+# Build-generated sources that are large or vary by build target. The release
+# scripts run `git add -A`, so an unignored artifact here would be committed by
+# accident and then drift from what the next build emits. Both are regenerated
+# by `apps/tui-bin/build.mjs`, which every build entry point runs.
+#
+# - ripgrep: ~7 MB of base64 per embedded platform binary, so the tree is
+#   unbuildable without a fetch/install anyway.
+# - windows-acl runner: ~90 KB, but regenerated from the farm on every build.
+packages/qialike-app/src/ripgrep-binary.generated.ts
+apps/tui-bin/src/windows-acl-runner.generated.ts

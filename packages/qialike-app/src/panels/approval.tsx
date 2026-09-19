@@ -19,8 +19,9 @@ import type { DOMElement } from 'ink'
 import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PendingApproval, TuiService, Store } from '../index.tsx'
-import { visualWidth } from '../markdown.tsx'
-import { WHEEL_STEP } from '../config.ts'
+import { visualWidth, truncateWide, countWrappedLines } from '../markdown.tsx'
+import { WHEEL_STEP, dockInnerWidth } from '../config.ts'
+import type { SidebarMode } from '../config.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 import { useRowGeometry, dialogRowIndexFromCol, measureDomTop } from '../list-geometry.ts'
@@ -46,21 +47,138 @@ const APPROVAL_CHOICES = ['Deny', 'Allow always', 'Allow once'] as const
  *  Refreshed whenever the dock renders. */
 let approvalDockSpan: { top: number; height: number } | null = null
 
-/** Strip the harness escalation boilerplate ("escalate sandbox to <mode>: ")
- *  so the dock shows the model's explanation alone, on one truncated line. */
-function conciseReason(reason: string | undefined, toolName: string): string {
-  if (reason === undefined) return `Tool ${toolName} requests privileged execution`
-  return reason.replace(/^escalate sandbox to [^:]+:\s*/i, '')
+/**
+ * How many wrapped rows the reason may occupy in the dock.
+ *
+ * The reason is often the model's own multi-sentence justification (an
+ * escalation request always carries one), and it IS the thing being approved: a
+ * single truncated line hid the reason to grant wider access. Five rows shows
+ * every reason seen in practice whole while keeping the dock's in-flow height
+ * bounded on a short terminal.
+ */
+export const REASON_MAX_ROWS = 5
+
+/** The marker appended to a reason that still does not fit {@link REASON_MAX_ROWS}. */
+const REASON_TAIL = ' … (full text below the prompt)'
+
+/**
+ * The dock's rows at a given reason height — the FIRST-FRAME ESTIMATE.
+ *
+ * The dock's fixed chrome measured 10 rows with Ink (border 2 + vertical padding
+ * 2 + title 1 + the reason block's margin 1 + the actions row's margin 1 + the
+ * actions row 1 + the hint's margin 1 + the hint row 1); the optional
+ * `Requests access:` block adds 1, and the reason adds its own wrapped rows.
+ *
+ * {@link conversation} reserves this many transcript rows, and a one-row reason
+ * is the 11-row dock this panel has always painted — the number a hard-coded 11
+ * there used to stand for. That hard-coding under-reserved the moment the reason
+ * took a second row, and the dock's bottom edge (hint + border) would fall off
+ * the screen; the panel now also reports the height MEASURED by Ink, and the
+ * caller takes `max(estimate, measured)`, so an estimate that is off by one only
+ * costs a row of transcript on the first frame. The reason's row count comes
+ * from the shared `wrap-ansi` oracle, which can disagree with Ink by one row
+ * when a break lands on the boundary — hence the measurement.
+ * @param reasonRows - wrapped rows the reason occupies (1..{@link REASON_MAX_ROWS}).
+ * @param hasTarget - whether the dock also renders the escalation-target row.
+ * @returns the dock's estimated painted rows.
+ */
+export function approvalDialogRows(reasonRows: number, hasTarget: boolean): number {
+  return 10 + (hasTarget ? 1 : 0) + Math.max(1, reasonRows)
 }
 
-/** In-band approval dock over a pending tool call: key info only (tool +
- *  one truncated reason line), docked above the composer. It is rendered
+/** One approval reason, split into its escalation target and its prose. */
+export interface ApprovalReason {
+  /** The sandbox mode the caller is asking to widen to, when the reason requests one. */
+  target: string | undefined
+  /** Everything the caller said, with the harness's `escalate sandbox to <mode>:` prefix removed. */
+  text: string
+}
+
+/**
+ * Split an approval reason into the escalation TARGET and the prose.
+ *
+ * The harness prefixes an escalation reason with `escalate sandbox to <mode>: `.
+ * That mode is the single most useful fact in the prompt — it is what the user
+ * is being asked to permit — so it is returned separately for its own labelled
+ * line instead of being stripped away with the rest of the boilerplate.
+ * @param reason - the request's reason, or `undefined` when it carries none.
+ * @param toolName - the tool the request came from, used for the fallback text.
+ * @returns the target (if any) and the prose to render.
+ */
+export function approvalReason(reason: string | undefined, toolName: string): ApprovalReason {
+  if (reason === undefined) return { target: undefined, text: `Tool ${toolName} requests privileged execution` }
+  const match = /^\s*escalate sandbox to ([^:]+):\s*/i.exec(reason)
+  if (match === null) return { target: undefined, text: reason.trim() }
+  return { target: (match[1] ?? '').trim(), text: reason.slice(match[0].length).trim() }
+}
+
+/**
+ * Fit a reason into the dock's row budget, keeping it whole when it fits.
+ *
+ * Bounded by ROWS, not characters: the same text occupies a different number of
+ * rows at every terminal width, so a character cap would either clip a short
+ * reason on a narrow terminal or leave a long one unreadable on a wide one.
+ * @param text - the reason prose.
+ * @param cols - display columns inside the dock.
+ * @param maxRows - the row budget (defaults to {@link REASON_MAX_ROWS}).
+ * @returns text that wraps to at most `maxRows`, shortened with a visible marker.
+ */
+export function fitReason(text: string, cols: number, maxRows: number = REASON_MAX_ROWS): string {
+  const usable = Math.max(1, cols)
+  if (countWrappedLines(text, usable) <= maxRows) return text
+  // Binary search the longest prefix whose wrapped form (plus the tail marker)
+  // still fits. One cell at a time would be O(n²) `wrap-ansi` passes, and a real
+  // session's reasons are hundreds of characters while a pasted one can be
+  // thousands; the predicate is monotone in the cut, so bisection is exact.
+  let low = 0
+  let high = text.length
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2)
+    if (countWrappedLines(`${truncateWide(text, mid)}${REASON_TAIL}`, usable) <= maxRows) low = mid
+    else high = mid - 1
+  }
+  return `${truncateWide(text, low)}${REASON_TAIL}`
+}
+
+/**
+ * Everything the dock needs to size and render one reason: the target it asks
+ * for, the prose (fitted to the row budget), and the height that results.
+ * @param reason - the request's reason.
+ * @param toolName - the tool the request came from.
+ * @param width - terminal width.
+ * @param mode - the right-sidebar mode (decides the dock's real inner width).
+ * @returns the target, the fitted prose, the reason's rows, whether it was shortened, and the dock's rows.
+ */
+export function approvalReasonLayout(
+  reason: string | undefined,
+  toolName: string,
+  width: number,
+  mode: SidebarMode,
+): { target: string | undefined; shown: string; rows: number; shortened: boolean; dockRows: number } {
+  const { target, text } = approvalReason(reason, toolName)
+  const cols = Math.max(1, dockInnerWidth(width, mode))
+  const shown = fitReason(text, cols)
+  const rows = Math.min(REASON_MAX_ROWS, countWrappedLines(shown, cols))
+  const hasTarget = target !== undefined && target.length > 0
+  return { target, shown, rows, shortened: shown !== text, dockRows: approvalDialogRows(rows, hasTarget) }
+}
+
+/** In-band approval dock over a pending tool call: the tool, the access being
+ *  requested, and the full reason (wrapped, and shortened only if it exceeds
+ *  {@link REASON_MAX_ROWS} rows), docked above the composer. It is rendered
  *  inside the message column, so it stretches to the message box's current
- *  width (the column re-lays out on every terminal resize). */
-function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element {
+ *  width (the column re-lays out on every terminal resize).
+ *
+ *  Exported so the height the transcript reserves can be pinned against the
+ *  height Ink actually paints (`tests/approval-reason-layout.test.ts`). */
+export function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element {
   const { req } = props.approval
   const dockRef = React.useRef<DOMElement>(null)
   const rowRef = React.useRef<DOMElement>(null)
+  // The dock's wrap width comes from the SAME helper the question dock uses:
+  // re-wrapping at the bare terminal width would overflow the narrower column
+  // and silently double the dock's height.
+  const layout = approvalReasonLayout(req.reason, req.toolName, store.width, store.sidebarMode ?? 'auto')
   // The three actions form one horizontal row; register its geometry so mouse
   // hover/click can map a screen (row, col) to an action index — the row is
   // part of the geometry, so hovering the dock's title/reason/hint rows never
@@ -77,6 +195,11 @@ function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element
       if (el === null) { approvalDockSpan = null; return }
       const h = Math.round(measureElement(el).height)
       approvalDockSpan = { top: Math.round(measureDomTop(el)), height: h }
+      // conversation.tsx reserves exactly this many transcript rows (the dock is
+      // IN-FLOW in the message column), so report the REAL painted height: the
+      // layout estimate above is what it uses on the first frame, before this
+      // measurement lands.
+      store.setApprovalRows(h)
     }
     report()
     const t = setTimeout(report, 80) // layout may settle a frame after commit
@@ -89,8 +212,13 @@ function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.Element
   return (
     <Box ref={dockRef} flexShrink={0} borderStyle="round" borderColor={theme.warning} flexDirection="column" paddingX={1} paddingY={1}>
       <Text color={theme.warning} bold wrap="wrap">⚠ Permission required · {stripTerminalControls(req.toolName)}</Text>
+      {layout.target !== undefined && layout.target.length > 0 && (
+        <Box marginTop={1}>
+          <Text color={theme.warning} wrap="truncate">Requests access: {stripTerminalControls(layout.target)}</Text>
+        </Box>
+      )}
       <Box marginTop={1}>
-        <Text wrap="truncate">{stripTerminalControls(conciseReason(req.reason, req.toolName))}</Text>
+        <Text wrap="wrap">{stripTerminalControls(layout.shown)}</Text>
       </Box>
       <Box flexDirection="row" gap={2} marginTop={1} ref={rowRef}>
         {APPROVAL_CHOICES.map((label, i) => (

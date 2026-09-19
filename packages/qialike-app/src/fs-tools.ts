@@ -8,10 +8,13 @@
  * shell, which is why this exists mainly for the hosts where that is expensive
  * or impossible:
  *
- *  - **Windows** mounts the unconfined `pwsh-local`, so every shell call is
- *    gated behind an approval prompt (the `unconfinedShellAskDecision` fence).
- *    Routine refactoring — delete a stale file, rename a module — would
- *    otherwise cost one human approval per operation.
+ *  - **Windows** confines every shell call through the ACL restricted-token
+ *    runner, which is a real process launch rather than an in-process file
+ *    operation. Routine refactoring — delete a stale file, rename a module —
+ *    would otherwise cost a process spawn per operation.
+ *  - **A host with no confining executor** gates every shell call behind an
+ *    approval prompt (the `unconfinedShellAskDecision` fence), so the fs tools
+ *    keep the operation inside the workspace fence without a prompt.
  *  - **A Linux host with neither `bwrap` nor Landlock** fails every shell call
  *    closed (`SANDBOX_UNAVAILABLE`), leaving the fs tools as the only way to
  *    change the workspace at all.

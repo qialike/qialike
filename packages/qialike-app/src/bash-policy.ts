@@ -136,8 +136,9 @@ function unconfinedShellReason(name: string): string {
 
 /**
  * Decide one shell execution when the mounted executor applies NO kernel
- * confinement — Windows, where the restricted-token runner cannot be bundled,
- * mounts the unconfined `pwsh-local`.
+ * confinement — a host whose only executor reports no `sandboxMode`, such as
+ * Windows before the ACL restricted-token runner could be bundled (it mounted
+ * the unconfined `pwsh-local`).
  *
  * Without this fence such a host declares `workspace-write` in the model-visible
  * policy context while the shell ignores it entirely: no denial is ever

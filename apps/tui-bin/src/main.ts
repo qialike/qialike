@@ -39,6 +39,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 // (SPLASH_DELAY_MS) and before any other module's.
 import { migrateLegacyHomeFiles } from '@yourname/qialike-app/src/legacy-names.ts'
 import { tuiCommand } from '@yourname/qialike-app/src/startup.ts'
+import { isWindowsAclRunnerArgv } from '@yourname/qialike-app/src/windows-acl-mode.ts'
 import { isLandlockLauncherArgv, isLauncherMode } from './launcher-modes.ts'
 
 const NAME = 'qialike'
@@ -68,6 +69,20 @@ async function main(): Promise<void> {
     const { runLandlockLauncher } = await import('./landlock-shim.ts')
     runLandlockLauncher(argv)
     return
+  }
+
+  // The embedded Windows ACL runner, on the same principle: when the harness
+  // confines a PowerShell command on Windows it spawns this very executable as
+  // `[<qialike>, --windows-acl-runner, --workspace … -- <argv>]`, so on that path
+  // the process is the sandbox runner, not a TUI. Handled here, before the home
+  // migration and the command line, for the same reasons as the Landlock branch:
+  // the runner's own flags are not TUI options and it must print only its own
+  // `windows-acl-run:` dialect. The runner parses the SAME slice of `process.argv`
+  // that the harness built, so only the reserved flag is removed here.
+  if (isWindowsAclRunnerArgv(argv)) {
+    const { runWindowsAclRunner } = await import('./windows-acl-shim.ts')
+    process.argv.splice(2, 1)
+    process.exit(await runWindowsAclRunner())
   }
 
   // Same first step as bin.ts's full boot: the pre-rename `$DSH_HOME` state
