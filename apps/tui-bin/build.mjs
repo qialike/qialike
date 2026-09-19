@@ -871,14 +871,20 @@ function patchBunSeaWorkerEntries() {
  * `apps/tui-bin/src/windows-acl-shim.ts` writes out and loads. Nothing here is
  * specific to Windows — the runner is only EXECUTED there — so the bundle is
  * produced on every host, exactly like the workflow worker.
+ *
+ * There is deliberately NO graceful degradation. `windows-acl-shim.ts` imports
+ * the generated module statically, so a build that cannot produce it cannot
+ * resolve that import either: the compile dies whatever this function returns. An
+ * earlier version deleted the generated file and logged "the runner stays
+ * unavailable", which described a fallback that does not exist — with
+ * `pwsh-sandbox` mounted unconditionally the honest outcome is a loud build
+ * failure, not a Windows binary whose confined executor silently cannot work.
  */
 function buildAclRunnerBundle() {
   const entry = join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox-windows-acl/lib/runner.js')
   const generated = join(ROOT, 'apps/tui-bin/src/windows-acl-runner.generated.ts')
   if (!existsSync(entry)) {
-    rmSync(generated, { force: true })
-    console.log('qialike: windows-acl runner entry not in the farm; the runner stays unavailable')
-    return false
+    throw new Error(`qialike: windows-acl runner entry not in the farm (${entry}); the single file cannot confine PowerShell, so the build cannot continue`)
   }
   const out = join(ROOT, 'apps/tui-bin/stub-native', 'windows-acl-runner.bundle.cjs')
   try {
@@ -886,18 +892,14 @@ function buildAclRunnerBundle() {
     rmSync(out, { force: true })
     run('bun', ['build', '--target=bun', '--format=cjs', '--outfile', out, entry])
   } catch (error) {
-    rmSync(generated, { force: true })
-    console.log(`qialike: windows-acl runner re-bundle failed (${
-      error instanceof Error ? error.message.split('\n')[0] : String(error)}); the runner stays unavailable`)
-    return false
+    throw new Error(`qialike: windows-acl runner re-bundle failed (${
+      error instanceof Error ? error.message.split('\n')[0] : String(error)}); the single file cannot confine PowerShell, so the build cannot continue`)
   }
   const bundled = readFileSync(out)
   if (/require\(["']@deepseek-ai\//.test(bundled.toString('utf8'))) {
     // A runner that still pulls `@deepseek-ai/*` by name would need a
     // node_modules tree beside it, which a single-file install does not have.
-    rmSync(generated, { force: true })
-    console.log('qialike: windows-acl runner bundle still requires @deepseek-ai/* by name; the runner stays unavailable')
-    return false
+    throw new Error('qialike: windows-acl runner bundle still requires @deepseek-ai/* by name; it would not run standalone, so the build cannot continue')
   }
   writeFileSync(
     generated,
@@ -913,7 +915,6 @@ function buildAclRunnerBundle() {
     ].join('\n'),
   )
   console.log(`qialike: bundled the windows-acl runner (${(bundled.length / 1024).toFixed(0)} KB)`)
-  return true
 }
 
 /**
