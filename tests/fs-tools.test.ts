@@ -3,16 +3,19 @@
  *
  * The fence is the point of the plugin, so the tests lead with it:
  *  - the workspace root ITSELF is refused (`contains(root, root)` is true, so
- *    the equality check must come first — otherwise `delete('.')` passes);
- *  - only the workspace root is writable, NOT the harness's `writableRoots()`
- *    temp grants;
+ *    the equality check must come first — otherwise `delete('.')` passes and
+ *    takes the whole tree with it);
+ *  - only the workspace root is writable: NOT the harness's `writableRoots()`
+ *    temp grants. That asymmetry with `write` is deliberate and pinned below —
+ *    `write` needs the shared temp area for mkstemp-family tools, an
+ *    irreversible recursive `delete` must not range over other processes' files;
  *  - `read-only` refuses, `danger-full-access` delegates;
  *  - `move` fences BOTH ends, so it cannot be used to ingest or exfiltrate.
  *
- * The fake `ctx.fs` mirrors `LocalFileSystem`'s contract for the four methods
- * the plugin uses (`resolve` / `processPath` / `contains` / `lstat`); its
- * `contains` is the real implementation's `relative()` rule verbatim, because
- * the equality-first ordering only has meaning against that rule.
+ * The fake `ctx.fs` mirrors `LocalFileSystem`'s contract for the three methods
+ * the plugin uses (`resolve` / `processPath` / `contains`); `contains` stays the
+ * real implementation's `relative()` rule verbatim, because the equality-first
+ * ordering only has meaning against that rule.
  *
  * Run with `bun test tests/fs-tools.test.ts`.
  *
@@ -21,7 +24,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
-import { lstat, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { apply } from '../packages/qialike-app/src/fs-tools.ts'
@@ -137,6 +140,39 @@ describe('the workspace fence', () => {
     const victim = join(sibling, 'v.txt')
     await writeFile(victim, 'x')
     await expect(rig(workspace, 'workspace-write').run('delete', { path: victim })).rejects.toThrow(/outside the workspace/)
+    expect(existsSync(victim)).toBe(true)
+  })
+
+  // The asymmetry with `write` is deliberate, and this pins its safe side: the
+  // write fence may create in the platform temp area (mkstemp-family tools need
+  // it), while `delete` must not range over the host's SHARED temp tree — a
+  // recursive removal there harms other processes and there is no undo. On POSIX
+  // the workspace fixture itself lives under that temp root, which is exactly why
+  // "outside" must stay a sibling of it: wiring `writableRoots()` into this fence
+  // turned this test red, and it must stay red.
+  test.skipIf(process.platform === 'win32')('refuses the platform temp area even though `write` may create there', async () => {
+    const { workspace } = await sandbox()
+    const victim = join(tmpdir(), `qialike-fs-tools-temp-${Date.now()}.txt`)
+    await writeFile(victim, 'x')
+    try {
+      await expect(rig(workspace, 'workspace-write').run('delete', { path: victim })).rejects.toThrow(/outside the workspace/)
+      expect(existsSync(victim)).toBe(true)
+    } finally {
+      await rm(victim, { force: true })
+    }
+  })
+
+  // An alias spelling must not become a way out: `resolve` canonicalizes through
+  // the junction, so the checked key is the outside path even though the model
+  // named a path that starts inside the workspace.
+  test.skipIf(process.platform !== 'win32')('a junction alias of an outside directory stays outside', async () => {
+    const { workspace, outside } = await sandbox()
+    const victim = join(outside, 'victim.txt')
+    await writeFile(victim, 'x')
+    await symlink(outside, join(workspace, 'alias'), 'junction')
+    await expect(
+      rig(workspace, 'workspace-write').run('delete', { path: join('alias', 'victim.txt') }),
+    ).rejects.toThrow(/outside the workspace/)
     expect(existsSync(victim)).toBe(true)
   })
 

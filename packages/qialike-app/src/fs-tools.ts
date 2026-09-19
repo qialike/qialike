@@ -29,6 +29,14 @@
  *    `/tmp` and `os.tmpdir()` so mkstemp-family WRITES work; there is no
  *    matching need to delete inside the host's shared temp tree, where a
  *    recursive removal harms other processes.
+ *  - That asymmetry with `write` is DELIBERATE and load-bearing, not drift: a
+ *    write into the shared temp area creates an object the caller owns, while
+ *    `delete` is irreversible and would range over other processes' files. A
+ *    "single source" refactor that points this fence at `writableRoots()`
+ *    re-opens exactly that hazard on POSIX (where the helper grants `/tmp` and
+ *    `os.tmpdir()` wholesale); the fix for the underlying asymmetry belongs
+ *    upstream, by narrowing the WRITE fence's POSIX roots — not by widening the
+ *    destructive one. The POSIX case in `tests/fs-tools.test.ts` pins this.
  *  - The workspace root ITSELF is refused. `contains(root, root)` is true, so
  *    that equality check has to come first — otherwise `delete('.')` would pass
  *    and take the whole workspace with it.
