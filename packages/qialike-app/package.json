@@ -46,6 +46,10 @@
       "types": "./lib/types/theme-plugin.d.ts",
       "default": "./lib/theme-plugin.js"
     },
+    "./fs-tools": {
+      "types": "./lib/types/fs-tools.d.ts",
+      "default": "./lib/fs-tools.js"
+    },
     "./sessions": {
       "types": "./lib/types/sessions.d.ts",
       "default": "./lib/sessions.js"

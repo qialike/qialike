@@ -111,6 +111,20 @@
   config:
     mode: !!js process.env.DSH_PERMISSION_MODE ?? 'workspace-write'
 
+# `delete` / `move`: the two workspace mutations the fs seam does not expose
+# (`ctx.fs` publishes only writeText and editText — and writeText already creates
+# parent directories, so `mkdir` needs no tool of its own). They read the SAME
+# session policy as fs-sandbox, but fence on the workspace root ALONE: not on
+# `writableRoots()`, which adds /tmp and os.tmpdir() because mkstemp-style writes
+# need them, with no matching need to delete inside the host's shared temp tree.
+# They also refuse the workspace root itself. The reason they exist at all is
+# that the shell is an expensive or unavailable path on some hosts: Windows gates
+# every shell call behind an approval prompt, and a Linux host with neither bwrap
+# nor Landlock fails shell calls closed (`SANDBOX_UNAVAILABLE`).
+- insert:
+    - id: qialike-fs-tools
+      name: '@yourname/qialike-app/fs-tools'
+
 - insert:
     # Gives the model the `ask_user_question` tool, which asks the user for a
     # decision (e.g. which language). The TUI registers a UserQuestionProvider
