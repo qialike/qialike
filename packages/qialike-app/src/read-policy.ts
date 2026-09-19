@@ -40,7 +40,15 @@ const BLOCKED_SEGMENTS = new Set(['.git', '.credentials.yaml', '.credentials.yml
  */
 export function isBlockedSecretSegment(segment: string): boolean {
   if (segment.endsWith('.env.example')) return false
-  return segment.endsWith('.env') || segment.startsWith('.env.')
+  if (segment.endsWith('.env') || segment.startsWith('.env.')) return true
+  // A GLOB segment is judged by what it can MATCH, not by its literal spelling.
+  // `glob`'s `pattern` is a path glob (see READ_TOOLS), so `.env*` — which the
+  // two rules above let through — can match `.env` itself, and returning a
+  // filename still confirms the secret exists. Any metacharacter makes the
+  // spelling arbitrary, so a pattern carrying one is refused when it names a
+  // blocked marker anywhere. `.env.example` stays readable (it returns above).
+  if (!/[*?[\]{}]/.test(segment)) return false
+  return [...BLOCKED_SEGMENTS, '.env'].some((marker) => segment.includes(marker))
 }
 
 /**
@@ -65,7 +73,7 @@ export function blockedPathSegment(path: string): string | undefined {
 /** The reason a secret read is refused. Names the file and the policy, so the
  *  model stops retrying instead of treating it as a transient failure. */
 function blockedReadReason(path: string, segment: string): string {
-  return `refusing to read ${JSON.stringify(path)}: "${segment}" is a secret or repository-internal path that qialike never exposes to a tool. This is not a sandbox-mode restriction, so no sandbox_permissions escalation lifts it.`
+  return `refusing to read ${JSON.stringify(path)}: "${segment}" is a secret or repository-internal path. This fences the READ TOOLS only — a shell command that names the same file is not covered — and it is not a sandbox-mode restriction, so no sandbox_permissions escalation lifts it.`
 }
 
 /**
