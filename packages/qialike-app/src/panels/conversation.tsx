@@ -23,7 +23,7 @@ import {
   compactionStatusText,
   sessionLoadingStatusText,
   sessionLoadingText,
-  BETA_FOOTER_SUFFIX,
+  VERSION_FOOTER_SUFFIX,
   type Store,
   type TranscriptItem,
   type StepItem,
@@ -2659,7 +2659,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       sessionTitle: sessionDisplayTitle(store.session.id),
       sessionId: String(store.session.id),
     }),
-    footerLines: [`deepseek-harness: ${HARNESS_VERSION}`, `qialike: ${APP_VERSION}${BETA_FOOTER_SUFFIX}`],
+    footerLines: [`deepseek-harness: ${HARNESS_VERSION}`, `qialike: ${APP_VERSION}${VERSION_FOOTER_SUFFIX}`],
     sections: sidebarSections.map(({ section, full, compact }) => ({ id: section.id, order: section.order, full, compact })),
   })
   const viewportLines = convViewportLines(composerH, 0, modalH)
@@ -3339,7 +3339,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               ("High"), WITHOUT bold — matching its muted weight exactly. */}
           <Box flexDirection="column">
             <Text color={theme.text} wrap="truncate">deepseek-harness: <Text color={mutedReadable()}>{HARNESS_VERSION}</Text></Text>
-            <Text color={theme.text} wrap="truncate">qialike: <Text color={mutedReadable()}>{APP_VERSION}{BETA_FOOTER_SUFFIX}</Text></Text>
+            <Text color={theme.text} wrap="truncate">qialike: <Text color={mutedReadable()}>{APP_VERSION}{VERSION_FOOTER_SUFFIX}</Text></Text>
             <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
           </Box>
         </Box>

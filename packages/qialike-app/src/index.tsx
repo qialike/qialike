@@ -29,6 +29,8 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import { lastSandboxMode, readOnlyBashDecision, unconfinedShellAskDecision, type SandboxMode } from './bash-policy.ts'
 import { blockedReadDecision } from './read-policy.ts'
+import { BUILD_MODE } from './build-mode.ts'
+import { versionFooterSuffix } from './version-footer.ts'
 import { SessionLogReader } from './log-frames.ts'
 import { sanitizeTerminalText } from './terminal-safe.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
@@ -79,11 +81,11 @@ export const name = 'tui-runtime'
 /** Project version (single source of truth: the root package.json). */
 export const APP_VERSION = (pkg as { version?: string }).version ?? '0.0.0'
 
-/** Footer suffix appended ONLY when beta is forced by `QIALIKE_BETA=1` on a
- *  plain (non-prerelease) version. A version that already spells it out
- *  (`0.2.2-beta`) shows as-is — no redundant " beta" word (GitHub semver
- *  convention). */
-export const BETA_FOOTER_SUFFIX = process.env.QIALIKE_BETA?.trim() === '1' ? ' beta' : ''
+/** Footer suffix for the sidebar's version line, from the BAKED build channel
+ *  (`QIALIKE_BUILD_MODE` at build time — see `./version-footer.ts`). `prod` and
+ *  an unset variable both show the bare version. Baked rather than read from the
+ *  environment here, so a released binary cannot be relabelled at launch. */
+export const VERSION_FOOTER_SUFFIX = versionFooterSuffix(APP_VERSION, BUILD_MODE)
 
 /** Core services required before the terminal session can start. */
 export const inject = ['agentDefaultModel', 'agents', 'sessions', 'tuiModels', 'workspaceRegistry']
