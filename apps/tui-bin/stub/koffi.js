@@ -27,7 +27,7 @@
  * @module qialike/koffi-shim
  */
 
-import { dlopen, FFIType, ptr, toArrayBuffer } from 'bun:ffi'
+import { JSCallback, dlopen, FFIType, ptr, toArrayBuffer } from 'bun:ffi'
 
 /**
  * Map a koffi primitive/pointer type name to a bun:ffi FFIType.
@@ -95,7 +95,64 @@ function cleanTypeSpelling(kind) {
   // "char16_t *path" / "uint32_t *needed" → "char16_t*" / "uint32_t*"
   const named = clean.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\*\s*[A-Za-z_][A-Za-z0-9_]*$/)
   if (named) clean = `${named[1]}*`
+  // "uint32_t requested" / "size_t length" → "uint32_t" / "size_t": a koffi
+  // declaration names scalar parameters as well, and the name is not part of the
+  // type. Without this the type lookup below misses every named scalar
+  // (`GetFileSecurityW`'s `requested`, `ReplaceFileW`'s `flags`, ...).
+  const namedScalar = clean.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+[A-Za-z_][A-Za-z0-9_]*$/)
+  if (namedScalar) clean = namedScalar[1]
   return clean.replace(/\s*\*\s*/g, '*')
+}
+
+/**
+ * Map one prototype parameter spelling to a bun:ffi callback type.
+ *
+ * `void` and pointer spellings are addresses; everything else must be a scalar
+ * this shim can marshal. An unsupported spelling throws here rather than
+ * registering a callback whose arguments bun:ffi would mis-read.
+ * @param spelling - the parameter type spelling (a name may follow it).
+ * @param declaration - the whole prototype, for the error message.
+ * @returns the bun:ffi type for that parameter.
+ */
+function protoFfiType(spelling, declaration) {
+  const clean = cleanTypeSpelling(spelling)
+  if (clean === 'void' || isPointerKind(clean)) return FFIType.ptr
+  const ffi = scalarFfiType(clean)
+  if (ffi === undefined) {
+    throw new Error(`koffi shim: unsupported prototype parameter type "${spelling}" in "${declaration}"`)
+  }
+  return ffi
+}
+
+/**
+ * Resolve the prototype a `register` type expression names: either the token
+ * `koffi.proto` returned, or the `koffi.pointer(proto)` expression callers
+ * actually pass (`koffi.register(fn, koffi.pointer(proto))`).
+ * @param type - the type expression.
+ * @returns the prototype token, or `undefined` when it names none.
+ */
+function protoOf(type) {
+  if (type === null || type === undefined) return undefined
+  if (type.__proto === true) return type
+  if (type instanceof Composite && type.inner !== undefined) return protoOf(type.inner)
+  return undefined
+}
+
+/** JS callbacks registered through `register`, keyed by the address handed out. */
+const registeredCallbacks = new Map()
+
+/**
+ * The native address of a bun:ffi callback, as the `bigint` this shim's pointer
+ * marshalling expects (`addressOf`). Measured on Bun 1.4.2: `JSCallback.ptr` is
+ * a plain `number`; the buffer/pointer forms are kept for other bun:ffi builds.
+ * @param callback - the live {@link JSCallback}.
+ * @returns the address.
+ */
+function callbackAddress(callback) {
+  const raw = callback.ptr
+  if (typeof raw === 'bigint') return raw
+  if (typeof raw === 'number') return BigInt(Math.trunc(raw))
+  return BigInt(ptr(raw))
 }
 
 /** A koffi pointer/array element spelling that carries no address of its own. */
@@ -349,7 +406,14 @@ function argSpec(kind) {
     return { ffiArgs: FFIType.ptr, toFfi: string16Argument }
   }
   if (isPointerKind(clean)) {
-    return { ffiArgs: FFIType.ptr, toFfi: (value) => addressOfPointerArg(value) }
+    // `T *` with a SCALAR pointee also accepts a JS array from koffi, whose
+    // element(s) receive what the call writes back — that is how the harness
+    // declares its `_Out_` parameters (`GetFileSecurityW`'s `needed`).
+    // `outScalar` is the pointee spelling the write-back in `bind` decodes as.
+    const pointee = clean.endsWith('*') ? clean.slice(0, -1) : ''
+    const spec = { ffiArgs: FFIType.ptr, toFfi: (value) => addressOfPointerArg(value) }
+    if (pointee !== '' && scalarFfiType(pointee) !== undefined) spec.outScalar = pointee
+    return spec
   }
   const scalar = scalarFfiType(clean)
   if (scalar === undefined) {
@@ -446,9 +510,28 @@ function bind(dll, name, retKind, argKinds) {
   })
   const fn = symbols.symbols[name]
   return (...values) => {
-    const args = specs.map((s, i) => s.toFfi(values[i]))
+    // A JS array for a scalar-pointer parameter is koffi's `_Out_` convention:
+    // this shim owns the block, the call writes into it, and the element(s) are
+    // copied back into the caller's array before the block is released.
+    const outParams = []
+    const args = specs.map((s, i) => {
+      const value = values[i]
+      if (s.outScalar === undefined || !Array.isArray(value)) return s.toFfi(value)
+      const layout = typeLayout(s.outScalar) ?? { size: 4, align: 4 }
+      const { address, buffer } = allocateBytes(layout.size * Math.max(1, value.length))
+      transient.push(address)
+      outParams.push({ value, buffer, size: layout.size, type: s.outScalar })
+      return address
+    })
     try {
-      return fn(...args)
+      const result = fn(...args)
+      for (const out of outParams) {
+        const view = new DataView(out.buffer.buffer, out.buffer.byteOffset, out.buffer.byteLength)
+        for (let i = 0; i < out.value.length; i += 1) {
+          out.value[i] = decodeScalar(view, i * out.size, out.type)
+        }
+      }
+      return result
     } finally {
       // Transient marshalling memory belongs to this call alone; return it to
       // the heap rather than leaking a block per call.
@@ -752,6 +835,32 @@ const koffi = {
   load(name) {
     return new Lib(name)
   },
+  /**
+   * Declare a callback prototype, e.g.
+   * `koffi.proto("int __stdcall Name(void *hwnd, intptr lparam)")`.
+   *
+   * koffi consumers use the result only through `koffi.pointer(...)` as the
+   * callback's type, and the shim keeps the parsed bun:ffi signature for the
+   * matching {@link koffi.register} call. Without this the native directory
+   * picker registered a callback the shim silently dropped, so
+   * `EnumThreadWindows` received a null pointer and the dialog thread's windows
+   * were never closed.
+   * @param declaration - the C prototype spelling.
+   * @returns the prototype token.
+   */
+  proto(declaration) {
+    const parsed = parseDeclaration(String(declaration))
+    const returns = parsed.ret === '' || cleanTypeSpelling(parsed.ret) === 'void'
+      ? FFIType.void
+      : protoFfiType(parsed.ret, declaration)
+    return {
+      __proto: true,
+      name: parsed.name,
+      args: parsed.args.map((arg) => protoFfiType(arg, declaration)),
+      returns,
+      signature: String(declaration),
+    }
+  },
   pointer(type) {
     return new Composite('pointer', typeof type === 'string' ? type : type.name, undefined, type)
   },
@@ -850,16 +959,49 @@ const koffi = {
     }
     return layout.size
   },
-  register() {
-    // callback registration is unused by the bundled TUI paths
+  /**
+   * Register a JS callback for a native function pointer and return the address
+   * to pass to the callee.
+   *
+   * `type` is the `koffi.pointer(koffi.proto(...))` expression a declaration
+   * carries; the returned handle must reach {@link koffi.unregister} once the
+   * callee is done with it, or the trampoline leaks for the process lifetime.
+   * @param fn - the JS callback.
+   * @param type - the prototype type expression.
+   * @returns the callback's address as an opaque handle.
+   */
+  register(fn, type) {
+    const proto = protoOf(type)
+    if (proto === undefined) {
+      throw new Error('koffi shim: register requires a koffi.proto(...) declaration (pass koffi.pointer(proto))')
+    }
+    if (typeof fn !== 'function') {
+      throw new Error('koffi shim: register requires a callback function')
+    }
+    const callback = new JSCallback(fn, { args: proto.args, returns: proto.returns })
+    const handle = { __ptr: callbackAddress(callback) }
+    registeredCallbacks.set(handle.__ptr, callback)
+    return handle
   },
-  unregister() {
+  /**
+   * Release a callback registered by {@link koffi.register}. A foreign handle is
+   * ignored by design: the shim only owns what it registered.
+   * @param handle - the value `register` returned.
+   */
+  unregister(handle) {
+    if (handle === null || handle === undefined) return
+    const address = addressOf(handle)
+    const callback = registeredCallbacks.get(address)
+    if (callback === undefined) return
+    registeredCallbacks.delete(address)
+    callback.close()
   },
 }
 
 export default koffi
 export const load = koffi.load
 export const pointer = koffi.pointer
+export const proto = koffi.proto
 export const struct = koffi.struct
 export const array = koffi.array
 export const alloc = koffi.alloc

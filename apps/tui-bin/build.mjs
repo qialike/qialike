@@ -30,6 +30,8 @@ import { createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 import { build } from 'esbuild'
 import semver from 'semver'
+import { ACL_PACKAGE_DIR, patchDeleteConstraint } from './harness-patches/delete-constraint.mjs'
+import { patchPolicyAndHygiene } from './harness-patches/policy-and-hygiene.mjs'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)), '..')
 const HARNESS = process.env.DSH_HARNESS ?? resolve(ROOT, '../deepseek-harness')
@@ -735,10 +737,22 @@ function createResolveFarm() {
   patchBunNodeUtilGaps()
   patchBunSeaWorkerEntries()
   patchBunSeaWorkflowWorker()
+  // P0-A: the delete constraint lives inside the ACL package (the confined token
+  // drops to Low integrity and both granted trees carry the Low label), and it
+  // MUST be patched BEFORE the runner below is bundled — that bundle inlines this
+  // package into the runner the binary executes.
+  patchDeleteConstraint({ root: join(ROOT, 'apps/tui-bin/x', ACL_PACKAGE_DIR), log: console.log })
   // The Windows ACL runner is a SECOND ENTRY the harness resolves by specifier
   // at call time; a single file cannot answer that (see the function).
   buildAclRunnerBundle()
   patchWindowsAclRunnerEntry()
+  // The in-process filesystem fence must mirror the roots the ACL runner
+  // actually grants (see the function); downstream carrier for the fix.
+  patchWritableRootsWindows()
+  // P1-B + P3-A: the workspace-write policy sentence is DERIVED from the
+  // allow-list the fence enforces, and the shared temp tree gets its stale
+  // `dsh-*` residue reclaimed (see the module).
+  patchPolicyAndHygiene({ root: join(ROOT, 'apps/tui-bin/x'), log: console.log })
   // The `glob` / `grep` tools spawn the packaged ripgrep, which a single file
   // can neither resolve nor carry implicitly (see the functions).
   embedRipgrepBinaries()
@@ -986,6 +1000,61 @@ function patchWindowsAclRunnerEntry() {
     + ' from "@yourname/qialike-app/src/windows-acl-mode.ts";\n'
   writeFileSync(file, text.replace(firstImport, firstImport + flagImport).replace(anchor, injected + anchor))
   console.log('qialike: patched the windows-acl runner entry in the bundled sandbox-local')
+}
+
+/**
+ * Keep the in-process filesystem fence on the roots the ACL runner grants.
+ *
+ * The harness's `writableRoots()` adds the literal `/tmp` — which on Windows
+ * resolves to `<drive>:\tmp` — and `os.tmpdir()`, the SHARED user temp tree.
+ * The restricted-token runner grants neither: it grants the workspace root and
+ * one session-private temp directory. So the tool layer was WIDER than the kernel
+ * layer it mirrors — `write` could create files the `delete`/`move` fence refuses
+ * to remove, `C:\tmp` became a write-only area no layer can clean, and the
+ * `workspace-write` name stopped describing the agent's real footprint.
+ *
+ * The fix itself belongs upstream (the patch is carried in the workspace as
+ * `qialike-downstream-patch/harness-writableRoots.diff`); this step applies it to
+ * the vendored copy, because a build copies `lib/` from the harness checkout and
+ * that checkout stays untouched. Windows keeps the workspace root alone; POSIX
+ * behaviour is unchanged. The injected comment doubles as the idempotency marker.
+ */
+function patchWritableRootsWindows() {
+  const patches = [
+    {
+      file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox/lib/index.js'),
+      from: '\treturn [...new Set([\n\t\tpolicy.workspaceRoot,\n\t\t"/tmp",\n\t\ttmpdir()\n\t].map(canonicalPath))];',
+      to: '\tconst roots = /* qialike: Windows grants the workspace root alone */ '
+        + 'process.platform === "win32" ? [policy.workspaceRoot] : [policy.workspaceRoot, "/tmp", tmpdir()];\n'
+        + '\treturn [...new Set(roots.map(canonicalPath))];',
+    },
+    {
+      file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox/lib/types/roots.js'),
+      from: "    return [...new Set([policy.workspaceRoot, '/tmp', tmpdir()].map(canonicalPath))];",
+      to: '    const roots = /* qialike: Windows grants the workspace root alone */\n'
+        + "        process.platform === 'win32' ? [policy.workspaceRoot] : [policy.workspaceRoot, '/tmp', tmpdir()];\n"
+        + '    return [...new Set(roots.map(canonicalPath))];',
+    },
+  ]
+  for (const { file, from, to } of patches) {
+    if (!existsSync(file)) {
+      console.log(`qialike: ${file} not in the farm; leaving writableRoots unpatched`)
+      continue
+    }
+    const text = readFileSync(file, 'utf8')
+    if (text.includes('qialike: Windows grants the workspace root alone')) {
+      console.log(`qialike: writableRoots already patched (${file})`)
+      continue
+    }
+    if (!text.includes(from)) {
+      throw new Error(
+        `qialike: the vendored ${file} no longer matches the writableRoots revision this build patches; `
+        + 're-check apps/tui-bin/build.mjs against the harness version',
+      )
+    }
+    writeFileSync(file, text.replace(from, to))
+    console.log(`qialike: patched writableRoots for Windows in the vendored ${file}`)
+  }
 }
 
 /**
