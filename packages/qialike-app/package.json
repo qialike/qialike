@@ -1,7 +1,7 @@
 {
   "name": "@yourname/qialike-app",
   "description": "The dsh TUI bundle: a full-screen Ink/React terminal surface over dsh-base, with a single interactive agent session.",
-  "version": "0.5.1-beta",
+  "version": "0.5.2-beta",
   "publishConfig": {
     "access": "public"
   },
