@@ -144,7 +144,8 @@ describe('product identity', () => {
   test('the build emits dist/qialike and qialike-<target> packages', () => {
     const build = readFileSync(join(REPO, 'apps/tui-bin/build.mjs'), 'utf8')
     expect(build).toContain("return join(OUT_DIR, name, `qialike${exe}`)")
-    expect(build).toContain("compileTarget(null, join(OUT_DIR, 'qialike'))")
+    // The host-only artifact (`--single`, i.e. `name === null`) lands at dist/qialike.
+    expect(build).toContain("name === null ? join(OUT_DIR, 'qialike')")
     expect(build).toContain('`qialike-${name}.tar.gz`')
     expect(build).toContain('`qialike-${name}.zip`')
     // The app package the farm links and the bundles import.
