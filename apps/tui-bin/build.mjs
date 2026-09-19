@@ -1069,12 +1069,21 @@ function embedRipgrepBinaries() {
     console.log(`qialike: no ripgrep binary for ${missing.join(', ')}; those targets will have no glob/grep`)
   }
   const hostKey = `${process.platform}-${process.arch}`
-  const hostBase64 = entries[hostKey]
-  // The file name is content-addressed from the HOST's binary: it names the file
-  // the shim writes at run time, and a changed binary must land on a new path.
-  const fileName = hostBase64 === undefined
-    ? 'rg-missing'
-    : `rg-${createHash('sha256').update(Buffer.from(hostBase64, 'base64')).digest('hex').slice(0, 16)}${process.platform === 'win32' ? '.exe' : ''}`
+  // One file name PER TARGET, content-addressed from that target's own bytes and
+  // carrying that target's extension. A single host-derived name cannot work:
+  // in a `BUILD_TARGETS=ALL` build hosted on Linux the Windows artifact would
+  // write its PE bytes to an extensionless path, and `CreateProcess` resolves an
+  // extensionless image by appending `.exe`, so `glob`/`grep` would fail to
+  // launch on the very platform this embedding exists for. A missing host binary
+  // is reported, not papered over with a placeholder name.
+  const fileNames = {}
+  for (const [key, base64] of Object.entries(entries)) {
+    const hash = createHash('sha256').update(Buffer.from(base64, 'base64')).digest('hex').slice(0, 16)
+    fileNames[key] = `rg-${hash}${key.startsWith('win32-') ? '.exe' : ''}`
+  }
+  if (entries[hostKey] === undefined) {
+    console.log(`qialike: this build carries no ripgrep for its own host ${hostKey}; glob/grep stay unavailable there`)
+  }
   // Generated INTO the app package, next to the shim that imports it: the farm
   // copy of `@yourname/qialike-app` carries it, and the shim's lazy
   // `import('./ripgrep-binary.generated.ts')` is what pulls it into the bundle.
@@ -1083,8 +1092,13 @@ function embedRipgrepBinaries() {
     [
       '/** Generated at build time; see apps/tui-bin/build.mjs. Do not edit. */',
       '',
-      '/** File name of the materialized ripgrep (content-addressed, so a rebuild never races an older file). */',
-      `export const RIPGREP_BINARY_FILE = ${JSON.stringify(fileName)}`,
+      '/**',
+      ' * File name of the materialized ripgrep, keyed by `<platform>-<arch>` exactly',
+      ' * like `RIPGREP_BINARIES`. Content-addressed from that target’s own bytes, so a',
+      ' * rebuild never races an older file, and carrying that target’s extension',
+      ' * (`.exe` on Windows, where an extensionless image cannot be spawned).',
+      ' */',
+      `export const RIPGREP_BINARY_FILES = ${JSON.stringify(fileNames, null, 2)}`,
       '',
       '/**',
       ' * The embedded ripgrep binaries, base64, keyed by `<platform>-<arch>` (the Node',

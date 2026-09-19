@@ -29,11 +29,13 @@ import { RIPGREP_TEMP_DIR } from './ripgrep-mode.ts'
 async function embedded(): Promise<{ base64: string; file: string } | undefined> {
   try {
     const generated = await import(`./ripgrep-binary.generated.ts` as string)
-    const base64 = (generated.RIPGREP_BINARIES as Record<string, string | undefined>)[
-      `${process.platform}-${process.arch}`
-    ]
-    if (base64 === undefined) return undefined
-    return { base64, file: generated.RIPGREP_BINARY_FILE as string }
+    const key = `${process.platform}-${process.arch}`
+    const base64 = (generated.RIPGREP_BINARIES as Record<string, string | undefined>)[key]
+    // The name is per target, not per build host: a cross-built Windows artifact
+    // needs its `.exe` even when the build ran on Linux.
+    const file = (generated.RIPGREP_BINARY_FILES as Record<string, string | undefined>)[key]
+    if (base64 === undefined || file === undefined) return undefined
+    return { base64, file }
   } catch {
     // A build that embedded nothing (a source checkout, or a target whose
     // package could not be obtained) leaves the harness on its own resolution.

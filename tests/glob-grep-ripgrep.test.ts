@@ -28,19 +28,27 @@ const HARNESS_SEARCH_DIR = join(process.cwd(), 'apps', 'tui-bin', 'x', '-deepsee
 const GENERATED = new URL('../packages/qialike-app/src/ripgrep-binary.generated.ts', import.meta.url)
 
 describe('the embedded ripgrep', () => {
-  test('the build embeds a binary per target and writes a content-addressed name', () => {
+  test('the build embeds a binary per target and names each one for its own platform', () => {
     const generated = readFileSync(GENERATED, 'utf8')
-    const file = /RIPGREP_BINARY_FILE = "([^"]+)"/u.exec(generated)?.[1]
-    expect(file).toBeDefined()
-    // A changed binary must land on a new path, so the name carries a hash.
-    expect(file).toMatch(/^rg-[0-9a-f]{16}(\.exe)?$/u)
     const map = JSON.parse(/RIPGREP_BINARIES = (\{[\s\S]*?\n\})/u.exec(generated)?.[1] ?? '{}') as Record<string, string>
+    const names = JSON.parse(/RIPGREP_BINARY_FILES = (\{[\s\S]*?\n\})/u.exec(generated)?.[1] ?? '{}') as Record<string, string>
     // The host must be among them: an artifact that cannot search on the host it
     // was built for is exactly the regression this file guards.
-    const host = map[`${process.platform}-${process.arch}`]
-    expect(typeof host).toBe('string')
+    const hostKey = `${process.platform}-${process.arch}`
+    expect(typeof map[hostKey]).toBe('string')
     // The bytes really are an executable, not a placeholder.
-    expect(Buffer.from(host ?? '', 'base64').length).toBeGreaterThan(1_000_000)
+    expect(Buffer.from(map[hostKey] ?? '', 'base64').length).toBeGreaterThan(1_000_000)
+    // Every embedded binary has a name, hashed so a changed binary lands on a new
+    // path, and carrying ITS OWN platform's extension. That last part is not
+    // cosmetic: a `BUILD_TARGETS=ALL` build hosted on Linux used to give the
+    // Windows artifact an extensionless name, and Windows cannot spawn an
+    // extensionless image (CreateProcess appends `.exe`), so `glob`/`grep` failed
+    // to launch on the one platform the embedding exists for.
+    expect(Object.keys(names).sort()).toEqual(Object.keys(map).sort())
+    for (const [key, name] of Object.entries(names)) {
+      expect(name).toMatch(/^rg-[0-9a-f]{16}(\.exe)?$/u)
+      expect(name.endsWith('.exe')).toBe(key.startsWith('win32-'))
+    }
   })
 
   test('the shim materializes a runnable ripgrep for the running platform', async () => {
@@ -58,19 +66,26 @@ describe('the embedded ripgrep', () => {
     const rg = await shim.ripgrepPath()
     // `glob` lists files (`--files` + a glob filter); `grep` searches content
     // through `--json`. Both go through `--no-config`, as the tool prepends.
-    const files = spawnSync(rg, ['--no-config', '--files', '--glob', '**/*.md'], {
+    //
+    // `stdin: 'ignore'` is not incidental: the harness spawns ripgrep through
+    // `ctx.subprocess` with `stdio.stdin: 'ignore'` and NO path argument when the
+    // model omits `path`. `spawnSync`'s own default is a PIPED stdin, and a
+    // piped stdin makes ripgrep search that empty pipe instead of the workdir
+    // (measured: pipe → 0 match records, ignore → the workdir's matches), so the
+    // default would test a shape the product never uses and report the tools as
+    // broken. Mirror the real spawn.
+    const spawnShape = {
       encoding: 'utf8',
       timeout: 60_000,
       cwd: process.cwd(),
-    })
+      stdio: ['ignore', 'pipe', 'pipe'],
+    } as const
+
+    const files = spawnSync(rg, ['--no-config', '--files', '--glob', '**/*.md'], spawnShape)
     expect(files.status).toBe(0)
     expect(files.stdout.split('\n').filter(Boolean).length).toBeGreaterThan(0)
 
-    const matches = spawnSync(rg, ['--no-config', '--json', 'qialike', '--glob', '**/*.md'], {
-      encoding: 'utf8',
-      timeout: 60_000,
-      cwd: process.cwd(),
-    })
+    const matches = spawnSync(rg, ['--no-config', '--json', 'qialike', '--glob', '**/*.md'], spawnShape)
     // 0 = matches, 1 = none; anything else is a launch/pattern failure.
     expect([0, 1]).toContain(matches.status)
     expect(matches.stdout).toContain('"type":"begin"')
