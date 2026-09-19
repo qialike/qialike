@@ -178,7 +178,10 @@ describe('decoding honours the computed offsets (not a guessed walk)', () => {
     expect(koffi.decode(bytes, 0, koffi.pointer('void'))).toBeNull()
   })
 
-  test('a char16 array decodes to a NUL-terminated string', () => {
+  // Windows only, for the same reason as the block below: this case reads back
+  // through `alloc`, which is a Win32 `HeapAlloc`, so it cannot run here. The
+  // every-platform decode coverage is the `Uint8Array` overload above.
+  test.skipIf(process.platform !== 'win32')('a char16 array decodes to a NUL-terminated string', () => {
     const s = koffi.struct('S8', { name: koffi.array('char16', 8) })
     const buffer = koffi.alloc(s, 1)
     koffi.encode(buffer, s, { name: 'qia' })
