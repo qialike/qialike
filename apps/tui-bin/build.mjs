@@ -26,6 +26,8 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlin
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { gunzipSync } from 'node:zlib'
 import { build } from 'esbuild'
 import semver from 'semver'
 
@@ -61,21 +63,36 @@ const ALL_TARGETS = [
 ]
 const BUN_TARGET = Object.fromEntries(ALL_TARGETS.map((name) => [name, `bun-${name}`]))
 
-/** Packages that load a native `.node` addon; stubbed (never activated by the TUI patch). */
+/** The targets this invocation compiles, resolved by {@link buildTargets} before the farm is built. */
+let BUILD_TARGETS = [null]
+
+/**
+ * Packages stubbed at the import-manifest level and in the resolve farm.
+ *
+ * Membership is only for a package that (a) the composition actually mounts and
+ * (b) cannot be bundled. When Windows gained the ACL rung, `dsh-pwsh-sandbox` had
+ * to LEAVE this set: it is the confined PowerShell executor the Windows
+ * composition mounts, it is pure JavaScript (it reaches the sandbox through
+ * `ctx.sandbox`), and the stub would have replaced that plugin with an empty
+ * module. Its own pair of Win32 helpers — `dsh-win32-process` and
+ * `dsh-sandbox-windows-acl` — are bundled for real now, backed by the koffi shim.
+ */
 const NATIVE_PACKAGES = new Set([
-  '@deepseek-ai/dsh-pwsh-sandbox',
   '@deepseek-ai/node-addon-landlock-run',
-  '@deepseek-ai/dsh-sandbox-windows-acl',
-  '@deepseek-ai/dsh-win32-process',
 ])
 
 /**
  * Stub source for a {@link NATIVE_PACKAGES} entry whose real module carries a
- * native addon but whose callers only need it to be importable. Entries either
- * report "unusable" (the Windows-only rungs a Linux/macOS host never selects)
- * or, for `node-addon-landlock-run`, carry a real pure-JS implementation read
- * from `apps/tui-bin/stub/`. Keyed by package name; the link loop uses it in
- * place of the generic proxy.
+ * native addon but whose callers only need it to be importable. Reserved for a
+ * package whose callers need something the generic proxy cannot give them: the
+ * one entry today carries a real pure-JS implementation read from
+ * `apps/tui-bin/stub/`. Keyed by package name; the link loop uses it in place of
+ * the generic proxy.
+ *
+ * The two Windows-only packages that used to live here (`dsh-win32-process` and
+ * `dsh-sandbox-windows-acl`) are now bundled for real: their native dependency
+ * is `koffi`, and `installKoffiShim` supplies a working `bun:ffi` implementation
+ * of it, so the Windows restricted-token rung runs in the single file.
  */
 const NATIVE_STUB_SOURCE = {
   // Landlock is REAL in qialike, not stubbed to `unusable`. The launcher is
@@ -87,36 +104,6 @@ const NATIVE_STUB_SOURCE = {
   // bubblewrap becomes optional rather than required. Both naming generations
   // (this key and the `node-addon-system` subpath below) read the same file.
   '@deepseek-ai/node-addon-landlock-run': readFileSync(join(ROOT, 'apps/tui-bin/stub/landlock-run.js'), 'utf8'),
-  // Windows-only restricted-token runner; it pulls the native koffi-backed
-  // `dsh-win32-process` whose struct size checks crash at module scope on
-  // Linux. The bwrap (Linux) / Seatbelt (macOS) rungs never touch it, so a
-  // no-op keeps the bundle importable; Windows ACL confinement stays off.
-  '@deepseek-ai/dsh-sandbox-windows-acl': [
-    'export class AclWriteGrant {}',
-    'export const assertTempRootOutsideWorkspace = () => {}',
-    'export const tempWriteSid = ""',
-    'export const workspaceWriteSid = ""',
-    '',
-  ].join('\n'),
-  // The Win32 Job/process ABI (`subprocess-local`'s Windows runner). Its `ffi.ts`
-  // asserts Koffi's `STARTUPINFOW`/`PROCESS_INFORMATION` layouts at MODULE LOAD,
-  // and the bun:ffi-backed koffi shim computes no size for them — so merely
-  // importing the Linux-capable `subprocess-local` crashed the binary with
-  // `STARTUPINFOW layout mismatch: koffi computed undefined, expected 104`.
-  // Every export here backs a `process.platform === 'win32'` branch, so a stub
-  // that keeps them importable (and throws if a Windows path ever runs) is
-  // enough on Linux/macOS — same rule as the Windows ACL entry above.
-  '@deepseek-ai/dsh-win32-process': [
-    'export class Win32Error extends Error {}',
-    'export const loadWin32ProcessBindings = () => { throw new Error("win32 process bindings are not available in qialike") }',
-    'export const probeCurrentTokenJobSupport = () => ({ supported: false })',
-    'export const spawnCurrentTokenJobProcess = () => { throw new Error("win32 process spawning is not available in qialike") }',
-    'export const closeHandleChecked = () => {}',
-    'export const isJobEmpty = () => true',
-    'export const pollProcessExit = () => undefined',
-    'export const terminateJob = () => {}',
-    '',
-  ].join('\n'),
 }
 
 /**
@@ -733,6 +720,14 @@ function createResolveFarm() {
   patchBunNodeUtilGaps()
   patchBunSeaWorkerEntries()
   patchBunSeaWorkflowWorker()
+  // The Windows ACL runner is a SECOND ENTRY the harness resolves by specifier
+  // at call time; a single file cannot answer that (see the function).
+  buildAclRunnerBundle()
+  patchWindowsAclRunnerEntry()
+  // The `glob` / `grep` tools spawn the packaged ripgrep, which a single file
+  // can neither resolve nor carry implicitly (see the functions).
+  embedRipgrepBinaries()
+  patchRipgrepPath()
 }
 
 /**
@@ -853,6 +848,298 @@ function patchBunSeaWorkerEntries() {
     patched += 1
   }
   if (patched > 0) console.log(`qialike: patched Bun SEA worker entry in ${patched} bundled file(s)`)
+}
+
+/**
+ * Re-bundle the harness's Windows ACL runner into a SELF-CONTAINED CJS file the
+ * binary embeds.
+ *
+ * `@deepseek-ai/dsh-sandbox-local` spawns the runner as a SECOND PROCESS
+ * (`[program, runner, --workspace …, --, <argv>]`) rather than importing it, and
+ * resolves the runner's path with
+ * `import.meta.resolve('@deepseek-ai/dsh-sandbox-windows-acl/runner')`. From a
+ * compiled binary Bun answers that with `Cannot find package …` for ANY
+ * specifier — measured, including one the same binary statically imports, because
+ * the embedded manifest serves real `import` statements and not runtime
+ * resolution. `confine()` therefore threw before spawning anything, and every
+ * Windows shell call failed with a package-resolution error instead of running.
+ *
+ * The fix reuses the launcher-mode pattern the Landlock rung already uses: the
+ * binary becomes its own runner. This step re-bundles the harness's runner (so
+ * its restricted-token argv contract stays the only implementation, with the
+ * koffi shim inlined among its dependencies) into a generated module that
+ * `apps/tui-bin/src/windows-acl-shim.ts` writes out and loads. Nothing here is
+ * specific to Windows — the runner is only EXECUTED there — so the bundle is
+ * produced on every host, exactly like the workflow worker.
+ */
+function buildAclRunnerBundle() {
+  const entry = join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox-windows-acl/lib/runner.js')
+  const generated = join(ROOT, 'apps/tui-bin/src/windows-acl-runner.generated.ts')
+  if (!existsSync(entry)) {
+    rmSync(generated, { force: true })
+    console.log('qialike: windows-acl runner entry not in the farm; the runner stays unavailable')
+    return false
+  }
+  const out = join(ROOT, 'apps/tui-bin/stub-native', 'windows-acl-runner.bundle.cjs')
+  try {
+    mkdirSync(dirname(out), { recursive: true })
+    rmSync(out, { force: true })
+    run('bun', ['build', '--target=bun', '--format=cjs', '--outfile', out, entry])
+  } catch (error) {
+    rmSync(generated, { force: true })
+    console.log(`qialike: windows-acl runner re-bundle failed (${
+      error instanceof Error ? error.message.split('\n')[0] : String(error)}); the runner stays unavailable`)
+    return false
+  }
+  const bundled = readFileSync(out)
+  if (/require\(["']@deepseek-ai\//.test(bundled.toString('utf8'))) {
+    // A runner that still pulls `@deepseek-ai/*` by name would need a
+    // node_modules tree beside it, which a single-file install does not have.
+    rmSync(generated, { force: true })
+    console.log('qialike: windows-acl runner bundle still requires @deepseek-ai/* by name; the runner stays unavailable')
+    return false
+  }
+  writeFileSync(
+    generated,
+    [
+      '/** Generated at build time; see apps/tui-bin/build.mjs. Do not edit. */',
+      '',
+      '/** File name of the materialized runner (content-addressed, so a rebuild never races an older file). */',
+      `export const WINDOWS_ACL_RUNNER_FILE = ${JSON.stringify(`runner-${createHash('sha256').update(bundled).digest('hex').slice(0, 16)}.cjs`)}`,
+      '',
+      '/** The bundled runner, base64, as it is written to disk before being loaded. */',
+      `export const WINDOWS_ACL_RUNNER_BASE64 = ${JSON.stringify(bundled.toString('base64'))}`,
+      '',
+    ].join('\n'),
+  )
+  console.log(`qialike: bundled the windows-acl runner (${(bundled.length / 1024).toFixed(0)} KB)`)
+  return true
+}
+
+/**
+ * Point the bundled `sandbox-local` at the qialike binary's own launcher mode.
+ *
+ * The patch replaces ONLY the runner-invocation resolution, so the harness keeps
+ * owning everything else: the `--workspace` / `--temp` / `--mode` / `--write-sid`
+ * arguments, the grant materialization, and the enforcement facts. The
+ * replacement is `[process.execPath, '--windows-acl-runner']` — the same shape
+ * `stub/landlock-run.js` uses for Linux, where the binary is its own launcher.
+ *
+ * The two `import.meta.resolve` fallbacks stay INSIDE a `try`, so an on-disk
+ * install (a developer checkout) still reaches the real `lib/runner.js` when it
+ * exists, and the binary's own mode covers the single-file case that cannot
+ * resolve the specifier at all.
+ */
+function patchWindowsAclRunnerEntry() {
+  const file = join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox-local/lib/index.js')
+  if (!existsSync(file)) {
+    console.log('qialike: sandbox-local not in the farm; leaving the windows-acl runner entry unpatched')
+    return
+  }
+  if (!existsSync(join(ROOT, 'apps/tui-bin/src/windows-acl-runner.generated.ts'))) {
+    console.log('qialike: no bundled windows-acl runner to point at; leaving the entry unpatched')
+    return
+  }
+  const text = readFileSync(file, 'utf8')
+  if (text.includes('QIALIKE_WINDOWS_ACL_RUNNER_FLAG')) {
+    console.log('qialike: windows-acl runner entry already patched')
+    return
+  }
+  const anchor = '\t\tconst builtEntry = this.internals.windowsAclRunnerEntry ?? fileURLToPath(import.meta.resolve("@deepseek-ai/dsh-sandbox-windows-acl/runner"));\n'
+  const firstImport = 'import { existsSync, mkdtempSync, rmSync } from "node:fs";\n'
+  if (!text.includes(anchor) || !text.includes(firstImport)) {
+    throw new Error(
+      'qialike: the bundled sandbox-local no longer matches the windows-acl runner resolution '
+      + 'this build patches; re-check apps/tui-bin/build.mjs against the harness version',
+    )
+  }
+  // The replacement lands AFTER the `internals` override check (which the harness
+  // keeps for its own tests), so only the real resolution is redirected.
+  const injected = [
+    '\t\t// qialike patch (see build.mjs): this executable is its own ACL runner — a',
+    '\t\t// single file cannot resolve the runner by specifier. An on-disk install',
+    '\t\t// (developer checkout) still resolves the harness entry, so try that first.',
+    '\t\ttry {',
+    '\t\t\tconst onDisk = this.internals.windowsAclRunnerEntry ?? fileURLToPath(import.meta.resolve("@deepseek-ai/dsh-sandbox-windows-acl/runner"));',
+    '\t\t\tif (existsSync(onDisk)) return [process.execPath, onDisk];',
+    '\t\t} catch { /* a single-file binary cannot resolve the specifier at all */ }',
+    '\t\treturn [process.execPath, QIALIKE_WINDOWS_ACL_RUNNER_FLAG];',
+    '',
+  ].join('\n')
+  const flagImport = 'import { WINDOWS_ACL_RUNNER_FLAG as QIALIKE_WINDOWS_ACL_RUNNER_FLAG }'
+    + ' from "@yourname/qialike-app/src/windows-acl-mode.ts";\n'
+  writeFileSync(file, text.replace(firstImport, firstImport + flagImport).replace(anchor, injected + anchor))
+  console.log('qialike: patched the windows-acl runner entry in the bundled sandbox-local')
+}
+
+/**
+ * The ripgrep platform package for one build target.
+ *
+ * `@vscode/ripgrep` selects it at RUNTIME as
+ * `@vscode/ripgrep-${process.platform}-${process.arch}`, so a single-file build
+ * bundles the module's JavaScript and none of the binaries — its
+ * `require.resolve('@vscode/ripgrep-<platform>-<arch>/bin/rg')` then throws, and
+ * every `glob` / `grep` call fails as `ripgrep launch failed`. The build embeds
+ * one binary per target instead.
+ */
+const RIPGREP_VERSION = '1.18.0'
+
+/** The `@vscode/ripgrep-<platform>-<arch>` package name for a target or the host. */
+function ripgrepPackageName(target) {
+  if (target === null) return `@vscode/ripgrep-${process.platform}-${process.arch}`
+  const [platform, arch] = target.split('-')
+  return `@vscode/ripgrep-${platform === 'windows' ? 'win32' : platform}-${arch}`
+}
+
+/** The bundled binary's file name inside that package. */
+function ripgrepBinaryName(target) {
+  const windows = target === null ? process.platform === 'win32' : target.startsWith('windows')
+  return windows ? 'rg.exe' : 'rg'
+}
+
+/**
+ * Find one ripgrep binary: the harness store first (already on disk for the
+ * platforms this checkout installed), then a content-addressed download from the
+ * npm registry. Returns `undefined` when neither yields bytes — the build then
+ * reports it and leaves that target without search rather than failing.
+ */
+function findRipgrepBinary(target) {
+  const pkg = ripgrepPackageName(target)
+  const binary = ripgrepBinaryName(target)
+  const store = join(HARNESS, 'node_modules/.pnpm/node_modules', ...pkg.split('/'), 'bin', binary)
+  if (existsSync(store)) return readFileSync(store)
+  const cached = join(ROOT, 'apps/tui-bin/stub-native/ripgrep', `${pkg.replace(/[@/]/g, '_')}-${binary}`)
+  if (existsSync(cached)) return readFileSync(cached)
+  try {
+    const url = `https://registry.npmjs.org/${pkg.replace('/', '%2f')}/-/${pkg.split('/')[1]}-${RIPGREP_VERSION}.tgz`
+    const response = spawnSync('curl', ['-fsSL', url], { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 })
+    if (response.status !== 0 || response.stdout === null) return undefined
+    const unpacked = extractFromTarGz(response.stdout, `package/bin/${binary}`)
+    if (unpacked === undefined) return undefined
+    mkdirSync(dirname(cached), { recursive: true })
+    writeFileSync(cached, unpacked)
+    return unpacked
+  } catch {
+    // Offline or a moved artifact: the caller reports the gap and moves on.
+    return undefined
+  }
+}
+
+/**
+ * Read one regular file's bytes out of a gzipped tar (an npm tarball).
+ *
+ * A local untar keeps the build dependency-free and avoids running a package
+ * manager inside a build step.
+ */
+function extractFromTarGz(tarball, wanted) {
+  const tar = gunzipSync(tarball)
+  for (let offset = 0; offset + 512 <= tar.length;) {
+    const header = tar.subarray(offset, offset + 512)
+    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/s, '')
+    const sizeText = header.subarray(124, 136).toString('utf8').replace(/\0.*$/s, '').trim()
+    const size = Number.parseInt(sizeText, 8) || 0
+    if (name === wanted) return Uint8Array.prototype.slice.call(tar, offset + 512, offset + 512 + size)
+    offset += 512 + Math.ceil(size / 512) * 512
+  }
+  return undefined
+}
+
+/**
+ * Embed the ripgrep binary for every platform this build produces.
+ *
+ * The generated module is imported by `apps/tui-bin/src/ripgrep-shim.ts`, which
+ * writes the running platform's entry out and returns its path. Every target
+ * gets its own binary so a cross-compiled artifact searches with a ripgrep that
+ * matches it; a target whose package cannot be obtained is reported and skipped.
+ */
+function embedRipgrepBinaries() {
+  const targets = BUILD_TARGETS
+  const entries = {}
+  const missing = []
+  for (const target of targets) {
+    const bytes = findRipgrepBinary(target)
+    if (bytes === undefined) {
+      missing.push(ripgrepPackageName(target))
+      continue
+    }
+    const key = target === null ? `${process.platform}-${process.arch}` : target.replace('windows', 'win32')
+    entries[key] = bytes.toString('base64')
+  }
+  if (missing.length > 0) {
+    console.log(`qialike: no ripgrep binary for ${missing.join(', ')}; those targets will have no glob/grep`)
+  }
+  const hostKey = `${process.platform}-${process.arch}`
+  const hostBase64 = entries[hostKey]
+  // The file name is content-addressed from the HOST's binary: it names the file
+  // the shim writes at run time, and a changed binary must land on a new path.
+  const fileName = hostBase64 === undefined
+    ? 'rg-missing'
+    : `rg-${createHash('sha256').update(Buffer.from(hostBase64, 'base64')).digest('hex').slice(0, 16)}${process.platform === 'win32' ? '.exe' : ''}`
+  // Generated INTO the app package, next to the shim that imports it: the farm
+  // copy of `@yourname/qialike-app` carries it, and the shim's lazy
+  // `import('./ripgrep-binary.generated.ts')` is what pulls it into the bundle.
+  writeFileSync(
+    join(ROOT, 'packages/qialike-app/src/ripgrep-binary.generated.ts'),
+    [
+      '/** Generated at build time; see apps/tui-bin/build.mjs. Do not edit. */',
+      '',
+      '/** File name of the materialized ripgrep (content-addressed, so a rebuild never races an older file). */',
+      `export const RIPGREP_BINARY_FILE = ${JSON.stringify(fileName)}`,
+      '',
+      '/**',
+      ' * The embedded ripgrep binaries, base64, keyed by `<platform>-<arch>` (the Node',
+      ' * spelling of this build target). The shim writes the running platform’s entry',
+      ' * out and spawns that file.',
+      ' */',
+      `export const RIPGREP_BINARIES = ${JSON.stringify(entries, null, 2)}`,
+      '',
+    ].join('\n'),
+  )
+  const total = Object.values(entries).reduce((sum, base64) => sum + base64.length, 0)
+  console.log(`qialike: embedded ripgrep for ${Object.keys(entries).length} target(s) (${(total / 1024 / 1024).toFixed(1)} MB as base64)`)
+}
+
+/**
+ * Point the bundled search package at the embedded binary.
+ *
+ * The patch replaces ONLY the ripgrep-path resolution, so the harness keeps
+ * owning the argv, the error vocabulary, and the spawn. The embedded path is
+ * tried first because in a single-file artifact it is the only one that can
+ * resolve; the original `@vscode/ripgrep` branch stays as the fallback so an
+ * on-disk install keeps behaving exactly as it did.
+ */
+function patchRipgrepPath() {
+  const file = join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-tool-fs-search/lib/index.js')
+  if (!existsSync(file)) {
+    console.log('qialike: tool-fs-search not in the farm; leaving the ripgrep path unpatched')
+    return
+  }
+  const text = readFileSync(file, 'utf8')
+  if (text.includes('QIALIKE_RIPGREP_PATH')) {
+    console.log('qialike: ripgrep path already patched')
+    return
+  }
+  const anchor = '\t\tconst executableSidecar = process.platform === "win32" ? join(executable.dir, `${executable.name}-rg.exe`) : `${process.execPath}-rg`;\n'
+  const importAnchor = 'import { existsSync } from "node:fs";\n'
+  if (!text.includes(anchor) || !text.includes(importAnchor)) {
+    throw new Error(
+      'qialike: the bundled tool-fs-search no longer matches the ripgrep path resolution '
+      + 'this build patches; re-check apps/tui-bin/build.mjs against the harness version',
+    )
+  }
+  const injected = [
+    '\t\t// qialike patch (see build.mjs): the artifact carries its own ripgrep,',
+    '\t\t// because `@vscode/ripgrep` cannot resolve its platform package from a',
+    '\t\t// single-file binary. The module branch below stays as the on-disk fallback.',
+    '\t\ttry {',
+    '\t\t\tconst embedded = await QIALIKE_RIPGREP_PATH();',
+    '\t\t\tif (existsSync(embedded)) return embedded;',
+    '\t\t} catch { /* no embedded binary for this platform: use the module */ }',
+    '',
+  ].join('\n')
+  const shimImport = 'import { ripgrepPath as QIALIKE_RIPGREP_PATH } from "@yourname/qialike-app/src/ripgrep-shim.ts";\n'
+  writeFileSync(file, text.replace(importAnchor, importAnchor + shimImport).replace(anchor, injected + anchor))
+  console.log('qialike: patched the ripgrep path in the bundled tool-fs-search')
 }
 
 /** Symlink every entry of the harness virtual-store `node_modules` we don't own. */
@@ -1741,6 +2028,28 @@ function packageBinary(name) {
 }
 
 /**
+ * The targets this invocation will compile: the explicit `QIALIKE_TARGETS` list,
+ * the host alone for `--single`, or every target. `null` means "the host".
+ *
+ * This is resolved BEFORE the resolve farm is built, because the embedded
+ * per-target assets (the ripgrep binary today) must match the artifacts this run
+ * will actually produce.
+ */
+function buildTargets() {
+  const args = process.argv.slice(2)
+  const requested = (process.env.QIALIKE_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (requested.length > 0) {
+    for (const t of requested) {
+      if (BUN_TARGET[t] === undefined) {
+        throw new Error(`unknown QIALIKE_TARGETS entry "${t}" (allowed: ${ALL_TARGETS.join(', ')})`)
+      }
+    }
+    return requested
+  }
+  return args.includes('--single') ? [null] : [...ALL_TARGETS]
+}
+
+/**
  * Bundle the entry with Bun into single self-contained binaries.
  *
  * Target selection:
@@ -1754,25 +2063,19 @@ function packageBinary(name) {
  */
 function bundle() {
   const args = process.argv.slice(2)
-  const single = args.includes('--single')
   const pack = args.includes('--package')
-  const requested = (process.env.QIALIKE_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
 
+  if (args.includes('--single')) {
+    compileTarget(null, join(OUT_DIR, 'qialike'))
+    return
+  }
+
+  const requested = (process.env.QIALIKE_TARGETS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
   if (requested.length > 0) {
-    for (const t of requested) {
-      if (BUN_TARGET[t] === undefined) {
-        throw new Error(`unknown QIALIKE_TARGETS entry "${t}" (allowed: ${ALL_TARGETS.join(', ')})`)
-      }
-    }
     for (const name of requested) {
       compileTarget(name, targetBinaryPath(name))
       if (pack) packageBinary(name)
     }
-    return
-  }
-
-  if (single) {
-    compileTarget(null, join(OUT_DIR, 'qialike'))
     return
   }
 
@@ -1800,6 +2103,9 @@ async function main() {
   rmSync(OUT_DIR, { recursive: true, force: true })
   mkdirSync(OUT_DIR, { recursive: true })
   const specifiers = pluginSpecifiers()
+  // Resolved before the farm: the per-target assets embedded below must match the
+  // artifacts this invocation produces.
+  BUILD_TARGETS = buildTargets()
   createResolveFarm()
   await buildBundleLib()
   generate(specifiers)

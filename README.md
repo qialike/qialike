@@ -43,29 +43,37 @@ bundle (`qialike-app`) plus a Bun-compiled single-file launcher.
   boundary out of the box. An older kernel ABI is reported honestly as partial enforcement rather
   than overstated. Only when neither rung can enforce does a `workspace-write` / `read-only` bash
   call fail closed (`SANDBOX_UNAVAILABLE`) and only `danger-full-access` run. macOS uses the built-in
-  Seatbelt; Windows has no OS-level process sandbox, so every shell call there is gated behind an
-  approval prompt instead (see below).
+  Seatbelt; Windows uses the harness's ACL restricted-token runner, bundled for real (see below).
 - **Secrets read guard**: tool reads of `.env`-family files, `.git` internals, and the harness
   credential document are refused, in every sandbox mode. This is a confidentiality rule, not a
   file-effect boundary, so `danger-full-access` does not lift it and no `sandbox_permissions`
   escalation applies. `.env.example` stays readable. The guard fences the read **tools**; a shell
   command that names a secret file is not intercepted, because inferring paths from shell text is
   unsound — the same gap Gemini CLI has, and it is documented rather than approximated.
-- **Windows shell approval**: the bundled Windows restricted-token runner is a native addon a
-  single-file build cannot carry, so `pwsh` would otherwise run with no confinement while the model
-  was told `workspace-write`. Every shell call on such a host now asks for approval first, and the
-  prompt says plainly that the command has your full user authority. The gate is driven by the
-  mounted executor's own capability fact, so a host that later ships a confining executor stops
-  asking with no change here.
+- **Windows shell sandbox**: `pwsh` runs under the harness's ACL **restricted-token** runner, which
+  grants write access through a per-workspace capability SID and refuses everything else. It needs no
+  elevation and no account provisioning; reads, network, and process visibility are unaffected, and
+  the runner reports `partial` enforcement honestly. Two things had to be supplied for that rung to
+  work from one file: its native `koffi` dependency (`apps/tui-bin/stub/koffi.js`) and **the runner
+  process itself**, which the harness locates by module specifier — a call a compiled binary cannot
+  answer — so qialike bundles the harness's own runner and serves as its launcher, exactly as it does
+  for Landlock on Linux. A host whose executor still reports no confinement keeps the per-call shell
+  **approval gate** as the fallback: the gate is driven by the mounted executor's own capability
+  fact, and the prompt says plainly that the command has your full user authority.
 - **Workspace `delete` and `move` tools**: the harness filesystem seam publishes only two
   mutations (`writeText`, `editText`), so qialike adds the two it lacks — deleting and renaming.
   They are fenced to the **workspace root alone** (not the harness's `writableRoots()` temp grants,
   which exist for mkstemp-style writes and have no matching delete need), they refuse the workspace
   root itself, both ends of a `move` are checked, `read-only` refuses, and `danger-full-access`
-  delegates. They exist because the shell is an expensive or unavailable path on some hosts:
-  Windows gates every shell call behind an approval prompt, and a Linux host with neither `bwrap`
-  nor Landlock fails shell calls closed. `mkdir` needs no tool — `writeText` already creates parent
-  directories.
+  delegates. They exist because the shell is a heavier or unavailable path on some hosts: Windows
+  launches a confined process per call, and a Linux host with neither `bwrap` nor Landlock fails
+  shell calls closed. `mkdir` needs no tool — `writeText` already creates parent directories.
+- **`glob` and `grep` work**: both search through the packaged ripgrep, which the harness reaches by
+  module specifier (`@vscode/ripgrep-<platform>-<arch>/bin/rg`) — a lookup a single-file build bundles
+  the JavaScript for but not the 5 MB executable, so every call used to fail at launch with
+  `ripgrep launch failed`. The artifact now **carries its own ripgrep** for the platform it was built
+  for: the build embeds the executable and points the tool's lookup at it, materializing the bytes on
+  first search (see `packages/qialike-app/src/ripgrep-shim.ts`).
 
 ### Terminal colour depth
 
@@ -550,11 +558,13 @@ examples/cordis.yml     a deploy overlay pinning model + workspace
 tests/smoke.mjs          keyless REAL-composition boot smoke
 ```
 
-`cordis.patch.yml` rides over `dsh-base`; the OS-level sandbox rows are enabled — bash runs via
-`ctx.sandbox.confine()` (bwrap, or qialike's own embedded Landlock launcher, on Linux; Seatbelt on
-macOS), with `danger-full-access` executing unconfined. Native rows a single-file SEA cannot carry
-are stubbed: the Windows ACL runner (`pwsh-sandbox`) is replaced on Windows only by a non-native
-`pwsh-local` executor that provides `ctx.shell`, and the `permission` presets row is disabled on
-Windows only (POSIX keeps it over the confined bash rung). The pure-JS `fs-sandbox` fence, the
-secrets read guard, and — on a host whose executor applies no kernel confinement — a per-call shell
-approval gate are the remaining boundaries.
+`cordis.patch.yml` rides over `dsh-base`; the OS-level sandbox rows are enabled on every platform —
+bash runs via `ctx.sandbox.confine()` (bwrap, or qialike's own embedded Landlock launcher, on Linux;
+Seatbelt on macOS) and `pwsh` runs via the ACL restricted-token runner on Windows, with
+`danger-full-access` executing unconfined. Nothing in that set is stubbed any more: the Windows rung
+was blocked by two native-shaped pieces, both now supplied — `koffi`, replaced by the bundled
+`bun:ffi` shim, and the runner process, which qialike carries and launches itself (see
+`apps/tui-bin/src/windows-acl-shim.ts`). The `permission` presets row is therefore enabled everywhere
+too (it refuses to mount over an unconfined executor). The pure-JS `fs-sandbox` fence, the secrets
+read guard, and — on a host whose executor applies no kernel confinement — a per-call shell approval
+gate are the remaining boundaries.

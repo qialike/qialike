@@ -28,22 +28,29 @@
   不需要宿主安装、不需要 `setuid`、不需要 user namespace，只要内核启用该 LSM（≥5.13），因此 Linux 通常
   开箱即得内核级写边界。较旧的内核 ABI 会如实上报为 partial enforcement，不夸大。只有两级都无法强制时，
   `workspace-write` / `read-only` 下的 bash 才 fail-closed 报 `SANDBOX_UNAVAILABLE`，仅 `danger-full-access`
-  能跑。macOS 用系统自带 Seatbelt；Windows 无 OS 级进程沙箱，因此那里的**每次 shell 调用都改为先弹审批**
-  （见下）。
+  能跑。macOS 用系统自带 Seatbelt；Windows 用 harness 的 ACL restricted-token runner（现已真实打进单文件，见下）。
 - **机密文件读取防护**：工具读取 `.env` 系列文件、`.git` 内部路径、以及 harness 凭据文档一律拒绝，任何
   沙箱模式下都生效。这是机密性规则而非文件效果边界，所以 `danger-full-access` 不会解除它，也不适用
   `sandbox_permissions` 升级。`.env.example` 仍可读。该防护拦的是读**工具**；shell 命令里点名机密文件
   不会被拦——从 shell 文本反推路径不可靠，这也是 Gemini CLI 同样存在的缺口，此处如实记录而非近似实现。
-- **Windows shell 审批**：随包携带的 Windows restricted-token runner 是单文件构建装不下的原生插件，缺了它
-  `pwsh` 会在模型被告知 `workspace-write` 的同时毫无约束地运行。现在这类主机上的每次 shell 调用都先请求
-  审批，提示会明说该命令拥有你的完整用户权限。该闸门由所挂执行器自身的能力事实驱动，因此将来某主机换上
-  真正受限的执行器后会自动停止询问，无需改动此处。
+- **Windows shell 沙箱**：`pwsh` 运行在 harness 的 ACL **restricted-token** runner 之下，写权限通过
+  每工作台一个的 capability SID 授予，其余写入一律拒绝。它不需要提权、不需要 provisioning 账户；读、网络与
+  进程可见性不受影响，并且如实上报 `partial` 级执行。要让这一档在单文件里真正跑起来，有两件事必须自带：
+  它依赖的原生 `koffi`（由 `apps/tui-bin/stub/koffi.js` 顶替），以及 **runner 进程本身**——harness 用模块
+  specifier 定位它，而编译后的二进制答不了这个调用，于是 qialike 把 harness 自己的 runner 打包进来、并由本
+  二进制充当它的 launcher，与 Linux 上 Landlock 的做法完全一致。若某主机的执行器仍报告"无内核隔离"，则保留
+  **逐次 shell 审批**作为兜底：该闸门由所挂执行器自身的能力事实驱动，提示会明说该命令拥有你的完整用户权限。
 - **工作台 `delete` 与 `move` 工具**：harness 的文件 seam 只发布两个变更操作（`writeText`、`editText`），
   qialike 补上缺的两个——删除与重命名。它们**只被围栏在工作台根内**（不是 harness 的 `writableRoots()`
   临时区授权，那套是给 mkstemp 式写入用的，没有对应的删除需求），拒绝操作工作台根自身，`move` 的**两端**
   都要过围栏，`read-only` 拒绝、`danger-full-access` 放行。之所以需要它们：某些主机上 shell 要么昂贵要么
-  不可用——Windows 每次 shell 调用都要审批，而既无 `bwrap` 又无 Landlock 的 Linux 上 shell 直接 fail-closed。
-  `mkdir` 不需要额外工具——`writeText` 已递归创建父目录。
+  不可用——Windows 每次 shell 调用都要起一个受限进程，而既无 `bwrap` 又无 Landlock 的 Linux 上 shell 直接
+  fail-closed。`mkdir` 不需要额外工具——`writeText` 已递归创建父目录。
+- **`glob` / `grep` 可用**：两个工具都经随包携带的 ripgrep 搜索，而 harness 是用模块 specifier
+  （`@vscode/ripgrep-<platform>-<arch>/bin/rg`）定位它的——单文件构建会打进去那段 JavaScript，却打不进那
+  5 MB 的可执行文件，于是每次调用都在启动阶段以 `ripgrep launch failed` 失败。现在产物**自带**与其构建目标
+  匹配的 ripgrep：build 把可执行文件内嵌，并把工具的定位改指向它，首次搜索时把字节落盘（见
+  `packages/qialike-app/src/ripgrep-shim.ts`）。
 
 ### 终端颜色档位
 
@@ -333,9 +340,10 @@ examples/cordis.yml     一处部署 overlay：固化模型与工作区
 tests/smoke.mjs         无 key 的 REAL-composition 启动冒烟
 ```
 
-`cordis.patch.yml` 在 `dsh-base` 之上；**OS 级沙箱行已启用**——bash 经 `ctx.sandbox.confine()` 运行
-（Linux 用 bwrap 或 qialike 自带的 Landlock launcher、macOS 用 Seatbelt），`danger-full-access` 不加隔离
-直跑。单文件 SEA 无法内嵌的原生行被 stub：Windows 原生 ACL runner（`pwsh-sandbox`）在 Windows 上由非原生
-`pwsh-local` 执行器补位提供 `ctx.shell`，`permission`（presets）行**仅 Windows 禁用**（POSIX 保留，挂在受限
-bash rung 上）；纯 JS `fs-sandbox` 栅栏、机密文件读取防护、以及**执行器不提供内核隔离时的逐次 shell 审批
-闸门**，共同构成其余的边界。
+`cordis.patch.yml` 在 `dsh-base` 之上；**OS 级沙箱行在所有平台都已启用**——bash 经 `ctx.sandbox.confine()`
+运行（Linux 用 bwrap 或 qialike 自带的 Landlock launcher、macOS 用 Seatbelt），Windows 上 `pwsh` 经 ACL
+restricted-token runner 运行，`danger-full-access` 不加隔离直跑。这一组里**已无任何 stub**：Windows 那一档
+曾被两样"原生形状"的东西挡住，现在都已自带——`koffi` 由内置的 `bun:ffi` shim 顶替；runner 进程由 qialike
+自己携带并启动（见 `apps/tui-bin/src/windows-acl-shim.ts`）。`permission`（presets）行因此也在所有平台启用
+（它拒绝挂在无约束的执行器之上）。纯 JS `fs-sandbox` 栅栏、机密文件读取防护、以及**执行器不提供内核隔离时的
+逐次 shell 审批闸门**，共同构成其余的边界。

@@ -58,49 +58,39 @@
     - id: tui-file-reference
       name: '@yourname/qialike-app/file-reference'
 
-# ── OS-level sandbox: bwrap (Linux) / Seatbelt (macOS) / ACL (Windows) ──────
+# ── OS-level sandbox: bwrap/Landlock (Linux) / Seatbelt (macOS) / ACL (Windows)
 #
-# The SEA single file cannot bundle the Linux-only landlock native addon, so
-# `node-addon-landlock-run` is stubbed to report `unusable` (see build.mjs) and
-# `dsh-sandbox-local` runs on Linux's **bwrap** rung, macOS's built-in seatbelt
-# rung, or the Windows ACL restricted-token runner — real OS process isolation
-# without a native addon. The file-effect boundary still holds: sandbox-policy
-# (workspace-write), approval (ask), permission presets, and
-# fs-observation-policy stay enabled. Bash now runs via the confined executor,
-# so each bash call is wrapped through `ctx.sandbox.confine()`.
+# Every rung is real in the SEA single file. `node-addon-landlock-run` is
+# REPLACED (not stubbed) by qialike's own `bun:ffi` launcher, so Linux runs
+# `dsh-sandbox-local`'s landlock rung with no host install and bwrap becomes
+# optional; macOS uses the built-in seatbelt rung; Windows runs the ACL
+# restricted-token runner, whose only native dependency is `koffi` — supplied by
+# the bundled `bun:ffi` shim (apps/tui-bin/stub/koffi.js). The file-effect
+# boundary still holds: sandbox-policy (workspace-write), approval (ask),
+# permission presets, and fs-observation-policy stay enabled. Bash and PowerShell
+# both run through the confined executor, so each call is wrapped through
+# `ctx.sandbox.confine()`.
 
 - id: sandbox
 
-# The permission presets row is sandbox-coupled (it needs a confined bash
-# executor), so it is enabled alongside the OS sandbox; the sandbox-POLICY
-# service still owns the session `sandbox:mode` that the TUI's Tab switch
-# writes, feeding the sandbox_permissions + approval escalation path.
-# On Windows the SEA single file cannot embed the native ACL restricted-token
-# runner (build.mjs stubs pwsh-sandbox), so the only mountable executor is the
-# unconfined pwsh-local; permission-presets refuses to mount over an
-# unconfined executor (its check fails loud), so the row is disabled on
-# Windows only. POSIX keeps it enabled over the confined bash-sandbox rung.
+# The permission presets row is sandbox-coupled (it needs a confined shell
+# executor) and refuses to mount over an unconfined one. Every platform now has a
+# confined executor — bash-sandbox over bwrap/Landlock/Seatbelt on POSIX,
+# pwsh-sandbox over the ACL restricted-token runner on Windows — so the row stays
+# enabled everywhere. The sandbox-POLICY service still owns the session
+# `sandbox:mode` that the TUI's Tab switch writes, feeding the
+# sandbox_permissions + approval escalation path.
 - id: permission
-  disabled: !!js process.platform === 'win32'
 
 - id: bash-sandbox
   config:
     timeoutMs: 60000
 
+# Windows `ctx.shell` executor: the native ACL restricted-token runner, bundled
+# for real (see build.mjs). Its Win32 calls go through the bundled koffi shim, so
+# the restricted-token rung is available; no `disabled` key here, because a
+# patch row replaces the base row it names.
 - id: pwsh-sandbox
-  disabled: true
-
-# Windows `ctx.shell` executor. The base pwsh-sandbox row this surface disables
-# above is the native ACL restricted-token runner, which a single-file SEA
-# cannot bundle (build.mjs stubs the module); without any executor the
-# pwsh tool row and permission-presets row stay pending on `shell` and boot
-# fails the activation audit. Windows still needs one shell executor, so mount
-# the non-native pwsh-local provider on Windows only, mirroring the base
-# bundle's per-platform bash/pwsh pairing (POSIX keeps bash-sandbox).
-- insert:
-    - id: pwsh-local
-      name: '@deepseek-ai/dsh-pwsh-local'
-      disabled: !!js process.platform !== 'win32'
 
 # fs-sandbox is the PURE-JS file-policy fence (no native addon): write/edit/
 # delete tools consult the session sandbox-policy mode and deny mutations in
@@ -118,9 +108,9 @@
 # `writableRoots()`, which adds /tmp and os.tmpdir() because mkstemp-style writes
 # need them, with no matching need to delete inside the host's shared temp tree.
 # They also refuse the workspace root itself. The reason they exist at all is
-# that the shell is an expensive or unavailable path on some hosts: Windows gates
-# every shell call behind an approval prompt, and a Linux host with neither bwrap
-# nor Landlock fails shell calls closed (`SANDBOX_UNAVAILABLE`).
+# that the shell is an expensive or unavailable path on some hosts: every Windows
+# shell call runs through the ACL restricted-token runner, and a Linux host with
+# neither bwrap nor Landlock fails shell calls closed (`SANDBOX_UNAVAILABLE`).
 - insert:
     - id: qialike-fs-tools
       name: '@yourname/qialike-app/fs-tools'

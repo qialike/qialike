@@ -42,6 +42,7 @@ import {
   dockedFits,
 } from '../layout-budget.ts'
 import { questionDockRows, isMultiSelect, optionChecked } from '../question-layout.ts'
+import { approvalReasonLayout } from './approval.tsx'
 import { questionPresentation } from '../plan-review.ts'
 import {
   HERO_ART_CELL_GLYPH,
@@ -2588,9 +2589,21 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const caretGlobalRow = composerCaretGlobalRow(input, store.cursor, cUsable)
   const cTextArea = Math.max(1, composerH - 4)
   const cWin = composerWindow(input, cUsable, caretGlobalRow, cTextArea)
-  // Approval dock height: fixed — border 2 + padding 2 + header 1 + gap 1 +
-  // one truncated reason line 1 + gap 1 + choice row 1 + gap 1 + hint 1.
-  const approvalH = store.approval === null ? 0 : 11
+  // Approval dock height: from the SAME pure layout function the approval panel
+  // renders from, because the reason WRAPS now — a fixed 11 under-reserved the
+  // moment it took a second row, and the dock's bottom edge (the hint and the
+  // border) would be pushed off the screen. The panel reports its REAL painted
+  // height as `store.approvalRows`, which corrects this estimate from the second
+  // frame on (the same measured-or-estimated split the question dock uses).
+  const approvalH = store.approval === null ? 0 : Math.max(
+    approvalReasonLayout(
+      store.approval.req.reason,
+      store.approval.req.toolName,
+      store.width,
+      store.sidebarMode ?? 'auto',
+    ).dockRows,
+    store.approvalRows,
+  )
   // Question dock height — from the SAME pure layout function the question
   // panel renders from (question-layout.questionDockRows). The dock lives
   // IN-FLOW in the message column (see the render below), so the transcript

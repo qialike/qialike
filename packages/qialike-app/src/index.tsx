@@ -1989,6 +1989,7 @@ export class Store {
   setApproval(approval: PendingApproval | null): void {
     this._approval = approval
     if (approval) this._approvalChoice = 2 // default: Allow once
+    if (approval) this._approvalRows = 0 // re-measured by the panel's first report
     if (approval) this._panel = 'approval'
     else if (this._panel === 'approval') this._panel = 'conversation'
     this.notify()
@@ -1996,6 +1997,18 @@ export class Store {
   /** Selected approval action (0=Deny, 1=Allow always, 2=Allow once); ←/→ cycle + Enter. */
   private _approvalChoice = 2
   get approvalChoice(): number { return this._approvalChoice }
+  /** Measured dock ROW count: the approval panel reports the real rendered
+   *  height of its IN-FLOW dock so `conversation.tsx` reserves exactly that
+   *  many transcript rows. 0 means "not measured yet"; the caller then uses the
+   *  layout estimate (`approvalReasonLayout().dockRows`). */
+  private _approvalRows = 0
+  get approvalRows(): number { return this._approvalRows }
+  setApprovalRows(v: number): void {
+    const n = Math.max(0, Math.round(v))
+    if (n === this._approvalRows) return
+    this._approvalRows = n
+    this.notify()
+  }
   cycleApprovalChoice(delta: number): void {
     this._approvalChoice = (this._approvalChoice + delta + 3) % 3
     this.notify()
@@ -3763,10 +3776,12 @@ export function apply(ctx: Context, config: Config): void {
   // above). The secrets read guard then refuses reads of `.env`-family files,
   // `.git` internals, and the credential document — a confidentiality rule, so
   // it is mode-independent and its reason says no escalation lifts it. Finally,
-  // when the mounted executor applies NO kernel confinement — the Windows
-  // `pwsh-local` case — every shell call is asked instead of running unapproved:
-  // without it the host would advertise `workspace-write` while the shell
-  // ignored it, and no denial would ever fire to trigger the escalation path.
+  // when the mounted executor applies NO kernel confinement — a host whose shell
+  // reports no `sandboxMode`, such as Windows before the ACL restricted-token
+  // runner could be bundled — every shell call is asked instead of running
+  // unapproved: without it the host would advertise `workspace-write` while the
+  // shell ignored it, and no denial would ever fire to trigger the escalation
+  // path.
   // fs mutations are fenced separately by the (pure-JS) fs-sandbox row. The
   // shell rules live in `bash-policy.ts` and the read rule in `read-policy.ts`,
   // so each stays pure and independently testable.
