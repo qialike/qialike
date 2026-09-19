@@ -54,12 +54,24 @@ function materializeRunner(): string {
 /**
  * Run one Windows ACL runner invocation in this process.
  *
- * The bundle executes its own `main()` when loaded and settles
- * `process.exitCode`; this waits for the module graph and one event-loop turn so
- * that code is in place before the entry returns and exits with it.
- * @returns the exit code the launcher should settle with.
+ * The bundle calls its own `main()` at module scope, but that `main` is ASYNC: it
+ * awaits `child.wait()` for the confined command, and only then settles
+ * `process.exitCode` through its own `.then`. Loading the bundle therefore
+ * RETURNS while the work is still pending, so the launcher must not time it out
+ * or exit on its behalf — doing that kills the child before it starts, and the
+ * harness sees exit 0 with empty output, which is neither its runner-failure
+ * signal (exit 127 + a `windows-acl-run:` line) nor a denial, i.e. a silent
+ * FALSE SUCCESS on a security path.
+ *
+ * So this returns a code ONLY for a launcher-level failure (materialize or load).
+ * On the success path it returns `undefined` and leaves the runner's own pending
+ * work holding the event loop; the process then ends with whatever the runner
+ * settled. `process.exitCode` is pre-set to the failure code as a pessimistic
+ * default, so a runner that never settles still fails closed.
+ *
+ * @returns the exit code to force, or `undefined` to let the runner settle it.
  */
-export async function runWindowsAclRunner(): Promise<number> {
+export async function runWindowsAclRunner(): Promise<number | undefined> {
   let file: string
   try {
     file = materializeRunner()
@@ -68,7 +80,7 @@ export async function runWindowsAclRunner(): Promise<number> {
       error instanceof Error ? error.message : String(error)}\n`)
     return RUNNER_FAILURE_EXIT
   }
-  process.exitCode = 0
+  process.exitCode = RUNNER_FAILURE_EXIT
   try {
     // The `.cjs` extension keeps the bundle CommonJS: it is a re-bundled copy of
     // the harness's own runner, not part of this module graph.
@@ -77,6 +89,5 @@ export async function runWindowsAclRunner(): Promise<number> {
     process.stderr.write(`windows-acl-run: ${error instanceof Error ? error.message : String(error)}\n`)
     return RUNNER_FAILURE_EXIT
   }
-  await new Promise<void>((resolve) => { setImmediate(resolve) })
-  return process.exitCode ?? 0
+  return undefined
 }

@@ -82,7 +82,14 @@ async function main(): Promise<void> {
   if (isWindowsAclRunnerArgv(argv)) {
     const { runWindowsAclRunner } = await import('./windows-acl-shim.ts')
     process.argv.splice(2, 1)
-    process.exit(await runWindowsAclRunner())
+    const failure = await runWindowsAclRunner()
+    // The runner's `main()` is async and settles `process.exitCode` only after
+    // the confined command finishes; its pending work keeps this process alive.
+    // So an explicit exit here would kill the command before it ran AND report 0
+    // — a silent false success on a security path. Only a launcher-level failure
+    // is forced.
+    if (failure !== undefined) process.exit(failure)
+    return
   }
 
   // Same first step as bin.ts's full boot: the pre-rename `$DSH_HOME` state
