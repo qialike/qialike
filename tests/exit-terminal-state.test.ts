@@ -33,9 +33,14 @@ const BOOT_MS = 6000 // let the composition mount before typing /exit
 const EXIT_TIMEOUT_MS = 30_000
 
 // The boot delay plus the pty session need well beyond bun's default 5s.
-test('exiting qialike writes nothing visible after the alternate-screen leave', async () => {
+//
+// Skipped, not failed, when the artifact is absent: an ALL / `--package` build
+// writes `dist/<target>/qialike[.exe]` and never `dist/qialike`, so a
+// cross-platform build is a legitimate tree in which this case has nothing to
+// exercise. `pnpm build --single` — what the release gate runs — writes it, and
+// that is where this case carries its weight.
+test.skipIf(!existsSync(bin))('exiting qialike writes nothing visible after the alternate-screen leave', async () => {
   if (process.platform === 'win32') return // script(1) is not available
-  if (!existsSync(bin)) throw new Error(`missing ${bin}; run \`pnpm run build\` first`)
 
   const out = join(tmpdir(), `qialike-exit-${process.pid}.typescript`)
   // Declare a NORMAL pty size inside the session: with stdin piped, script(1)
