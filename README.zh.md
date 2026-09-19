@@ -22,11 +22,22 @@
 - 一份 DeepSeek Harness 检出（`DSH_HARNESS`，默认 `../deepseek-harness`；仅 `pnpm build` 需要，运行编译好的 `dist/qialike` 无需检出）
 - 跑真实会话时需要 `DEEPSEEK_API_KEY`（环境变量、`~/.dsh` 设置或 `.env`）
 - **内存**（2026-09-14 在 `0.4.15-beta` 上实测；整棵进程树、静置 12 s）：编译后的单文件可执行体启动 hero 峰值约 **250–290 MB**、加载超大会话约 **330–345 MB**，稳态常驻 **约 170 MB（hero）–225 MB（长会话）**；只读打开一个 30 MB（压缩）的转录峰值约 **320 MB**、随后稳定在约 **220 MB**。建议 **≥1 GB** 内存；512 MB 可用但偏紧（超长转录没有 swap 余量），低于 512 MB 不支持。运行时是 Bun/JSC，不会及时把已释放页面还给系统，所以 RSS 随使用缓慢上升后趋于平台——**这是 GC 策略，不是泄漏**（实测：同一负载下开 `BUN_JSC_collectContinuously=1`，RSS 不升反降）。内存紧张时该环境变量就是官方缓解手段，代价是 GC 更频繁。
-- **Linux 沙箱前置**：受限 `bash` 经 `bwrap`（**bubblewrap**，需宿主自行安装）运行，并要求内核开启
-  非特权 user namespace。缺失时应用照常启动、非 shell 工具全部可用，但 `workspace-write` / `read-only`
-  下**每条 bash 都 fail-closed 报 `SANDBOX_UNAVAILABLE`**，只有 `danger-full-access`（无隔离）能跑。
-  macOS 用系统自带 Seatbelt，Windows 无 OS 级进程沙箱。**qialike 不使用 LandLock**：单文件构建把原生
-  launcher stub 成不可用，Linux 固定落到 bwrap 档（harness 自身是 bwrap → Landlock 两级）。
+- **Linux 沙箱**：受限 `bash` 走 harness 的 `bwrap` → Landlock 两级链，qialike 现在**两级都自带**。宿主有
+  `bwrap`（**bubblewrap**）时优先用它；没有、或无法创建 namespace 时，链条落到 **Landlock**——qialike 用
+  `bun:ffi` 自己实现该 launcher，并以本二进制自身的子命令形式重入（`--ro` / `--rw` / `--probe`）。Landlock
+  不需要宿主安装、不需要 `setuid`、不需要 user namespace，只要内核启用该 LSM（≥5.13），因此 Linux 通常
+  开箱即得内核级写边界。较旧的内核 ABI 会如实上报为 partial enforcement，不夸大。只有两级都无法强制时，
+  `workspace-write` / `read-only` 下的 bash 才 fail-closed 报 `SANDBOX_UNAVAILABLE`，仅 `danger-full-access`
+  能跑。macOS 用系统自带 Seatbelt；Windows 无 OS 级进程沙箱，因此那里的**每次 shell 调用都改为先弹审批**
+  （见下）。
+- **机密文件读取防护**：工具读取 `.env` 系列文件、`.git` 内部路径、以及 harness 凭据文档一律拒绝，任何
+  沙箱模式下都生效。这是机密性规则而非文件效果边界，所以 `danger-full-access` 不会解除它，也不适用
+  `sandbox_permissions` 升级。`.env.example` 仍可读。该防护拦的是读**工具**；shell 命令里点名机密文件
+  不会被拦——从 shell 文本反推路径不可靠，这也是 Gemini CLI 同样存在的缺口，此处如实记录而非近似实现。
+- **Windows shell 审批**：随包携带的 Windows restricted-token runner 是单文件构建装不下的原生插件，缺了它
+  `pwsh` 会在模型被告知 `workspace-write` 的同时毫无约束地运行。现在这类主机上的每次 shell 调用都先请求
+  审批，提示会明说该命令拥有你的完整用户权限。该闸门由所挂执行器自身的能力事实驱动，因此将来某主机换上
+  真正受限的执行器后会自动停止询问，无需改动此处。
 
 ### 终端颜色档位
 
@@ -317,7 +328,8 @@ tests/smoke.mjs         无 key 的 REAL-composition 启动冒烟
 ```
 
 `cordis.patch.yml` 在 `dsh-base` 之上；**OS 级沙箱行已启用**——bash 经 `ctx.sandbox.confine()` 运行
-（Linux 用 bwrap、macOS 用 Seatbelt），`danger-full-access` 不加隔离直跑。单文件 SEA 无法内嵌的原生行
-被 stub：Windows 原生 ACL runner（`pwsh-sandbox`）在 Windows 上由非原生 `pwsh-local` 执行器补位提供
-`ctx.shell`，`permission`（presets）行**仅 Windows 禁用**（POSIX 保留，挂在受限 bash rung 上）；
-纯 JS `fs-sandbox` 栅栏 + `workspace-write + ask` 审批边界仍是文件效应的闸门。
+（Linux 用 bwrap 或 qialike 自带的 Landlock launcher、macOS 用 Seatbelt），`danger-full-access` 不加隔离
+直跑。单文件 SEA 无法内嵌的原生行被 stub：Windows 原生 ACL runner（`pwsh-sandbox`）在 Windows 上由非原生
+`pwsh-local` 执行器补位提供 `ctx.shell`，`permission`（presets）行**仅 Windows 禁用**（POSIX 保留，挂在受限
+bash rung 上）；纯 JS `fs-sandbox` 栅栏、机密文件读取防护、以及**执行器不提供内核隔离时的逐次 shell 审批
+闸门**，共同构成其余的边界。

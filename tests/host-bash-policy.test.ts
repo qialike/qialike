@@ -18,7 +18,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { bashMutates, readOnlyBashDecision } from '../packages/qialike-app/src/bash-policy.ts'
+import { bashMutates, readOnlyBashDecision, unconfinedShellAskDecision } from '../packages/qialike-app/src/bash-policy.ts'
 import { Store } from '../packages/qialike-app/src/index.tsx'
 
 describe('bashMutates detects filesystem mutations', () => {
@@ -80,10 +80,48 @@ describe('readOnlyBashDecision fences bash only under read-only', () => {
   })
 })
 
+describe('unconfinedShellAskDecision gates a shell that no kernel confines', () => {
+  const unconfined = { permission: 'workspace-write', shellConfines: false } as const
+
+  test('asks for a shell tool when the mounted executor applies no confinement', () => {
+    const decision = unconfinedShellAskDecision({ name: 'pwsh', arguments: { command: 'Get-ChildItem' } }, unconfined)
+    expect(decision?.kind).toBe('ask')
+    // The prompt is the whole boundary on such a host, so it must state the
+    // stake rather than read like a routine confirmation.
+    expect(decision?.reason).toContain('no kernel sandbox')
+    expect(decision?.reason).toContain('full user authority')
+    expect(decision?.reason).toContain('"pwsh"')
+  })
+
+  test('delegates once a confining executor is mounted — the capability fact decides, not the platform', () => {
+    expect(unconfinedShellAskDecision({ name: 'pwsh', arguments: {} }, { permission: 'workspace-write', shellConfines: true })).toBeUndefined()
+  })
+
+  test('danger-full-access is exempt: the user already chose "no boundary"', () => {
+    expect(unconfinedShellAskDecision({ name: 'pwsh', arguments: {} }, { permission: 'danger-full-access', shellConfines: false })).toBeUndefined()
+  })
+
+  test('read-only still asks (the deny fence runs first and is stronger)', () => {
+    // Both fences apply; index.tsx consults readOnlyBashDecision first, so a
+    // mutating command under read-only is denied rather than merely asked.
+    expect(unconfinedShellAskDecision({ name: 'bash', arguments: {} }, { permission: 'read-only', shellConfines: false })?.kind).toBe('ask')
+  })
+
+  test('a non-shell tool is never gated here', () => {
+    expect(unconfinedShellAskDecision({ name: 'read', arguments: {} }, unconfined)).toBeUndefined()
+    expect(unconfinedShellAskDecision({ arguments: {} }, unconfined)).toBeUndefined()
+  })
+
+  test('bash-flavoured names are gated too', () => {
+    expect(unconfinedShellAskDecision({ name: 'bash-bg', arguments: {} }, unconfined)?.kind).toBe('ask')
+  })
+})
+
 describe('the fence is shared, not duplicated', () => {
   test('index.tsx applies the shared rule (no second copy of the regexes)', () => {
     const client = readFileSync(join(process.cwd(), 'packages/qialike-app/src/index.tsx'), 'utf8')
     expect(client).toContain('readOnlyBashDecision')
+    expect(client).toContain('unconfinedShellAskDecision')
     expect(client).not.toMatch(/function bashMutates/)
   })
 

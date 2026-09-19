@@ -71,23 +71,22 @@ const NATIVE_PACKAGES = new Set([
 
 /**
  * Stub source for a {@link NATIVE_PACKAGES} entry whose real module carries a
- * native addon but whose callers only need it to be importable and to report
- * "unusable". `node-addon-landlock-run` is Linux-only, so the OS sandbox must
- * run on Linux's **bwrap** rung; this stub keeps the module bundle-able and
- * makes the landlock probe return `unusable` so the `dsh-sandbox-local` chain
- * never selects it (macOS Seatbelt / Windows ACL never touch it either).
- * Keyed by package name; the link loop uses it in place of the generic proxy.
+ * native addon but whose callers only need it to be importable. Entries either
+ * report "unusable" (the Windows-only rungs a Linux/macOS host never selects)
+ * or, for `node-addon-landlock-run`, carry a real pure-JS implementation read
+ * from `apps/tui-bin/stub/`. Keyed by package name; the link loop uses it in
+ * place of the generic proxy.
  */
 const NATIVE_STUB_SOURCE = {
-  '@deepseek-ai/node-addon-landlock-run': [
-    'export const LAUNCHER_BIN = "landlock-run"',
-    'export const LAUNCHER_FAILURE_EXIT = 125',
-    'export const launcherPath = () => ""',
-    'export const grantArgs = () => []',
-    'export const probe = () => "unusable"',
-    'export default ""',
-    '',
-  ].join('\n'),
+  // Landlock is REAL in qialike, not stubbed to `unusable`. The launcher is
+  // embedded in this binary: `stub/landlock-run.js` spells the launcher's argv
+  // and points `launcherPath()` at `process.execPath`, and the entry
+  // (`src/main.ts`) re-enters `src/landlock-shim.ts` on that argv, applying a
+  // Landlock ruleset over `bun:ffi` before spawning the wrapped command. Linux
+  // therefore gets a kernel-enforced write boundary with no host install, and
+  // bubblewrap becomes optional rather than required. Both naming generations
+  // (this key and the `node-addon-system` subpath below) read the same file.
+  '@deepseek-ai/node-addon-landlock-run': readFileSync(join(ROOT, 'apps/tui-bin/stub/landlock-run.js'), 'utf8'),
   // Windows-only restricted-token runner; it pulls the native koffi-backed
   // `dsh-win32-process` whose struct size checks crash at module scope on
   // Linux. The bwrap (Linux) / Seatbelt (macOS) rungs never touch it, so a
@@ -140,15 +139,7 @@ const NATIVE_STUB_SOURCE = {
  */
 const NATIVE_SUBPATH_STUB_SOURCE = {
   '@deepseek-ai/node-addon-system': {
-    './landlock-run': [
-      'export const LAUNCHER_BIN = "landlock-run"',
-      'export const LAUNCHER_FAILURE_EXIT = 125',
-      'export const launcherPath = () => ""',
-      'export const grantArgs = () => []',
-      'export const probe = () => "unusable"',
-      'export default ""',
-      '',
-    ].join('\n'),
+    './landlock-run': readFileSync(join(ROOT, 'apps/tui-bin/stub/landlock-run.js'), 'utf8'),
     './flock': [
       'export async function tryLockExclusive(_fd) { return undefined }',
       'export default { tryLockExclusive }',
@@ -633,7 +624,9 @@ function createResolveFarm() {
   // build actually imports depends on the harness version the gate let through
   // (≤0.1.2-rc.1 imports `node-addon-landlock-run`; ≥0.1.5 imports the
   // `node-addon-system` subpaths), and an unused stub directory is inert.
-  // The landlock stub reports `unusable`, pushing the Linux sandbox to bwrap.
+  // The landlock module is a real implementation (read from `stub/`), so the
+  // Linux chain selects the Landlock rung whenever the kernel enforces it and
+  // falls back to bwrap only when it does not.
   {
     const stubName = '@deepseek-ai/node-addon-landlock-run'
     const stubSrc = NATIVE_STUB_SOURCE[stubName]

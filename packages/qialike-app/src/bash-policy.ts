@@ -91,6 +91,16 @@ export function lastSandboxMode(events: readonly { type?: string; data?: unknown
 }
 
 /**
+ * Whether a tool name designates a shell command execution. Shared by both
+ * shell fences so their notion of "a shell tool" cannot drift apart.
+ * @param name - the tool's registered name.
+ * @returns whether this tool runs a shell command.
+ */
+export function isShellTool(name: unknown): name is string {
+  return typeof name === 'string' && (name === 'bash' || name === 'pwsh' || name.includes('bash'))
+}
+
+/**
  * Decide one tool execution under the `read-only` bash fence.
  *
  * `read-only` denies bash commands that would modify the filesystem; the fs
@@ -107,8 +117,52 @@ export function readOnlyBashDecision(
   permission: SandboxMode,
 ): PreToolDecision | undefined {
   if (permission !== 'read-only') return undefined
-  const name = exec.name
-  if (typeof name !== 'string' || !(name === 'bash' || name === 'pwsh' || name.includes('bash'))) return undefined
+  if (!isShellTool(exec.name)) return undefined
   if (!bashMutates(commandOf(exec))) return undefined
   return { kind: 'deny', reason: `${DENIAL_MARKER}\n${ESCALATION_HINT}` }
+}
+
+/**
+ * The reason an unconfined shell call must be approved. It states the missing
+ * boundary and the consequence in the user's own terms, because this prompt is
+ * the ONLY thing standing between the model and the user's full authority on
+ * such a host — it is not a routine confirmation.
+ * @param name - the tool's registered name.
+ * @returns the approval reason shown to the user.
+ */
+function unconfinedShellReason(name: string): string {
+  return `This host has no kernel sandbox for shell commands, so "${name}" runs with your full user authority — it can read, modify, or delete anything you can. Approve to run this command once.`
+}
+
+/**
+ * Decide one shell execution when the mounted executor applies NO kernel
+ * confinement — Windows, where the restricted-token runner cannot be bundled,
+ * mounts the unconfined `pwsh-local`.
+ *
+ * Without this fence such a host declares `workspace-write` in the model-visible
+ * policy context while the shell ignores it entirely: no denial is ever
+ * produced, so the harness's own escalation path never fires and the model gets
+ * unapproved, unbounded authority. Reporting the boundary honestly and failing
+ * closed is the documented stance (`SandboxUnavailableError`); where refusing
+ * outright would leave the platform unusable, an approval gate keeps the user in
+ * the loop without pretending the command is confined.
+ *
+ * It is deliberately derived from the capability fact (`ShellExecutor.sandboxMode`)
+ * rather than from `process.platform`: a host that later ships a confining
+ * executor stops asking with no change here.
+ *
+ * `danger-full-access` is exempt — the user has explicitly selected "no
+ * boundary", and a prompt there would contradict the mode the model was told.
+ * @param exec - the tool execution under decision (`name` + `arguments`).
+ * @param options - the effective mode and whether the mounted executor confines.
+ * @returns the ask decision, or `undefined` to delegate down the chain.
+ */
+export function unconfinedShellAskDecision(
+  exec: { readonly name?: unknown; readonly arguments?: unknown },
+  options: { readonly permission: SandboxMode; readonly shellConfines: boolean },
+): PreToolDecision | undefined {
+  if (options.shellConfines) return undefined
+  if (options.permission === 'danger-full-access') return undefined
+  if (!isShellTool(exec.name)) return undefined
+  return { kind: 'ask', reason: unconfinedShellReason(exec.name) }
 }

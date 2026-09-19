@@ -39,7 +39,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 // (SPLASH_DELAY_MS) and before any other module's.
 import { migrateLegacyHomeFiles } from '@yourname/qialike-app/src/legacy-names.ts'
 import { tuiCommand } from '@yourname/qialike-app/src/startup.ts'
-import { isLauncherMode } from './launcher-modes.ts'
+import { isLandlockLauncherArgv, isLauncherMode } from './launcher-modes.ts'
 
 const NAME = 'qialike'
 
@@ -55,10 +55,25 @@ function isCommanderExit(error: unknown): error is { code: string; exitCode: num
 }
 
 async function main(): Promise<void> {
+  const argv = process.argv.slice(2)
+
+  // The embedded Landlock launcher comes FIRST, before anything else in this
+  // process does any work. When the harness confines a command it spawns this
+  // very executable as `[<qialike>, --ro|--rw … --probe, …]`, so on that path
+  // the process is a sandbox launcher, not a TUI: it must not migrate home
+  // files, parse the TUI command line, or load the plugin graph. `runLandlockLauncher`
+  // never returns — it exits with the confined command's status, or with the
+  // launcher's reserved 125 after printing its fatal `landlock-run:` line.
+  if (isLandlockLauncherArgv(argv)) {
+    const { runLandlockLauncher } = await import('./landlock-shim.ts')
+    runLandlockLauncher(argv)
+    return
+  }
+
   // Same first step as bin.ts's full boot: the pre-rename `$DSH_HOME` state
   // files must move before this process reads or appends to any of them.
   migrateLegacyHomeFiles()
-  const args = process.argv.slice(2)
+  const args = argv
 
   // `--version` is launcher-owned, resolved before the app owns the command
   // line: same condition and bytes as bin.ts's own check, so `qialike --model

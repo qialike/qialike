@@ -34,13 +34,29 @@ bundle (`qialike-app`) plus a Bun-compiled single-file launcher.
   `BUN_JSC_collectContinuously=1` RSS goes *down* during the same workload). On a
   memory-constrained box that flag is the supported mitigation, at the cost of
   more frequent GC.
-- **Linux sandbox**: the confined `bash` rung runs through `bwrap` (**bubblewrap**), which must be
-  installed on the host, and it needs a kernel with unprivileged user namespaces. Without it the app
-  still boots and every non-shell tool works, but each `workspace-write` / `read-only` bash call
-  fails closed (`SANDBOX_UNAVAILABLE`); only `danger-full-access` (unconfined) runs. macOS uses the
-  built-in Seatbelt; Windows has no OS-level process sandbox. **LandLock is not used** by qialike:
-  the single-file build stubs the native launcher as unusable, so Linux always takes the bwrap rung
-  (the harness itself is bwrap → Landlock).
+- **Linux sandbox**: the confined `bash` rung runs through the harness's `bwrap` → Landlock chain.
+  qialike now carries **both** rungs. Linux first tries `bwrap` (**bubblewrap**) when the host has it;
+  when it does not — or when it cannot create a namespace — the chain falls to **Landlock**, which
+  qialike implements itself over `bun:ffi` and re-executes as a subcommand of this binary
+  (`--ro` / `--rw` / `--probe`). Landlock needs no host install, no `setuid`, and no user namespace,
+  only a kernel with the LSM enabled (≥5.13), so a Linux host normally gets a kernel-enforced write
+  boundary out of the box. An older kernel ABI is reported honestly as partial enforcement rather
+  than overstated. Only when neither rung can enforce does a `workspace-write` / `read-only` bash
+  call fail closed (`SANDBOX_UNAVAILABLE`) and only `danger-full-access` run. macOS uses the built-in
+  Seatbelt; Windows has no OS-level process sandbox, so every shell call there is gated behind an
+  approval prompt instead (see below).
+- **Secrets read guard**: tool reads of `.env`-family files, `.git` internals, and the harness
+  credential document are refused, in every sandbox mode. This is a confidentiality rule, not a
+  file-effect boundary, so `danger-full-access` does not lift it and no `sandbox_permissions`
+  escalation applies. `.env.example` stays readable. The guard fences the read **tools**; a shell
+  command that names a secret file is not intercepted, because inferring paths from shell text is
+  unsound — the same gap Gemini CLI has, and it is documented rather than approximated.
+- **Windows shell approval**: the bundled Windows restricted-token runner is a native addon a
+  single-file build cannot carry, so `pwsh` would otherwise run with no confinement while the model
+  was told `workspace-write`. Every shell call on such a host now asks for approval first, and the
+  prompt says plainly that the command has your full user authority. The gate is driven by the
+  mounted executor's own capability fact, so a host that later ships a confining executor stops
+  asking with no change here.
 
 ### Terminal colour depth
 
@@ -526,9 +542,10 @@ tests/smoke.mjs          keyless REAL-composition boot smoke
 ```
 
 `cordis.patch.yml` rides over `dsh-base`; the OS-level sandbox rows are enabled — bash runs via
-`ctx.sandbox.confine()` (bwrap on Linux, Seatbelt on macOS), with `danger-full-access` executing
-unconfined. Native rows a single-file SEA cannot carry are stubbed: the Windows ACL runner
-(`pwsh-sandbox`) is replaced on Windows only by a non-native `pwsh-local` executor that provides
-`ctx.shell`, and the `permission` presets row is disabled on Windows only (POSIX keeps it over the
-confined bash rung). The pure-JS `fs-sandbox` fence plus the `workspace-write + ask` approval
-boundary remain the file-effect gates.
+`ctx.sandbox.confine()` (bwrap, or qialike's own embedded Landlock launcher, on Linux; Seatbelt on
+macOS), with `danger-full-access` executing unconfined. Native rows a single-file SEA cannot carry
+are stubbed: the Windows ACL runner (`pwsh-sandbox`) is replaced on Windows only by a non-native
+`pwsh-local` executor that provides `ctx.shell`, and the `permission` presets row is disabled on
+Windows only (POSIX keeps it over the confined bash rung). The pure-JS `fs-sandbox` fence, the
+secrets read guard, and — on a host whose executor applies no kernel confinement — a per-call shell
+approval gate are the remaining boundaries.

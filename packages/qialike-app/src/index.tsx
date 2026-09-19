@@ -27,7 +27,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
-import { lastSandboxMode, readOnlyBashDecision, type SandboxMode } from './bash-policy.ts'
+import { lastSandboxMode, readOnlyBashDecision, unconfinedShellAskDecision, type SandboxMode } from './bash-policy.ts'
+import { blockedReadDecision } from './read-policy.ts'
 import { SessionLogReader } from './log-frames.ts'
 import { sanitizeTerminalText } from './terminal-safe.ts'
 import type { AgentHandle, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
@@ -3754,14 +3755,31 @@ export function apply(ctx: Context, config: Config): void {
     return result
   })
 
-  // File-permission enforcement for bash: fs tools are already fenced by the
-  // (pure-JS) fs-sandbox row. Bash bypasses those tools, so in `read-only` we
-  // deny commands that would modify the filesystem, carrying the `[sandbox: …]`
-  // marker the model surfaces for a `sandbox_permissions` escalation (which
-  // routes to the approval answerer above). The rule itself lives in
-  // `bash-policy.ts` so it stays pure and independently testable.
+  // Three tool fences, strongest first. `read-only` denies commands that would
+  // modify the filesystem, carrying the `[sandbox: …]` marker the model surfaces
+  // for a `sandbox_permissions` escalation (which routes to the approval answerer
+  // above). The secrets read guard then refuses reads of `.env`-family files,
+  // `.git` internals, and the credential document — a confidentiality rule, so
+  // it is mode-independent and its reason says no escalation lifts it. Finally,
+  // when the mounted executor applies NO kernel confinement — the Windows
+  // `pwsh-local` case — every shell call is asked instead of running unapproved:
+  // without it the host would advertise `workspace-write` while the shell
+  // ignored it, and no denial would ever fire to trigger the escalation path.
+  // fs mutations are fenced separately by the (pure-JS) fs-sandbox row. The
+  // shell rules live in `bash-policy.ts` and the read rule in `read-policy.ts`,
+  // so each stays pure and independently testable.
   ctx.on('tools/pre-execute', async (exec, next): Promise<PreToolDecision> => {
-    return readOnlyBashDecision(exec, store.permission) ?? next()
+    return readOnlyBashDecision(exec, store.permission)
+      ?? blockedReadDecision(exec)
+      ?? unconfinedShellAskDecision(exec, {
+        permission: store.permission,
+        // The capability fact, not `process.platform`: an executor that applies
+        // no kernel confinement reports `undefined`, so this gate lights up
+        // exactly where a shell would otherwise run unconfined, and a host that
+        // later ships a confining executor stops asking with no change here.
+        shellConfines: ctx.get('shell')?.sandboxMode !== undefined,
+      })
+      ?? next()
   })
 
   void start(ctx, config, io).catch((error: unknown) => {
