@@ -167,3 +167,25 @@ export function unconfinedShellAskDecision(
   if (!isShellTool(exec.name)) return undefined
   return { kind: 'ask', reason: unconfinedShellReason(exec.name) }
 }
+
+/**
+ * The one-time notice the TUI shows when a confined shell reports PARTIAL
+ * enforcement: the boundary exists, but it does not cover every file effect —
+ * the Windows ACL rung constrains the shell's write-class effects (writing and
+ * deleting files) and deliberately leaves reads unconfined, which its own README
+ * documents as a partial boundary.
+ *
+ * The fact is read from the SETTLED RESULT (`result.sandbox.enforcement`), which
+ * is the only place the harness publishes it: an executor exposes `sandboxMode`
+ * (whether a boundary exists) but not how complete it is, so a UI that inferred
+ * this from `process.platform` would be inventing a claim no backend made.
+ * @param sandbox - the settled sandbox facts of one shell result, when present.
+ * @returns the notice to show once, or `undefined` when it is not partial.
+ */
+export function partialEnforcementNotice(
+  sandbox: { readonly mode?: unknown; readonly enforcement?: unknown } | undefined,
+): string | undefined {
+  if (sandbox?.enforcement !== 'partial') return undefined
+  const mode = typeof sandbox.mode === 'string' ? sandbox.mode : 'this mode'
+  return `sandbox: ${mode} — PARTIAL enforcement on this host: the shell is confined for write-class file effects (writing and deleting files), not for reads or every file effect.`
+}

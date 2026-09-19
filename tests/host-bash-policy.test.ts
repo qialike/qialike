@@ -18,7 +18,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { bashMutates, readOnlyBashDecision, unconfinedShellAskDecision } from '../packages/qialike-app/src/bash-policy.ts'
+import { bashMutates, partialEnforcementNotice, readOnlyBashDecision, unconfinedShellAskDecision } from '../packages/qialike-app/src/bash-policy.ts'
 import { Store } from '../packages/qialike-app/src/index.tsx'
 
 describe('bashMutates detects filesystem mutations', () => {
@@ -132,5 +132,47 @@ describe('the fence is shared, not duplicated', () => {
     expect(store.cyclePermission()).toBe('danger-full-access')
     expect(store.cyclePermission()).toBe('read-only')
     expect(seen).toEqual(['danger-full-access', 'read-only'])
+  })
+})
+
+describe('partial enforcement is surfaced, not silently implied', () => {
+  test('a partial settlement produces a notice naming the mode and the gap', () => {
+    const notice = partialEnforcementNotice({ mode: 'workspace-write', enforcement: 'partial' })
+    expect(notice).toContain('PARTIAL')
+    expect(notice).toContain('workspace-write')
+    expect(notice).toContain('not for reads')
+  })
+
+  test('a full or absent enforcement produces nothing', () => {
+    expect(partialEnforcementNotice({ mode: 'workspace-write', enforcement: 'full' })).toBeUndefined()
+    expect(partialEnforcementNotice({ mode: 'workspace-write' })).toBeUndefined()
+    expect(partialEnforcementNotice(undefined)).toBeUndefined()
+  })
+
+  test('the notice is derived from the settled result, never from the platform', () => {
+    // A missing mode must not invent one: the mode label is the harness's.
+    const notice = partialEnforcementNotice({ enforcement: 'partial' })
+    expect(notice).toContain('this mode')
+    expect(notice).not.toContain('win32')
+  })
+
+  test('index.tsx announces it from the post-execute result', () => {
+    const client = readFileSync(join(process.cwd(), 'packages/qialike-app/src/index.tsx'), 'utf8')
+    expect(client).toContain('partialEnforcementNotice')
+    expect(client).toContain("'tools/post-execute'")
+  })
+
+  test('the harness really publishes enforcement on a settled shell result', () => {
+    // P2-A reads `result.value.sandbox.enforcement`. That path belongs to the
+    // harness, so pin it here: a bump that moves the field must fail THIS test,
+    // not leave the TUI silently announcing nothing.
+    const bundle = readFileSync(
+      join(process.cwd(), 'apps/tui-bin/x/-deepseek-ai-dsh-tool-pwsh/lib/index.js'),
+      'utf8',
+    )
+    // The dispatched value carries the settled facts …
+    expect(bundle).toContain('...result.sandbox !== void 0 ? { sandbox: {')
+    // … and the output schema declares the field, so normalization keeps it.
+    expect(bundle).toMatch(/sandbox: \{[\s\S]{0,400}enforcement: \{ type: "string" \}/)
   })
 })

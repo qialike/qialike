@@ -27,7 +27,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
-import { lastSandboxMode, readOnlyBashDecision, unconfinedShellAskDecision, type SandboxMode } from './bash-policy.ts'
+import { lastSandboxMode, partialEnforcementNotice, readOnlyBashDecision, unconfinedShellAskDecision, type SandboxMode } from './bash-policy.ts'
 import { blockedReadDecision } from './read-policy.ts'
 import { turnEndNotice, type TurnEndReasonLike } from './turn-end-notice.ts'
 import { BUILD_MODE } from './build-mode.ts'
@@ -3798,6 +3798,22 @@ export function apply(ctx: Context, config: Config): void {
         shellConfines: ctx.get('shell')?.sandboxMode !== undefined,
       })
       ?? next()
+  })
+
+  // P2-A: a mounted boundary is not necessarily a COMPLETE one, and the harness
+  // publishes the distinction only with a settled shell result
+  // (`result.sandbox.enforcement`) — `ctx.get('shell')?.sandboxMode` says a
+  // boundary exists, not how far it reaches. Announce `partial` once per session
+  // so the mode label is never read as full confinement.
+  let announcedSandboxEnforcement: string | undefined
+  ctx.on('tools/post-execute', async (_exec, result, next) => {
+    const value = result.value as { sandbox?: { mode?: unknown; enforcement?: unknown } } | undefined
+    const notice = partialEnforcementNotice(value?.sandbox)
+    if (notice !== undefined && notice !== announcedSandboxEnforcement) {
+      announcedSandboxEnforcement = notice
+      store.append('status', notice, true)
+    }
+    return next()
   })
 
   void start(ctx, config, io).catch((error: unknown) => {
