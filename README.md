@@ -57,6 +57,15 @@ bundle (`qialike-app`) plus a Bun-compiled single-file launcher.
   prompt says plainly that the command has your full user authority. The gate is driven by the
   mounted executor's own capability fact, so a host that later ships a confining executor stops
   asking with no change here.
+- **Workspace `delete` and `move` tools**: the harness filesystem seam publishes only two
+  mutations (`writeText`, `editText`), so qialike adds the two it lacks — deleting and renaming.
+  They are fenced to the **workspace root alone** (not the harness's `writableRoots()` temp grants,
+  which exist for mkstemp-style writes and have no matching delete need), they refuse the workspace
+  root itself, both ends of a `move` are checked, `read-only` refuses, and `danger-full-access`
+  delegates. They exist because the shell is an expensive or unavailable path on some hosts:
+  Windows gates every shell call behind an approval prompt, and a Linux host with neither `bwrap`
+  nor Landlock fails shell calls closed. `mkdir` needs no tool — `writeText` already creates parent
+  directories.
 
 ### Terminal colour depth
 

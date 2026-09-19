@@ -38,6 +38,12 @@
   `pwsh` 会在模型被告知 `workspace-write` 的同时毫无约束地运行。现在这类主机上的每次 shell 调用都先请求
   审批，提示会明说该命令拥有你的完整用户权限。该闸门由所挂执行器自身的能力事实驱动，因此将来某主机换上
   真正受限的执行器后会自动停止询问，无需改动此处。
+- **工作台 `delete` 与 `move` 工具**：harness 的文件 seam 只发布两个变更操作（`writeText`、`editText`），
+  qialike 补上缺的两个——删除与重命名。它们**只被围栏在工作台根内**（不是 harness 的 `writableRoots()`
+  临时区授权，那套是给 mkstemp 式写入用的，没有对应的删除需求），拒绝操作工作台根自身，`move` 的**两端**
+  都要过围栏，`read-only` 拒绝、`danger-full-access` 放行。之所以需要它们：某些主机上 shell 要么昂贵要么
+  不可用——Windows 每次 shell 调用都要审批，而既无 `bwrap` 又无 Landlock 的 Linux 上 shell 直接 fail-closed。
+  `mkdir` 不需要额外工具——`writeText` 已递归创建父目录。
 
 ### 终端颜色档位
 
