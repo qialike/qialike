@@ -35,6 +35,7 @@ import {
 import {
   installMethod,
   latestVersion,
+  releasesUrl,
   upgrade,
 } from '@yourname/qialike-app/src/self-update.ts'
 
@@ -107,7 +108,7 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
     if (policy.disabled || auto === false || buildMode() === 'dev') return 0
     if (method === 'unknown') return 0
 
-    const latest = latestVersion()
+    const latest = latestVersion({ releases: releasesUrl(env) })
     // No network, a rate-limited host or an unpublished platform all mean "we do
     // not know of a newer version" — say nothing rather than interrupting.
     if (latest === undefined) return 0
@@ -138,7 +139,7 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
   // installed: "what is the newest release?" is a fair question from a checkout
   // build too. The self-replacement gate below does not apply to it.
   if (flags.check) {
-    const target = flags.version ?? latestVersion()
+    const target = flags.version ?? latestVersion({ releases: releasesUrl(env) })
     if (target === undefined) {
       io.err('qialike: could not determine the newest version (no network?) — pass one explicitly:')
       io.err('         qialike upgrade --check <version>')
@@ -159,7 +160,7 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
     return 1
   }
 
-  const target = flags.version ?? latestVersion()
+  const target = flags.version ?? latestVersion({ releases: releasesUrl(env) })
   if (target === undefined) {
     io.err('qialike: could not determine the newest version (no network?) — pass one explicitly:')
     io.err('         qialike upgrade <version>')
