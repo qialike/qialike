@@ -16,7 +16,7 @@ qialike_cleanup() {
 main() {
   parse_args "$@"
 
-  local target asset tag archive inner
+  local target asset tag archive inner i
   target=$(qialike_detect_target)
   qialike_require_supported "$target"
   # Windows installs as `qialike.exe`; everything else as `qialike`. Set before
@@ -28,7 +28,16 @@ main() {
     say "dry run — nothing will be written"
     say "          platform  $target"
     say "          asset     $asset"
-    say "          releases  $BASE_URL"
+    # The whole list, in the order it would be tried, without probing any of them:
+    # a dry run that hit the network could not be run offline, and the point here is
+    # to show the plan, not to test the links.
+    for (( i = 0; i < ${#SOURCE_BASES[@]}; i += 1 )); do
+      if (( i == 0 )); then
+        say "          releases  ${SOURCE_BASES[$i]}"
+      else
+        say "          fallback  ${SOURCE_BASES[$i]}"
+      fi
+    done
     say "          install   $INSTALL_DIR/$BIN"
     if [[ "$NO_MODIFY_PATH" == true ]]; then
       say "          PATH      left alone (--no-modify-path)"
@@ -38,7 +47,10 @@ main() {
     return 0
   fi
 
-  tag=$(qialike_resolve_version "$asset")
+  # NOT `tag=$(…)`: the resolve records which source answered in globals, and a
+  # command substitution would throw that away (see 30-version.sh).
+  qialike_resolve_into_globals "$asset"
+  tag=$RESOLVED_TAG
 
   QIALIKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/qialike-install.XXXXXX") || die "could not create a temporary directory"
   # `qialike_cleanup` reads a global rather than a local: the trap fires after

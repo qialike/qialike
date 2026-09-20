@@ -27,6 +27,7 @@ import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   buildMode,
+  compareVersions,
   decideUpdate,
   getReleaseType,
   readEnvPolicy,
@@ -35,7 +36,7 @@ import {
 import {
   installMethod,
   latestVersion,
-  releasesUrl,
+  releaseSources,
   upgrade,
 } from '@yourname/qialike-app/src/self-update.ts'
 
@@ -108,7 +109,7 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
     if (policy.disabled || auto === false || buildMode() === 'dev') return 0
     if (method === 'unknown') return 0
 
-    const latest = latestVersion({ releases: releasesUrl(env) })
+    const latest = latestVersion({ sources: releaseSources(env) })
     // No network, a rate-limited host or an unpublished platform all mean "we do
     // not know of a newer version" — say nothing rather than interrupting.
     if (latest === undefined) return 0
@@ -139,13 +140,21 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
   // installed: "what is the newest release?" is a fair question from a checkout
   // build too. The self-replacement gate below does not apply to it.
   if (flags.check) {
-    const target = flags.version ?? latestVersion({ releases: releasesUrl(env) })
+    const target = flags.version ?? latestVersion({ sources: releaseSources(env) })
     if (target === undefined) {
       io.err('qialike: could not determine the newest version (no network?) — pass one explicitly:')
       io.err('         qialike upgrade --check <version>')
       return 1
     }
-    const relation = target === io.installed ? 'up to date' : `${getReleaseType(io.installed, target)} update available`
+    // Three cases, not two. A source that lags reports a tag OLDER than what is
+    // installed, and calling that an "update available" would point the user at a
+    // downgrade; naming it plainly is what makes the mirror's lag visible.
+    const comparison = compareVersions(target, io.installed)
+    const relation = comparison === 0
+      ? 'up to date'
+      : comparison < 0
+        ? 'older than installed — the reachable release source has not caught up'
+        : `${getReleaseType(io.installed, target)} update available`
     io.out(`installed  ${io.installed}`)
     io.out(`newest     ${target}  (${relation})`)
     return 0
@@ -160,7 +169,7 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
     return 1
   }
 
-  const target = flags.version ?? latestVersion({ releases: releasesUrl(env) })
+  const target = flags.version ?? latestVersion({ sources: releaseSources(env) })
   if (target === undefined) {
     io.err('qialike: could not determine the newest version (no network?) — pass one explicitly:')
     io.err('         qialike upgrade <version>')

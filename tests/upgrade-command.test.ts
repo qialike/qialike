@@ -143,6 +143,16 @@ describe('runUpgrade argument handling (offline forms)', () => {
     expect(major.out.join('\n')).toContain('major update available')
   })
 
+  test('--check names a lagging source as such, never as an available update', () => {
+    // When GitHub is unreachable the newest tag comes from a mirror that can be
+    // behind, so `newest` is sometimes OLDER than the install. Reporting "patch
+    // update available" there would send the user to a downgrade.
+    const older = io('0.6.1')
+    expect(runUpgrade(['--check', '0.6.0'], older.sink)).toBe(0)
+    expect(older.out.join('\n')).toContain('older than installed')
+    expect(older.out.join('\n')).not.toContain('update available')
+  })
+
   test('an extra positional is refused rather than silently ignored', () => {
     const { err, sink } = io()
     expect(runUpgrade(['0.6.0', '0.7.0'], sink)).toBe(1)

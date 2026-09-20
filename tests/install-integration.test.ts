@@ -66,11 +66,20 @@ const KIND = TARGET?.startsWith('linux') ? 'tar.gz' : 'zip'
 /** Inside the archive the member is always the generic name (`.exe` on Windows). */
 const INNER = TARGET?.startsWith('windows') ? 'qialike.exe' : 'qialike'
 
-/** Serves a directory as a release host: `tag`, `files/<name>`, `files/install`. */
+/**
+ * Serves a directory as a release host: `tag`, `files/<name>`, `files/install`.
+ *
+ * Two shapes, because the installer now reads a list of sources and they do not
+ * answer the same way. `github` issues the 302 that carries the tag; `gitcode`
+ * answers the same path with an HTML page — verified against the real host — and
+ * exposes the tag through an API instead, which is exactly the difference the
+ * source list has to cope with.
+ */
 const FIXTURE_SERVER = `
-import http.server, os, re, socketserver, sys
+import http.server, json, os, re, socketserver, sys
 
 root = sys.argv[1]
+shape = sys.argv[2]
 files = os.path.join(root, 'files')
 
 def tag():
@@ -83,17 +92,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header('Content-Length', '0')
         self.end_headers()
 
-    def _send(self, path, status=200):
+    def _send(self, path, status=200, content_type=None):
         if not os.path.isfile(path):
             return self._notfound()
         with open(path, 'rb') as fh:
             body = fh.read()
         self.send_response(status)
+        if content_type:
+            self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _html(self):
+        body = b'<!DOCTYPE html><html><body>releases</body></html>'
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
+        # The releases API a mirror without a redirect is read through.
+        if self.path == '/api/latest':
+            body = json.dumps({'tag_name': tag()}).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # GitHub 404s BOTH of these when the release carries no such asset, so the
         # fixture must too: that is the real shape of "this platform was never
         # published", and it is the version RESOLUTION that fails first.
@@ -102,6 +131,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             name = latest.group(1)
             if not os.path.isfile(os.path.join(files, name)):
                 return self._notfound()
+            if shape == 'gitcode':
+                return self._html()
             self.send_response(302)
             self.send_header('Location', '/download/%s/%s' % (tag(), name))
             self.end_headers()
@@ -119,7 +150,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 
 server = socketserver.TCPServer(('127.0.0.1', 0), Handler)
-with open(os.path.join(root, 'port'), 'w') as fh:
+with open(os.path.join(root, 'port-' + shape), 'w') as fh:
     fh.write(str(server.server_address[1]))
 server.serve_forever()
 `
@@ -163,7 +194,8 @@ function stubArchive(dir: string, kind: 'tar.gz' | 'zip', member: string, versio
 
 let fixtureFiles = ''
 let fixtureBase = ''
-let fixtureChild: { kill(): void } | undefined
+let mirrorBase = ''
+const fixtureChildren: { kill(): void }[] = []
 
 /** Publish (or, with `undefined`, unpublish) one file the fixture serves. */
 function publish(name: string, bytes: Uint8Array | undefined): void {
@@ -183,16 +215,20 @@ beforeAll(async () => {
 
   const script = join(root, 'fixture.py')
   writeFileSync(script, FIXTURE_SERVER)
-  fixtureChild = Bun.spawn(['python3', script, root], { stdout: 'ignore', stderr: 'ignore' })
 
-  const portFile = join(root, 'port')
-  const deadline = Date.now() + 10_000
-  while (!existsSync(portFile) && Date.now() < deadline) await Bun.sleep(50)
-  if (!existsSync(portFile)) throw new Error('the fixture server never reported a port')
-  fixtureBase = `http://127.0.0.1:${readFileSync(portFile, 'utf8').trim()}`
+  // Both shapes over the SAME published files, so a case can serve one host and
+  // withhold the other without publishing the bytes twice.
+  for (const [shape, assign] of [['github', (base: string) => { fixtureBase = base }], ['gitcode', (base: string) => { mirrorBase = base }]] as const) {
+    fixtureChildren.push(Bun.spawn(['python3', script, root, shape], { stdout: 'ignore', stderr: 'ignore' }))
+    const portFile = join(root, `port-${shape}`)
+    const deadline = Date.now() + 10_000
+    while (!existsSync(portFile) && Date.now() < deadline) await Bun.sleep(50)
+    if (!existsSync(portFile)) throw new Error(`the ${shape} fixture server never reported a port`)
+    assign(`http://127.0.0.1:${readFileSync(portFile, 'utf8').trim()}`)
+  }
 })
 
-afterAll(() => { fixtureChild?.kill() })
+afterAll(() => { for (const child of fixtureChildren) child.kill() })
 
 /** A throwaway HOME with a profile, so the PATH step has something to append to. */
 function makeHome(): string {
@@ -208,9 +244,16 @@ function makeHome(): string {
  * the `QIALIKE_INSTALL_BASE_URL` the piped cases must use — `upgrade()` can only
  * hand the installer an environment, so covering the flag here and the variable
  * there is what exercises both spellings.
+ *
+ * `base: null` passes no `--base-url` at all, which is what the case that supplies a
+ * whole `QIALIKE_INSTALL_SOURCES` list needs: the flag would replace that list with a
+ * single host and the fallback under test would never happen. The sentinel is `null`
+ * and not `undefined` because passing `undefined` to a defaulted parameter RESTORES
+ * the default — which silently made this helper pass the GitHub fixture while the
+ * case believed it had supplied only a source list.
  */
-function install(home: string, args: string[] = [], env: Record<string, string> = {}) {
-  const result = spawnSync('bash', [INSTALLER, '--base-url', fixtureBase, ...args], {
+function install(home: string, args: string[] = [], env: Record<string, string> = {}, base: string | null = fixtureBase) {
+  const result = spawnSync('bash', [INSTALLER, ...(base === null ? [] : ['--base-url', base]), ...args], {
     encoding: 'utf8',
     timeout: 60_000,
     env: {
@@ -343,6 +386,72 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('failures are repor
     expect(status, output).toBe(0)
     expect(output).toContain('the release asset and its tag disagree')
     expect(existsSync(join(home, '.dsh', 'bin', INNER))).toBe(true)
+  })
+})
+
+describe.skipIf(TARGET === undefined || ASSET === undefined)('the source list is probed, and the mirror takes over', () => {
+  test('a dead primary falls through to a mirror that has no redirect at all', () => {
+    // The feature end to end, and the reason the source list exists: a user who
+    // cannot reach GitHub still gets an install. The mirror here answers
+    // `/latest/download/...` with an HTML page exactly as gitcode does, so the tag
+    // can only come from its API — the whole fallback chain, resolve and download.
+    const work = tempDir('qialike-fixture-mirror-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publish('sha256sums.txt', undefined)
+
+    const home = makeHome()
+    const { status, output } = install(
+      home,
+      [],
+      // Port 1 refuses immediately, so this costs no wait: the point under test is
+      // the fallback, not the timeout budget.
+      { QIALIKE_INSTALL_SOURCES: `http://127.0.0.1:1/releases,${mirrorBase}|${mirrorBase}/api/latest` },
+      null,
+    )
+
+    expect(status, output).toBe(0)
+    expect(output).toContain('did not answer')
+    expect(output).toContain('can lag behind')
+    expect(output).toContain(`installing qialike ${TAG} for ${TARGET}`)
+    const dest = join(home, '.dsh', 'bin', INNER)
+    expect(existsSync(dest)).toBe(true)
+    expect(spawnSync(dest, ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe(`qialike ${TAG}`)
+  })
+
+  test('the primary is preferred when it answers, and the mirror is never contacted', () => {
+    const work = tempDir('qialike-fixture-primary-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publish('sha256sums.txt', undefined)
+
+    const home = makeHome()
+    const { status, output } = install(
+      home,
+      [],
+      // The mirror is listed but points at a dead port: if the probe did not stop at
+      // the first source that answered, this install could not succeed.
+      { QIALIKE_INSTALL_SOURCES: `${fixtureBase},http://127.0.0.1:1/releases` },
+      null,
+    )
+
+    expect(status, output).toBe(0)
+    expect(output).not.toContain('did not answer')
+    expect(existsSync(join(home, '.dsh', 'bin', INNER))).toBe(true)
+  })
+
+  test('an explicit --base-url is the ONLY source, so there is no silent fallback', () => {
+    // A configured host must be the whole truth: the public mirrors are not appended
+    // to it, or a deliberately dead host would be papered over and this would install
+    // something the operator did not ask for.
+    const home = makeHome()
+    publish(ASSET!, undefined)
+
+    const { status, output } = install(home, [], { QIALIKE_VERSION: TAG }, 'http://127.0.0.1:1/releases')
+
+    expect(status).not.toBe(0)
+    expect(output).toContain('download failed:')
+    expect(output).toContain('http://127.0.0.1:1/releases')
+    expect(output).not.toContain('gitcode.com')
+    expect(existsSync(join(home, '.dsh', 'bin'))).toBe(false)
   })
 })
 

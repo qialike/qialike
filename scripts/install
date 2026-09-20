@@ -35,10 +35,75 @@ INSTALL_DIR="$HOME/.dsh/bin"
 MARKER='# qialike'
 PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
 
-# Release plumbing. `DEFAULT_BASE_URL` is the releases directory, not the repo:
-# assets live at `<BASE_URL>/download/<tag>/<asset>` and the newest tag is
-# resolved through `<BASE_URL>/latest/download/<asset>`.
-DEFAULT_BASE_URL='https://github.com/qialike/qialike/releases'
+# Release plumbing. Assets live at `<base>/download/<tag>/<asset>`, and each source
+# is asked for its newest tag in whichever way that host answers:
+#
+#   - GitHub issues a 302 for `<base>/latest/download/<asset>`, and the tag is in
+#     the Location. No API, so nothing counts against the 60/hour unauthenticated
+#     API limit — which is why the redirect is read rather than the API.
+#   - gitcode answers that same path with an HTML page (verified: 200, text/html,
+#     no redirect), so its tag comes from the v5 releases API instead. That API
+#     answers unauthenticated; its ASSET downloads are what need care — only GET
+#     works there (HEAD is refused with 401), and only GET is ever used here.
+#
+# The two are NOT equivalent: GitHub is the primary and always carries the newest
+# release, the mirror lags. A fallback install can therefore land on an older tag
+# than GitHub would have given — which is exactly why the updater refuses to move
+# backwards (see `compareVersions` in packages/qialike-app/src/upgrade-policy.ts).
+#
+# A source is `<base>` or `<base>|<api>`, comma-separated, the first that answers
+# winning. The API is optional because it is DERIVED for the hosts that need one
+# (`qialike_api_for`), so the list is normally just host names.
+# `packages/qialike-app/src/self-update.ts` carries the same list, and
+# `tests/self-update.test.ts` fails if the two ever drift apart.
+DEFAULT_SOURCES='https://github.com/qialike/qialike/releases,https://gitcode.com/qialike/qialike/releases'
+
+# Probe budget, in seconds. Short on purpose: the point is to notice a blackholed
+# GitHub and move on, rather than making the user wait out curl's own defaults.
+CONNECT_TIMEOUT=4
+PROBE_TIMEOUT=10
+
+# Give up on a body that has stalled. Below 1 KB/s for 30s is not a slow download,
+# it is a blocked one — and that is the shape a throttled GitHub takes: the connect
+# succeeds, so only a throughput guard can tell it apart from a working source.
+SPEED_LIMIT=1024
+SPEED_TIME=30
+
+# The sources to try, and the one currently in use. Declared here rather than only
+# inside parse_args so the arrays are never UNSET under `set -u` when a test sources
+# the bundle and calls a function directly.
+SOURCE_BASES=()
+SOURCE_APIS=()
+SOURCE_INDEX=0
+BASE_URL=''
+RESOLVED_TAG=''
+
+# The releases API for a host with no `latest` redirect, derived from the base
+# rather than hardcoded per repository: `<host>/<owner>/<repo>/releases` becomes
+# `<host>/api/v5/repos/<owner>/<repo>/releases/latest`. Only gitcode is known to
+# need one, so only gitcode is asked.
+qialike_api_for() {
+  local base=$1 path
+
+  case "$base" in
+    https://gitcode.com/*/releases)
+      path=${base#https://gitcode.com/}
+      path=${path%/releases}
+      printf 'https://gitcode.com/api/v5/repos/%s/releases/latest\n' "$path"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# The sources as one comma-separated line, for messages.
+qialike_source_list() {
+  local out='' base
+
+  for base in "${SOURCE_BASES[@]}"; do
+    out="${out:+$out, }$base"
+  done
+  printf '%s\n' "$out"
+}
 
 say() { printf '%s: %s\n' "$APP" "$*"; }
 warn() { printf '%s: warning — %s\n' "$APP" "$*" >&2; }
@@ -59,7 +124,9 @@ die() {
 #
 # Environment inputs (read here so `--version` and the upgrade path agree):
 #   QIALIKE_VERSION          version to install; the automatic updater passes it
-#   QIALIKE_INSTALL_BASE_URL releases-directory override (mirrors, tests)
+#   QIALIKE_INSTALL_BASE_URL one explicit releases directory — NO fallback
+#   QIALIKE_INSTALL_SOURCES  full source list, `<base>` or `<base>|<api>`, comma-
+#                            separated (tests, private multi-mirror setups)
 #   QIALIKE_INSTALL_TARGET   platform override — TEST ONLY, see 20-platform.sh
 #   QIALIKE_INSTALL_LIB_ONLY `1` sources the bundle without installing (tests)
 
@@ -73,8 +140,13 @@ Options:
     -h, --help              display this help message
     -v, --version <version> install a specific version (e.g. 0.6.0 or v0.6.0)
         --no-modify-path    don't modify shell config files (.bashrc, .zshrc)
-        --base-url <url>    use a different releases directory (mirrors, tests)
+        --base-url <url>    use exactly this releases directory, no fallback
         --dry-run           print what would be done, then change nothing
+
+The newest release is read from the first source that answers, so an unreachable
+GitHub falls through to the gitcode mirror on its own:
+
+    github.com/qialike/qialike    then    gitcode.com/qialike/qialike
 
 Examples:
     curl -fsSL https://qialike.com/install | bash
@@ -83,14 +155,70 @@ Examples:
 EOF
 }
 
+# Split a source specification into two index-aligned arrays.
+#
+# Indexed arrays, not an associative one: macOS ships bash 3.2, which has none, and
+# `60-path.sh` already goes out of its way to stay compatible with it. An entry with
+# no `|` gets its API derived when the host is one that needs it, so
+# `--base-url https://gitcode.com/qialike/qialike/releases` resolves instead of
+# silently finding nothing.
+qialike_parse_sources() {
+  local spec=$1 entry base api
+  local IFS=','
+
+  SOURCE_BASES=()
+  SOURCE_APIS=()
+  for entry in $spec; do
+    # Spaces are stripped rather than trimmed: a URL never contains one, and this
+    # keeps a hand-written comma list readable without a helper.
+    entry=${entry// /}
+    if [[ -z "$entry" ]]; then
+      continue
+    fi
+
+    # The separator has to be tested for, not inferred: `${entry#*|}` returns the
+    # WHOLE string when there is no `|`, so a bare base would otherwise be taken as
+    # its own API URL and asked for JSON.
+    if [[ "$entry" == *"|"* ]]; then
+      base=${entry%%|*}
+      api=${entry#*|}
+    else
+      base=$entry
+      api=''
+    fi
+
+    # An empty API slot always TRIES to derive one, so writing `base|` means the same
+    # thing as plain `base`: the bare form is what a user types, and a host that needs
+    # an API would otherwise resolve nothing for no visible reason. A host with no
+    # derivable API derives nothing and is read through its redirect.
+    if [[ -z "$api" ]]; then
+      api=$(qialike_api_for "$base" || true)
+    fi
+
+    SOURCE_BASES+=("${base%/}")
+    SOURCE_APIS+=("$api")
+  done
+
+  if (( ${#SOURCE_BASES[@]} == 0 )); then
+    die "no release sources configured (check QIALIKE_INSTALL_SOURCES)"
+  fi
+}
+
 parse_args() {
   REQUESTED_VERSION=${QIALIKE_VERSION:-}
   NO_MODIFY_PATH=false
   DRY_RUN=false
-  BASE_URL=${QIALIKE_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}
-  # A trailing slash would produce `//download/...`; harmless for GitHub but not
-  # for every mirror, so normalise once here.
-  BASE_URL=${BASE_URL%/}
+
+  # An explicit override means exactly ONE source. A private mirror or a test
+  # fixture must not have the public fallbacks silently appended to it: a
+  # deliberately unreachable host would then be papered over by a working one, and
+  # the failure under test would never surface.
+  local spec=${DEFAULT_SOURCES}
+  if [[ -n "${QIALIKE_INSTALL_SOURCES:-}" ]]; then
+    spec=$QIALIKE_INSTALL_SOURCES
+  elif [[ -n "${QIALIKE_INSTALL_BASE_URL:-}" ]]; then
+    spec=$QIALIKE_INSTALL_BASE_URL
+  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -113,7 +241,7 @@ parse_args() {
         if [[ -z "${2:-}" ]]; then
           die "--base-url requires a URL argument"
         fi
-        BASE_URL=${2%/}
+        spec=$2
         shift 2
         ;;
       --dry-run)
@@ -125,6 +253,12 @@ parse_args() {
         ;;
     esac
   done
+
+  # A trailing slash would produce `//download/...`; harmless for GitHub but not for
+  # every mirror, so it is stripped once, per source, as the list is parsed.
+  qialike_parse_sources "$spec"
+  SOURCE_INDEX=0
+  BASE_URL=${SOURCE_BASES[0]}
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,31 +352,79 @@ qialike_set_binary_name() {
 # ─────────────────────────────────────────────────────────────────────────────
 # 30-version.sh
 # ─────────────────────────────────────────────────────────────────────────────
-# Version resolution.
+# Version resolution, and the connectivity probe.
 #
-# The newest tag is read from the redirect the releases server issues for
-# `<BASE_URL>/latest/download/<asset>`, NOT from the GitHub API: the
-# unauthenticated API allows only 60 requests/hour, while the redirect is
-# unlimited and needs no JSON parsing.
+# The newest tag is read from whichever source ANSWERS FIRST, and that same source
+# is then used for the download. The probe and the resolution are the same
+# operation on purpose: "what is your newest release?" is exactly the question a
+# blackholed host cannot answer, so a separate liveness check would only add a
+# round trip that can disagree with this one.
 #
-# Note the two tag spellings in play. Local git tags are annotated and carry a
-# `v` (`v0.6.0`), but the GitHub RELEASE tag does not (`0.6.0`) — the download
-# URL only works with the bare form (verified: `…/download/v0.5.4/…` 404s while
-# `…/download/0.5.4/…` redirects). So a user-supplied `v0.6.0` is normalised
-# here, and the version string that goes into the URL and the installer
-# environment is always the bare one.
+# GitHub answers with a redirect and is read WITHOUT the API: the unauthenticated
+# API allows only 60 requests/hour, while the redirect is unlimited. gitcode has no
+# such redirect (its `/latest/download/...` is an HTML page), so it is read through
+# its v5 releases API, which does answer unauthenticated. See `DEFAULT_SOURCES` in
+# 00-common.sh for both shapes.
+#
+# Note the two tag spellings in play. Local git tags are annotated and carry a `v`
+# (`v0.6.0`), but the RELEASE tag does not (`0.6.0`) — the download URL only works
+# with the bare form (verified on GitHub: `…/download/v0.5.4/…` 404s while
+# `…/download/0.5.4/…` redirects). So a user-supplied `v0.6.0` is normalised here,
+# and the version string that goes into the URL and the installer environment is
+# always the bare one.
 
 qialike_normalize_version() {
   printf '%s\n' "${1#v}"
 }
 
-# Echo the tag to install. `$1` is the asset name, needed to build the URL the
+# Ask one source for its newest tag. Echoes the tag, or nothing when this source
+# cannot be reached or cannot answer. `$2` is its API URL, empty for a host that
+# needs none.
+qialike_source_tag() {
+  local base=$1 api=$2 asset=$3 url tag
+  local budget=(--connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT")
+
+  url=$(curl -fsS "${budget[@]}" -o /dev/null -w '%{redirect_url}' "$base/latest/download/$asset" 2>/dev/null || true)
+  if [[ -n "$url" ]]; then
+    tag=$(printf '%s\n' "$url" | sed -n 's#.*/download/\([^/]*\)/[^/]*$#\1#p')
+    if [[ -n "$tag" ]]; then
+      printf '%s\n' "$tag"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$api" ]]; then
+    # `head -n1` and the anchored sed: the answer is one line of JSON, and the FIRST
+    # `tag_name` is the release's own. The asset entries carry `browser_download_url`
+    # and `name`, never a `tag_name`, so nothing later in the body can be mistaken
+    # for it.
+    tag=$(curl -fsS "${budget[@]}" "$api" 2>/dev/null \
+      | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      | head -n 1 \
+      | sed 's/.*"\([^"]*\)"$/\1/' || true)
+    if [[ -n "$tag" ]]; then
+      printf '%s\n' "$tag"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Resolve the tag to install, and leave `RESOLVED_TAG`/`BASE_URL`/`SOURCE_INDEX` on
+# the source that answered. `$1` is the asset name, needed to build the URL the
 # redirect is read from.
-qialike_resolve_version() {
-  local asset=$1 url tag
+#
+# Sets GLOBALS rather than echoing, and that is not a style choice: the obvious
+# `tag=$(qialike_resolve_version …)` runs in a SUBSHELL, so `SOURCE_INDEX`/`BASE_URL`
+# set in here would be discarded and the download would go back to the source that
+# just failed. `qialike_resolve_version` below keeps the echoing form for callers
+# that only want the tag.
+qialike_resolve_into_globals() {
+  local asset=$1 i tag
 
   if [[ -n "${REQUESTED_VERSION:-}" ]]; then
-    qialike_normalize_version "$REQUESTED_VERSION"
+    RESOLVED_TAG=$(qialike_normalize_version "$REQUESTED_VERSION")
     return 0
   fi
 
@@ -250,18 +432,30 @@ qialike_resolve_version() {
     die "'curl' is required but not installed"
   fi
 
-  url=$(curl -fsS -o /dev/null -w '%{redirect_url}' "$BASE_URL/latest/download/$asset" 2>/dev/null || true)
-  if [[ -z "$url" ]]; then
-    die "could not resolve the latest version from $BASE_URL/latest/download/$asset"
-  fi
+  for i in "${!SOURCE_BASES[@]}"; do
+    tag=$(qialike_source_tag "${SOURCE_BASES[$i]}" "${SOURCE_APIS[$i]}" "$asset" || true)
+    if [[ -n "$tag" ]]; then
+      SOURCE_INDEX=$i
+      BASE_URL=${SOURCE_BASES[$i]}
+      RESOLVED_TAG=$tag
+      if (( i > 0 )); then
+        # stderr, and a warning rather than a note: the user needs to know, because
+        # the mirror can lag behind GitHub and this install may land on an older tag.
+        warn "${SOURCE_BASES[0]} did not answer — using $BASE_URL, which can lag behind"
+      fi
+      return 0
+    fi
+  done
 
-  # Works for GitHub and for a mirror that keeps the same path shape.
-  tag=$(printf '%s\n' "$url" | sed -n 's#.*/download/\([^/]*\)/[^/]*$#\1#p')
-  if [[ -z "$tag" ]]; then
-    die "could not read a version out of '$url'"
-  fi
+  die "could not resolve the latest version from any source (tried: $(qialike_source_list)) — check your network, or none of them publishes $asset"
+}
 
-  printf '%s\n' "$tag"
+# Echo just the tag. The source it came from is NOT visible to the caller here — a
+# command substitution is a subshell — so anything that needs to download from that
+# same source must use `qialike_resolve_into_globals` instead.
+qialike_resolve_version() {
+  qialike_resolve_into_globals "$1"
+  printf '%s\n' "$RESOLVED_TAG"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -274,40 +468,72 @@ qialike_resolve_version() {
 # quiet form — the bar is the only coloured thing this script would otherwise
 # print, and a caller that asked for no colour has no use for it.
 #
-# Checksums: `sha256sums.txt` is not published yet, so an absent manifest is a
-# normal outcome and NOT an error — but when one IS published it is enforced.
-# Until then the only trust anchors are HTTPS and GitHub itself.
+# Two guards on the transfer, and both exist because of the mirror fallback:
+# `--connect-timeout` so a blackholed host is abandoned quickly rather than at
+# curl's default, and `--speed-limit/--speed-time` so a host that connects and then
+# stalls is abandoned too. That second shape is the one a throttled GitHub actually
+# takes, and without it the fallback would never trigger — the connect succeeds and
+# curl waits forever on a body that never arrives.
+#
+# Checksums: `sha256sums.txt` is not published on either source yet, so an absent
+# manifest is a normal outcome and NOT an error — but when one IS published it is
+# enforced, against the source the archive came from.
+#
+# Fallback: the source that resolved the version is tried first, then the rest. A
+# host can answer the small "what is newest" request and still fail a 55 MB body,
+# and that is exactly the case this second attempt exists for. A tag the mirror has
+# not caught up to simply 404s there, which is reported rather than hidden.
+
+# One attempt against one source. 0 on success.
+qialike_try_download() {
+  # $1 = base, $2 = tag, $3 = asset, $4 = output path
+  local base=$1 tag=$2 asset=$3 out=$4 url
+  local guards=(--connect-timeout "$CONNECT_TIMEOUT" --speed-limit "$SPEED_LIMIT" --speed-time "$SPEED_TIME")
+
+  url="$base/download/$tag/$asset"
+  if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+    curl -fL "${guards[@]}" -# -o "$out" "$url"
+  else
+    curl -fsSL "${guards[@]}" -o "$out" "$url"
+  fi
+}
 
 qialike_fetch_archive() {
   # $1 = asset name, $2 = tag, $3 = destination directory. Echoes the archive path.
-  local asset=$1 tag=$2 dest=$3 url out
+  local asset=$1 tag=$2 dest=$3 attempt i base out
+  local count=${#SOURCE_BASES[@]}
 
   if ! command -v curl >/dev/null 2>&1; then
     die "'curl' is required but not installed"
   fi
 
-  url="$BASE_URL/download/$tag/$asset"
   out="$dest/$asset"
+  for ((attempt = 0; attempt < count; attempt += 1)); do
+    i=$(( (SOURCE_INDEX + attempt) % count ))
+    base=${SOURCE_BASES[$i]}
 
-  if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-    if ! curl -fL -# -o "$out" "$url"; then
-      die "download failed: $url — the release may not carry $asset for this platform"
+    if qialike_try_download "$base" "$tag" "$asset" "$out"; then
+      qialike_verify_checksum "$base" "$tag" "$asset" "$out"
+      printf '%s\n' "$out"
+      return 0
     fi
-  else
-    if ! curl -fsSL -o "$out" "$url"; then
-      die "download failed: $url — the release may not carry $asset for this platform"
-    fi
-  fi
 
-  qialike_verify_checksum "$tag" "$asset" "$out"
-  printf '%s\n' "$out"
+    rm -f "$out"
+    if (( attempt + 1 < count )); then
+      warn "download from $base failed — trying the next source"
+    fi
+  done
+
+  die "download failed: $asset (tag $tag) — no source could provide it (tried: $(qialike_source_list))"
 }
 
-# Verify against the release's `sha256sums.txt` when that file exists.
+# Verify against the release's `sha256sums.txt` when that file exists, on the source
+# the archive came from: a mirror that has the asset but not the manifest is a
+# missing manifest, not a reason to trust a different host's numbers.
 qialike_verify_checksum() {
-  local tag=$1 asset=$2 file=$3 sums expected actual
+  local base=$1 tag=$2 asset=$3 file=$4 sums expected actual
 
-  sums=$(curl -fsSL "$BASE_URL/download/$tag/sha256sums.txt" 2>/dev/null || true)
+  sums=$(curl -fsSL "$base/download/$tag/sha256sums.txt" 2>/dev/null || true)
   if [[ -z "$sums" ]]; then
     return 0
   fi
@@ -533,7 +759,7 @@ qialike_cleanup() {
 main() {
   parse_args "$@"
 
-  local target asset tag archive inner
+  local target asset tag archive inner i
   target=$(qialike_detect_target)
   qialike_require_supported "$target"
   # Windows installs as `qialike.exe`; everything else as `qialike`. Set before
@@ -545,7 +771,16 @@ main() {
     say "dry run — nothing will be written"
     say "          platform  $target"
     say "          asset     $asset"
-    say "          releases  $BASE_URL"
+    # The whole list, in the order it would be tried, without probing any of them:
+    # a dry run that hit the network could not be run offline, and the point here is
+    # to show the plan, not to test the links.
+    for (( i = 0; i < ${#SOURCE_BASES[@]}; i += 1 )); do
+      if (( i == 0 )); then
+        say "          releases  ${SOURCE_BASES[$i]}"
+      else
+        say "          fallback  ${SOURCE_BASES[$i]}"
+      fi
+    done
     say "          install   $INSTALL_DIR/$BIN"
     if [[ "$NO_MODIFY_PATH" == true ]]; then
       say "          PATH      left alone (--no-modify-path)"
@@ -555,7 +790,10 @@ main() {
     return 0
   fi
 
-  tag=$(qialike_resolve_version "$asset")
+  # NOT `tag=$(…)`: the resolve records which source answered in globals, and a
+  # command substitution would throw that away (see 30-version.sh).
+  qialike_resolve_into_globals "$asset"
+  tag=$RESOLVED_TAG
 
   QIALIKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/qialike-install.XXXXXX") || die "could not create a temporary directory"
   # `qialike_cleanup` reads a global rather than a local: the trap fires after

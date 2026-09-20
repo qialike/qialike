@@ -20,13 +20,20 @@ import { join } from 'node:path'
 import {
   acquireLock,
   assetFor,
+  CONNECT_TIMEOUT,
+  DEFAULT_RELEASES_URL,
   detectTarget,
   installDir,
   installMethod,
   installedVersion,
   latestVersion,
   lockPath,
+  MIRROR_RELEASES_URL,
+  parseTagFromJson,
   parseTagFromRedirect,
+  PROBE_TIMEOUT,
+  RELEASE_SOURCES,
+  releaseSources,
   releaseLock,
   upgrade,
   withUpgradeLock,
@@ -113,6 +120,102 @@ describe('platform naming', () => {
       expect(assetFor(target), `${target} disagrees with 20-platform.sh`).toBe(shell.stdout.trim())
     }
     expect(assetFor('plan9-mips')).toBeUndefined()
+  })
+})
+
+describe('release sources', () => {
+  test('the default list is GitHub first, then the mirror with its API', () => {
+    const sources = releaseSources({})
+    expect(sources.map((source) => source.base)).toEqual([DEFAULT_RELEASES_URL, MIRROR_RELEASES_URL])
+    // GitHub is read through its redirect, so it must have NO API: adding one would
+    // start counting against the 60/hour limit for no benefit.
+    expect(sources[0]?.api).toBeUndefined()
+    expect(sources[1]?.api).toBe('https://gitcode.com/api/v5/repos/qialike/qialike/releases/latest')
+  })
+
+  test('an explicit base URL is exactly ONE source', () => {
+    // A configured host must not have the public fallbacks appended: a deliberately
+    // unreachable fixture would then be papered over by a working mirror, and the
+    // failure under test would never surface.
+    expect(releaseSources({ QIALIKE_INSTALL_BASE_URL: 'https://mirror.test/rel/' })).toEqual([
+      { base: 'https://mirror.test/rel' },
+    ])
+    // A bare gitcode base still gets its API, or nothing could resolve through it.
+    expect(releaseSources({ QIALIKE_INSTALL_BASE_URL: MIRROR_RELEASES_URL })).toEqual([
+      { base: MIRROR_RELEASES_URL, api: 'https://gitcode.com/api/v5/repos/qialike/qialike/releases/latest' },
+    ])
+  })
+
+  test('a source list is parsed, deriving an API only where the host needs one', () => {
+    expect(releaseSources({ QIALIKE_INSTALL_SOURCES: 'https://a.test/rel, https://gitcode.com/o/r/releases|' })).toEqual([
+      { base: 'https://a.test/rel' },
+      { base: 'https://gitcode.com/o/r/releases', api: 'https://gitcode.com/api/v5/repos/o/r/releases/latest' },
+    ])
+    // An explicit API is believed over the derivation.
+    expect(releaseSources({ QIALIKE_INSTALL_SOURCES: 'https://gitcode.com/o/r/releases|https://elsewhere/api' })).toEqual([
+      { base: 'https://gitcode.com/o/r/releases', api: 'https://elsewhere/api' },
+    ])
+  })
+
+  test('the installer carries the same list as this module', () => {
+    // The two are a copy of each other by necessity (one is bash, one is bundled TS),
+    // so this is the check that keeps them from drifting — the same shape as the
+    // asset-table check below, and it runs the installer's own parser.
+    const shell = spawnSync(
+      'bash',
+      [
+        '-c',
+        'source "$1/scripts/install.d/00-common.sh"; source "$1/scripts/install.d/10-args.sh";' +
+          ' qialike_parse_sources "$DEFAULT_SOURCES";' +
+          ' for i in "${!SOURCE_BASES[@]}"; do printf \'%s|%s\\n\' "${SOURCE_BASES[$i]}" "${SOURCE_APIS[$i]}"; done',
+        'bash',
+        REPO,
+      ],
+      { encoding: 'utf8' },
+    )
+    expect(shell.status, shell.stderr).toBe(0)
+    expect(shell.stdout.trim().split('\n')).toEqual(RELEASE_SOURCES.map((source) => `${source.base}|${source.api ?? ''}`))
+  })
+
+  test('the API tag is read out of the JSON without a parser', () => {
+    expect(parseTagFromJson('{"tag_name":"0.6.0","assets":[{"name":"x"}]}')).toBe('0.6.0')
+    expect(parseTagFromJson('{"assets":[]}')).toBeUndefined()
+    expect(parseTagFromJson('')).toBeUndefined()
+  })
+
+  test('a reachable primary needs no API call at all', () => {
+    const { run, calls } = fakeRunner({
+      curl: { status: 0, stdout: 'https://github.com/qialike/qialike/releases/download/0.6.1/qialike-linux-x64.tar.gz' },
+    })
+    expect(latestVersion({ target: 'linux-x64', run })).toBe('0.6.1')
+    expect(calls).toHaveLength(1)
+  })
+
+  test('a source that cannot answer falls through to the next, API included', () => {
+    const asked: string[] = []
+    const run: Runner = (cmd, args) => {
+      const line = `${cmd} ${args.join(' ')}`
+      asked.push(line)
+      // The primary is blackholed: 28 is curl's exit for a timeout.
+      if (line.includes('github.com')) return { status: 28, stdout: '', stderr: '' }
+      if (line.includes('/api/v5/repos/')) return { status: 0, stdout: '{"tag_name":"0.6.0"}', stderr: '' }
+      // The mirror's own `/latest/download/…` answers with a page and no redirect.
+      return { status: 0, stdout: '', stderr: '' }
+    }
+
+    expect(latestVersion({ target: 'linux-x64', run })).toBe('0.6.0')
+    expect(asked[0]).toContain(DEFAULT_RELEASES_URL)
+    expect(asked[0]).toContain('%{redirect_url}')
+    expect(asked[1]).toContain(MIRROR_RELEASES_URL)
+    expect(asked[1]).toContain('%{redirect_url}')
+    // Only the mirror gets asked for JSON — GitHub has no API in the list.
+    expect(asked[2]).toContain('/api/v5/repos/')
+    expect(asked).toHaveLength(3)
+    // Both probes are bounded, so a blackholed host cannot hang the check.
+    for (const line of asked) {
+      expect(line).toContain(CONNECT_TIMEOUT)
+      expect(line).toContain(PROBE_TIMEOUT)
+    }
   })
 })
 
