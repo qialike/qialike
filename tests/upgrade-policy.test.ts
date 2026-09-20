@@ -100,6 +100,20 @@ describe('the gate matrix', () => {
     expect(decideUpdate(input({ latest: '0.6.0' }))).toEqual({ kind: 'up-to-date' })
   })
 
+  test('a LAGGING source that reports an older tag must never be installed', () => {
+    // The realistic shape of this: the user is on 0.6.1, GitHub is unreachable, and
+    // the gitcode mirror has only caught up to 0.6.0. `getReleaseType` compares just
+    // major and minor, so 0.6.0 against 0.6.1 classifies as a PATCH — without the
+    // guard this would have been a silent downgrade, and the next check (with GitHub
+    // reachable again) would have pushed the user back up, and so on.
+    expect(decideUpdate(input({ installed: '0.6.1', latest: '0.6.0' }))).toEqual({ kind: 'up-to-date' })
+    expect(decideUpdate(input({ installed: '0.6.1', latest: '0.5.9' }))).toEqual({ kind: 'up-to-date' })
+    expect(decideUpdate(input({ installed: '1.0.0', latest: '0.9.9' }))).toEqual({ kind: 'up-to-date' })
+    // ...and an unparseable tag is not "newer" either, so it cannot be installed
+    // over a version we do understand.
+    expect(decideUpdate(input({ installed: '0.6.1', latest: 'nightly' }))).toEqual({ kind: 'up-to-date' })
+  })
+
   test('`alwaysNotify` announces even an already-current version', () => {
     // It is checked before the equality short-circuit, matching opencode.
     expect(decideUpdate(input({ latest: '0.6.0', alwaysNotify: true }))).toEqual({ kind: 'notify', version: '0.6.0' })

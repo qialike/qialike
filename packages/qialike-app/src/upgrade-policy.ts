@@ -70,14 +70,40 @@ export interface PolicyInput {
   alwaysNotify: boolean
 }
 
-/** Major/minor of a version, tolerating a `v` prefix, a `-suffix` and junk. */
+/** Major/minor/patch of a version, tolerating a `v` prefix, a `-suffix` and junk. */
+function versionParts(version: string): [number, number, number] {
+  const match = /^v?(\d+)\.(\d+)(?:\.(\d+))?/.exec(version.trim())
+  // An unparseable version reads as 0.0.0, which makes any real release look like a
+  // move away from it — i.e. "announce, do not install" for the minor/major cases
+  // below. Failing towards the quiet branch is the safe direction for a value we
+  // could not understand.
+  if (match === null) return [0, 0, 0]
+  return [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)]
+}
+
+/** Major/minor of a version. */
 function majorMinor(version: string): { major: number; minor: number } {
-  const match = /^v?(\d+)\.(\d+)/.exec(version.trim())
-  // An unparseable version reads as 0.0, which makes any real release look like a
-  // major/minor move — i.e. "announce, do not install". Failing towards the quiet
-  // branch is the safe direction for a value we could not understand.
-  if (match === null) return { major: 0, minor: 0 }
-  return { major: Number(match[1]), minor: Number(match[2]) }
+  const [major, minor] = versionParts(version)
+  return { major, minor }
+}
+
+/**
+ * Compare two versions: negative when `a` is older than `b`, 0 when equal.
+ *
+ * Needed because the release SOURCES can disagree. A mirror (gitcode) lags the
+ * primary (GitHub), so when the primary is unreachable the newest tag read from the
+ * fallback can be OLDER than what is installed. `getReleaseType` compares only
+ * major and minor, so 0.6.0 against an installed 0.6.1 classifies as a patch — and
+ * the updater would have quietly installed a downgrade.
+ */
+export function compareVersions(a: string, b: string): number {
+  const left = versionParts(a)
+  const right = versionParts(b)
+  for (let i = 0; i < 3; i += 1) {
+    const difference = (left[i] as number) - (right[i] as number)
+    if (difference !== 0) return difference
+  }
+  return 0
 }
 
 /**
@@ -116,6 +142,13 @@ export function decideUpdate(input: PolicyInput): UpdateDecision {
   if (input.buildMode === 'dev') return { kind: 'skip', reason: 'dev-build' }
   if (input.alwaysNotify) return { kind: 'notify', version: input.latest }
   if (input.installed === input.latest) return { kind: 'up-to-date' }
+  // A LAGGING SOURCE also lands here, and must not be acted on: when the primary
+  // release host is unreachable the newest tag comes from a mirror that may not
+  // have caught up, so "newest" can be OLDER than what is installed. Installing it
+  // would be a silent downgrade — and because the mirror's tag would then match
+  // nothing on the primary, the next check would bounce the user back up and down
+  // again. Treat "not newer" as nothing to do.
+  if (compareVersions(input.latest, input.installed) < 0) return { kind: 'up-to-date' }
 
   const release = getReleaseType(input.installed, input.latest)
   if (input.auto === 'notify' || release !== 'patch') return { kind: 'notify', version: input.latest }
