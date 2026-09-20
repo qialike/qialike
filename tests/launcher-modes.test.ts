@@ -12,17 +12,18 @@
  */
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
-import { LAUNCHER_MODES, PLUGIN_MODE, UNINSTALL_MODE, WEB_MODE, isLauncherMode } from '../apps/tui-bin/src/launcher-modes.ts'
+import { LAUNCHER_MODES, PLUGIN_MODE, UNINSTALL_MODE, UPGRADE_MODE, WEB_MODE, isLauncherMode } from '../apps/tui-bin/src/launcher-modes.ts'
 
 const binSource = readFileSync(new URL('../apps/tui-bin/src/bin.ts', import.meta.url), 'utf8')
 const mainSource = readFileSync(new URL('../apps/tui-bin/src/main.ts', import.meta.url), 'utf8')
 
 describe('launcher modes', () => {
-  test('web, uninstall and plugin are launcher-owned positionals', () => {
+  test('web, uninstall, plugin and upgrade are launcher-owned positionals', () => {
     expect(isLauncherMode(WEB_MODE)).toBe(true)
     expect(isLauncherMode(UNINSTALL_MODE)).toBe(true)
     expect(isLauncherMode(PLUGIN_MODE)).toBe(true)
-    expect(LAUNCHER_MODES).toEqual([UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE])
+    expect(isLauncherMode(UPGRADE_MODE)).toBe(true)
+    expect(LAUNCHER_MODES).toEqual([UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE, UPGRADE_MODE])
   })
 
   test('resume, a typo and a missing argument are NOT launcher modes', () => {
@@ -40,7 +41,7 @@ describe('launcher modes', () => {
     const literals = [...binSource.matchAll(/args\[0\] === '([^']+)'/g)].map((match) => match[1])
     expect(literals).toEqual([])
     const constants = [...binSource.matchAll(/args\[0\] === ([A-Z_]+)/g)].map((match) => match[1])
-    expect(new Set(constants)).toEqual(new Set(['UNINSTALL_MODE', 'WEB_MODE', 'PLUGIN_MODE']))
+    expect(new Set(constants)).toEqual(new Set(['UNINSTALL_MODE', 'WEB_MODE', 'PLUGIN_MODE', 'UPGRADE_MODE']))
     expect(new Set(constants).size).toBe(LAUNCHER_MODES.length)
   })
 

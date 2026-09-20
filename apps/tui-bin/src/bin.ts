@@ -44,7 +44,8 @@ import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generated/config-embed.js'
 import { PLUGIN_BUILTINS, LEGACY_PLUGIN_ALIASES } from '../generated/plugins.js'
 import pkg from '../../../package.json' with { type: 'json' }
-import { PLUGIN_MODE, UNINSTALL_MODE, WEB_MODE } from './launcher-modes.ts'
+import { PLUGIN_MODE, UNINSTALL_MODE, UPGRADE_MODE, WEB_MODE } from './launcher-modes.ts'
+import { runUpgrade, scheduleAutoCheck } from './upgrade-command.ts'
 import { classifyProjectLayer } from './project-overlay.ts'
 import type { ProjectRowProblem } from './project-overlay.ts'
 
@@ -1359,6 +1360,19 @@ async function main(): Promise<void> {
   // `plugin` owns its whole command line too, and — like the other launcher
   // modes — never boots the tree or touches the terminal.
   if (args[0] === PLUGIN_MODE) process.exit(runPlugin(args))
+  // `upgrade` owns its whole line too, and like the other launcher modes it never
+  // boots the tree or touches the terminal — so it works over ssh, from a script,
+  // and from the automatic check the TUI spawns.
+  if (args[0] === UPGRADE_MODE) {
+    process.exit(runUpgrade(args.slice(1), {
+      installed: readVersion(),
+      out: (line) => { process.stdout.write(`${line}\n`) },
+      err: (line) => { process.stderr.write(`${line}\n`) },
+      // No context here on purpose: the settings namespace exists only inside a
+      // booted tree, and only `--auto` consults it (it always has one, because the
+      // TUI is what spawns it).
+    }))
+  }
   // `--dump-config` is a DIAGNOSTIC: it must not touch the terminal at all (a
   // piped `qialike --dump-config > file` has to stay free of screen escapes), so
   // it runs before the alternate screen, the splash and every terminal probe.
@@ -1495,6 +1509,22 @@ async function main(): Promise<void> {
   // The app is mounted; from here its own exit handler owns the leave (see the
   // comment above the backstop), so the backstop becomes a no-op.
   appMounted = true
+
+  // The automatic update check: ONCE, deferred, non-blocking, and spawned as a
+  // child process. opencode does the same thing for the same reason — a check
+  // must never delay the first frame — and the child matters here because the
+  // upgrade path downloads tens of megabytes and replaces this very binary; on
+  // the TUI's event loop that would freeze the interface. Only the resulting
+  // notice is relayed, through the existing `tui.notify`.
+  //
+  // It is deliberately NOT wired into `web`: that mode forwards to the `dsh` CLI
+  // and has already handed the terminal over, and it returns above.
+  scheduleAutoCheck({
+    notify: (message) => {
+      const tui = ctx.get('tui') as { notify(message: string): void } | undefined
+      tui?.notify(message)
+    },
+  })
 
   // Keep the process alive: the mounted TUI holds open handles. If the tree
   // disposed itself (a one-shot side of the app), let the loop drain.

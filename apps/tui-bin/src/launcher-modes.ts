@@ -11,6 +11,11 @@
  *    (`--host`, `--no-open`) — parsing would reject those first.
  *  - {@link UNINSTALL_MODE} ignores the rest of the line by design and clears
  *    the harness home plus the shell-profile PATH line.
+ *  - {@link UPGRADE_MODE} replaces the installed binary. It is privileged in the
+ *    same way `uninstall` is (it writes `~/.dsh/bin`), and it must work with no
+ *    TUI at all — that is also why the automatic check SPAWNS this mode instead
+ *    of doing the work in-process: the `upgrade` path downloads ~52 MB and swaps
+ *    the running binary, which must not happen on the TUI's event loop.
  *
  * This list is the single source of truth for both entry points because the two
  * used to drift: F5 (`v0.4.9-beta`) validated the positional against `resume`
@@ -28,9 +33,11 @@ export const UNINSTALL_MODE = 'uninstall'
 export const WEB_MODE = 'web'
 /** Inspects / edits the overlay layers; never boots the TUI. */
 export const PLUGIN_MODE = 'plugin'
+/** Replaces the installed binary with the newest (or a named) release. */
+export const UPGRADE_MODE = 'upgrade'
 
 /** Every launcher-owned positional mode, in the order `bin.ts` resolves them. */
-export const LAUNCHER_MODES = [UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE] as const
+export const LAUNCHER_MODES = [UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE, UPGRADE_MODE] as const
 
 /** Whether `arg` is a launcher mode, i.e. its whole argv belongs to `bin.ts`. */
 export function isLauncherMode(arg: string | undefined): arg is (typeof LAUNCHER_MODES)[number] {

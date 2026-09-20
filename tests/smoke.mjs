@@ -26,7 +26,13 @@ function run() {
   if (!existsSync(bin)) {
     throw new Error(`missing ${bin}; run \`pnpm run build\` first`)
   }
-  const result = spawnSync(bin, ['--help'], { encoding: 'utf8', timeout: 30_000 })
+  // No background work: the smoke test must not have the binary reach out for an
+  // update check, let alone replace itself mid-test.
+  const result = spawnSync(bin, ['--help'], {
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { ...process.env, QIALIKE_DISABLE_AUTOUPDATE: '1' },
+  })
   if (result.status !== 0) {
     throw new Error(`qialike --help exited ${String(result.status)}:\n${result.stderr || result.stdout}`)
   }

@@ -24,7 +24,7 @@ const body = (source: string, marker: string): string =>
 describe('plugin CLI', () => {
   test('① it is a launcher mode, dispatched before the terminal is touched', () => {
     expect(MODES, 'the mode exists').toContain("export const PLUGIN_MODE = 'plugin'")
-    expect(MODES, 'and is registered in the single source of truth').toContain('LAUNCHER_MODES = [UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE]')
+    expect(MODES, 'and is registered in the single source of truth').toContain('LAUNCHER_MODES = [UNINSTALL_MODE, WEB_MODE, PLUGIN_MODE, UPGRADE_MODE]')
     const dispatch = BIN.indexOf('runPlugin(args)')
     const alt = BIN.indexOf("process.stdout.write('\\x1b[?1049h')")
     expect(dispatch, 'dispatched').toBeGreaterThan(-1)

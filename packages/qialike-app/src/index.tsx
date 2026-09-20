@@ -19,6 +19,7 @@
 // (SPLASH_DELAY_MS) and before any other module's.
 import { migrateLegacyHomeFiles } from './legacy-names.ts'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { statSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { render, Box, Text } from 'ink'
@@ -59,6 +60,7 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
 import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
+import { registerUpdateSettings } from './upgrade-policy.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
@@ -3670,6 +3672,13 @@ export function apply(ctx: Context, config: Config): void {
   // (UI state) and the `tui` aggregate (panel/command registration, notify).
   ctx.provide('tuiStore', store)
   ctx.provide('tui', tui)
+  // Declare the `qialike-update` settings namespace (`auto: true | false | "notify"`).
+  // Registered from THIS plugin rather than from a plugin of its own: the updater
+  // is not a Cordis child plugin — it must also run outside the tree
+  // (`qialike upgrade`) — so this is one registration call, not a new row in
+  // cordis.patch.yml. It runs here, during boot, so the automatic check that the
+  // launcher schedules afterwards can read the user's choice.
+  registerUpdateSettings(ctx)
   // The repository overlay is applied without asking: name it in the status bar
   // (long flash, visible on the hero) and leave a line in the transcript.
   const overlayNotice = projectOverlayNotice()
@@ -4059,6 +4068,33 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   tui.commands.register({ name: 'think', hint: 'show/hide details under Think and tool rows (reasoning + tool output)', run: () => { store.toggleAllDetail() } })
   tui.commands.register({ name: 'clear', hint: 'clear the transcript', run: () => { abortResumeFold(); store.clear() } })
   tui.commands.register({ name: 'exit', hint: 'quit qialike', run: () => { requestExit(io, 0) } })
+  // `/upgrade` runs the launcher mode in a CHILD process. Calling the updater here
+  // would run a multi-megabyte download and swap the running binary on this event
+  // loop — the interface would freeze for the whole download. The child reports
+  // only the lines worth showing, and they arrive as ordinary status notices.
+  tui.commands.register({
+    name: 'upgrade',
+    hint: 'check for and install a newer qialike',
+    run: () => {
+      tui.notify('checking for a newer qialike…')
+      const child = spawn(process.execPath, ['upgrade'], { stdio: ['ignore', 'pipe', 'pipe'] })
+      let received = ''
+      const collect = (chunk: Buffer | string): void => { received += String(chunk) }
+      child.stdout?.on('data', collect)
+      child.stderr?.on('data', collect)
+      child.on('error', () => { tui.notify('update failed: could not start the updater') })
+      child.on('exit', (code) => {
+        const lines = received.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+        if (lines.length === 0) {
+          // Silence means "already newest" (or a policy skip); say so rather than
+          // leaving the notice above hanging.
+          tui.notify(code === 0 ? 'qialike is already the newest version' : 'update failed')
+          return
+        }
+        for (const line of lines) tui.notify(line)
+      })
+    },
+  })
 
   // ── S2-2b: mount the UI and take input BEFORE the blocking attach ──────────
   // `agents.resume()` decodes the whole durable log on this one thread and
