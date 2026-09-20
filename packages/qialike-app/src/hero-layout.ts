@@ -447,15 +447,20 @@ export function heroPaletteBottomRow(rows: number, heroLift: number): number {
  *  synchronized-output envelope (`ESC[?2026h/l`, see `__dshFrameEnvelope` in the
  *  build), which presents a split frame as one picture. On a terminal that
  *  ignores the mode the old one-round-trip half-paint can be visible again — the
- *  accepted price of showing all 14 commands.
+ *  accepted price of showing the whole list.
+ *
+ *  There is deliberately NO cap constant any more. One existed and was kept equal
+ *  to the number of commands, so the list painted whole only for as long as nobody
+ *  added a command: `/upgrade` made it 15 and silently pushed a row into the
+ *  `… 1 more` footer, which the `hero-palette` scenario caught. The cap IS the
+ *  list size, clamped only by the room below.
  *
  *  It is still CLAMPED to what fits: the popup grows upward from
  *  {@link heroPaletteBottomRow}, so on a short hero a full list would push the
  *  box's top border off screen — {@link heroPaletteLimitRows} keeps it on row 1
- *  and lets the footer report the remainder (pty-measured: 14 rows with no footer
- *  from a 24-row terminal up, 8 rows + footer at 120×18; see the `hero-palette`
- *  scenario). */
-export const HERO_PALETTE_MAX_ROWS = 14
+ *  and lets the footer report the remainder (pty-measured: the whole list with no
+ *  footer from a 24-row terminal up, 9 rows + footer at 133×20; see the
+ *  `hero-palette` scenario). */
 
 /**
  * The number of palette content rows the hero can paint without pushing the box's
@@ -473,7 +478,9 @@ export const HERO_PALETTE_MAX_ROWS = 14
  */
 export function heroPaletteLimitRows(rows: number, heroLift: number, count: number): number {
   const room = heroPaletteBottomRow(rows, heroLift) - 2
-  const cap = Math.min(HERO_PALETTE_MAX_ROWS, Math.max(1, count))
+  // The list size, not a constant: the hero is meant to paint EVERY command, and a
+  // fixed cap only looks right while it happens to equal the command count.
+  const cap = Math.max(1, count)
   const limit = Math.max(1, Math.min(cap, room))
   return count > limit ? Math.max(1, Math.min(limit, room - 1)) : limit
 }

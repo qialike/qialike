@@ -42,7 +42,6 @@ import {
   paletteBoxRows,
   paletteContentRows,
   paletteWindow,
-  HERO_PALETTE_MAX_ROWS,
   heroPaletteBottomRow,
   heroPaletteLimitRows,
   PALETTE_DOCKED_GAP,
@@ -499,28 +498,44 @@ describe('the palette window (paletteWindow / paletteContentRows)', () => {
     expect(paletteContentRows(w.visible, w.hidden)).toBe(3)
   })
 
-  test('a list longer than the cap is sliced and reports its remainder', () => {
-    const w = paletteWindow(30, 0, HERO_PALETTE_MAX_ROWS)
+  test('a list longer than the window is sliced and reports its remainder', () => {
+    // A window size, not a cap: these cases exercise `paletteWindow`/`paletteContentRows`
+    // arithmetic, and any limit does. (The hero's own limit follows the list size —
+    // see the case below.)
+    const window = 14
+    const w = paletteWindow(30, 0, window)
     expect(w.first).toBe(0)
-    expect(w.visible).toBe(HERO_PALETTE_MAX_ROWS)
-    expect(w.hidden).toBe(30 - HERO_PALETTE_MAX_ROWS)
+    expect(w.visible).toBe(window)
+    expect(w.hidden).toBe(30 - window)
     // The footer row that reports the remainder is part of the box.
-    expect(paletteContentRows(w.visible, w.hidden)).toBe(HERO_PALETTE_MAX_ROWS + 1)
+    expect(paletteContentRows(w.visible, w.hidden)).toBe(window + 1)
   })
 
-  test('the hero cap is the whole command list (14 commands are NOT truncated)', () => {
+  test('the hero cap is the whole command list — there is no fixed cap', () => {
     // User call: the hero must show every command again. 8 rows truncated the
     // list into a `… N more` footer that bought nothing — the frame is over the
     // pty's 4095-byte instalment at 8 rows too (8232 B at 120×30), and the
     // synchronized-output envelope is what actually prevents the visible tear.
-    expect(HERO_PALETTE_MAX_ROWS).toBe(14)
-    const w = paletteWindow(14, 0, HERO_PALETTE_MAX_ROWS)
-    expect(w).toEqual({ first: 0, visible: 14, hidden: 0 })
-    expect(paletteContentRows(w.visible, w.hidden), 'no footer row').toBe(14)
+    //
+    // A constant used to live here, kept equal to the command count, so the list
+    // painted whole only until somebody added a command: `/upgrade` made it 15 and
+    // pushed a row into the footer. The cap follows the list now, whatever it is.
+    const tall = heroLayout({ ...BASE, rows: 37 })
+    for (const count of [14, 15, 20, 40]) {
+      const limit = heroPaletteLimitRows(37, tall.paletteBottomMargin, count)
+      const w = paletteWindow(count, 0, limit)
+      // Room allows these, so the whole list must paint with no footer row.
+      if (limit === count) {
+        expect(w, `count=${count}`).toEqual({ first: 0, visible: count, hidden: 0 })
+        expect(paletteContentRows(w.visible, w.hidden), `count=${count} no footer`).toBe(count)
+      }
+    }
+    // 15 is the live command count; at a normal height it paints whole.
+    expect(heroPaletteLimitRows(37, tall.paletteBottomMargin, 15)).toBe(15)
   })
 
   test('the window slides only as far as the selection requires', () => {
-    const max = HERO_PALETTE_MAX_ROWS
+    const max = 14
     const count = 30
     // Inside the window: it must not move (the list cannot jump under the user).
     for (let i = 0; i < max; i++) expect(paletteWindow(count, i, max).first).toBe(0)
@@ -560,17 +575,19 @@ describe('the palette window (paletteWindow / paletteContentRows)', () => {
   /**
    * The hero popup is bottom-anchored and grows UPWARD, so a long list can push
    * its own top border off screen on a short hero. The limit is what keeps every
-   * painted row on the terminal — and what makes the 14-row cap safe.
+   * painted row on the terminal — and, since the cap is the LIST SIZE, what makes
+   * the whole palette safe at any list length.
    */
   test('the hero limit keeps the top border on screen at every height', () => {
+    const LIST = 20
     for (let rows = 8; rows <= 60; rows++) {
       const l = heroLayout({ ...BASE, rows })
-      const limit = heroPaletteLimitRows(rows, l.paletteBottomMargin, 20)
+      const limit = heroPaletteLimitRows(rows, l.paletteBottomMargin, LIST)
       // A full list is shown whenever it fits above the anchored bottom…
-      expect(limit, `rows=${rows}`).toBeLessThanOrEqual(HERO_PALETTE_MAX_ROWS)
+      expect(limit, `rows=${rows}`).toBeLessThanOrEqual(LIST)
       expect(limit, `rows=${rows}`).toBeGreaterThanOrEqual(1)
       // …and the resulting box never starts above row 1 (both borders included).
-      const w = paletteWindow(20, 0, limit)
+      const w = paletteWindow(LIST, 0, limit)
       const box = paletteBoxRows({
         hero: true,
         count: paletteContentRows(w.visible, w.hidden),
@@ -580,11 +597,11 @@ describe('the palette window (paletteWindow / paletteContentRows)', () => {
       expect(box.first, `rows=${rows} box=${box.first}..${box.last}`).toBeGreaterThanOrEqual(1)
       expect(box.last, `rows=${rows}`).toBe(heroPaletteBottomRow(rows, l.paletteBottomMargin))
     }
-    // …so a tall terminal shows all 14 and a short one degrades instead of
-    // clipping (pty-measured: 14 from 24 rows up, 9 at 120×18).
+    // …so a tall terminal shows the whole list and a short one degrades instead of
+    // clipping (pty-measured: 15 commands from 24 rows up, 9 at 133×20).
     const tall = heroLayout({ ...BASE, rows: 37 })
-    expect(heroPaletteLimitRows(37, tall.paletteBottomMargin, 14)).toBe(HERO_PALETTE_MAX_ROWS)
+    expect(heroPaletteLimitRows(37, tall.paletteBottomMargin, 15)).toBe(15)
     const short = heroLayout({ ...BASE, rows: 18 })
-    expect(heroPaletteLimitRows(18, short.paletteBottomMargin, 14)).toBeLessThan(HERO_PALETTE_MAX_ROWS)
+    expect(heroPaletteLimitRows(18, short.paletteBottomMargin, 15)).toBeLessThan(15)
   })
 })
