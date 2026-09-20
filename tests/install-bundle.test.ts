@@ -31,7 +31,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -111,8 +113,24 @@ describe('replacing a running binary requires rename(2)', () => {
 
       const child = spawn(dest, ['30'], { stdio: 'ignore' })
       try {
-        // Let the exec land before touching the path.
-        await new Promise((resolve) => setTimeout(resolve, 400))
+        // Wait until the child is ACTUALLY executing `dest`, rather than assuming
+        // a fixed delay is enough. A bare `setTimeout(400)` is a race: under load
+        // (this suite runs right after `tsc` in the release gate) the exec may not
+        // have landed yet, `cp` then succeeds, and the control assertion below
+        // fails for reasons that have nothing to do with the code under test.
+        // The kernel reports the executing image per pid, so this is exact.
+        const expected = realpathSync(dest)
+        const deadline = Date.now() + 10_000
+        let executing = false
+        while (!executing && Date.now() < deadline) {
+          try {
+            executing = readlinkSync(`/proc/${String(child.pid)}/exe`) === expected
+          } catch {
+            // Not exec'd yet (or already gone) — keep waiting.
+          }
+          if (!executing) await new Promise((resolve) => setTimeout(resolve, 20))
+        }
+        expect(executing, `child ${String(child.pid)} never began executing ${dest}`).toBe(true)
 
         // Control: prove the premise on THIS path. Without this the test would
         // pass on a filesystem that never returns ETXTBSY, proving nothing.
