@@ -19,6 +19,9 @@ main() {
   local target asset tag archive inner
   target=$(qialike_detect_target)
   qialike_require_supported "$target"
+  # Windows installs as `qialike.exe`; everything else as `qialike`. Set before
+  # any path is built from $BIN.
+  qialike_set_binary_name "$target"
   asset=$(qialike_asset_for "$target")
 
   if [[ "$DRY_RUN" == true ]]; then

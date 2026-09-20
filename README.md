@@ -500,8 +500,10 @@ pnpm install:remote                  # equivalent
 `scripts/install` lives in `scripts/install.d/*.sh` and is assembled into one self-contained file
 by `scripts/build-install.sh`, because the entry point pipes it into `bash`. It installs to
 `~/.dsh/bin` — deliberately not `$DSH_HOME/bin`, since `qialike uninstall` scans exactly
-`$HOME/.dsh/bin` and `$HOME/.local/bin`. **Only `linux-x64` is published today**; other platforms
-are refused by name before anything is written.
+`$HOME/.dsh/bin` and `$HOME/.local/bin`. All six targets are published — `linux-x64`,
+`linux-arm64`, `darwin-x64`, `darwin-arm64`, `windows-x64`, `windows-arm64` — and the archive
+decides the extractor (`tar.gz` on linux, `zip` elsewhere). Windows installs as `qialike.exe`.
+Anything else is refused by name before a single byte is written.
 
 The binary embeds DeepSeek Harness at build time, so `qialike` needs no harness checkout, no
 `pnpm`, and no `node_modules` at runtime — only an API key for the provider in use

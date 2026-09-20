@@ -188,20 +188,31 @@ qialike_inner_binary() {
   esac
 }
 
-# Refuse anything that has no published build yet.
+# Refuse anything with no release asset.
+#
+# The accepted set IS the asset table, not a second list: the table mirrors
+# `build.mjs`'s ALL_TARGETS, and a separately maintained "published" list is
+# exactly the kind of copy that drifts out of step with the release. A target the
+# table knows but the release does not carry therefore fails one step later, at
+# the download, with an actionable message — and still before anything is written.
 qialike_require_supported() {
   local target=$1
 
-  if [[ "$target" == 'linux-x64' ]]; then
+  if qialike_asset_for "$target" >/dev/null 2>&1; then
     return 0
   fi
 
-  # Recognised, but not released: name the platform so the message is actionable.
-  if qialike_asset_for "$target" >/dev/null 2>&1; then
-    die "no published build for '$target' yet — only linux-x64 is released; build from source with 'pnpm build --package' instead"
-  fi
-
   die "unsupported platform '$target' (expected one of: linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64)"
+}
+
+# The name the binary takes once INSTALLED.
+#
+# Windows ships `qialike.exe` inside its archive, so the file on disk has to keep
+# that suffix or the shell cannot run it. Every other platform ships the bare
+# `qialike`. Deriving it from the archive's own member name keeps the two from
+# disagreeing — there is one source for "what is this binary called".
+qialike_set_binary_name() {
+  BIN=$(qialike_inner_binary "$1")
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,11 +291,11 @@ qialike_fetch_archive() {
 
   if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
     if ! curl -fL -# -o "$out" "$url"; then
-      die "download failed: $url"
+      die "download failed: $url — the release may not carry $asset for this platform"
     fi
   else
     if ! curl -fsSL -o "$out" "$url"; then
-      die "download failed: $url"
+      die "download failed: $url — the release may not carry $asset for this platform"
     fi
   fi
 
@@ -319,20 +330,35 @@ qialike_verify_checksum() {
 
 # Unpack the archive. Echoes the path of the binary inside it.
 #
-# Only `.tar.gz` is handled: the single supported target is linux-x64, and the
-# `.zip` branch belongs with the darwin/windows targets in 20-platform.sh —
-# adding `unzip` here before a platform can reach it would be dead code.
+# Two formats, matching what `build.mjs --package` produces: `.tar.gz` on linux
+# and `.zip` elsewhere. The extractor is chosen from the file name rather than
+# from the target, so the two cannot disagree about which tool is needed; the
+# member that must come out is still resolved from the target.
 qialike_extract() {
   # $1 = archive path, $2 = target, $3 = destination directory
   local archive=$1 target=$2 dest=$3 inner
 
-  if ! command -v tar >/dev/null 2>&1; then
-    die "'tar' is required but not installed"
-  fi
-
-  if ! tar -xzf "$archive" -C "$dest"; then
-    die "could not extract $archive"
-  fi
+  case "$archive" in
+    *.zip)
+      if ! command -v unzip >/dev/null 2>&1; then
+        die "'unzip' is required to extract $archive"
+      fi
+      if ! unzip -q -o "$archive" -d "$dest"; then
+        die "could not extract $archive"
+      fi
+      ;;
+    *.tar.gz)
+      if ! command -v tar >/dev/null 2>&1; then
+        die "'tar' is required to extract $archive"
+      fi
+      if ! tar -xzf "$archive" -C "$dest"; then
+        die "could not extract $archive"
+      fi
+      ;;
+    *)
+      die "don't know how to extract $archive"
+      ;;
+  esac
 
   inner="$dest/$(qialike_inner_binary "$target")"
   if [[ ! -f "$inner" ]]; then
@@ -510,6 +536,9 @@ main() {
   local target asset tag archive inner
   target=$(qialike_detect_target)
   qialike_require_supported "$target"
+  # Windows installs as `qialike.exe`; everything else as `qialike`. Set before
+  # any path is built from $BIN.
+  qialike_set_binary_name "$target"
   asset=$(qialike_asset_for "$target")
 
   if [[ "$DRY_RUN" == true ]]; then

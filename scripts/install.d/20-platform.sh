@@ -56,18 +56,29 @@ qialike_inner_binary() {
   esac
 }
 
-# Refuse anything that has no published build yet.
+# Refuse anything with no release asset.
+#
+# The accepted set IS the asset table, not a second list: the table mirrors
+# `build.mjs`'s ALL_TARGETS, and a separately maintained "published" list is
+# exactly the kind of copy that drifts out of step with the release. A target the
+# table knows but the release does not carry therefore fails one step later, at
+# the download, with an actionable message — and still before anything is written.
 qialike_require_supported() {
   local target=$1
 
-  if [[ "$target" == 'linux-x64' ]]; then
+  if qialike_asset_for "$target" >/dev/null 2>&1; then
     return 0
   fi
 
-  # Recognised, but not released: name the platform so the message is actionable.
-  if qialike_asset_for "$target" >/dev/null 2>&1; then
-    die "no published build for '$target' yet — only linux-x64 is released; build from source with 'pnpm build --package' instead"
-  fi
-
   die "unsupported platform '$target' (expected one of: linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64)"
+}
+
+# The name the binary takes once INSTALLED.
+#
+# Windows ships `qialike.exe` inside its archive, so the file on disk has to keep
+# that suffix or the shell cannot run it. Every other platform ships the bare
+# `qialike`. Deriving it from the archive's own member name keeps the two from
+# disagreeing — there is one source for "what is this binary called".
+qialike_set_binary_name() {
+  BIN=$(qialike_inner_binary "$1")
 }

@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -162,25 +162,41 @@ describe('arguments', () => {
   })
 })
 
-describe('platforms without a published build are refused before any write', () => {
-  test('a recognized-but-unreleased platform names itself and writes nothing', () => {
-    const home = fakeHome()
-    const { status, output } = install([], { home, env: { QIALIKE_INSTALL_TARGET: 'darwin-arm64' } })
-    expect(status).not.toBe(0)
-    expect(output).toContain("no published build for 'darwin-arm64'")
-    expect(output).toContain('pnpm build --package')
-    expect(existsSync(join(home, '.dsh'))).toBe(false)
-  })
+describe('platforms map to their release asset', () => {
+  // The six targets `build.mjs` can produce, all of which the 0.6.0 release
+  // publishes. A dry run pins the mapping and needs no network.
+  const TARGETS: readonly (readonly [target: string, asset: string, installed: string])[] = [
+    ['linux-x64', 'qialike-linux-x64.tar.gz', 'qialike'],
+    ['linux-arm64', 'qialike-linux-arm64.tar.gz', 'qialike'],
+    ['darwin-x64', 'qialike-darwin-x64.zip', 'qialike'],
+    ['darwin-arm64', 'qialike-darwin-arm64.zip', 'qialike'],
+    ['windows-x64', 'qialike-windows-x64.zip', 'qialike.exe'],
+    ['windows-arm64', 'qialike-windows-arm64.zip', 'qialike.exe'],
+  ]
 
-  test('an unknown platform is refused too', () => {
+  for (const [target, asset, installed] of TARGETS) {
+    test(`${target} -> ${asset}, installed as ${installed}`, () => {
+      const home = fakeHome()
+      const { status, output } = install(['--dry-run'], { home, env: { QIALIKE_INSTALL_TARGET: target } })
+      expect(status, `refused ${target}: ${output}`).toBe(0)
+      expect(output).toContain(asset)
+      // Windows' archive carries `qialike.exe`, so the installed name must too.
+      expect(output).toContain(join(home, '.dsh', 'bin', installed))
+      expect(existsSync(join(home, '.dsh'))).toBe(false)
+    })
+  }
+
+  test('an unknown platform is refused before any write', () => {
     const home = fakeHome()
     const { status, output } = install([], { home, env: { QIALIKE_INSTALL_TARGET: 'plan9-mips' } })
     expect(status).not.toBe(0)
     expect(output).toContain("unsupported platform 'plan9-mips'")
+    // The message lists what IS accepted, so the refusal is actionable.
+    expect(output).toContain('darwin-arm64')
     expect(existsSync(join(home, '.dsh'))).toBe(false)
   })
 
-  test ('--dry-run on the host platform reports the plan and writes nothing', () => {
+  test('--dry-run reports the plan and writes nothing', () => {
     const home = fakeHome()
     const { status, output } = install(['--dry-run'], { home, env: { QIALIKE_INSTALL_TARGET: 'linux-x64' } })
     expect(status).toBe(0)
@@ -189,6 +205,83 @@ describe('platforms without a published build are refused before any write', () 
     expect(output).toContain(join(home, '.dsh', 'bin', 'qialike'))
     expect(output).toContain(PATH_LINE)
     expect(existsSync(join(home, '.dsh'))).toBe(false)
+  })
+})
+
+describe('archive extraction covers both release formats', () => {
+  /** Build a one-member archive holding `member`, using the real tools. */
+  function makeArchive(dir: string, kind: 'tar.gz' | 'zip', member: string): string {
+    const payload = join(dir, member)
+    writeFileSync(payload, '#!/bin/sh\necho stand-in\n')
+    chmodSync(payload, 0o755)
+    const archive = join(dir, kind === 'zip' ? 'a.zip' : 'a.tar.gz')
+    const built = kind === 'zip'
+      ? spawnSync('zip', ['-q', '-j', archive, payload], { cwd: dir, encoding: 'utf8' })
+      : spawnSync('tar', ['-czf', archive, '-C', dir, member], { encoding: 'utf8' })
+    expect(built.status, `could not build the fixture: ${built.stderr}`).toBe(0)
+    return archive
+  }
+
+  /** Run `qialike_extract` against a fixture and report what happened. */
+  function extract(archive: string, target: string, dest: string) {
+    return spawnSync(
+      'bash',
+      [
+        '-c',
+        'source "$1/scripts/install.d/00-common.sh"; source "$1/scripts/install.d/20-platform.sh";' +
+          ' source "$1/scripts/install.d/40-fetch.sh"; qialike_extract "$2" "$3" "$4"',
+        'bash',
+        REPO,
+        archive,
+        target,
+        dest,
+      ],
+      { encoding: 'utf8', timeout: 30_000 },
+    )
+  }
+
+  test('a .tar.gz yields the bare binary', () => {
+    const dir = tempDir('qialike-extract-')
+    const dest = join(dir, 'out')
+    mkdirSync(dest, { recursive: true })
+    const archive = makeArchive(dir, 'tar.gz', 'qialike')
+    const result = extract(archive, 'linux-arm64', dest)
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe(join(dest, 'qialike'))
+  })
+
+  test('a .zip yields qialike.exe for a Windows target', () => {
+    // The archive name decides the tool; the target decides which member must
+    // come out.
+    const dir = tempDir('qialike-extract-')
+    const dest = join(dir, 'out')
+    mkdirSync(dest, { recursive: true })
+    const archive = makeArchive(dir, 'zip', 'qialike.exe')
+    const result = extract(archive, 'windows-x64', dest)
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe(join(dest, 'qialike.exe'))
+  })
+
+  test('a member that is not the expected one is reported, not accepted', () => {
+    const dir = tempDir('qialike-extract-')
+    const dest = join(dir, 'out')
+    mkdirSync(dest, { recursive: true })
+    // A zip holding `qialike` for a Windows target must not silently "succeed".
+    const archive = makeArchive(dir, 'zip', 'qialike')
+    const result = extract(archive, 'windows-x64', dest)
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain('did not contain qialike.exe')
+  })
+
+  test('an unknown archive format is refused, not guessed at', () => {
+    const dir = tempDir('qialike-extract-')
+    const dest = join(dir, 'out')
+    mkdirSync(dest, { recursive: true })
+    const odd = join(dir, 'a.tar.xz')
+    writeFileSync(odd, 'not really an archive\n')
+    const result = extract(odd, 'linux-x64', dest)
+    expect(result.status).not.toBe(0)
+    expect(result.stderr).toContain("don't know how to extract")
   })
 })
 

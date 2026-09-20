@@ -287,7 +287,9 @@ pnpm install:remote                  # 等价
 
 `scripts/install` 的源在 `scripts/install.d/*.sh`，由 `scripts/build-install.sh` 拼接成单一自包含
 文件——因为入口是把它管道给 `bash` 的。安装目录固定为 `~/.dsh/bin`，**刻意不跟随 `$DSH_HOME`**：
-`qialike uninstall` 只扫 `$HOME/.dsh/bin` 与 `$HOME/.local/bin`。**当前只发布 `linux-x64`**，
+`qialike uninstall` 只扫 `$HOME/.dsh/bin` 与 `$HOME/.local/bin`。六个目标**全部已发布**——
+`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`windows-x64`、`windows-arm64`——
+解包工具由归档名决定（linux 用 `tar.gz`，其余用 `zip`）。Windows 安装为 `qialike.exe`。
 其余平台会在写入任何东西之前按名字明确报错。
 
 二进制在构建时已内嵌 DeepSeek Harness，因此 `qialike` 运行时**不需要** harness 检出、`pnpm` 或

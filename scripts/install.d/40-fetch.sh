@@ -22,11 +22,11 @@ qialike_fetch_archive() {
 
   if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
     if ! curl -fL -# -o "$out" "$url"; then
-      die "download failed: $url"
+      die "download failed: $url — the release may not carry $asset for this platform"
     fi
   else
     if ! curl -fsSL -o "$out" "$url"; then
-      die "download failed: $url"
+      die "download failed: $url — the release may not carry $asset for this platform"
     fi
   fi
 
@@ -61,20 +61,35 @@ qialike_verify_checksum() {
 
 # Unpack the archive. Echoes the path of the binary inside it.
 #
-# Only `.tar.gz` is handled: the single supported target is linux-x64, and the
-# `.zip` branch belongs with the darwin/windows targets in 20-platform.sh —
-# adding `unzip` here before a platform can reach it would be dead code.
+# Two formats, matching what `build.mjs --package` produces: `.tar.gz` on linux
+# and `.zip` elsewhere. The extractor is chosen from the file name rather than
+# from the target, so the two cannot disagree about which tool is needed; the
+# member that must come out is still resolved from the target.
 qialike_extract() {
   # $1 = archive path, $2 = target, $3 = destination directory
   local archive=$1 target=$2 dest=$3 inner
 
-  if ! command -v tar >/dev/null 2>&1; then
-    die "'tar' is required but not installed"
-  fi
-
-  if ! tar -xzf "$archive" -C "$dest"; then
-    die "could not extract $archive"
-  fi
+  case "$archive" in
+    *.zip)
+      if ! command -v unzip >/dev/null 2>&1; then
+        die "'unzip' is required to extract $archive"
+      fi
+      if ! unzip -q -o "$archive" -d "$dest"; then
+        die "could not extract $archive"
+      fi
+      ;;
+    *.tar.gz)
+      if ! command -v tar >/dev/null 2>&1; then
+        die "'tar' is required to extract $archive"
+      fi
+      if ! tar -xzf "$archive" -C "$dest"; then
+        die "could not extract $archive"
+      fi
+      ;;
+    *)
+      die "don't know how to extract $archive"
+      ;;
+  esac
 
   inner="$dest/$(qialike_inner_binary "$target")"
   if [[ ! -f "$inner" ]]; then
