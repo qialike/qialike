@@ -34,7 +34,6 @@ import {
 } from '@yourname/qialike-app/src/upgrade-policy.ts'
 import {
   installMethod,
-  installedVersion,
   latestVersion,
   upgrade,
 } from '@yourname/qialike-app/src/self-update.ts'
@@ -232,9 +231,4 @@ export function scheduleAutoCheck(options: AutoCheckOptions): void {
 
   // Node's Timeout has `unref`; the cast keeps this file usable in a test double.
   ;(timer as { unref?: () => void }).unref?.()
-}
-
-/** The installed version as reported out-of-process, for `--check`-style callers. */
-export function readInstalledVersion(): string | undefined {
-  return installedVersion()
 }
