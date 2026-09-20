@@ -1,148 +1,553 @@
 #!/usr/bin/env bash
-# Install qialike into ~/.dsh/bin: copy the single-file binary there and make
-# sure ~/.dsh/bin is on PATH so `qialike` runs from any directory.
+# GENERATED FILE — do not edit by hand.
 #
-# Usage: bash scripts/install   (from the repo root, or from the workspace root
-#                                where the repo lives at ./qialike)
+# Assembled from `scripts/install.d/*.sh` by `scripts/build-install.sh`, in lexical
+# order. Edit the modules, then re-run the builder; `tests/install-bundle.test.ts`
+# fails when this file and a fresh assembly disagree.
+#
+# The modules are concatenated rather than sourced because the entry point is
+# `curl -fsSL https://qialike.com/install | bash`: a script arriving on stdin has no
+# siblings to source and no $BASH_SOURCE to resolve.
 set -euo pipefail
 
-NAME="qialike"
-# The product's pre-rename command name. Only compatibility/cleanup code may
-# name it: the installed copy under it is removed below, and a stale PATH entry
-# pointing at its checkout is reported (both would otherwise shadow or replace
-# this build silently).
-LEGACY_NAME="dsh-tui"
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-INSTALL_DIR="${HOME}/.dsh/bin"
-DEST="$INSTALL_DIR/$NAME"
+# ─────────────────────────────────────────────────────────────────────────────
+# 00-common.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared constants and output helpers.
+#
+# No side effects: this module only sets variables and defines functions, so a
+# test may source it (plus one other module) without running an install.
 
-# Locate the binary. Candidates cover running from the repo root (./dist) and
-# from the workspace root (./qialike/dist), both the single-target build
-# (dist/qialike) and the platform dirs (dist/linux-x64/qialike, ...).
-find_binary() {
-  local base
-  for base in "$REPO_ROOT" "$(pwd)"; do
-    local cand
-    for cand in \
-      "$base/dist/$NAME" \
-      "$base/dist/linux-x64/$NAME" \
-      "$base/$NAME/dist/$NAME" \
-      "$base/$NAME/dist/linux-x64/$NAME"; do
-      if [[ -x "$cand" ]]; then
-        printf '%s\n' "$cand"
-        return 0
-      fi
-    done
-    local dir
-    for dir in "$base"/dist/*/; do
-      [[ -d "$dir" && -x "$dir/$NAME" ]] || continue
-      printf '%s\n' "$dir/$NAME"
-      return 0
-    done
-  done
-  return 1
-}
+APP=qialike
+BIN=qialike
 
-BIN="$(find_binary)" || {
-  echo "qialike: binary not found under $REPO_ROOT/dist (or ./qialike/dist); run \`pnpm build --single\` first" >&2
+# Deliberately NOT derived from $DSH_HOME. `qialike uninstall`
+# (apps/tui-bin/src/bin.ts) scans exactly `$HOME/.local/bin` and `$HOME/.dsh/bin`
+# and drops the PATH line by matching it byte-for-byte, so honouring a DSH_HOME
+# override here would place the binary somewhere uninstall cannot reach.
+INSTALL_DIR="$HOME/.dsh/bin"
+
+# The marker comment written above PATH_LINE, and the line itself. Both are a
+# contract with `qialike uninstall`: it removes the line only on an exact match,
+# and then also removes a preceding `# qialike`. Single quotes on purpose — the
+# literal text `$HOME` is what the shell profile must contain, so it has to
+# survive being written.
+MARKER='# qialike'
+PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
+
+# Release plumbing. `DEFAULT_BASE_URL` is the releases directory, not the repo:
+# assets live at `<BASE_URL>/download/<tag>/<asset>` and the newest tag is
+# resolved through `<BASE_URL>/latest/download/<asset>`.
+DEFAULT_BASE_URL='https://github.com/qialike/qialike/releases'
+
+say() { printf '%s: %s\n' "$APP" "$*"; }
+warn() { printf '%s: warning — %s\n' "$APP" "$*" >&2; }
+die() {
+  printf '%s: %s\n' "$APP" "$*" >&2
   exit 1
 }
 
-mkdir -p "$INSTALL_DIR"
-cp "$BIN" "$DEST"
-chmod +x "$DEST"
-echo "qialike: installed  $DEST"
+# ─────────────────────────────────────────────────────────────────────────────
+# 10-args.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Option parsing.
+#
+# An UNKNOWN option is an error, not a warning (opencode's installer warns and
+# carries on). This script edits the user's shell profile, so a typo such as
+# `--no-modify-pth` would otherwise silently do the one thing the user asked it
+# not to do.
+#
+# Environment inputs (read here so `--version` and the upgrade path agree):
+#   QIALIKE_VERSION          version to install; the automatic updater passes it
+#   QIALIKE_INSTALL_BASE_URL releases-directory override (mirrors, tests)
+#   QIALIKE_INSTALL_TARGET   platform override — TEST ONLY, see 20-platform.sh
+#   QIALIKE_INSTALL_LIB_ONLY `1` sources the bundle without installing (tests)
 
-# A copy installed under the pre-rename name would otherwise keep shadowing this
-# one on PATH (`dsh-tui` still resolves, and runs the old build). Remove it and
-# say so — including the rename itself, because the user's muscle memory (and
-# any script of theirs) still says `dsh-tui` — instead of leaving two commands
-# for one program.
-LEGACY_DEST="$INSTALL_DIR/$LEGACY_NAME"
-if [[ -e "$LEGACY_DEST" ]]; then
-  rm -f "$LEGACY_DEST"
-  echo "qialike: removed the pre-rename binary $LEGACY_DEST ($LEGACY_NAME is now $NAME)"
-fi
+qialike_usage() {
+  cat <<'EOF'
+qialike installer
 
-# Every UNCOMMENTED PATH export in one shell profile, as `lineno:line`. The
-# `-n` is kept so a warning can name the exact line the user has to edit, and
-# the `^[[:space:]]*export` anchor is what keeps `# export PATH=…` out.
-live_path_lines() {
+Usage: install [options]
+
+Options:
+    -h, --help              display this help message
+    -v, --version <version> install a specific version (e.g. 0.6.0 or v0.6.0)
+        --no-modify-path    don't modify shell config files (.bashrc, .zshrc)
+        --base-url <url>    use a different releases directory (mirrors, tests)
+        --dry-run           print what would be done, then change nothing
+
+Examples:
+    curl -fsSL https://qialike.com/install | bash
+    curl -fsSL https://qialike.com/install | bash -s -- --version 0.6.0
+    bash scripts/install --dry-run
+EOF
+}
+
+parse_args() {
+  REQUESTED_VERSION=${QIALIKE_VERSION:-}
+  NO_MODIFY_PATH=false
+  DRY_RUN=false
+  BASE_URL=${QIALIKE_INSTALL_BASE_URL:-$DEFAULT_BASE_URL}
+  # A trailing slash would produce `//download/...`; harmless for GitHub but not
+  # for every mirror, so normalise once here.
+  BASE_URL=${BASE_URL%/}
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        qialike_usage
+        exit 0
+        ;;
+      -v|--version)
+        if [[ -z "${2:-}" ]]; then
+          die "--version requires a version argument"
+        fi
+        REQUESTED_VERSION=$2
+        shift 2
+        ;;
+      --no-modify-path)
+        NO_MODIFY_PATH=true
+        shift
+        ;;
+      --base-url)
+        if [[ -z "${2:-}" ]]; then
+          die "--base-url requires a URL argument"
+        fi
+        BASE_URL=${2%/}
+        shift 2
+        ;;
+      --dry-run)
+        DRY_RUN=true
+        shift
+        ;;
+      *)
+        die "unknown option '$1' (try --help)"
+        ;;
+    esac
+  done
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 20-platform.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform detection and asset naming.
+#
+# Only linux-x64 is published today (verified 2026-09-20: every other asset name
+# 404s on the release), so every other platform is refused with a precise message
+# instead of downloading a 404 body and failing later inside `tar`. Refusing
+# BEFORE anything is written is the point: a half-installed platform is worse
+# than an honest error.
+
+# The platform this script would install for, as `<os>-<arch>`.
+qialike_detect_target() {
+  # Test-only override: the whole point is to exercise the refusal paths on a
+  # linux-x64 host, which is otherwise impossible.
+  if [[ -n "${QIALIKE_INSTALL_TARGET:-}" ]]; then
+    printf '%s\n' "$QIALIKE_INSTALL_TARGET"
+    return 0
+  fi
+
+  local os arch
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    MINGW*|MSYS*|CYGWIN*) os=windows ;;
+    *) die "unsupported operating system: $(uname -s)" ;;
+  esac
+
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+
+  printf '%s-%s\n' "$os" "$arch"
+}
+
+# The release asset for a target. Kept as a table (rather than a single string)
+# because the naming already differs per platform family — linux ships a
+# `.tar.gz`, the others a `.zip` — and `build.mjs --package` is the source of
+# that convention.
+qialike_asset_for() {
+  case "$1" in
+    linux-x64) printf '%s\n' 'qialike-linux-x64.tar.gz' ;;
+    linux-arm64) printf '%s\n' 'qialike-linux-arm64.tar.gz' ;;
+    darwin-x64|darwin-arm64) printf '%s\n' "qialike-$1.zip" ;;
+    windows-x64|windows-arm64) printf '%s\n' "qialike-$1.zip" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The executable's name INSIDE the archive: the archives carry the generic name
+# (`build.mjs`: "the archive contains just the generic-named binary"), and on
+# Windows that name carries the `.exe` suffix.
+qialike_inner_binary() {
+  case "$1" in
+    windows-*) printf '%s\n' 'qialike.exe' ;;
+    *) printf '%s\n' 'qialike' ;;
+  esac
+}
+
+# Refuse anything that has no published build yet.
+qialike_require_supported() {
+  local target=$1
+
+  if [[ "$target" == 'linux-x64' ]]; then
+    return 0
+  fi
+
+  # Recognised, but not released: name the platform so the message is actionable.
+  if qialike_asset_for "$target" >/dev/null 2>&1; then
+    die "no published build for '$target' yet — only linux-x64 is released; build from source with 'pnpm build --package' instead"
+  fi
+
+  die "unsupported platform '$target' (expected one of: linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64)"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 30-version.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Version resolution.
+#
+# The newest tag is read from the redirect the releases server issues for
+# `<BASE_URL>/latest/download/<asset>`, NOT from the GitHub API: the
+# unauthenticated API allows only 60 requests/hour, while the redirect is
+# unlimited and needs no JSON parsing.
+#
+# Note the two tag spellings in play. Local git tags are annotated and carry a
+# `v` (`v0.6.0`), but the GitHub RELEASE tag does not (`0.6.0`) — the download
+# URL only works with the bare form (verified: `…/download/v0.5.4/…` 404s while
+# `…/download/0.5.4/…` redirects). So a user-supplied `v0.6.0` is normalised
+# here, and the version string that goes into the URL and the installer
+# environment is always the bare one.
+
+qialike_normalize_version() {
+  printf '%s\n' "${1#v}"
+}
+
+# Echo the tag to install. `$1` is the asset name, needed to build the URL the
+# redirect is read from.
+qialike_resolve_version() {
+  local asset=$1 url tag
+
+  if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+    qialike_normalize_version "$REQUESTED_VERSION"
+    return 0
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    die "'curl' is required but not installed"
+  fi
+
+  url=$(curl -fsS -o /dev/null -w '%{redirect_url}' "$BASE_URL/latest/download/$asset" 2>/dev/null || true)
+  if [[ -z "$url" ]]; then
+    die "could not resolve the latest version from $BASE_URL/latest/download/$asset"
+  fi
+
+  # Works for GitHub and for a mirror that keeps the same path shape.
+  tag=$(printf '%s\n' "$url" | sed -n 's#.*/download/\([^/]*\)/[^/]*$#\1#p')
+  if [[ -z "$tag" ]]; then
+    die "could not read a version out of '$url'"
+  fi
+
+  printf '%s\n' "$tag"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 40-fetch.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Download and unpack.
+#
+# Progress: curl's own bar when stderr is a terminal, silent otherwise (a pipe
+# or a log would otherwise fill with carriage returns). NO_COLOR also selects the
+# quiet form — the bar is the only coloured thing this script would otherwise
+# print, and a caller that asked for no colour has no use for it.
+#
+# Checksums: `sha256sums.txt` is not published yet, so an absent manifest is a
+# normal outcome and NOT an error — but when one IS published it is enforced.
+# Until then the only trust anchors are HTTPS and GitHub itself.
+
+qialike_fetch_archive() {
+  # $1 = asset name, $2 = tag, $3 = destination directory. Echoes the archive path.
+  local asset=$1 tag=$2 dest=$3 url out
+
+  if ! command -v curl >/dev/null 2>&1; then
+    die "'curl' is required but not installed"
+  fi
+
+  url="$BASE_URL/download/$tag/$asset"
+  out="$dest/$asset"
+
+  if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+    if ! curl -fL -# -o "$out" "$url"; then
+      die "download failed: $url"
+    fi
+  else
+    if ! curl -fsSL -o "$out" "$url"; then
+      die "download failed: $url"
+    fi
+  fi
+
+  qialike_verify_checksum "$tag" "$asset" "$out"
+  printf '%s\n' "$out"
+}
+
+# Verify against the release's `sha256sums.txt` when that file exists.
+qialike_verify_checksum() {
+  local tag=$1 asset=$2 file=$3 sums expected actual
+
+  sums=$(curl -fsSL "$BASE_URL/download/$tag/sha256sums.txt" 2>/dev/null || true)
+  if [[ -z "$sums" ]]; then
+    return 0
+  fi
+
+  expected=$(printf '%s\n' "$sums" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }')
+  if [[ -z "$expected" ]]; then
+    return 0
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$file" | cut -d' ' -f1)
+  else
+    actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
+  fi
+
+  if [[ "$expected" != "$actual" ]]; then
+    die "SHA256 mismatch for $asset (expected $expected, got $actual)"
+  fi
+}
+
+# Unpack the archive. Echoes the path of the binary inside it.
+#
+# Only `.tar.gz` is handled: the single supported target is linux-x64, and the
+# `.zip` branch belongs with the darwin/windows targets in 20-platform.sh —
+# adding `unzip` here before a platform can reach it would be dead code.
+qialike_extract() {
+  # $1 = archive path, $2 = target, $3 = destination directory
+  local archive=$1 target=$2 dest=$3 inner
+
+  if ! command -v tar >/dev/null 2>&1; then
+    die "'tar' is required but not installed"
+  fi
+
+  if ! tar -xzf "$archive" -C "$dest"; then
+    die "could not extract $archive"
+  fi
+
+  inner="$dest/$(qialike_inner_binary "$target")"
+  if [[ ! -f "$inner" ]]; then
+    die "$archive did not contain $(qialike_inner_binary "$target")"
+  fi
+
+  printf '%s\n' "$inner"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 50-place.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Place the binary at $INSTALL_DIR/$BIN.
+#
+# mv, never cp. `cp` onto a path that is currently executing fails with
+# ETXTBSY ("Text file busy"), which is exactly the automatic-upgrade case: the
+# running qialike is replacing itself. rename(2) swaps the directory entry
+# atomically and the running process keeps the old inode, so the upgrade works.
+# The previous installer used `cp` and therefore could not upgrade a running
+# binary at all; `tests/install-bundle.test.ts` pins this so it cannot come back.
+#
+# The copy-to-staging step is still a `cp` — but into a fresh name that nothing
+# is executing, which is safe, and it keeps a failed download from leaving a
+# truncated binary where a working one used to be.
+
+qialike_place() {
+  # $1 = path to the extracted binary. Echoes the installed path.
+  local src=$1 dest="$INSTALL_DIR/$BIN" staged
+
+  mkdir -p "$INSTALL_DIR" || die "could not create $INSTALL_DIR"
+
+  staged="$INSTALL_DIR/.$BIN.new.$$"
+  if ! cp "$src" "$staged"; then
+    rm -f "$staged"
+    die "could not stage the new binary at $staged"
+  fi
+  if ! chmod 755 "$staged"; then
+    rm -f "$staged"
+    die "could not make $staged executable"
+  fi
+  if ! mv -f "$staged" "$dest"; then
+    rm -f "$staged"
+    die "could not replace $dest"
+  fi
+
+  printf '%s\n' "$dest"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 60-path.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Put $INSTALL_DIR on PATH for future shells.
+#
+# Every UNCOMMENTED PATH export in one profile, as `lineno:line`. The `-n` is
+# kept so a warning can name the exact line the user has to edit, and the
+# `^[[:space:]]*export` anchor is what keeps `# export PATH=…` out.
+qialike_live_path_lines() {
   grep -nE '^[[:space:]]*export[[:space:]]+PATH=' "$1" 2>/dev/null || true
 }
 
-# PATH entries naming the pre-rename product point at a checkout directory the
-# rename removed, so they can never resolve. Report them (never edit them: they
-# are the user's own lines) — this is the state that reads as "the rename broke
-# my command", with no hint anywhere telling the user which line to fix.
-for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-  [[ -f "$rc" ]] || continue
-  stale=()
-  while IFS= read -r entry; do
-    [[ -n "$entry" ]] || continue
-    line="${entry#*:}"
-    if [[ "$line" == *"$LEGACY_NAME"* ]]; then
-      stale+=("${rc}:${entry}")
-    fi
-  done < <(live_path_lines "$rc")
-  if (( ${#stale[@]} > 0 )); then
-    echo "qialike: warning — $rc still exports a pre-rename PATH entry, which cannot resolve:"
-    for entry in "${stale[@]}"; do
-      echo "            $entry"
-    done
-    echo "          \`$LEGACY_NAME\` was renamed to \`$NAME\`, so that directory is gone."
-    echo "          Delete or update that line (the current checkout is $REPO_ROOT/dist)."
+qialike_ensure_path() {
+  if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
+    say "$INSTALL_DIR is already on PATH"
+    return 0
   fi
-done
 
-# Make sure ~/.dsh/bin is on PATH for future shells (and tell the user how to
-# enable it in the current one).
-#
-# "Configured" means an UNCOMMENTED export names ~/.dsh/bin. A plain
-# `grep -F "$PATH_LINE"` also matched a commented-out copy of the very same text
-# — the state a profile ends up in when the line was disabled by hand — so the
-# installer called the line configured, appended nothing, and closed by telling
-# the user to `source ~/.bashrc`: `qialike: command not found` survived the
-# install that claimed to fix it.
-PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
-if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
-  echo "qialike: $INSTALL_DIR is already on PATH"
-else
   # Profiles this run actually wrote, so the closing hint names a file that
-  # exists (a fresh HOME has neither `.bashrc` nor `.zshrc` — telling the user
-  # to `source ~/.bashrc` there is advice they cannot follow).
-  appended_rcs=()
+  # exists: a fresh HOME has neither `.bashrc` nor `.zshrc`, and telling the user
+  # to `source ~/.bashrc` there is advice they cannot follow.
+  local appended_rcs=() rc entry configured
+
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     [[ -f "$rc" ]] || continue
+
+    # "Configured" means an UNCOMMENTED export already names ~/.dsh/bin. A plain
+    # `grep -F "$PATH_LINE"` also matched a commented-out copy of the very same
+    # text — the state a profile ends up in when the line was disabled by hand —
+    # so the installer called the line configured, appended nothing, and closed by
+    # telling the user to `source ~/.bashrc`: `qialike: command not found`
+    # survived the install that claimed to fix it.
+    #
+    # Matching on `.dsh/bin` rather than the whole line is deliberate too: it
+    # accepts equivalent spellings (an absolute path, different quoting), where
+    # opencode's exact-line `grep -Fxq` would append a duplicate.
     configured=0
     while IFS= read -r entry; do
       [[ -n "$entry" ]] || continue
-      if [[ "${entry#*:}" == *".dsh/bin"* ]]; then
+      if [[ "${entry#*:}" == *'.dsh/bin'* ]]; then
         configured=1
       fi
-    done < <(live_path_lines "$rc")
+    done < <(qialike_live_path_lines "$rc")
+
     if (( configured )); then
-      echo "qialike: $rc already exports $INSTALL_DIR on PATH"
+      say "$rc already exports $INSTALL_DIR on PATH"
       continue
     fi
-    printf '\n# qialike\n%s\n' "$PATH_LINE" >> "$rc"
-    appended_rcs+=("$rc")
-    echo "qialike: appended to $rc: $PATH_LINE"
-    if grep -qsE '^[[:space:]]*#[[:space:]]*export[[:space:]]+PATH=.*\.dsh/bin' "$rc"; then
-      echo "qialike: note — $rc also holds a commented-out copy of that line; the live one just added is the one in effect"
+
+    if [[ ! -w "$rc" ]]; then
+      warn "$rc is not writable — add this line to it yourself:"
+      printf '            %s\n' "$PATH_LINE" >&2
+      continue
     fi
+
+    # The marker line and the exact PATH_LINE text are what `qialike uninstall`
+    # looks for when it takes the line back out.
+    printf '\n%s\n%s\n' "$MARKER" "$PATH_LINE" >> "$rc"
+    appended_rcs+=("$rc")
+    say "appended to $rc: $PATH_LINE"
   done
-  echo "qialike: $INSTALL_DIR is not on PATH in this shell; run the following now,"
-  echo "          or open a new terminal:"
+
+  say "$INSTALL_DIR is not on PATH in this shell; run one of the following now,"
+  say "or open a new terminal:"
   # Guarded: on bash 3.2 (macOS `/bin/bash`) `"${arr[@]}"` on an EMPTY array
   # trips `set -u` as an unbound variable, which would abort the install at its
-  # last line.
+  # last step.
   if (( ${#appended_rcs[@]} > 0 )); then
     for rc in "${appended_rcs[@]}"; do
-      echo "            source $rc"
+      printf '            source %s\n' "$rc"
     done
   fi
-  echo "            $PATH_LINE"
-fi
+  printf '            %s\n' "$PATH_LINE"
+}
 
-echo "qialike: installed. Run 'qialike' (or 'qialike uninstall')."
+# ─────────────────────────────────────────────────────────────────────────────
+# 70-verify.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Confirm the installed binary runs and reports the version we asked for.
+#
+# opencode's installer only reads `--version` back; comparing it catches the
+# failure that is otherwise invisible until much later — a release whose asset
+# does not match its tag. A mismatch is reported but not fatal: the binary was
+# installed and works, and failing here would leave the user with a working
+# command and a non-zero exit code.
+#
+# `--version` prints `qialike <version>`, so the version is the last word.
+
+qialike_verify() {
+  local expected=$1 out actual
+
+  out=$("$INSTALL_DIR/$BIN" --version 2>/dev/null || true)
+  if [[ -z "$out" ]]; then
+    die "the installed binary did not run: $INSTALL_DIR/$BIN --version produced no output"
+  fi
+
+  actual=${out##* }
+  if [[ "$actual" != "$expected" ]]; then
+    warn "installed binary reports '$out' but $expected was expected — the release asset and its tag disagree"
+    return 0
+  fi
+
+  say "installed  $INSTALL_DIR/$BIN ($out)"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 80-main.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# The install sequence.
+#
+# Guarded at the bottom so the assembled bundle can be sourced with
+# QIALIKE_INSTALL_LIB_ONLY=1 (tests do this); individual modules have no side
+# effects at all, so sourcing one of those needs no guard.
+
+QIALIKE_TMP=''
+
+qialike_cleanup() {
+  if [[ -n "$QIALIKE_TMP" ]]; then
+    rm -rf "$QIALIKE_TMP"
+    QIALIKE_TMP=''
+  fi
+}
+
+main() {
+  parse_args "$@"
+
+  local target asset tag archive inner
+  target=$(qialike_detect_target)
+  qialike_require_supported "$target"
+  asset=$(qialike_asset_for "$target")
+
+  if [[ "$DRY_RUN" == true ]]; then
+    say "dry run — nothing will be written"
+    say "          platform  $target"
+    say "          asset     $asset"
+    say "          releases  $BASE_URL"
+    say "          install   $INSTALL_DIR/$BIN"
+    if [[ "$NO_MODIFY_PATH" == true ]]; then
+      say "          PATH      left alone (--no-modify-path)"
+    else
+      say "          PATH      $PATH_LINE"
+    fi
+    return 0
+  fi
+
+  tag=$(qialike_resolve_version "$asset")
+
+  QIALIKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/qialike-install.XXXXXX") || die "could not create a temporary directory"
+  # `qialike_cleanup` reads a global rather than a local: the trap fires after
+  # main's frame is gone, where a `local` would be unbound under `set -u`.
+  trap qialike_cleanup EXIT INT TERM
+
+  say "installing qialike $tag for $target"
+  archive=$(qialike_fetch_archive "$asset" "$tag" "$QIALIKE_TMP")
+  inner=$(qialike_extract "$archive" "$target" "$QIALIKE_TMP")
+  qialike_place "$inner" >/dev/null
+
+  if [[ "$NO_MODIFY_PATH" == true ]]; then
+    say "PATH left alone (--no-modify-path)"
+  else
+    qialike_ensure_path
+  fi
+
+  qialike_verify "$tag"
+  say "installed. Run 'qialike' (or 'qialike uninstall')."
+}
+
+if [[ "${QIALIKE_INSTALL_LIB_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

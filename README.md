@@ -467,8 +467,8 @@ contract and an example.
 ## Install as a command
 
 ```sh
-bash scripts/install      # copy dist/qialike into ~/.dsh/bin and put ~/.dsh/bin on PATH
-# (equivalent: pnpm install:local; from the workspace root: bash qialike/scripts/install)
+bash scripts/install      # download the released binary into ~/.dsh/bin and put it on PATH
+# (equivalent: pnpm install:remote; from the workspace root: bash qialike/scripts/install)
 qialike                  # now runnable from any directory
 qialike --help
 qialike uninstall        # uninstall from inside the binary: clears the whole harness

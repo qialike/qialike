@@ -1,23 +1,15 @@
 /**
- * Tests for `scripts/install`'s PATH handling.
+ * Behaviour of `scripts/install` — the networked downloader.
  *
- * The installer writes into the user's shell profile, so its two failure modes
- * are silent by construction: it either claims a line is configured when it is
- * not, or it edits a file and says nothing useful about what the user still has
- * to fix. Both were hit for real:
+ * The installer writes into the user's shell profile and replaces a binary that
+ * may be running, so its interesting behaviours are the ones with silent failure
+ * modes: claiming a line is configured when it is not, editing a file it cannot
+ * write, or reporting success for an install that cannot work. Those are pinned
+ * here; the download path itself is covered end to end in P5's fixture test.
  *
- *  - the "already configured" guard used `grep -F "$PATH_LINE"`, which also
- *    matched a COMMENTED-OUT copy of the same text — the state a profile ends up
- *    in when the line was disabled by hand. The installer then appended nothing
- *    and closed by telling the user to `source ~/.bashrc`, so `qialike: command
- *    not found` survived an install that reported success.
- *  - a PATH export naming the pre-rename product (`dsh-tui`) points at a
- *    checkout directory the rename removed. Nothing said so, and the failure
- *    reads as "the rename broke my command".
- *
- * Each case runs the real script against a throwaway HOME and a stand-in
- * `dist/qialike` (a 100 MB binary copy per case would pin nothing extra — the
- * script's own logic is the subject).
+ * Everything runs offline: the cases that need no network source the modules and
+ * call them directly, and the cases that need a refusal assert it happens BEFORE
+ * any network access.
  *
  * Run with `bun test tests/install-script.test.ts`.
  *
@@ -25,23 +17,23 @@
  */
 
 import { describe, expect, test } from 'bun:test'
-import { afterEach, describe, expect, test } from 'bun:test'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawnSync } from 'node:child_process'
 
 const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
-const INSTALL_SCRIPT = join(REPO, 'scripts', 'install')
-/** The pre-rename command name. Tests are outside the rename-hygiene scan, so
- *  naming it here is how the guard's behaviour gets pinned. */
-const LEGACY_NAME = 'dsh-tui'
+const SCRIPT = join(REPO, 'scripts', 'install')
+
+/** The exact text `qialike uninstall` matches when it takes the line back out. */
 const PATH_LINE = 'export PATH="$HOME/.dsh/bin:$PATH"'
 
-const temporaries: string[] = []
+/** A PATH that cannot contain the install dir, so `ensure_path` always works. */
+const BARE_PATH = '/usr/bin:/bin'
 
-afterEach(() => {
-  for (const dir of temporaries.splice(0)) rmSync(dir, { recursive: true, force: true })
+const temporaries: string[] = []
+process.on('exit', () => {
+  for (const dir of temporaries) rmSync(dir, { recursive: true, force: true })
 })
 
 function tempDir(prefix: string): string {
@@ -50,16 +42,42 @@ function tempDir(prefix: string): string {
   return dir
 }
 
-/** A throwaway checkout holding the real installer plus a stand-in binary. */
-function fakeRepo(): string {
-  const repo = tempDir('qialike-install-repo-')
-  mkdirSync(join(repo, 'scripts'), { recursive: true })
-  mkdirSync(join(repo, 'dist'), { recursive: true })
-  copyFileSync(INSTALL_SCRIPT, join(repo, 'scripts', 'install'))
-  const bin = join(repo, 'dist', 'qialike')
-  writeFileSync(bin, '#!/bin/sh\necho qialike-stand-in\n')
-  chmodSync(bin, 0o755)
-  return repo
+/** Run the installer as the user would (`bash scripts/install …`). */
+function install(args: string[], options: { home: string; env?: Record<string, string> }) {
+  const result = spawnSync('bash', [SCRIPT, ...args], {
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: { ...process.env, HOME: options.home, PATH: BARE_PATH, ...options.env },
+  })
+  return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+}
+
+/**
+ * Source the assembled bundle and run `snippet` against it. `LIB_ONLY` stops the
+ * bundle's trailing `main "$@"`, so this exercises the modules without installing.
+ */
+function library(snippet: string, options: { home: string; env?: Record<string, string> }) {
+  const result = spawnSync('bash', ['-c', `source "$1/scripts/install"; ${snippet}`, 'bash', REPO], {
+    encoding: 'utf8',
+    timeout: 30_000,
+    env: {
+      ...process.env,
+      HOME: options.home,
+      PATH: BARE_PATH,
+      QIALIKE_INSTALL_LIB_ONLY: '1',
+      ...options.env,
+    },
+  })
+  return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+}
+
+/** Uncommented `export PATH=` lines only, i.e. what a shell would act on. */
+function livePathLines(text: string): string[] {
+  return text.split('\n').filter((line) => /^\s*export\s+PATH=/.test(line))
+}
+
+function bashrcOf(home: string): string {
+  return readFileSync(join(home, '.bashrc'), 'utf8')
 }
 
 function fakeHome(bashrc?: string): string {
@@ -68,133 +86,192 @@ function fakeHome(bashrc?: string): string {
   return home
 }
 
-/** Run the installer against `home`, with the install dir off PATH unless asked. */
-function install(repo: string, home: string, options: { onPath?: boolean } = {}) {
-  const path = options.onPath === true
-    ? `${join(home, '.dsh', 'bin')}:${process.env.PATH ?? ''}`
-    : process.env.PATH ?? ''
-  const result = spawnSync('bash', [join(repo, 'scripts', 'install')], {
-    cwd: repo,
-    encoding: 'utf8',
-    timeout: 60_000,
-    env: { ...process.env, HOME: home, PATH: path },
+describe('the artifact keeps the contracts other code depends on', () => {
+  const text = readFileSync(SCRIPT, 'utf8')
+
+  /** The script with comment lines removed — these contracts are about CODE.
+   *  The modules deliberately name `DSH_HOME` and `$BASH_SOURCE` in prose to
+   *  explain why neither is used, and matching that prose would be meaningless. */
+  const code = text
+    .split('\n')
+    .filter((line) => !/^\s*#/.test(line))
+    .join('\n')
+
+  test('installs to ~/.dsh/bin, which is where uninstall looks', () => {
+    // `uninstallSelf()` scans exactly $HOME/.local/bin and $HOME/.dsh/bin, so a
+    // DSH_HOME override here would put the binary out of its reach.
+    expect(code.includes('INSTALL_DIR="$HOME/.dsh/bin"'), 'INSTALL_DIR must be exactly $HOME/.dsh/bin').toBe(true)
+    expect(code.includes('DSH_HOME'), 'INSTALL_DIR must not follow $DSH_HOME').toBe(false)
   })
-  return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
-}
 
-function bashrcOf(home: string): string {
-  return readFileSync(join(home, '.bashrc'), 'utf8')
-}
+  test('writes the exact PATH line and marker that uninstall removes', () => {
+    expect(text.includes(`PATH_LINE='${PATH_LINE}'`), 'PATH_LINE must be the exact text uninstall matches').toBe(true)
+    expect(text.includes("MARKER='# qialike'"), 'MARKER must be the exact comment uninstall drops').toBe(true)
+  })
 
-/** Uncommented `export PATH=` lines only, i.e. what a shell would act on. */
-function livePathLines(text: string): string[] {
-  return text.split('\n').filter((line) => /^\s*export\s+PATH=/.test(line))
-}
+  test('never resolves BASH_SOURCE: it may arrive on stdin', () => {
+    // Under `curl … | bash` there is no $0 and no $BASH_SOURCE to resolve, and
+    // `set -u` would turn a reference into a fatal unbound variable.
+    expect(code.includes('BASH_SOURCE'), 'the artifact must not reference $BASH_SOURCE').toBe(false)
+  })
 
-describe('the installer appends a PATH line the shell will actually read', () => {
+  test('has no local-binary channel and no pre-rename migration left', () => {
+    // Both were removed by decision: the installer is a downloader now, and the
+    // dsh-tui cleanup moved out of the install path.
+    expect(code.includes('--binary'), 'the local-binary channel was removed').toBe(false)
+    expect(code.includes('dsh-tui'), 'the pre-rename migration was removed').toBe(false)
+  })
+})
+
+describe('arguments', () => {
+  test('--help explains itself and exits 0', () => {
+    const { status, output } = install(['--help'], { home: fakeHome() })
+    expect(status).toBe(0)
+    expect(output).toContain('Usage: install [options]')
+    expect(output).toContain('--no-modify-path')
+    expect(output).toContain('curl -fsSL https://qialike.com/install | bash')
+  })
+
+  test('an unknown option is an error, not a warning', () => {
+    // A typo like `--no-modify-pth` must not silently edit the shell profile.
+    const home = fakeHome('# mine\n')
+    const { status, output } = install(['--no-modify-pth'], { home })
+    expect(status).not.toBe(0)
+    expect(output).toContain("unknown option '--no-modify-pth'")
+    expect(bashrcOf(home)).toBe('# mine\n')
+  })
+
+  test('an option missing its argument is refused', () => {
+    for (const flag of ['--version', '--base-url']) {
+      const { status, output } = install([flag], { home: fakeHome() })
+      expect(status, `${flag} without a value should fail`).not.toBe(0)
+      expect(output).toContain('requires')
+    }
+  })
+
+  test('a requested version is normalised to the bare tag', () => {
+    // Local git tags carry a `v`; the GitHub release tag does not, and only the
+    // bare form resolves (…/download/v0.5.4/… 404s).
+    const home = fakeHome()
+    const { status, output } = library(
+      'REQUESTED_VERSION=v0.6.0; printf "tag=%s\\n" "$(qialike_resolve_version qialike-linux-x64.tar.gz)"',
+      { home },
+    )
+    expect(status).toBe(0)
+    expect(output).toContain('tag=0.6.0')
+  })
+})
+
+describe('platforms without a published build are refused before any write', () => {
+  test('a recognized-but-unreleased platform names itself and writes nothing', () => {
+    const home = fakeHome()
+    const { status, output } = install([], { home, env: { QIALIKE_INSTALL_TARGET: 'darwin-arm64' } })
+    expect(status).not.toBe(0)
+    expect(output).toContain("no published build for 'darwin-arm64'")
+    expect(output).toContain('pnpm build --package')
+    expect(existsSync(join(home, '.dsh'))).toBe(false)
+  })
+
+  test('an unknown platform is refused too', () => {
+    const home = fakeHome()
+    const { status, output } = install([], { home, env: { QIALIKE_INSTALL_TARGET: 'plan9-mips' } })
+    expect(status).not.toBe(0)
+    expect(output).toContain("unsupported platform 'plan9-mips'")
+    expect(existsSync(join(home, '.dsh'))).toBe(false)
+  })
+
+  test ('--dry-run on the host platform reports the plan and writes nothing', () => {
+    const home = fakeHome()
+    const { status, output } = install(['--dry-run'], { home, env: { QIALIKE_INSTALL_TARGET: 'linux-x64' } })
+    expect(status).toBe(0)
+    expect(output).toContain('dry run — nothing will be written')
+    expect(output).toContain('qialike-linux-x64.tar.gz')
+    expect(output).toContain(join(home, '.dsh', 'bin', 'qialike'))
+    expect(output).toContain(PATH_LINE)
+    expect(existsSync(join(home, '.dsh'))).toBe(false)
+  })
+})
+
+describe('the PATH line the shell will actually read', () => {
   test('a commented-out copy does not count as configured', () => {
-    const repo = fakeRepo()
-    const home = fakeHome(`# ${LEGACY_NAME}\n# ${PATH_LINE}\nexport PATH="/opt/keep:$PATH"\n`)
-
-    const { status, output } = install(repo, home)
+    // The state a profile ends up in when the line was disabled by hand. Treating
+    // it as configured is what let `qialike: command not found` survive an install
+    // that reported success.
+    const home = fakeHome(`# ${PATH_LINE}\nexport PATH="/opt/keep:$PATH"\n`)
+    const { status, output } = library('qialike_ensure_path', { home })
 
     expect(status).toBe(0)
     expect(output).toContain('appended to')
-    // The live line lands after the user's own lines, and the profile keeps
-    // both of them: the installer adds a line, it never rewrites one.
     expect(bashrcOf(home).endsWith(`\n# qialike\n${PATH_LINE}\n`)).toBe(true)
+    // The user's own line is never rewritten, only appended after.
     expect(livePathLines(bashrcOf(home))).toContain('export PATH="/opt/keep:$PATH"')
-    expect(output).toContain('commented-out copy')
   })
 
-  test('an existing live line is reported, never duplicated', () => {
-    const repo = fakeRepo()
-    const home = fakeHome(`${PATH_LINE}\n`)
+  test('an equivalent live spelling counts, and is not duplicated', () => {
+    // Matching on `.dsh/bin` rather than the whole line accepts a different
+    // spelling; opencode's exact-line `grep -Fxq` would append a duplicate here.
+    const home = fakeHome('export PATH="/home/someone/.dsh/bin:$PATH"\n')
+    const { status, output } = library('qialike_ensure_path', { home })
 
-    const first = install(repo, home)
-    const second = install(repo, home)
-
-    expect(first.status).toBe(0)
-    expect(second.status).toBe(0)
-    expect(second.output).toContain('already exports')
-    expect(livePathLines(bashrcOf(home))).toEqual([PATH_LINE])
+    expect(status).toBe(0)
+    expect(output).toContain('already exports')
+    expect(livePathLines(bashrcOf(home))).toEqual(['export PATH="/home/someone/.dsh/bin:$PATH"'])
   })
 
-  test('running twice leaves exactly one line (idempotent)', () => {
-    const repo = fakeRepo()
+  test('running twice leaves exactly one line', () => {
     const home = fakeHome('# mine\n')
-
-    install(repo, home)
-    install(repo, home)
+    library('qialike_ensure_path', { home })
+    library('qialike_ensure_path', { home })
 
     expect(livePathLines(bashrcOf(home))).toEqual([PATH_LINE])
     expect(bashrcOf(home)).toContain('# qialike')
   })
 
-  test('the closing hint never tells the user to source a profile that does not exist', () => {
-    const repo = fakeRepo()
-    const home = fakeHome() // fresh HOME: neither .bashrc nor .zshrc
+  test('an install dir already on PATH leaves the profile alone', () => {
+    const home = fakeHome('# keep me\n')
+    const { status, output } = library('qialike_ensure_path', {
+      home,
+      env: { PATH: `${join(home, '.dsh', 'bin')}:${BARE_PATH}` },
+    })
 
-    const { status, output } = install(repo, home)
+    expect(status).toBe(0)
+    expect(output).toContain('is already on PATH')
+    expect(bashrcOf(home)).toBe('# keep me\n')
+  })
+
+  test('a fresh HOME is never told to source a profile that does not exist', () => {
+    const home = fakeHome() // neither .bashrc nor .zshrc
+    const { status, output } = library('qialike_ensure_path', { home })
 
     expect(status).toBe(0)
     expect(output).not.toContain('source ')
     expect(output).toContain(PATH_LINE)
   })
 
-  test('a profile that already covers the install dir is not edited', () => {
-    const repo = fakeRepo()
-    const home = fakeHome('# keep me\n')
-
-    const { status, output } = install(repo, home, { onPath: true })
+  test.skipIf(process.getuid?.() === 0)('an unwritable profile is reported, not fatal', () => {
+    // `set -euo pipefail` would otherwise abort at the append and leave the user
+    // with no idea which line to add.
+    const home = fakeHome('# mine\n')
+    chmodSync(join(home, '.bashrc'), 0o444)
+    const { status, output } = library('qialike_ensure_path', { home })
 
     expect(status).toBe(0)
-    expect(output).toContain('is already on PATH')
-    expect(bashrcOf(home)).toBe('# keep me\n')
+    expect(output).toContain('not writable')
+    expect(output).toContain(PATH_LINE)
+    expect(bashrcOf(home)).toBe('# mine\n')
   })
 })
 
-describe('the rename is reported where a user can act on it', () => {
-  test('a stale pre-rename PATH entry is named with its file and line', () => {
-    const repo = fakeRepo()
-    const home = fakeHome(`# ${LEGACY_NAME}\nexport PATH="$HOME/deepseek/${LEGACY_NAME}/dist:$PATH"\n`)
-
-    const { status, output } = install(repo, home)
-
-    expect(status).toBe(0)
-    expect(output).toContain('warning')
-    // Naming the exact line is the whole point: the installer must not edit it
-    // for the user, so the message has to be actionable on its own.
-    expect(output).toContain(`${join(home, '.bashrc')}:2:export PATH="$HOME/deepseek/${LEGACY_NAME}/dist:$PATH"`)
-    expect(output).toContain(`\`${LEGACY_NAME}\` was renamed to \`qialike\``)
-    // Reported, not rewritten.
-    expect(bashrcOf(home)).toContain(`${LEGACY_NAME}/dist`)
-    // A commented-out entry is not a live one and must not be reported.
-    expect(output).not.toContain(`.bashrc:1:`)
-  })
-
-  test('a commented-out pre-rename entry is not reported as a live PATH entry', () => {
-    const repo = fakeRepo()
-    const home = fakeHome(`# export PATH="$HOME/deepseek/${LEGACY_NAME}/dist:$PATH"\n`)
-
-    const { output } = install(repo, home)
-
-    expect(output).not.toContain('warning')
-  })
-
-  test('a pre-rename binary in the install dir is removed, and the rename is named', () => {
-    const repo = fakeRepo()
+describe('--no-modify-path', () => {
+  test('leaves the profile untouched and says so', () => {
     const home = fakeHome('# mine\n')
-    const legacyDest = join(home, '.dsh', 'bin', LEGACY_NAME)
-    mkdirSync(join(home, '.dsh', 'bin'), { recursive: true })
-    writeFileSync(legacyDest, 'old build\n')
-
-    const { status, output } = install(repo, home)
+    const { status, output } = install(['--no-modify-path', '--dry-run'], {
+      home,
+      env: { QIALIKE_INSTALL_TARGET: 'linux-x64' },
+    })
 
     expect(status).toBe(0)
-    expect(existsSync(legacyDest)).toBe(false)
-    expect(existsSync(join(home, '.dsh', 'bin', 'qialike'))).toBe(true)
-    expect(output).toContain(`removed the pre-rename binary ${legacyDest}`)
-    expect(output).toContain(`${LEGACY_NAME} is now qialike`)
+    expect(output).toContain('left alone (--no-modify-path)')
+    expect(bashrcOf(home)).toBe('# mine\n')
   })
 })

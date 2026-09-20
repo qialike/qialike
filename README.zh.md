@@ -257,8 +257,8 @@ overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内
 ## 安装为命令
 
 ```sh
-bash scripts/install      # 把 dist/qialike 拷贝到 ~/.dsh/bin，并把 ~/.dsh/bin 加入 PATH
-# （等价于 pnpm install:local；工作台根执行：bash qialike/scripts/install）
+bash scripts/install      # 下载已发布二进制到 ~/.dsh/bin，并把 ~/.dsh/bin 加入 PATH
+# （等价于 pnpm install:remote；工作台根执行：bash qialike/scripts/install）
 qialike                  # 此后任意目录可直接执行
 qialike --help
 qialike uninstall        # 从二进制内部卸载：清空整个 harness home（$DSH_HOME，默认 ~/.dsh——
