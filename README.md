@@ -467,16 +467,19 @@ contract and an example.
 ## Install as a command
 
 ```sh
-bash scripts/install      # download the released binary into ~/.dsh/bin and put it on PATH
-# (equivalent: pnpm install:remote; from the workspace root: bash qialike/scripts/install)
+curl -fsSL https://qialike.com/install | bash      # released binary -> ~/.dsh/bin
+# flags (both forms):
+#   bash -s -- --version 0.6.0    install a specific version (v-prefix accepted)
+#               --no-modify-path  don't touch ~/.bashrc / ~/.zshrc
+#               --dry-run         print the plan, change nothing
 qialike                  # now runnable from any directory
 qialike --help
 qialike uninstall        # uninstall from inside the binary: clears the whole harness
                          #   home ($DSH_HOME, default ~/.dsh — config, logs, themes,
                          #   settings.yaml, sessions, profiles, storages, attachments,
-                         #   exports, and any local ~/.dsh/bin copy) and removes the
-                         #   ~/.local/bin/qialike dev symlink and the PATH export line
-                         #   the install script added to ~/.bashrc/~/.zshrc
+                         #   exports, and the ~/.dsh/bin copy) and removes the PATH
+                         #   export line the installer added to ~/.bashrc/~/.zshrc,
+                         #   plus the legacy ~/.local/bin/qialike dev symlink
 qialike web [flags]      # serve the DeepSeek Harness browser UI (alias of the installed
                          #   `dsh web` CLI, so the Web surface stays the harness's own):
                          #   needs `dsh` on PATH (`npm install -g @deepseek-ai/dsh`) or
@@ -485,6 +488,20 @@ qialike web [flags]      # serve the DeepSeek Harness browser UI (alias of the i
 pnpm uninstall:local     # (legacy) remove the ~/.local/bin/qialike symlink of older
                          #   dev installs created by the removed scripts/install.sh
 ```
+
+From a checkout, the same installer runs directly — it downloads the **released** binary, it does
+not install your working tree:
+
+```sh
+bash scripts/install                 # same script the URL above serves
+pnpm install:remote                  # equivalent
+```
+
+`scripts/install` lives in `scripts/install.d/*.sh` and is assembled into one self-contained file
+by `scripts/build-install.sh`, because the entry point pipes it into `bash`. It installs to
+`~/.dsh/bin` — deliberately not `$DSH_HOME/bin`, since `qialike uninstall` scans exactly
+`$HOME/.dsh/bin` and `$HOME/.local/bin`. **Only `linux-x64` is published today**; other platforms
+are refused by name before anything is written.
 
 The binary embeds DeepSeek Harness at build time, so `qialike` needs no harness checkout, no
 `pnpm`, and no `node_modules` at runtime — only an API key for the provider in use
@@ -531,10 +548,11 @@ The command was renamed: `dsh-tui` no longer exists — the checkout is `qialike
 is `dist/qialike`. Saved state, settings and environment variables are migrated automatically,
 but the command NAME is not: a shell profile or script that still says `dsh-tui` fails with
 `dsh-tui: command not found`, and a PATH entry pointing at the old checkout resolves nowhere.
-`bash scripts/install` warns when it finds a live pre-rename PATH entry and names the file and
-line to fix; `grep -n 'dsh-tui' ~/.bashrc ~/.zshrc` finds the rest. Then open a **new**
-terminal — `export PATH=…` only reaches shells that read the profile again, so an existing one
-keeps the old PATH.
+The installer no longer reports those stale entries (that migration was dropped when it became a
+downloader), so check by hand: `grep -n 'dsh-tui' ~/.bashrc ~/.zshrc`. A pre-rename binary under
+`~/.dsh/bin` is still removed — by `qialike uninstall`, which sweeps that name too. Then open a
+**new** terminal — `export PATH=…` only reaches shells that read the profile again, so an existing
+one keeps the old PATH.
 
 ## Install as a plugin bundle
 

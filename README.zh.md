@@ -257,15 +257,18 @@ overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内
 ## 安装为命令
 
 ```sh
-bash scripts/install      # 下载已发布二进制到 ~/.dsh/bin，并把 ~/.dsh/bin 加入 PATH
-# （等价于 pnpm install:remote；工作台根执行：bash qialike/scripts/install）
+curl -fsSL https://qialike.com/install | bash      # 已发布二进制 → ~/.dsh/bin
+# 参数（两种调用形式均可用）：
+#   bash -s -- --version 0.6.0    安装指定版本（接受 v 前缀）
+#               --no-modify-path  不改动 ~/.bashrc / ~/.zshrc
+#               --dry-run         只打印计划，不做任何改动
 qialike                  # 此后任意目录可直接执行
 qialike --help
 qialike uninstall        # 从二进制内部卸载：清空整个 harness home（$DSH_HOME，默认 ~/.dsh——
                          #   config、日志、主题、settings.yaml、sessions、profiles、storages、
-                         #   attachments、exports 及本地 ~/.dsh/bin 拷贝），并移除
-                         #   ~/.local/bin/qialike 开发软链与安装脚本追加到 ~/.bashrc/~/.zshrc
-                         #   的 PATH 导出行
+                         #   attachments、exports 及 ~/.dsh/bin 那份拷贝），并移除安装器追加到
+                         #   ~/.bashrc/~/.zshrc 的 PATH 导出行，以及旧版 ~/.local/bin/qialike
+                         #   开发软链
 qialike web [flags]      # 打开 DeepSeek Harness 浏览器 UI（转发已安装的 `dsh web` CLI，Web
                          #   界面保持为 harness 自有实现）：需要 `dsh` 在 PATH 上
                          #   （`npm install -g @deepseek-ai/dsh`）或设置 $QIALIKE_DSH；
@@ -274,6 +277,18 @@ qialike web [flags]      # 打开 DeepSeek Harness 浏览器 UI（转发已安�
 pnpm uninstall:local     # （历史遗留）移除旧版 scripts/install.sh 创建的
                          #   ~/.local/bin/qialike 软链
 ```
+
+在检出里可以直接跑同一个安装器——它下载的是**已发布**二进制，**不是**你的工作树：
+
+```sh
+bash scripts/install                 # 与上面那个 URL 提供的是同一个脚本
+pnpm install:remote                  # 等价
+```
+
+`scripts/install` 的源在 `scripts/install.d/*.sh`，由 `scripts/build-install.sh` 拼接成单一自包含
+文件——因为入口是把它管道给 `bash` 的。安装目录固定为 `~/.dsh/bin`，**刻意不跟随 `$DSH_HOME`**：
+`qialike uninstall` 只扫 `$HOME/.dsh/bin` 与 `$HOME/.local/bin`。**当前只发布 `linux-x64`**，
+其余平台会在写入任何东西之前按名字明确报错。
 
 二进制在构建时已内嵌 DeepSeek Harness，因此 `qialike` 运行时**不需要** harness 检出、`pnpm` 或
 `node_modules`——只需 `DEEPSEEK_API_KEY`（环境变量 / `~/.dsh` settings / `.env`）与一个工作区
@@ -314,9 +329,10 @@ ssh -L 3080:localhost:3080 user@headless-host
 
 命令已改名：`dsh-tui` 不再存在——仓库目录是 `qialike/`、二进制是 `dist/qialike`。状态文件、
 设置与环境变量会自动迁移，但**命令名不会**：shell profile 或脚本里若仍写着 `dsh-tui`，只会得到
-`dsh-tui: command not found`；指向旧检出目录的 PATH 行同样解析不到任何东西。`bash scripts/install`
-发现**生效中**的旧 PATH 行时会告警并指出要改的文件与行号，其余的用
-`grep -n 'dsh-tui' ~/.bashrc ~/.zshrc` 找。改完请**新开一个终端**——`export PATH=…` 只对重新
+`dsh-tui: command not found`；指向旧检出目录的 PATH 行同样解析不到任何东西。安装器**已不再报告**
+这些失效行（它改为下载器时一并移除了该迁移），请自行检查：
+`grep -n 'dsh-tui' ~/.bashrc ~/.zshrc`。`~/.dsh/bin` 下的旧名二进制**仍会被清理**——由
+`qialike uninstall` 完成，它同样扫这个旧名。改完请**新开一个终端**——`export PATH=…` 只对重新
 读取 profile 的 shell 生效，已开着的终端仍旧用旧 PATH。
 
 ## 作为插件 bundle 安装
