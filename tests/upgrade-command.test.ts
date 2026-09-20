@@ -53,7 +53,11 @@ describe('the automatic check spawns the launcher mode and relays its report', (
     chmodSync(script, 0o755)
 
     const notified: string[] = []
-    scheduleAutoCheck({ execPath: script, notify: (m) => notified.push(m), delayMs: 10 })
+    // `env` is passed EXPLICITLY, and empty: without it the check reads the
+    // ambient environment, so a shell (or the release gate) that exports
+    // QIALIKE_DISABLE_AUTOUPDATE would switch the spawn off — correctly — and this
+    // test would then fail for a reason that has nothing to do with the relay.
+    scheduleAutoCheck({ execPath: script, notify: (m) => notified.push(m), delayMs: 10, env: {} })
 
     // Poll rather than sleep a fixed amount: the relay is asynchronous.
     const deadline = Date.now() + 5_000
