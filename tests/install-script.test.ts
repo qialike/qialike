@@ -142,11 +142,43 @@ describe('arguments', () => {
   })
 
   test('an option missing its argument is refused', () => {
-    for (const flag of ['--version', '--base-url']) {
+    for (const flag of ['--version', '--base-url', '--source']) {
       const { status, output } = install([flag], { home: fakeHome() })
       expect(status, `${flag} without a value should fail`).not.toBe(0)
       expect(output).toContain('requires')
     }
+  })
+
+  test('--source names one host, and only `auto` compares them', () => {
+    const home = fakeHome()
+
+    // A named host is exactly that host — and a bare gitcode base still gets its
+    // releases API derived, or nothing could be resolved through it.
+    const github = library('parse_args --source github; printf "%s|%s|%s\\n" "${SOURCE_BASES[0]}" "${SOURCE_APIS[0]}" "$SOURCE_MEASURE"', { home })
+    expect(github.status, github.output).toBe(0)
+    expect(github.output.trim()).toBe('https://github.com/qialike/qialike/releases||0')
+
+    const gitcode = library('parse_args --source gitcode; printf "%s|%s|%s\\n" "${SOURCE_BASES[0]}" "${SOURCE_APIS[0]}" "$SOURCE_MEASURE"', { home })
+    expect(gitcode.status, gitcode.output).toBe(0)
+    expect(gitcode.output.trim()).toBe(
+      'https://gitcode.com/qialike/qialike/releases|https://gitcode.com/api/v5/repos/qialike/qialike/releases/latest|0',
+    )
+
+    // `auto` is the pair, and the only form that asks for the comparison.
+    const auto = library('parse_args --source auto; printf "%s|%s\\n" "${#SOURCE_BASES[@]}" "$SOURCE_MEASURE"', { home })
+    expect(auto.output.trim()).toBe('2|1')
+
+    // An unknown name is refused by name rather than silently ignored.
+    const bogus = library('parse_args --source plan9', { home })
+    expect(bogus.status).not.toBe(0)
+    expect(bogus.output).toContain("unknown source 'plan9'")
+
+    // The documented escape hatch turns the comparison off without changing the list.
+    const off = library('parse_args; printf "%s|%s\\n" "${#SOURCE_BASES[@]}" "$SOURCE_MEASURE"', {
+      home,
+      env: { QIALIKE_INSTALL_MEASURE: '0' },
+    })
+    expect(off.output.trim()).toBe('2|0')
   })
 
   test('a requested version is normalised to the bare tag', () => {

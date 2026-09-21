@@ -76,8 +76,9 @@ const INNER = TARGET?.startsWith('windows') ? 'qialike.exe' : 'qialike'
  * source list has to cope with.
  */
 const FIXTURE_SERVER = `
-import http.server, json, os, re, socketserver, sys
+import http.server, json, os, re, socketserver, sys, time
 
+SLOW_SECONDS = 1
 root = sys.argv[1]
 shape = sys.argv[2]
 files = os.path.join(root, 'files')
@@ -85,6 +86,14 @@ files = os.path.join(root, 'files')
 def tag():
     with open(os.path.join(root, 'tag')) as fh:
         return fh.read().strip()
+
+# THREADED, not the plain TCPServer: one case deliberately stalls a body for a second
+# while the installer is sampling or downloading, and on a single-threaded server that
+# one connection blocks every later request — including the probes of unrelated cases,
+# which then fail as "could not resolve" long after the case that caused it.
+class Server(socketserver.ThreadingTCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def _notfound(self):
@@ -143,13 +152,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if download:
             if download.group(1) != tag():
                 return self._notfound()
+            # A source can be slow for the BODY while answering the small probe at once.
+            # That is the GitHub shape this comparison exists for (the redirect comes
+            # from github.com, the 55 MB comes from release-assets.githubusercontent.com),
+            # so the switch delays only the transfer, never the probe.
+            if os.path.isfile(os.path.join(root, 'slow-' + shape)):
+                time.sleep(SLOW_SECONDS)
             return self._send(os.path.join(files, download.group(2)))
         self._notfound()
 
     def log_message(self, *args):
         pass
 
-server = socketserver.TCPServer(('127.0.0.1', 0), Handler)
+server = Server(('127.0.0.1', 0), Handler)
 with open(os.path.join(root, 'port-' + shape), 'w') as fh:
     fh.write(str(server.server_address[1]))
 server.serve_forever()
@@ -192,6 +207,7 @@ function stubArchive(dir: string, kind: 'tar.gz' | 'zip', member: string, versio
   return readFileSync(archive)
 }
 
+let fixtureRoot = ''
 let fixtureFiles = ''
 let fixtureBase = ''
 let mirrorBase = ''
@@ -206,6 +222,7 @@ function publish(name: string, bytes: Uint8Array | undefined): void {
 
 beforeAll(async () => {
   const root = tempDir('qialike-fixture-')
+  fixtureRoot = root
   fixtureFiles = join(root, 'files')
   mkdirSync(fixtureFiles, { recursive: true })
   writeFileSync(join(root, 'tag'), `${TAG}\n`)
@@ -218,13 +235,21 @@ beforeAll(async () => {
 
   // Both shapes over the SAME published files, so a case can serve one host and
   // withhold the other without publishing the bytes twice.
-  for (const [shape, assign] of [['github', (base: string) => { fixtureBase = base }], ['gitcode', (base: string) => { mirrorBase = base }]] as const) {
+  //
+  // The two are reached under DIFFERENT hostnames on purpose: the installer names the
+  // host it chose, and `127.0.0.1` twice would make "which one won" unassertable.
+  // `localhost` resolves to the same loopback listener (verified), so this costs
+  // nothing but makes the decision visible.
+  for (const [shape, host, assign] of [
+    ['github', '127.0.0.1', (base: string) => { fixtureBase = base }],
+    ['gitcode', 'localhost', (base: string) => { mirrorBase = base }],
+  ] as const) {
     fixtureChildren.push(Bun.spawn(['python3', script, root, shape], { stdout: 'ignore', stderr: 'ignore' }))
     const portFile = join(root, `port-${shape}`)
     const deadline = Date.now() + 10_000
     while (!existsSync(portFile) && Date.now() < deadline) await Bun.sleep(50)
     if (!existsSync(portFile)) throw new Error(`the ${shape} fixture server never reported a port`)
-    assign(`http://127.0.0.1:${readFileSync(portFile, 'utf8').trim()}`)
+    assign(`http://${host}:${readFileSync(portFile, 'utf8').trim()}`)
   }
 })
 
@@ -452,6 +477,116 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the source list is
     expect(output).toContain('http://127.0.0.1:1/releases')
     expect(output).not.toContain('gitcode.com')
     expect(existsSync(join(home, '.dsh', 'bin'))).toBe(false)
+  })
+})
+
+describe.skipIf(TARGET === undefined || ASSET === undefined)('with two sources the fastest wins, not the first that answered', () => {
+  /** Make one shape stall on the BODY only (the probe still answers at once). */
+  function slow(shape: 'github' | 'gitcode', on: boolean): void {
+    const flag = join(fixtureRoot, `slow-${shape}`)
+    if (on) writeFileSync(flag, '1')
+    else rmSync(flag, { force: true })
+  }
+
+  /** Both fixture hosts as a source list: github first, mirror second. */
+  const bothSources = () => `${fixtureBase},${mirrorBase}|${mirrorBase}/api/latest`
+
+  test('a primary that is only slow for the body loses to the mirror', () => {
+    // The reason this feature exists: the probe to the primary SUCCEEDS (it reads a
+    // 302 and never asks for the body), so reachability alone would pick it and then
+    // crawl. Sampling the real asset is the only thing that can tell them apart.
+    const work = tempDir('qialike-fixture-speed-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publish('sha256sums.txt', undefined)
+    slow('github', true)
+    try {
+      const home = makeHome()
+      const { status, output } = install(home, [], { QIALIKE_INSTALL_SOURCES: bothSources() }, null)
+
+      expect(status, output).toBe(0)
+      expect(output).toContain('source speeds')
+      // The mirror is the fast one, and it is the one the download used. Named by host:
+      // the two fixtures are the same listener under different names.
+      expect(output).toContain('downloading from localhost')
+      expect(spawnSync(join(home, '.dsh', 'bin', INNER), ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe(`qialike ${TAG}`)
+    } finally {
+      slow('github', false)
+    }
+  })
+
+  test('a mirror that cannot serve the tag is never chosen, however fast it looks', () => {
+    // A lagging mirror 404s this tag. Measuring must treat that as "not a candidate"
+    // rather than as a winner, or the install would fail on the mirror and only then
+    // retry — which is the retry the measurement exists to avoid.
+    const work = tempDir('qialike-fixture-speed2-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publish('sha256sums.txt', undefined)
+    slow('github', true)
+    try {
+      const home = makeHome()
+      // The mirror's base points at a path the fixture answers 404 for, so it can be
+      // measured (fast) but never downloaded from.
+      const { status, output } = install(home, [], {
+        QIALIKE_INSTALL_SOURCES: `${fixtureBase},${mirrorBase}/empty|${mirrorBase}/api/latest`,
+      }, null)
+
+      expect(status, output).toBe(0)
+      expect(output).toContain('unavailable')
+      expect(output).toContain('downloading from 127.0.0.1')
+    } finally {
+      slow('github', false)
+    }
+  })
+
+  test('a single source is never compared (there is nothing to compare against)', () => {
+    // `--source github` / `--source gitcode` / `--base-url` all resolve to exactly one
+    // host, and that is the case this covers: one source means no sampling, no extra
+    // request and no message. (`--source`'s own parsing — including that a bare
+    // gitcode base still gets its API derived — is pinned offline in
+    // `install-script.test.ts`; a live `--source gitcode` here would download from the
+    // real mirror, which this suite must never do.)
+    const work = tempDir('qialike-fixture-speed3-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publish('sha256sums.txt', undefined)
+
+    // (i) `--base-url`, redirect-shaped host: one source, resolved through its 302.
+    const one = makeHome()
+    const first = install(one, [], {}, fixtureBase)
+    expect(first.status, first.output).toBe(0)
+    expect(first.output).not.toContain('source speeds')
+    expect(first.output).not.toContain('downloading from')
+
+    // (ii) One host as a full spec WITH its API — the shape `--source gitcode` resolves
+    // to, since a mirror has no `latest` redirect and so needs its API to be resolvable
+    // at all.
+    const two = makeHome()
+    const second = install(two, [], { QIALIKE_INSTALL_SOURCES: `${mirrorBase}|${mirrorBase}/api/latest` }, null)
+    expect(second.status, second.output).toBe(0)
+    expect(second.output).not.toContain('source speeds')
+    expect(second.output).not.toContain('downloading from')
+    expect(existsSync(join(two, '.dsh', 'bin', INNER))).toBe(true)
+  })
+
+  test('the comparison can be turned off, restoring the probe order', () => {
+    // The escape hatch, and the reason the older order tests keep their meaning: with
+    // MEASURE=0 nothing is sampled and the first source that answered is used.
+    const work = tempDir('qialike-fixture-speed4-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publish('sha256sums.txt', undefined)
+    slow('github', true)
+    try {
+      const home = makeHome()
+      const { status, output } = install(home, [], {
+        QIALIKE_INSTALL_SOURCES: bothSources(),
+        QIALIKE_INSTALL_MEASURE: '0',
+      }, null)
+
+      expect(status, output).toBe(0)
+      expect(output).not.toContain('source speeds')
+      expect(output).not.toContain('downloading from')
+    } finally {
+      slow('github', false)
+    }
   })
 })
 

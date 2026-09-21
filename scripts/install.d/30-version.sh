@@ -30,7 +30,7 @@ qialike_source_tag() {
   local base=$1 api=$2 asset=$3 url tag
   local budget=(--connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT")
 
-  url=$(curl -fsS "${budget[@]}" -o /dev/null -w '%{redirect_url}' "$base/latest/download/$asset" 2>/dev/null || true)
+  url=$(curl -fsS "${budget[@]}" -o "$(qialike_null_device)" -w '%{redirect_url}' "$base/latest/download/$asset" 2>/dev/null || true)
   if [[ -n "$url" ]]; then
     tag=$(printf '%s\n' "$url" | sed -n 's#.*/download/\([^/]*\)/[^/]*$#\1#p')
     if [[ -n "$tag" ]]; then

@@ -90,6 +90,59 @@ qialike_source_list() {
   printf '%s\n' "$out"
 }
 
+# The built-in hosts `--source` names. GitHub is the canonical host; gitcode is the
+# mirror a China-side user reaches without the CDN throttling that the reachability
+# probe cannot see (see MEASURE_* below).
+GITHUB_SOURCES='https://github.com/qialike/qialike/releases'
+GITCODE_SOURCES='https://gitcode.com/qialike/qialike/releases'
+
+# Throughput comparison between sources, used whenever there is more than one.
+#
+# Why measure at all: the probe above answers "is this host reachable", which is a
+# DIFFERENT question from "can it move 55 MB". GitHub answers the small redirect
+# request from `github.com` and then serves the body from
+# `release-assets.githubusercontent.com` (measured: the 302 that comes back names
+# that host), so a reachable GitHub whose asset CDN is throttled — the ordinary
+# case behind the national firewall — passes the probe and then crawls for tens of
+# minutes, with nothing in the output saying which host it chose. Sampling the real
+# asset is what tells the two apart.
+MEASURE=1
+# Sample size and budget per source. 256 KB is enough to separate "throttled" from
+# "fine" and small enough to be worth discarding.
+MEASURE_BYTES=262144
+MEASURE_TIMEOUT=8
+# Resolved by parse_args: 1 = compare sources, 0 = use the probe's order.
+SOURCE_MEASURE=1
+
+# The sources for a `--source` name, or nothing for an unknown one.
+qialike_named_sources() {
+  case "$1" in
+    github) printf '%s\n' "$GITHUB_SOURCES" ;;
+    gitcode) printf '%s\n' "$GITCODE_SOURCES" ;;
+    auto) printf '%s\n' "$DEFAULT_SOURCES" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The host of a release base, for messages:
+# `https://github.com/qialike/qialike/releases` -> `github.com`.
+qialike_host_of() {
+  printf '%s\n' "$1" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#/.*$##'
+}
+
+# The curl output path that discards a response body on THIS platform.
+#
+# Not `/dev/null` everywhere: Windows' curl does not map the POSIX spelling onto the
+# null device — it resolves the request and then exits 23 trying to create
+# `<drive>:\dev\null` — and this installer runs on Windows under Git Bash. The same
+# spelling is used in `nullDevice()` on the launcher side, for the same reason.
+qialike_null_device() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) printf 'NUL\n' ;;
+    *) printf '/dev/null\n' ;;
+  esac
+}
+
 say() { printf '%s: %s\n' "$APP" "$*"; }
 warn() { printf '%s: warning — %s\n' "$APP" "$*" >&2; }
 die() {

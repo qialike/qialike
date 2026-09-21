@@ -21,6 +21,94 @@
 # and that is exactly the case this second attempt exists for. A tag the mirror has
 # not caught up to simply 404s there, which is reported rather than hidden.
 
+# Comparing sources by throughput.
+#
+# The reachability probe in `30-version.sh` answers "can this host name the newest
+# release", which is a different question from "can it move 55 MB": GitHub answers
+# the small redirect from `github.com` and serves the body from
+# `release-assets.githubusercontent.com`, so a GitHub whose CDN is throttled is
+# reachable and slow. Sampling the real asset is what tells those apart — which is
+# why the default is to sample every source and download from the fastest, rather
+# than to guess at geography.
+
+# Echo how fast one source delivers this asset, in bytes per second, or nothing when
+# it cannot serve it at all.
+qialike_measure_speed() {
+  # $1 = base, $2 = tag, $3 = asset
+  local base=$1 tag=$2 asset=$3 out speed
+
+  # The exit status is deliberately IGNORED: the source that needs measuring most is
+  # the one that will hit `--max-time`, and curl still prints `%{speed_download}`
+  # when it aborts (measured: a trickling source answers `200 131072 16380`, exit
+  # 28). Only "not a single byte" means "not a candidate" — a dead host, or a mirror
+  # that has not caught up to this tag and 404s.
+  out=$(curl -fsSL -r "0-$((MEASURE_BYTES - 1))" \
+    --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MEASURE_TIMEOUT" \
+    -o "$(qialike_null_device)" -w '%{speed_download}' \
+    "$base/download/$tag/$asset" 2>/dev/null || true)
+
+  speed=$(printf '%s' "$out" | tr -d '\r' | sed -n 's/^\([0-9][0-9]*\).*$/\1/p')
+  if [[ -z "$speed" ]] || (( speed <= 0 )); then
+    return 1
+  fi
+  printf '%s\n' "$speed"
+}
+
+# A rate a person can read.
+qialike_human_speed() {
+  local speed=$1
+
+  if (( speed >= 1048576 )); then
+    printf '%s MB/s' "$(( speed / 1048576 ))"
+  elif (( speed >= 1024 )); then
+    printf '%s KB/s' "$(( speed / 1024 ))"
+  else
+    printf '%s B/s' "$speed"
+  fi
+}
+
+# Point `SOURCE_INDEX`/`BASE_URL` at the fastest source that can actually serve this
+# asset, and say what each one measured.
+#
+# Ties and unmeasurable sources keep the earlier index: the first source that wins
+# strictly is the one chosen, so an inconclusive comparison leaves the probe's order
+# (GitHub first) exactly as it was. A source that 404s is reported as unavailable and
+# can never be chosen — the mirror lagging behind the tag must not turn into a failed
+# download followed by a retry.
+qialike_choose_source() {
+  # $1 = tag, $2 = asset
+  local tag=$1 asset=$2 i base speed report='' best=-1 best_index=$SOURCE_INDEX
+
+  if (( SOURCE_MEASURE == 0 )) || (( ${#SOURCE_BASES[@]} < 2 )); then
+    return 0
+  fi
+
+  for i in "${!SOURCE_BASES[@]}"; do
+    base=${SOURCE_BASES[$i]}
+    speed=$(qialike_measure_speed "$base" "$tag" "$asset" || true)
+    if [[ -z "$speed" ]]; then
+      report="${report:+$report, }$(qialike_host_of "$base") unavailable"
+      continue
+    fi
+    report="${report:+$report, }$(qialike_host_of "$base") $(qialike_human_speed "$speed")"
+    if (( speed > best )); then
+      best=$speed
+      best_index=$i
+    fi
+  done
+
+  if (( best < 0 )); then
+    # Nothing could be measured — every source 404s this asset or none answered. Leave
+    # the choice to the download step, whose own error names the asset and the hosts.
+    return 0
+  fi
+
+  say "source speeds — $report"
+  SOURCE_INDEX=$best_index
+  BASE_URL=${SOURCE_BASES[$best_index]}
+  say "downloading from $(qialike_host_of "$BASE_URL")"
+}
+
 # One attempt against one source. 0 on success.
 qialike_try_download() {
   # $1 = base, $2 = tag, $3 = asset, $4 = output path
