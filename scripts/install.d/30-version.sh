@@ -39,7 +39,7 @@ qialike_source_tag() {
   local base=$1 api=$2 asset=$3 url tag
   local budget=(--connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT")
 
-  url=$(curl -fsS "${budget[@]}" -o "$(qialike_null_device)" -w '%{redirect_url}' "$base/latest/download/$asset" 2>/dev/null || true)
+  url=$(curl -fsS ${budget[@]+"${budget[@]}"} -o "$(qialike_null_device)" -w '%{redirect_url}' "$base/latest/download/$asset" 2>/dev/null || true)
   if [[ -n "$url" ]]; then
     tag=$(printf '%s\n' "$url" | sed -n 's#.*/download/\([^/]*\)/[^/]*$#\1#p')
     if [[ -n "$tag" ]]; then
@@ -53,7 +53,7 @@ qialike_source_tag() {
     # `tag_name` is the release's own. The asset entries carry `browser_download_url`
     # and `name`, never a `tag_name`, so nothing later in the body can be mistaken
     # for it.
-    tag=$(curl -fsS "${budget[@]}" "$api" 2>/dev/null \
+    tag=$(curl -fsS ${budget[@]+"${budget[@]}"} "$api" 2>/dev/null \
       | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
       | head -n 1 \
       | sed 's/.*"\([^"]*\)"$/\1/' || true)
@@ -177,7 +177,15 @@ qialike_decide_source() {
   BASE_URL=${SOURCE_BASES[$SOURCE_INDEX]}
   RESOLVED_TAG=${PROBE_TAGS[$first]}
 
-  for i in "${PROBE_UNREACHABLE[@]}"; do
+  # `+`-guarded, and not for style: on bash < 4.4 — macOS `/bin/bash` is still 3.2.57 —
+  # an EMPTY array expanded as `"${arr[@]}"` counts as an unbound variable under
+  # `set -u`, and `set -euo pipefail` is line 11 of this script. This loop's array is
+  # empty exactly when EVERY source answered, so the abort landed on the HAPPY path of
+  # a real macOS install (`PROBE_UNREACHABLE[@]: unbound variable`). The PATH step
+  # guards the same hazard on `appended_rcs` (60-path.sh); this instance was missed.
+  # `${arr[@]:-}` is NOT a substitute: it yields one empty word, so the body would run
+  # once with an empty index.
+  for i in ${PROBE_UNREACHABLE[@]+"${PROBE_UNREACHABLE[@]}"}; do
     base=${SOURCE_BASES[$i]}
     unreachable="${unreachable:+$unreachable, }$(qialike_host_of "$base")"
   done

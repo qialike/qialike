@@ -94,10 +94,14 @@ qialike_api_for() {
 }
 
 # The sources as one comma-separated line, for messages.
+#
+# `+`-guarded for the bash 3.2 reason spelled out in 30-version.sh: the case-4 message
+# reaches this with whatever the caller has, and under `set -u` an empty array would
+# abort the reporting of the very failure it is describing.
 qialike_source_list() {
   local out='' base
 
-  for base in "${SOURCE_BASES[@]}"; do
+  for base in ${SOURCE_BASES[@]+"${SOURCE_BASES[@]}"}; do
     out="${out:+$out, }$base"
   done
   printf '%s\n' "$out"

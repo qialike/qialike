@@ -121,9 +121,9 @@ qialike_try_download() {
 
   url="$base/download/$tag/$asset"
   if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
-    curl -fL "${guards[@]}" -# -o "$out" "$url"
+    curl -fL ${guards[@]+"${guards[@]}"} -# -o "$out" "$url"
   else
-    curl -fsSL "${guards[@]}" -o "$out" "$url"
+    curl -fsSL ${guards[@]+"${guards[@]}"} -o "$out" "$url"
   fi
 }
 

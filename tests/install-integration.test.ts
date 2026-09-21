@@ -728,6 +728,18 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
   })
 })
 
+/**
+ * The automatic updater does not download anything itself: it fetches `/install` and
+ * pipes it to bash. These cases therefore execute the REAL script through the REAL
+ * pipe, which is also what runs on macOS.
+ *
+ * Coverage boundary worth knowing (it is how a macOS abort shipped): the bash here is
+ * the HOST's, and the class of failure that broke macOS was a bash-3.2-only rule about
+ * empty arrays — invisible on bash >= 4.4 whatever the script contains. The portable
+ * guard for that is the static check in `tests/install-bundle.test.ts`; what these
+ * cases add is that the pipe, the environment hand-off and the placement still work
+ * end to end.
+ */
 describe.skipIf(TARGET === undefined || ASSET === undefined)('the upgrade path runs the real installer over a real pipe', () => {
   test('upgrade() fetches /install, pipes it to bash, and reports what landed', () => {
     const work = tempDir('qialike-fixture-e-')

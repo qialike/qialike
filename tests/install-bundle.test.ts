@@ -45,6 +45,51 @@ const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
 const SCRIPT = join(REPO, 'scripts', 'install')
 const BUILDER = join(REPO, 'scripts', 'build-install.sh')
 
+/**
+ * Array VALUE expansions that bash older than 4.4 refuses.
+ *
+ * The installer opens with `set -euo pipefail` (line 11). In bash < 4.4 — macOS
+ * `/bin/bash` is still 3.2.57 — `"${arr[@]}"` on an EMPTY array is an *unbound
+ * variable*, so `set -u` aborts the shell. Bash 4.4 changed that; macOS never did.
+ * Key expansions (`${!arr[@]}`) and lengths (`${#arr[@]}`) were never affected.
+ *
+ * A real macOS install died on this in `qialike_decide_source`, on the HAPPY path:
+ * `PROBE_UNREACHABLE` is empty exactly when every source answered. The script already
+ * guarded the same hazard on `appended_rcs`; that one instance was missed.
+ *
+ * Safe spellings, both accepted here:
+ *   - `for x in ${arr[@]+"${arr[@]}"}` — the `+` guard, works whether the array is
+ *     empty, unset or full;
+ *   - a **length guard** on the enclosing `if` (`(( ${#arr[@]} > 0 ))`), the idiom the
+ *     PATH step uses. `${arr[@]:-}` is NOT safe: it expands to one EMPTY word, so the
+ *     loop body runs once with an empty index.
+ *
+ * Comments are skipped — this file quotes the dangerous form in prose on purpose.
+ */
+function unguardedArrayExpansions(script: string): string[] {
+  const lines = script.split('\n')
+  const offenders: string[] = []
+  lines.forEach((raw, index) => {
+    if (raw.trimStart().startsWith('#')) return
+    // Remove the `+`-guarded spellings first: their inner `"${arr[@]}"` is safe, and
+    // matching it would flag every fixed line.
+    const line = raw.replace(/\$\{\w+\[@\]\+"\$\{\w+\[@\]\}"\}/g, '')
+    for (const match of line.matchAll(/"\$\{(\w+)\[@\](:-)?\}"/g)) {
+      const name = match[1] as string
+      // `${arr[@]:-}` is never safe here: it expands to ONE empty word, so the loop
+      // body runs once with an empty index instead of not at all.
+      if (match[2] !== undefined) {
+        offenders.push(`${index + 1}: ${raw.trim()}`)
+        continue
+      }
+      const before = lines.slice(Math.max(0, index - 4), index).join('\n')
+      const lengthGuarded = before.includes(`\${#${name}[@]}`)
+      if (!lengthGuarded) offenders.push(`${index + 1}: ${raw.trim()}`)
+    }
+  })
+  return offenders
+}
+
 /** A binary long-lived enough to still be executing when we replace it. */
 const LONG_RUNNING = '/bin/sleep'
 
@@ -90,6 +135,46 @@ describe('the committed installer is a fresh assembly of its modules', () => {
     for (const module of modules) {
       expect(text, `${module} is missing from the artifact`).toContain(`# ${module}\n`)
     }
+  })
+})
+
+describe('the installer survives the bash macOS ships', () => {
+  test('every array VALUE expansion in the artifact is guarded', () => {
+    // The artifact, not the modules: this is what `curl | bash` actually runs, and it
+    // is also what the automatic updater pipes to bash on macOS.
+    const offenders = unguardedArrayExpansions(readFileSync(SCRIPT, 'utf8'))
+    expect(offenders, `unguarded array expansions:\n${offenders.join('\n')}`).toEqual([])
+  })
+
+  test('the detector is not vacuous: it flags the line that aborted a macOS install', () => {
+    // The exact pre-fix shape, from the bug report (`bash: line 638: PROBE_UNREACHABLE[@]:
+    // unbound variable`). Without this control the check above could pass because the
+    // pattern never matched anything at all.
+    const prefix = [
+      'qialike_decide_source() {',
+      '  local i unreachable=""',
+      '  for i in "${PROBE_UNREACHABLE[@]}"; do',
+      '    unreachable="$unreachable $i"',
+      '  done',
+      '}',
+    ].join('\n')
+    expect(unguardedArrayExpansions(prefix)).toHaveLength(1)
+    expect(unguardedArrayExpansions(prefix)[0]).toContain('${PROBE_UNREACHABLE[@]}')
+
+    // ...and both safe spellings are accepted, so the check cannot be satisfied only
+    // by deleting the loop.
+    const guarded = [
+      'for x in ${A[@]+"${A[@]}"}; do :; done',
+      'if (( ${#B[@]} > 0 )); then',
+      '  for y in "${B[@]}"; do :; done',
+      'fi',
+      '# prose may quote "${C[@]}" safely',
+    ].join('\n')
+    expect(unguardedArrayExpansions(guarded)).toEqual([])
+
+    // `${arr[@]:-}` is a trap, not a fix: it yields ONE empty word, so the body runs
+    // with an empty index. The detector must NOT accept it.
+    expect(unguardedArrayExpansions('for x in "${A[@]:-}"; do :; done')).toHaveLength(1)
   })
 })
 
