@@ -15,6 +15,15 @@
  * pinning the target, mirroring opencode's `upgradeCurl`. The installer owns
  * platform naming, extraction and the `mv` that replaces a running binary.
  *
+ * **Windows is detect-only.** Two facts make in-place replacement impossible
+ * there and neither is a policy choice: a running `.exe` cannot be overwritten
+ * (the `mv` that saves a running ELF on POSIX does not work on Windows), and the
+ * installer is bash, which the platform does not ship. `upgrade()` therefore
+ * refuses on `win32`, and the notice carries download links instead — see
+ * `downloadUrls()`. `nullDevice()` and `binaryName()` exist for the same reason:
+ * both are spellings that differ on Windows, and each silently broke one half of
+ * the chain (the probe and the install guard respectively).
+ *
  * @module @yourname/qialike-app/self-update
  */
 
@@ -26,6 +35,45 @@ import type { InstallMethod } from './upgrade-policy.ts'
 
 /** The installed executable's name. */
 export const BIN = 'qialike'
+
+/**
+ * The name the binary has ON DISK for a platform.
+ *
+ * Windows cannot run a suffix-less executable, so the release archive carries
+ * `qialike.exe` there (`scripts/install.d/20-platform.sh` derives the same name
+ * from the archive member). Every place that builds a path to the installed
+ * binary has to use this rather than `BIN`: the guard in `upgrade()` used `BIN`
+ * and therefore reported "not installed at …\qialike" on a Windows machine where
+ * the file was sitting right beside it as `qialike.exe`.
+ */
+export function binaryName(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? `${BIN}.exe` : BIN
+}
+
+/**
+ * The curl output path that discards a response body on this platform.
+ *
+ * NOT `/dev/null` everywhere. Measured on Windows 11 with the shipped
+ * `C:\Windows\System32\curl.exe` (8.21.0), against the real release host:
+ * `curl -fsS -o /dev/null -w '%{http_code} %{filename_effective}' …` answers
+ * `302 /dev/null` — the request succeeds and the redirect is resolved — and then
+ * exits **23**, because curl did NOT map the POSIX spelling onto the null device:
+ * it tried to create the literal file `<drive>:\dev\null` and failed (`C:\dev` is
+ * never created, on an administrator's account either). `-o NUL` prints
+ * `302 NUL` and exits 0.
+ *
+ * That exit status is the whole problem: `latestFrom` only believes a tag when
+ * curl exited 0, so on Windows the PRIMARY (GitHub) probe always threw its tag
+ * away — measured end to end on the released 0.6.1 build, whose `--check` against
+ * a GitHub-only source list answered "could not determine the newest version (no
+ * network?)". It looked healthy only because the source list has a second entry:
+ * the gitcode mirror's API call passes no `-o` at all, so the update was resolved
+ * through the MIRROR. Requirement "GitHub first, mirror as the fallback" had
+ * silently collapsed into "mirror only" on Windows.
+ */
+export function nullDevice(platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? 'NUL' : '/dev/null'
+}
 
 /** The releases directory the installer also defaults to. */
 export const DEFAULT_RELEASES_URL = 'https://github.com/qialike/qialike/releases'
@@ -141,8 +189,9 @@ export function parseTagFromJson(body: string): string | undefined {
 function latestFrom(source: ReleaseSource, asset: string, run: Runner): string | undefined {
   const budget = ['--connect-timeout', CONNECT_TIMEOUT, '--max-time', PROBE_TIMEOUT]
   // The redirect first, and without `-L`: this reads the recipe, it does not
-  // download 55 MB.
-  const redirect = run('curl', ['-fsS', ...budget, '-o', '/dev/null', '-w', '%{redirect_url}', `${source.base}/latest/download/${asset}`])
+  // download 55 MB. The output path is the platform's null device — see
+  // `nullDevice()` for why the POSIX spelling silently killed this probe on Windows.
+  const redirect = run('curl', ['-fsS', ...budget, '-o', nullDevice(), '-w', '%{redirect_url}', `${source.base}/latest/download/${asset}`])
   if (redirect.status === 0) {
     const tag = parseTagFromRedirect(redirect.stdout)
     if (tag !== undefined) return tag
@@ -272,11 +321,34 @@ export function installUrl(env: NodeJS.ProcessEnv = process.env): string {
   return env.QIALIKE_INSTALL_URL ?? DEFAULT_INSTALL_URL
 }
 
+/**
+ * Where a person can fetch one release by hand, one URL per release source.
+ *
+ * Windows never installs an update itself (see the module note), so a notice to a
+ * Windows user has to carry a LINK rather than a command — and it carries every
+ * source, primary first, because the user who needs this most is the one behind a
+ * blocked GitHub who must recognise the mirror as the way out.
+ *
+ * With no version to name (nothing resolved yet, or `upgrade` refusing offline)
+ * or no asset for this platform, the releases page is the honest answer: it always
+ * resolves, where a guessed asset name would 404.
+ */
+export function downloadUrls(
+  version: string | undefined,
+  options: { target?: string; sources?: readonly ReleaseSource[] } = {},
+): string[] {
+  const sources = options.sources ?? releaseSources()
+  const target = options.target ?? detectTarget()
+  const asset = target === undefined ? undefined : assetFor(target)
+  if (version === undefined || asset === undefined) return sources.map((source) => source.base)
+  return sources.map((source) => `${source.base}/download/${version}/${asset}`)
+}
+
 /** The version the installed binary reports, or undefined if it will not run. */
-export function installedVersion(options: { dir?: string; run?: Runner } = {}): string | undefined {
+export function installedVersion(options: { dir?: string; run?: Runner; platform?: NodeJS.Platform } = {}): string | undefined {
   const dir = options.dir ?? installDir()
   const run = options.run ?? runShell
-  const result = run(join(dir, BIN), ['--version'])
+  const result = run(join(dir, binaryName(options.platform)), ['--version'])
   if (result.status !== 0) return undefined
   const out = result.stdout.trim()
   return out === '' ? undefined : out.split(/\s+/).pop()
@@ -358,6 +430,11 @@ export interface UpgradeResult {
  *
  * The whole thing runs under the lock, so two qialike processes cannot install
  * over each other.
+ *
+ * Windows is refused outright, and before anything is spawned: there is no `mv`
+ * that replaces a running `.exe`, and no bash to run the installer with. The
+ * refusal names the manual route, which is the only one that exists there — see
+ * `downloadUrls()` for the links the caller prints with it.
  */
 export function upgrade(
   target: string,
@@ -367,16 +444,24 @@ export function upgrade(
     lock?: string
     run?: Runner
     env?: NodeJS.ProcessEnv
+    platform?: NodeJS.Platform
   } = {},
 ): UpgradeResult {
   const run = options.run ?? runShell
   const dir = options.dir ?? installDir()
+  const platform = options.platform ?? process.platform
   // The lock sits beside the binary it guards, so an overridden install dir gets
   // its own lock rather than contending on the default home's.
   const lock = options.lock ?? join(dir, '.upgrade.lock')
 
-  if (!existsSync(join(dir, BIN))) {
-    return { ok: false, error: `qialike is not installed at ${join(dir, BIN)}` }
+  if (platform === 'win32') {
+    return { ok: false, error: 'qialike does not replace a running .exe on Windows — update it by hand' }
+  }
+  // The platform's own name: a Windows build is `qialike.exe` on disk, and asking
+  // for `qialike` there answered "not installed" about a file that was present.
+  const binary = join(dir, binaryName(platform))
+  if (!existsSync(binary)) {
+    return { ok: false, error: `qialike is not installed at ${binary}` }
   }
   if (run('bash', ['--version']).status !== 0) {
     // The installer is bash: arrays, `[[ ]]` and process substitution are load
@@ -399,5 +484,5 @@ export function upgrade(
     return { ok: false, error: `installer failed: ${detail}` }
   }
 
-  return { ok: true, version: installedVersion({ dir, run }) }
+  return { ok: true, version: installedVersion({ dir, run, platform }) }
 }

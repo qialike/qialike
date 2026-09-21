@@ -61,6 +61,7 @@ import type {} from '@deepseek-ai/dsh-cmdline'
 import { type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
 import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
 import { registerUpdateSettings } from './upgrade-policy.ts'
+import { isNewerAvailable, parseUpdateReport, updateHintText, updateNoticeLines, type UpdateOffer } from './update-hint.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
@@ -600,6 +601,8 @@ export class Store {
   private _cursor = 0
   private _composerImage: ComposerImage | null = null
   private _panel: 'conversation' | 'approval' | 'connect' | 'question' | 'sessions' | 'export' | 'help' | 'themes' | 'file-refs' = 'conversation'
+  /** One-line hint that a newer qialike is waiting; null when there is nothing to say. */
+  private _updateHint: string | undefined
   private _commandFilter = ''
   private _commandIndex = 0
   private _approval: PendingApproval | null = null
@@ -973,6 +976,8 @@ export class Store {
   get composerImage(): ComposerImage | null { return this._composerImage }
   get input(): string { return this._input }
   get panel() { return this._panel }
+  /** The update hint, or null when there is no newer release to report. */
+  get updateHint(): string | undefined { return this._updateHint }
   get commandFilter() { return this._commandFilter }
   get commandIndex() { return this._commandIndex }
   get approval() { return this._approval }
@@ -1080,6 +1085,27 @@ export class Store {
   }
   cancelHelp(): void {
     if (this._panel === 'help') this._panel = 'conversation'
+    this.notify()
+  }
+  /**
+   * Record that a newer release is waiting, as the one-line hint the hero row and the
+   * docked status bar both paint.
+   *
+   * Only Windows reaches this (`process.platform` gates every caller): that platform
+   * cannot install a release by itself, so the user has to fetch it, and a status line
+   * is where they will see it. No dialog — this is news, not a question, and a
+   * takeover would interrupt whatever they were typing.
+   */
+  noteUpdate(offer: UpdateOffer): void {
+    const hint = updateHintText(offer)
+    if (this._updateHint === hint) return
+    this._updateHint = hint
+    this.notify()
+  }
+  /** Drop the hint (the release is no longer newer, or the check could not run). */
+  clearUpdateHint(): void {
+    if (this._updateHint === undefined) return
+    this._updateHint = undefined
     this.notify()
   }
   /** /sessions dialog rows filtered by the live filter (title/id/cwd match). */
@@ -4070,29 +4096,80 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   tui.commands.register({ name: 'exit', hint: 'quit qialike', run: () => { requestExit(io, 0) } })
   // `/upgrade` runs the launcher mode in a CHILD process. Calling the updater here
   // would run a multi-megabyte download and swap the running binary on this event
-  // loop — the interface would freeze for the whole download. The child reports
-  // only the lines worth showing, and they arrive as ordinary status notices.
+  // loop — the interface would freeze for the whole download.
+  const installUpdate = (): void => {
+    const child = spawn(process.execPath, ['upgrade'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let received = ''
+    const collect = (chunk: Buffer | string): void => { received += String(chunk) }
+    child.stdout?.on('data', collect)
+    child.stderr?.on('data', collect)
+    child.on('error', () => { tui.notify('update failed: could not start the updater') })
+    child.on('exit', (code) => {
+      const lines = received.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+      if (lines.length === 0) {
+        // Silence means "already newest" (or a policy skip); say so rather than
+        // leaving the notice above hanging.
+        tui.notify(code === 0 ? 'qialike is already the newest version' : 'update failed')
+        return
+      }
+      for (const line of lines) tui.notify(line)
+    })
+  }
+  /**
+   * The Windows `/upgrade`: check, then HINT in the status line, never install.
+   *
+   * Windows cannot replace a running `.exe` and has no bash for the installer, so
+   * the launcher refuses to install there (and the startup check says so too). What
+   * this adds is the answer to "is there something newer?" in the place the user is
+   * already looking: the update hint (hero row / docked status bar), plus the two
+   * download URLs as ordinary transcript notices, because a status line cannot carry
+   * two 85-character links.
+   *
+   * Deliberately NOT a dialog: the user asked for a hint, and a fullscreen panel would
+   * interrupt whatever they were typing on the frame the check returns.
+   */
+  const checkUpdateOnWindows = (): void => {
+    const child = spawn(process.execPath, ['upgrade', '--check', '--json'], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let received = ''
+    const collect = (chunk: Buffer | string): void => { received += String(chunk) }
+    child.stdout?.on('data', collect)
+    child.stderr?.on('data', collect)
+    child.on('error', () => { tui.notify('update check failed: could not start the updater') })
+    child.on('exit', () => {
+      const report = parseUpdateReport(received)
+      if (report === undefined) {
+        tui.notify('update check failed: no answer from the updater')
+        return
+      }
+      const version = report.newest
+      if (version === null) {
+        store.clearUpdateHint()
+        tui.notify('could not check for a newer qialike (no network?)')
+        return
+      }
+      if (!isNewerAvailable(report)) {
+        // The hint is a claim about the CURRENT release; a check that finds nothing
+        // newer has to retract it rather than leave a stale line up.
+        store.clearUpdateHint()
+        tui.notify('qialike is already the newest version')
+        return
+      }
+      const offer = { installed: report.installed, version, urls: report.downloads }
+      store.noteUpdate(offer)
+      for (const line of updateNoticeLines(offer)) tui.notify(line)
+    })
+  }
   tui.commands.register({
     name: 'upgrade',
-    hint: 'check for and install a newer qialike',
+    hint: 'check for a newer qialike (installs it where that is possible)',
     run: () => {
       tui.notify('checking for a newer qialike…')
-      const child = spawn(process.execPath, ['upgrade'], { stdio: ['ignore', 'pipe', 'pipe'] })
-      let received = ''
-      const collect = (chunk: Buffer | string): void => { received += String(chunk) }
-      child.stdout?.on('data', collect)
-      child.stderr?.on('data', collect)
-      child.on('error', () => { tui.notify('update failed: could not start the updater') })
-      child.on('exit', (code) => {
-        const lines = received.split('\n').map((line) => line.trim()).filter((line) => line !== '')
-        if (lines.length === 0) {
-          // Silence means "already newest" (or a policy skip); say so rather than
-          // leaving the notice above hanging.
-          tui.notify(code === 0 ? 'qialike is already the newest version' : 'update failed')
-          return
-        }
-        for (const line of lines) tui.notify(line)
-      })
+      // Non-Windows keeps the pre-existing flow byte for byte: the launcher installs
+      // the release itself (or refuses an unmanaged copy), and its lines are relayed.
+      // The hint path is Windows-only by requirement, so Linux/macOS behaviour — and
+      // with it the verified silent patch install — cannot be disturbed here.
+      if (process.platform !== 'win32') { installUpdate(); return }
+      checkUpdateOnWindows()
     },
   })
 

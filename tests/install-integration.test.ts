@@ -484,6 +484,75 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
     expect(out.join('\n')).toContain(`newest     ${TAG}`)
     expect(out.join('\n')).toContain('patch update available')
   })
+
+  test('--auto on Windows announces the patch and installs NOTHING', () => {
+    // The Windows contract, end to end against a real release host: a patch the
+    // POSIX policy would install silently has to become a notice carrying both
+    // download URLs, and the installer must never be fetched. `platform` is
+    // injected because the suite runs on whatever host is at hand — the point is
+    // the decision, and `--auto` must not reach for bash on the way.
+    const work = tempDir('qialike-fixture-h-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    // The fixture already serves the REAL installer at /install (see `beforeAll`),
+    // and this case must never fetch it — that is half of what is being pinned.
+
+    const out: string[] = []
+    const err: string[] = []
+    const code = runUpgrade(['--auto', '--json'], {
+      installed: '0.6.0',
+      out: (line) => out.push(line),
+      err: (line) => err.push(line),
+      platform: 'win32',
+      env: { QIALIKE_INSTALL_BASE_URL: fixtureBase } as NodeJS.ProcessEnv,
+    })
+
+    expect(code, err.join('\n')).toBe(0)
+    // The last line is the machine-readable report the startup relay branches on;
+    // everything before it is the notice a person reads.
+    const report = JSON.parse(out[out.length - 1] as string)
+    expect(report).toMatchObject({
+      decision: 'notify',
+      installed: '0.6.0',
+      newest: TAG,
+      canSelfInstall: false,
+      downloads: [`${fixtureBase}/download/${TAG}/${ASSET}`],
+    })
+    const notice = out.slice(0, -1).join('\n')
+    expect(notice).toContain(`qialike ${TAG} is available (you have 0.6.0)`)
+    expect(notice).toContain('download it and replace the file by hand:')
+    expect(notice).not.toContain("run 'qialike upgrade'")
+    // Nothing was installed, and nothing tried to be.
+    expect(notice).not.toContain('updated to qialike')
+    expect(notice).not.toContain('automatic update failed')
+  })
+
+  test('--check --json answers even when no source can be reached', () => {
+    // The TUI renders this answer, so "I could not check" has to travel as data:
+    // the report still arrives (with `newest: null` and the releases page as the
+    // fallback link) and only the EXIT CODE says the probe failed. A dead host is
+    // enough — no fixture traffic is involved.
+    const out: string[] = []
+    const err: string[] = []
+    const code = runUpgrade(['--check', '--json'], {
+      installed: '0.6.0',
+      out: (line) => out.push(line),
+      err: (line) => err.push(line),
+      env: { QIALIKE_INSTALL_BASE_URL: 'http://127.0.0.1:1/releases' } as NodeJS.ProcessEnv,
+    })
+
+    expect(code, err.join('\n')).toBe(1)
+    expect(out).toHaveLength(1)
+    expect(JSON.parse(out[0] as string)).toEqual({
+      // `decision` is part of the contract (it is how a caller tells "could not
+      // check" from "up to date"), and the emitter always sets it.
+      decision: 'check',
+      installed: '0.6.0',
+      newest: null,
+      relation: null,
+      canSelfInstall: false,
+      downloads: ['http://127.0.0.1:1/releases'],
+    })
+  })
 })
 
 describe.skipIf(TARGET === undefined || ASSET === undefined)('the upgrade path runs the real installer over a real pipe', () => {

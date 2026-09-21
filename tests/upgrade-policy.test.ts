@@ -16,6 +16,7 @@ import {
   buildMode,
   decideUpdate,
   getReleaseType,
+  platformKind,
   readEnvPolicy,
   readUpdateSettings,
   registerUpdateSettings,
@@ -31,6 +32,7 @@ function input(overrides: Partial<PolicyInput> = {}): PolicyInput {
     auto: true,
     buildMode: 'beta',
     method: 'curl',
+    platform: 'unix',
     disabled: false,
     alwaysNotify: false,
     ...overrides,
@@ -127,6 +129,31 @@ describe('the gate matrix', () => {
     // install-method branch.
     expect(decideUpdate(input({ method: 'unknown' }))).toEqual({ kind: 'skip', reason: 'unmanaged-install' })
     expect(decideUpdate(input({ method: 'unknown', latest: '0.7.0' }))).toEqual({ kind: 'notify', version: '0.7.0' })
+  })
+
+  test('Windows is announce-only: even a patch is news, never an install', () => {
+    // The platform, not a preference: the installer's `mv` cannot replace a
+    // running `.exe`, and the installer itself is bash, which Windows does not
+    // ship. So the "patch installs silently" rule has no implementation there and
+    // every newer release must reach the notice — including from a copy nobody's
+    // installer manages, because a hand-placed binary is exactly the case that
+    // still has to be told where to download.
+    expect(decideUpdate(input({ platform: 'windows' }))).toEqual({ kind: 'notify', version: '0.6.1' })
+    expect(decideUpdate(input({ platform: 'windows', method: 'unknown' }))).toEqual({ kind: 'notify', version: '0.6.1' })
+    expect(decideUpdate(input({ platform: 'windows', latest: '0.7.0' }))).toEqual({ kind: 'notify', version: '0.7.0' })
+    // The other gates still come first, Windows or not.
+    expect(decideUpdate(input({ platform: 'windows', installed: '0.6.1' }))).toEqual({ kind: 'up-to-date' })
+    expect(decideUpdate(input({ platform: 'windows', disabled: true }))).toEqual({ kind: 'skip', reason: 'disabled' })
+    // ...and `auto: "notify"` is not where the platform gate lives: a POSIX copy
+    // asked for notify-only still never installs either.
+    expect(decideUpdate(input({ auto: 'notify' }))).toEqual({ kind: 'notify', version: '0.6.1' })
+  })
+
+  test('every platform maps onto the two families the policy distinguishes', () => {
+    expect(platformKind('win32')).toBe('windows')
+    expect(platformKind('linux')).toBe('unix')
+    expect(platformKind('darwin')).toBe('unix')
+    expect(platformKind('freebsd')).toBe('unix')
   })
 })
 

@@ -20,15 +20,18 @@ import { join } from 'node:path'
 import {
   acquireLock,
   assetFor,
+  binaryName,
   CONNECT_TIMEOUT,
   DEFAULT_RELEASES_URL,
   detectTarget,
+  downloadUrls,
   installDir,
   installMethod,
   installedVersion,
   latestVersion,
   lockPath,
   MIRROR_RELEASES_URL,
+  nullDevice,
   parseTagFromJson,
   parseTagFromRedirect,
   PROBE_TIMEOUT,
@@ -237,6 +240,50 @@ describe('version probing', () => {
     expect(calls[0]?.args).not.toContain('-L')
   })
 
+  test('the probe discards the body through the platform null device', () => {
+    // Measured on Windows with the shipped curl 8.21.0: `-o /dev/null` answers
+    // 302 and then exits 23 — curl does NOT map the POSIX spelling onto the null
+    // device, it tries to create the literal `<drive>:\dev\null` and fails — while
+    // every caller here requires exit 0 before it believes the tag. The primary
+    // (GitHub) probe therefore always threw its tag away on Windows, and updates
+    // were resolved only through the mirror's API call (which passes no `-o`).
+    expect(nullDevice('win32')).toBe('NUL')
+    expect(nullDevice('linux')).toBe('/dev/null')
+    expect(nullDevice('darwin')).toBe('/dev/null')
+
+    const { run, calls } = fakeRunner({ curl: { status: 0, stdout: 'https://host/download/0.6.1/qialike-linux-x64.tar.gz' } })
+    expect(latestVersion({ target: 'linux-x64', releases: 'https://example.test/rel', run })).toBe('0.6.1')
+    expect(calls[0]?.args).toContain(nullDevice())
+    // ...and never the POSIX spelling that broke Windows. Guarded by platform
+    // because the probe passes the HOST's device: on Linux `nullDevice()` IS
+    // `/dev/null`, so an unconditional `not.toContain` here asserted a
+    // contradiction and made this test pass on Windows only. The three assertions
+    // above are what pins the Windows spelling.
+    if (process.platform === 'win32') {
+      expect(calls[0]?.args).not.toContain('/dev/null')
+    }
+  })
+
+  test('the manual download links name every source, or the releases page', () => {
+    // This is what a Windows notice is built from, so it has to point at real
+    // download URLs for the platform's own asset: GitHub first, mirror second,
+    // because the user who needs it most is the one whose GitHub is blocked.
+    expect(downloadUrls('0.8.0', { target: 'windows-x64', sources: RELEASE_SOURCES })).toEqual([
+      `${DEFAULT_RELEASES_URL}/download/0.8.0/qialike-windows-x64.zip`,
+      `${MIRROR_RELEASES_URL}/download/0.8.0/qialike-windows-x64.zip`,
+    ])
+    // With no version resolved yet, or no asset for the platform, the releases
+    // page is the honest answer — a guessed asset name would 404.
+    expect(downloadUrls(undefined, { target: 'windows-x64', sources: RELEASE_SOURCES })).toEqual([
+      DEFAULT_RELEASES_URL,
+      MIRROR_RELEASES_URL,
+    ])
+    expect(downloadUrls('0.8.0', { target: 'plan9-mips', sources: RELEASE_SOURCES })).toEqual([
+      DEFAULT_RELEASES_URL,
+      MIRROR_RELEASES_URL,
+    ])
+  })
+
   test('an unpublished platform or a failed curl yields undefined, not a throw', () => {
     const { run } = fakeRunner({ curl: { status: 0, stdout: '' } })
     expect(latestVersion({ target: 'darwin-arm64', run })).toBeUndefined()
@@ -248,10 +295,26 @@ describe('version probing', () => {
 
   test('the installed version is the last word of --version', () => {
     const { run } = fakeRunner({ [join('/home/x/.dsh/bin', 'qialike')]: { status: 0, stdout: 'qialike 0.6.0\n' } })
-    expect(installedVersion({ dir: '/home/x/.dsh/bin', run })).toBe('0.6.0')
+    // The platform is named explicitly so the expectation does not depend on the
+    // host running the suite: the binary's file name differs on Windows.
+    expect(installedVersion({ dir: '/home/x/.dsh/bin', run, platform: 'linux' })).toBe('0.6.0')
 
     const broken = fakeRunner({ [join('/home/x/.dsh/bin', 'qialike')]: { status: 1 } })
-    expect(installedVersion({ dir: '/home/x/.dsh/bin', run: broken.run })).toBeUndefined()
+    expect(installedVersion({ dir: '/home/x/.dsh/bin', run: broken.run, platform: 'linux' })).toBeUndefined()
+  })
+
+  test('the installed binary is asked for under its own platform name', () => {
+    // `.exe` is not decoration on Windows: the released asset carries that name,
+    // and the guard in `upgrade()` looked for the bare one — so a perfectly
+    // installed Windows copy was reported as "not installed".
+    expect(binaryName('win32')).toBe('qialike.exe')
+    expect(binaryName('linux')).toBe('qialike')
+    expect(binaryName('darwin')).toBe('qialike')
+
+    const dir = 'C:\\Users\\x\\.dsh\\bin'
+    const { run, calls } = fakeRunner({ [join(dir, 'qialike.exe')]: { status: 0, stdout: 'qialike 0.6.1\n' } })
+    expect(installedVersion({ dir, run, platform: 'win32' })).toBe('0.6.1')
+    expect(calls[0]?.args).toEqual(['--version'])
   })
 })
 
@@ -306,7 +369,7 @@ describe('upgrading runs the installer', () => {
     spawnSync('mkdir', ['-p', dir])
     writeFileSync(join(dir, 'qialike'), '#!/bin/sh\n')
 
-    const result = upgrade('0.6.1', { installUrl: 'https://install.test/install', dir, run })
+    const result = upgrade('0.6.1', { installUrl: 'https://install.test/install', dir, run, platform: 'linux' })
     expect(result).toEqual({ ok: true, version: '0.6.1' })
 
     const piped = calls.find((call) => call.cmd === 'bash' && call.args.length === 0)
@@ -321,13 +384,26 @@ describe('upgrading runs the installer', () => {
     writeFileSync(join(dir, 'qialike'), '#!/bin/sh\n')
 
     const noFetch = fakeRunner({ 'bash --version': { status: 0 }, curl: { status: 22, stderr: '404' } })
-    expect(upgrade('0.6.1', { dir, run: noFetch.run }).error).toContain('could not fetch the installer')
+    expect(upgrade('0.6.1', { dir, run: noFetch.run, platform: 'linux' }).error).toContain('could not fetch the installer')
 
     const noBash = fakeRunner({ 'bash --version': { status: 127 } })
-    expect(upgrade('0.6.1', { dir, run: noBash.run }).error).toContain('bash is required')
+    expect(upgrade('0.6.1', { dir, run: noBash.run, platform: 'linux' }).error).toContain('bash is required')
 
     const empty = join(tempDir('qialike-upg-'), '.dsh', 'bin')
-    expect(upgrade('0.6.1', { dir: empty, run: noFetch.run }).error).toContain('not installed at')
+    expect(upgrade('0.6.1', { dir: empty, run: noFetch.run, platform: 'linux' }).error).toContain('not installed at')
+  })
+
+  test('Windows is refused before anything is spawned', () => {
+    // Neither fact is a preference: a running `.exe` cannot be replaced (the `mv`
+    // that saves a running ELF on POSIX does not work there), and the installer is
+    // bash, which Windows does not ship. The refusal has to come FIRST too — a
+    // Windows run that answered "bash is required" would send the user hunting for
+    // a shell instead of downloading the release.
+    const { run, calls } = fakeRunner({})
+    const result = upgrade('0.6.1', { dir: tempDir('qialike-win-'), run, platform: 'win32' })
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('Windows')
+    expect(calls).toEqual([])
   })
 
   test('an installer failure reports the last line of its stderr', () => {
@@ -339,7 +415,7 @@ describe('upgrading runs the installer', () => {
       'curl -fsSL https://install.test/install': { status: 0, stdout: 'script\n' },
       'bash ': { status: 1, stderr: 'noise\nqialike: download failed: https://x\n' },
     })
-    expect(upgrade('0.6.1', { installUrl: 'https://install.test/install', dir, run }).error)
+    expect(upgrade('0.6.1', { installUrl: 'https://install.test/install', dir, run, platform: 'linux' }).error)
       .toBe('installer failed: qialike: download failed: https://x')
   })
 
@@ -355,6 +431,6 @@ describe('upgrading runs the installer', () => {
       curl: { status: 0, stdout: 'script\n' },
       'bash ': { status: 0 },
     })
-    expect(upgrade('0.6.1', { dir, lock, run }).error).toBe('another upgrade is already running')
+    expect(upgrade('0.6.1', { dir, lock, run, platform: 'linux' }).error).toBe('another upgrade is already running')
   })
 })

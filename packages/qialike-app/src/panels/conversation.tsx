@@ -132,14 +132,26 @@ function composerMinHeight(): number {
   return COMPOSER_MIN_HEIGHT + (store.hero ? HERO_COMPOSER_EXTRA_ROWS : 0)
 }
 
+/** The single status line the hero paints UNDER its card, or `undefined`.
+ *
+ *  One row carries exactly ONE of them, in this order: the update hint (a newer
+ *  release is waiting — the reason to act), the repository-overlay warning (that one
+ *  is ALSO flashed in the status bar and left in the transcript, so it is never lost
+ *  when the hint wins), or the provider/session tip. Keeping it to one row is what
+ *  the layout budget and the small-terminal scenarios pin; the resolution lives here
+ *  so the row count and the paint cannot disagree. */
+function heroStatusText(): string | undefined {
+  return store.updateHint ?? heroNoticeText(store.repoOverlayNotice)
+}
+
 /** Rows the hero reserves for lines UNDER its card: the older-history progress
- *  line and the provider/session hint. ONE source for the layout model and the
+ *  line and the status line above. ONE source for the layout model and the
  *  paint — the caret, the click mapping and the palette lift all read the model,
  *  so a row counted in one place and not the other is exactly how the hardware
  *  caret drifts out of the card. The formula itself lives in `hero-layout.ts`
  *  (`heroHintRows`) so it can be unit-tested on its own. */
 function heroHintRowCount(): number {
-  return heroHintRows(store.olderLoading, store.providerReady, store.repoOverlayNotice)
+  return heroHintRows(store.olderLoading, store.providerReady, heroStatusText())
 }
 
 /** The hero's row budget for THIS frame, resolved once by `heroBudget`: the
@@ -2509,10 +2521,13 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // the sentence muted), so it cannot go through `centerInHero` — but its pad
   // must be computed from the concatenation of exactly those parts, or the
   // colored row would sit off-center against the art/title/card above it.
-  // A repository overlay REPLACES the tip row (same row count): the layer was
-  // applied without asking, so this row names it instead of giving advice.
-  const heroNoticeFull = heroNoticeText(store.repoOverlayNotice)
-  const heroHintFull = heroNoticeFull ?? heroHintText(store.providerReady)
+  // A repository overlay or a waiting update REPLACES the tip row (same row
+  // count): the overlay was applied without asking and the update is news, so the
+  // row that would give advice carries the more actionable fact instead. The
+  // precedence lives in `heroStatusText()` so the row COUNT (`heroHintRowCount`)
+  // and this paint can never disagree.
+  const heroStatusFull = heroStatusText()
+  const heroHintFull = heroStatusFull ?? heroHintText(store.providerReady)
   const heroHintPad = heroHintFull === undefined
     ? 0
     : Math.max(0, Math.floor((heroUsable - visualWidth(heroHintFull)) / 2))
@@ -2534,10 +2549,10 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     // useful next step is `/models`; once one is ready the useful one is
     // `/sessions`. `undefined` = probe not settled yet (no wrong-instruction
     // flash).
-    if (heroNoticeFull !== undefined) {
+    if (heroStatusFull !== undefined) {
       heroHintPaint.push(
         <Text key="hero-notice" color={theme.warning} wrap="truncate">
-          {' '.repeat(heroHintPad)}{heroNoticeFull}
+          {' '.repeat(heroHintPad)}{heroStatusFull}
         </Text>,
       )
     } else if (heroHint !== undefined) {
@@ -3412,6 +3427,17 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
                 // the user must be able to read why the session did not open.
                 ? <Text color={theme.error} wrap="truncate">{store.loadError!}</Text>
                 : <BusyIndicator animate={store.running} paused={store.paused} />}
+        {/* The update hint (Windows): a newer release is waiting and this copy cannot
+            install it by itself, so the user has to fetch it. It sits right after the
+            busy/status slot — before the flex spacer — so the stats stay pinned to the
+            right edge and a narrow terminal truncates the HINT rather than pushing the
+            stats off. Absent on every non-update day, which is why it cannot disturb
+            the docked layout. */}
+        {store.updateHint !== undefined && (
+          <Box flexShrink={0} marginLeft={1}>
+            <Text color={theme.warning} wrap="truncate">{store.updateHint}</Text>
+          </Box>
+        )}
         {/* The steps/turns · tokens stats are pinned to the RIGHT edge of the
             status bar regardless of the busy indicator's width: an explicit
             flex spacer pushes the stats group flush right, and the group

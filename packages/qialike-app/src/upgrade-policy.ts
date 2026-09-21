@@ -7,7 +7,7 @@
  *
  * The shape follows opencode's `cli/upgrade.ts`: only a **patch** release is
  * installed silently, anything that moves the minor or major version is merely
- * announced. Two gates are qialike's own, and both exist because its situation
+ * announced. Three gates are qialike's own, and each exists because its situation
  * differs from opencode's:
  *
  *  - `BUILD_MODE === 'dev'` — opencode leans on its install-method probe to keep
@@ -16,8 +16,17 @@
  *    puts the binary in `~/.dsh/bin`, so a locally built dev binary that was
  *    installed there looks exactly like a released one and would be silently
  *    replaced by the published version.
+ *  - `platform === 'windows'` — never install, whatever the release type. A
+ *    running `.exe` cannot be replaced (the `mv` that saves a running ELF on
+ *    POSIX does not work there) and the installer is bash, which Windows does not
+ *    ship, so the only honest action is to announce the release and let the user
+ *    replace the file. This is a property of the platform, not a preference: the
+ *    `patch`-is-silent rule above simply has no implementation there.
  *  - `method === 'unknown'` as an explicit skip once we get past the notify
- *    branch — there is nothing to self-install over.
+ *    branch — there is nothing to self-install over. Note it comes AFTER the
+ *    platform gate, so a hand-placed Windows copy is still announced: the user
+ *    who downloaded the binary by hand is exactly the one who must download the
+ *    next one by hand.
  *
  * @module @yourname/qialike-app/upgrade-policy
  */
@@ -45,6 +54,19 @@ export type ReleaseType = 'patch' | 'minor' | 'major'
 /** Whether this installation is one the updater may replace. */
 export type InstallMethod = 'curl' | 'unknown'
 
+/**
+ * The two platform families the policy distinguishes.
+ *
+ * `windows` cannot replace a running executable, so no release is ever installed
+ * there; everything else is treated as POSIX, where the installer's `mv` works.
+ */
+export type PlatformKind = 'windows' | 'unix'
+
+/** Map a Node platform onto the two families the policy cares about. */
+export function platformKind(platform: NodeJS.Platform = process.platform): PlatformKind {
+  return platform === 'win32' ? 'windows' : 'unix'
+}
+
 /** What the updater should do about one observed pair of versions. */
 export type UpdateDecision =
   | { kind: 'skip'; reason: 'disabled' | 'dev-build' | 'unmanaged-install' }
@@ -64,6 +86,8 @@ export interface PolicyInput {
   buildMode: BuildMode
   /** Whether this install is the updater's to manage. */
   method: InstallMethod
+  /** The platform family this binary runs on. Windows is announce-only. */
+  platform: PlatformKind
   /** `QIALIKE_DISABLE_AUTOUPDATE` was set. */
   disabled: boolean
   /** `QIALIKE_ALWAYS_NOTIFY_UPDATE` was set. */
@@ -130,10 +154,14 @@ export function getReleaseType(current: string, latest: string): ReleaseType {
  *  - `alwaysNotify` is honoured before anything else can silence it, because the
  *    user asked for it by name;
  *  - an already-current version short-circuits before classification;
- *  - the notify branch is checked BEFORE the install-method gate (as in
- *    opencode), so an install the updater cannot manage is still *announced*
- *    when the release is not a patch — silence there would hide a minor or major
- *    upgrade from exactly the users who must act on it manually.
+ *  - the notify branch is checked BEFORE the install gates (as in opencode), so an
+ *    install the updater cannot manage is still *announced* when the release is not
+ *    a patch — silence there would hide a minor or major upgrade from exactly the
+ *    users who must act on it manually;
+ *  - Windows is then announced for ANY newer release, patch included, because
+ *    "install a patch silently" has no implementation on a platform where the
+ *    running `.exe` cannot be replaced;
+ *  - only then does an unmanaged install fall through to a skip.
  */
 export function decideUpdate(input: PolicyInput): UpdateDecision {
   // Both ways of saying "off" are checked first: the settings switch and the
@@ -152,6 +180,10 @@ export function decideUpdate(input: PolicyInput): UpdateDecision {
 
   const release = getReleaseType(input.installed, input.latest)
   if (input.auto === 'notify' || release !== 'patch') return { kind: 'notify', version: input.latest }
+  // Windows never installs: the user must fetch the release themselves, so a patch
+  // is news there rather than something to do quietly. Checked before the method
+  // gate so a hand-placed copy is announced too.
+  if (input.platform === 'windows') return { kind: 'notify', version: input.latest }
 
   if (input.method === 'unknown') return { kind: 'skip', reason: 'unmanaged-install' }
   return { kind: 'install', version: input.latest }

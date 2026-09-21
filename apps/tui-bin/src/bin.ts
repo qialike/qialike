@@ -1514,8 +1514,13 @@ async function main(): Promise<void> {
   // child process. opencode does the same thing for the same reason — a check
   // must never delay the first frame — and the child matters here because the
   // upgrade path downloads tens of megabytes and replaces this very binary; on
-  // the TUI's event loop that would freeze the interface. Only the resulting
-  // notice is relayed, through the existing `tui.notify`.
+  // the TUI's event loop that would freeze the interface.
+  //
+  // Two ways for the answer to reach the user, and the child's report decides which:
+  // on Windows a newer release becomes the TUI's one-line update HINT (that platform
+  // cannot install it, so the user must fetch it, and the status line is where they
+  // will see it), while everywhere else the child's own notice lines are relayed
+  // exactly as before — Linux/macOS keep their verified auto-update path untouched.
   //
   // It is deliberately NOT wired into `web`: that mode forwards to the `dsh` CLI
   // and has already handed the terminal over, and it returns above.
@@ -1523,6 +1528,15 @@ async function main(): Promise<void> {
     notify: (message) => {
       const tui = ctx.get('tui') as { notify(message: string): void } | undefined
       tui?.notify(message)
+    },
+    // `tuiStore` rather than a new service method: the store IS the UI state, and
+    // `noteUpdate` is the same action the `/upgrade` command uses, so both routes end
+    // in one status line.
+    onUpdate: (offer) => {
+      const store = ctx.get('tuiStore') as
+        | { noteUpdate?(update: { installed: string; version: string; urls: readonly string[] }): void }
+        | undefined
+      store?.noteUpdate?.(offer)
     },
   })
 
