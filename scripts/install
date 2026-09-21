@@ -51,9 +51,12 @@ PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
 # than GitHub would have given — which is exactly why the updater refuses to move
 # backwards (see `compareVersions` in packages/qialike-app/src/upgrade-policy.ts).
 #
-# A source is `<base>` or `<base>|<api>`, comma-separated, the first that answers
-# winning. The API is optional because it is DERIVED for the hosts that need one
-# (`qialike_api_for`), so the list is normally just host names.
+# A source is `<base>` or `<base>|<api>`, comma-separated. Which one is used is the
+# four-case policy in `qialike_decide_source` (30-version.sh): the mirror when only it
+# answers, the primary when only IT answers, the faster of the two by throughput when
+# both do, and a STOP with nothing written when neither does. The API is optional
+# because it is DERIVED for the hosts that need one (`qialike_api_for`), so the list
+# is normally just host names.
 # `packages/qialike-app/src/self-update.ts` carries the same list, and
 # `tests/self-update.test.ts` fails if the two ever drift apart.
 DEFAULT_SOURCES='https://github.com/qialike/qialike/releases,https://gitcode.com/qialike/qialike/releases'
@@ -77,6 +80,16 @@ SOURCE_APIS=()
 SOURCE_INDEX=0
 BASE_URL=''
 RESOLVED_TAG=''
+
+# What `qialike_probe_sources` found, filled in together and read by the decision
+# (`qialike_decide_source`) and the download (`qialike_fetch_archive`):
+#
+#   PROBE_INDEXES     sources that ANSWERED, in configured order
+#   PROBE_TAGS        tag each of those named, '' when it answered without one
+#   PROBE_UNREACHABLE sources that did not answer at all
+PROBE_INDEXES=()
+PROBE_TAGS=()
+PROBE_UNREACHABLE=()
 
 # The releases API for a host with no `latest` redirect, derived from the base
 # rather than hardcoded per repository: `<host>/<owner>/<repo>/releases` becomes
@@ -165,6 +178,29 @@ die() {
   exit 1
 }
 
+# Case 4 of the source policy — no configured source is reachable — exits with THIS
+# status rather than 1, so a caller can tell "the network is not there, nothing was
+# touched, the installed copy still works" apart from "the install failed". Only the
+# second is worth reporting to a user or retrying; the automatic updater maps this
+# one onto "keep what is installed" and stays quiet. `apps/tui-bin/src/upgrade-
+# command.ts` and `packages/qialike-app/src/self-update.ts` carry the same number.
+EXIT_NO_SOURCE=3
+
+# Stop an update because not one source answered.
+#
+# `die` would be the wrong shape: this is the policy's fourth case, not a
+# malfunction, and the message has to carry the only fact that matters to the user —
+# that nothing was downloaded and nothing was written over.
+qialike_stop_no_source() {
+  local keep='nothing was installed'
+  if [[ -f "$INSTALL_DIR/$BIN" ]]; then
+    keep='keeping the installed version'
+  fi
+  printf '%s: no release source is reachable (tried: %s) — %s\n' \
+    "$APP" "$(qialike_source_list)" "$keep" >&2
+  exit "$EXIT_NO_SOURCE"
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 10-args.sh
 # ─────────────────────────────────────────────────────────────────────────────
@@ -195,19 +231,25 @@ Options:
     -h, --help              display this help message
     -v, --version <version> install a specific version (e.g. 0.6.0 or v0.6.0)
         --no-modify-path    don't modify shell config files (.bashrc, .zshrc)
-        --source <name>     github | gitcode | auto (default auto = compare them)
+        --source <name>     github | gitcode | auto (default auto = the policy above)
         --base-url <url>    use exactly this releases directory, no fallback
         --dry-run           print what would be done, then change nothing
 
 Two hosts carry the release: github.com/qialike/qialike (canonical) and
-gitcode.com/qialike/qialike (mirror). The newest release is read from the first
-one that answers, and with more than one source the installer then samples the
-real download from each and uses the FASTER one — reachability alone says nothing
-about a 55 MB body, and a GitHub whose asset CDN is throttled is reachable.
+gitcode.com/qialike/qialike (mirror). Both are checked for connectivity first, and
+which one is used follows from what answered:
 
-    --source gitcode        skip the comparison and use that host only
+    github only        use github
+    gitcode only       use gitcode
+    both               sample the real download from each and use the FASTER one —
+                       reachability says nothing about a 55 MB body, and a GitHub
+                       whose asset CDN is throttled is reachable
+    neither            stop: nothing is downloaded, nothing is written, and an
+                       installed qialike keeps working (exit 3)
+
+    --source gitcode        skip the policy and use that host only
     --source github         likewise, for the canonical host
-    QIALIKE_INSTALL_MEASURE=0   keep the probe's order, never compare
+    QIALIKE_INSTALL_MEASURE=0   never compare, keep the policy's own order
 
 Examples:
     curl -fsSL https://qialike.com/install | bash
@@ -448,13 +490,22 @@ qialike_set_binary_name() {
 # ─────────────────────────────────────────────────────────────────────────────
 # 30-version.sh
 # ─────────────────────────────────────────────────────────────────────────────
-# Version resolution, and the connectivity probe.
+# Version resolution, connectivity, and the four-case source decision.
 #
-# The newest tag is read from whichever source ANSWERS FIRST, and that same source
-# is then used for the download. The probe and the resolution are the same
-# operation on purpose: "what is your newest release?" is exactly the question a
-# blackholed host cannot answer, so a separate liveness check would only add a
-# round trip that can disagree with this one.
+# The decision has four cases, and they are checked in this order:
+#
+#   1. only the mirror answers            -> the mirror
+#   2. only the primary answers           -> the primary
+#   3. both answer                        -> sample both, keep the faster
+#   4. neither answers                    -> STOP: nothing is downloaded, nothing is
+#                                            written, an installed copy keeps working
+#
+# Reachability is asked FIRST, and throughput only in case 3. The two questions are
+# different on purpose: a host can answer "what is your newest release" and then crawl
+# on the 55 MB body (GitHub answers the small redirect from `github.com` and serves
+# the body from `release-assets.githubusercontent.com`), so case 3 has to measure —
+# while cases 1 and 2 must NOT measure, because sampling a host already known to be
+# dead only buys a timeout, and sampling the only live host cannot change the answer.
 #
 # GitHub answers with a redirect and is read WITHOUT the API: the unauthenticated
 # API allows only 60 requests/hour, while the redirect is unlimited. gitcode has no
@@ -507,49 +558,159 @@ qialike_source_tag() {
   return 1
 }
 
-# Resolve the tag to install, and leave `RESOLVED_TAG`/`BASE_URL`/`SOURCE_INDEX` on
-# the source that answered. `$1` is the asset name, needed to build the URL the
-# redirect is read from.
+# Did this host answer AT ALL?
 #
-# Sets GLOBALS rather than echoing, and that is not a style choice: the obvious
-# `tag=$(qialike_resolve_version …)` runs in a SUBSHELL, so `SOURCE_INDEX`/`BASE_URL`
-# set in here would be discarded and the download would go back to the source that
-# just failed. `qialike_resolve_version` below keeps the echoing form for callers
-# that only want the tag.
-qialike_resolve_into_globals() {
+# Any status counts: the question is whether the host replied, not whether it liked
+# the path, so a 404 from a live host is reachable while a refused or blackholed
+# connection is not. `-f` is deliberately absent (it would turn a 404 into a failure)
+# and `%{http_code}` is read instead — curl prints `000` when no response arrived,
+# which is exactly the signal wanted.
+#
+# `-I` (HEAD), not a plain GET: the releases page is ~234 KB on GitHub (measured) and
+# nothing in it is wanted, only the answer. Measured on both hosts: HEAD answers `200`
+# with `size_download=0` in 0.23 s (GitHub) / 0.39 s (gitcode), so the cheap form is
+# also a supported one.
+qialike_source_reachable() {
+  local base=$1 code
+
+  code=$(curl -sS -I -o "$(qialike_null_device)" -w '%{http_code}' \
+    --connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT" "$base" 2>/dev/null || true)
+  code=$(printf '%s' "$code" | tr -d '\r')
+  # Only a definite `000` — curl's code for "no response arrived" — counts as
+  # unreachable. An empty answer means the probe itself said nothing, and guessing
+  # "down" there would stop an update that might have worked; guessing "up" only costs
+  # a download attempt whose own error names the host.
+  [[ "$code" != 000 ]]
+}
+
+# Ask every configured source whether it is there, and what it would install.
+#
+# The tag read doubles as the connectivity test whenever it SUCCEEDS — one request
+# answers both questions — so `qialike_source_reachable` is asked only about a source
+# whose tag read failed, and only there do "down" and "up, but no such asset" need
+# telling apart. That distinction is what keeps case 4 (nothing reachable => stop)
+# from swallowing a real failure such as an unpublished platform or a pulled release,
+# which is a source that IS reachable and simply has nothing for this asset.
+#
+# A pinned version needs no tag at all, only the host, so it asks the cheap question
+# directly. The version was decided by the caller; what is being decided here is
+# where it comes from.
+qialike_probe_sources() {
   local asset=$1 i tag
 
-  if [[ -n "${REQUESTED_VERSION:-}" ]]; then
-    RESOLVED_TAG=$(qialike_normalize_version "$REQUESTED_VERSION")
-    return 0
-  fi
+  PROBE_INDEXES=()
+  PROBE_TAGS=()
+  PROBE_UNREACHABLE=()
+
+  for i in "${!SOURCE_BASES[@]}"; do
+    if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+      # A pinned version already answers "which release" — the only open question is
+      # WHERE it comes from, so the host is asked directly. The tag cannot stand in for
+      # that answer here: it is known before any host is contacted.
+      if ! qialike_source_reachable "${SOURCE_BASES[$i]}"; then
+        PROBE_UNREACHABLE+=("$i")
+        continue
+      fi
+      PROBE_INDEXES+=("$i")
+      PROBE_TAGS+=("$(qialike_normalize_version "$REQUESTED_VERSION")")
+      continue
+    fi
+
+    tag=$(qialike_source_tag "${SOURCE_BASES[$i]}" "${SOURCE_APIS[$i]}" "$asset" || true)
+    # A tag that came back is proof the host answered; only an empty one leaves the
+    # question open, and only then is the host asked the cheaper way.
+    if [[ -z "$tag" ]] && ! qialike_source_reachable "${SOURCE_BASES[$i]}"; then
+      PROBE_UNREACHABLE+=("$i")
+      continue
+    fi
+    PROBE_INDEXES+=("$i")
+    PROBE_TAGS+=("$tag")
+  done
+}
+
+# The four cases, applied. Sets `SOURCE_INDEX`/`BASE_URL`/`RESOLVED_TAG`, says which
+# case applied, and stops the run entirely in case 4.
+#
+# The TAG comes from the first REACHABLE source that named one, in configured order,
+# so a reachable GitHub still decides the version even when the mirror is faster: a
+# source that lags must not be able to move anyone backwards. `RESOLVED_TAG` is fixed
+# before any measurement, so case 3 can only reorder the DOWNLOAD.
+qialike_decide_source() {
+  local asset=$1 i first='' unreachable='' base
 
   if ! command -v curl >/dev/null 2>&1; then
     die "'curl' is required but not installed"
   fi
 
-  for i in "${!SOURCE_BASES[@]}"; do
-    tag=$(qialike_source_tag "${SOURCE_BASES[$i]}" "${SOURCE_APIS[$i]}" "$asset" || true)
-    if [[ -n "$tag" ]]; then
-      SOURCE_INDEX=$i
-      BASE_URL=${SOURCE_BASES[$i]}
-      RESOLVED_TAG=$tag
-      if (( i > 0 )); then
-        # stderr, and a warning rather than a note: the user needs to know, because
-        # the mirror can lag behind GitHub and this install may land on an older tag.
-        warn "${SOURCE_BASES[0]} did not answer — using $BASE_URL, which can lag behind"
-      fi
-      return 0
+  qialike_probe_sources "$asset"
+
+  # Case 4 first: with nothing reachable there is nothing to compare, nothing to fall
+  # back to — and no reason to create a temp dir or touch a shell profile. Everything
+  # the installer would have done is skipped by construction, which is what makes
+  # "the installed version is untouched" true rather than merely likely.
+  if (( ${#PROBE_INDEXES[@]} == 0 )); then
+    qialike_stop_no_source
+  fi
+
+  for i in "${!PROBE_INDEXES[@]}"; do
+    if [[ -n "${PROBE_TAGS[$i]}" ]]; then
+      first=$i
+      break
     fi
   done
+  if [[ -z "$first" ]]; then
+    # Reachable, but not one of them publishes this asset: a real failure, not case 4.
+    # Reporting this as "no source is reachable" would send the user after a network
+    # problem that does not exist.
+    die "could not resolve the latest version from any source (tried: $(qialike_source_list)) — check your network, or none of them publishes $asset"
+  fi
 
-  die "could not resolve the latest version from any source (tried: $(qialike_source_list)) — check your network, or none of them publishes $asset"
+  SOURCE_INDEX=${PROBE_INDEXES[$first]}
+  BASE_URL=${SOURCE_BASES[$SOURCE_INDEX]}
+  RESOLVED_TAG=${PROBE_TAGS[$first]}
+
+  for i in "${PROBE_UNREACHABLE[@]}"; do
+    base=${SOURCE_BASES[$i]}
+    unreachable="${unreachable:+$unreachable, }$(qialike_host_of "$base")"
+  done
+
+  if (( ${#PROBE_INDEXES[@]} == 1 )); then
+    if (( SOURCE_INDEX > 0 )); then
+      # Case 1. stderr, and a warning rather than a note: the user needs to know,
+      # because the mirror can lag behind GitHub and this install may land on an older
+      # tag.
+      warn "${SOURCE_BASES[0]} did not answer — using $BASE_URL, which can lag behind"
+    elif [[ -n "$unreachable" ]]; then
+      # Case 2. A note, not a warning: the canonical host answered, so this is the
+      # ordinary install — but naming the dead host keeps a silent half-outage from
+      # looking like everything is well. Nothing is sampled here: there is one
+      # candidate, so a comparison could not change anything.
+      say "source $(qialike_host_of "$BASE_URL") — $unreachable not reachable"
+    fi
+    return 0
+  fi
+
+  # Case 3. Both answered, so the body decides (`qialike_choose_source`).
+  qialike_choose_source "$RESOLVED_TAG" "$asset"
+}
+
+# The historical name for the decision; the two are one implementation, not two paths.
+qialike_resolve_into_globals() {
+  qialike_decide_source "$1"
 }
 
 # Echo just the tag. The source it came from is NOT visible to the caller here — a
 # command substitution is a subshell — so anything that needs to download from that
 # same source must use `qialike_resolve_into_globals` instead.
+#
+# A pinned version is pure arithmetic and stays OFFLINE: this form exists for callers
+# that only want the string, and reaching for the network to answer a question the
+# caller already answered would make it fail on a host with no route out.
 qialike_resolve_version() {
+  if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+    qialike_normalize_version "$REQUESTED_VERSION"
+    return 0
+  fi
   qialike_resolve_into_globals "$1"
   printf '%s\n' "$RESOLVED_TAG"
 }
@@ -575,20 +736,22 @@ qialike_resolve_version() {
 # manifest is a normal outcome and NOT an error — but when one IS published it is
 # enforced, against the source the archive came from.
 #
-# Fallback: the source that resolved the version is tried first, then the rest. A
-# host can answer the small "what is newest" request and still fail a 55 MB body,
-# and that is exactly the case this second attempt exists for. A tag the mirror has
-# not caught up to simply 404s there, which is reported rather than hidden.
+# Fallback: the source the decision chose is tried first, then the other REACHABLE
+# ones (case 3's order). A host can answer the small "what is newest" request and
+# still fail a 55 MB body, and that is exactly the case this second attempt exists
+# for. A source that failed the connectivity probe is NOT retried here: it was
+# already pronounced unreachable, and dialling it again would spend a connect timeout
+# to learn the same thing.
 
 # Comparing sources by throughput.
 #
-# The reachability probe in `30-version.sh` answers "can this host name the newest
-# release", which is a different question from "can it move 55 MB": GitHub answers
-# the small redirect from `github.com` and serves the body from
+# This runs in case 3 only — both sources answered — because reachability answers "can
+# this host name the newest release", which is a different question from "can it move
+# 55 MB": GitHub answers the small redirect from `github.com` and serves the body from
 # `release-assets.githubusercontent.com`, so a GitHub whose CDN is throttled is
-# reachable and slow. Sampling the real asset is what tells those apart — which is
-# why the default is to sample every source and download from the fastest, rather
-# than to guess at geography.
+# reachable and slow. Sampling the real asset is what tells those apart — which is why
+# the measurement decides rather than a guess at geography. Cases 1 and 2 skip it:
+# there is one candidate, so nothing could change.
 
 # Echo how fast one source delivers this asset, in bytes per second, or nothing when
 # it cannot serve it at all.
@@ -626,23 +789,25 @@ qialike_human_speed() {
   fi
 }
 
-# Point `SOURCE_INDEX`/`BASE_URL` at the fastest source that can actually serve this
-# asset, and say what each one measured.
+# Point `SOURCE_INDEX`/`BASE_URL` at the fastest REACHABLE source that can actually
+# serve this asset, and say what each one measured.
 #
-# Ties and unmeasurable sources keep the earlier index: the first source that wins
-# strictly is the one chosen, so an inconclusive comparison leaves the probe's order
-# (GitHub first) exactly as it was. A source that 404s is reported as unavailable and
-# can never be chosen — the mirror lagging behind the tag must not turn into a failed
-# download followed by a retry.
+# Only sources the connectivity probe reached are sampled (case 3 by definition: two
+# or more answered). Ties and unmeasurable sources keep the earlier index: the first
+# source that wins strictly is the one chosen, so an inconclusive comparison leaves
+# the decision's order exactly as it was. A source that 404s this tag is reported as
+# unavailable and can never be chosen — a mirror lagging behind the tag must not turn
+# into a failed download followed by a retry.
 qialike_choose_source() {
   # $1 = tag, $2 = asset
-  local tag=$1 asset=$2 i base speed report='' best=-1 best_index=$SOURCE_INDEX
+  local tag=$1 asset=$2 pos i base speed report='' best=-1 best_index=$SOURCE_INDEX
 
-  if (( SOURCE_MEASURE == 0 )) || (( ${#SOURCE_BASES[@]} < 2 )); then
+  if (( SOURCE_MEASURE == 0 )) || (( ${#PROBE_INDEXES[@]} < 2 )); then
     return 0
   fi
 
-  for i in "${!SOURCE_BASES[@]}"; do
+  for pos in "${!PROBE_INDEXES[@]}"; do
+    i=${PROBE_INDEXES[$pos]}
     base=${SOURCE_BASES[$i]}
     speed=$(qialike_measure_speed "$base" "$tag" "$asset" || true)
     if [[ -z "$speed" ]]; then
@@ -657,8 +822,8 @@ qialike_choose_source() {
   done
 
   if (( best < 0 )); then
-    # Nothing could be measured — every source 404s this asset or none answered. Leave
-    # the choice to the download step, whose own error names the asset and the hosts.
+    # Nothing could be measured — every reachable source 404s this asset. Leave the
+    # choice to the download step, whose own error names the asset and the hosts.
     return 0
   fi
 
@@ -684,16 +849,45 @@ qialike_try_download() {
 
 qialike_fetch_archive() {
   # $1 = asset name, $2 = tag, $3 = destination directory. Echoes the archive path.
-  local asset=$1 tag=$2 dest=$3 attempt i base out
-  local count=${#SOURCE_BASES[@]}
+  local asset=$1 tag=$2 dest=$3 attempt pos i base out tried=''
+  local order=() count start=0
 
   if ! command -v curl >/dev/null 2>&1; then
     die "'curl' is required but not installed"
   fi
 
+  # The candidates are the sources that ANSWERED, in configured order, walked from the
+  # one the decision chose. Empty means nobody probed first (a direct call from a test,
+  # or a caller that only wants the download), in which case every configured source is
+  # still a candidate — the decision is an optimisation, not a prerequisite.
+  for i in "${!PROBE_INDEXES[@]}"; do
+    order+=("${PROBE_INDEXES[$i]}")
+  done
+  if (( ${#order[@]} == 0 )); then
+    for i in "${!SOURCE_BASES[@]}"; do
+      order+=("$i")
+    done
+  fi
+  count=${#order[@]}
+  for ((pos = 0; pos < count; pos += 1)); do
+    if (( order[pos] == SOURCE_INDEX )); then
+      start=$pos
+      break
+    fi
+  done
+  # The chosen source leads the list, so the `tried:` report below reads in the order
+  # the sources were actually tried.
+  local rotated=()
+  for ((pos = 0; pos < count; pos += 1)); do
+    rotated+=("${order[$(( (start + pos) % count ))]}")
+  done
+  for ((pos = 0; pos < count; pos += 1)); do
+    tried="${tried:+$tried, }${SOURCE_BASES[${rotated[$pos]}]}"
+  done
+
   out="$dest/$asset"
   for ((attempt = 0; attempt < count; attempt += 1)); do
-    i=$(( (SOURCE_INDEX + attempt) % count ))
+    i=${rotated[$attempt]}
     base=${SOURCE_BASES[$i]}
 
     if qialike_try_download "$base" "$tag" "$asset" "$out"; then
@@ -708,7 +902,7 @@ qialike_fetch_archive() {
     fi
   done
 
-  die "download failed: $asset (tag $tag) — no source could provide it (tried: $(qialike_source_list))"
+  die "download failed: $asset (tag $tag) — no source could provide it (tried: $tried)"
 }
 
 # Verify against the release's `sha256sums.txt` when that file exists, on the source
@@ -966,7 +1160,7 @@ main() {
       fi
     done
     if (( SOURCE_MEASURE == 1 )); then
-      say "          source    the faster of the above (up to ${MEASURE_BYTES} B each); --source github|gitcode pins one"
+      say "          policy    github.com, else gitcode.com, else the faster of the two (sampled, up to ${MEASURE_BYTES} B); neither reachable = stop, keep what is installed"
     fi
     say "          install   $INSTALL_DIR/$BIN"
     if [[ "$NO_MODIFY_PATH" == true ]]; then
@@ -977,16 +1171,14 @@ main() {
     return 0
   fi
 
-  # NOT `tag=$(…)`: the resolve records which source answered in globals, and a
-  # command substitution would throw that away (see 30-version.sh).
-  qialike_resolve_into_globals "$asset"
+  # NOT `tag=$(…)`: the decision records which source answered in globals, and a
+  # command substitution would throw that away (see 30-version.sh). It also applies
+  # the four-case source policy — including case 4, which exits here with nothing
+  # downloaded and nothing written — and, in case 3, samples the sources and moves
+  # the download to the faster one. The tag is fixed before that sampling, so the
+  # comparison can only reorder the download, never change the version installed.
+  qialike_decide_source "$asset"
   tag=$RESOLVED_TAG
-
-  # Reachability decided which source could NAME the release; the body is a separate
-  # question, so with more than one source the real asset is sampled and the fastest
-  # one wins (see 40-fetch.sh). This can only reorder the download — the tag is
-  # already fixed, so a slow primary cannot cost anyone a version.
-  qialike_choose_source "$tag" "$asset"
 
   QIALIKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/qialike-install.XXXXXX") || die "could not create a temporary directory"
   # `qialike_cleanup` reads a global rather than a local: the trap fires after

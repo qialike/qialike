@@ -25,19 +25,25 @@ Options:
     -h, --help              display this help message
     -v, --version <version> install a specific version (e.g. 0.6.0 or v0.6.0)
         --no-modify-path    don't modify shell config files (.bashrc, .zshrc)
-        --source <name>     github | gitcode | auto (default auto = compare them)
+        --source <name>     github | gitcode | auto (default auto = the policy above)
         --base-url <url>    use exactly this releases directory, no fallback
         --dry-run           print what would be done, then change nothing
 
 Two hosts carry the release: github.com/qialike/qialike (canonical) and
-gitcode.com/qialike/qialike (mirror). The newest release is read from the first
-one that answers, and with more than one source the installer then samples the
-real download from each and uses the FASTER one — reachability alone says nothing
-about a 55 MB body, and a GitHub whose asset CDN is throttled is reachable.
+gitcode.com/qialike/qialike (mirror). Both are checked for connectivity first, and
+which one is used follows from what answered:
 
-    --source gitcode        skip the comparison and use that host only
+    github only        use github
+    gitcode only       use gitcode
+    both               sample the real download from each and use the FASTER one —
+                       reachability says nothing about a 55 MB body, and a GitHub
+                       whose asset CDN is throttled is reachable
+    neither            stop: nothing is downloaded, nothing is written, and an
+                       installed qialike keeps working (exit 3)
+
+    --source gitcode        skip the policy and use that host only
     --source github         likewise, for the canonical host
-    QIALIKE_INSTALL_MEASURE=0   keep the probe's order, never compare
+    QIALIKE_INSTALL_MEASURE=0   never compare, keep the policy's own order
 
 Examples:
     curl -fsSL https://qialike.com/install | bash

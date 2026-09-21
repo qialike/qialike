@@ -421,6 +421,100 @@ export function fastestSource(
   return best
 }
 
+/**
+ * The status the installer exits with when NO configured release source is reachable
+ * — the fourth case of the source policy (`scripts/install.d/30-version.sh` decides
+ * it, and `EXIT_NO_SOURCE` there carries the same number).
+ *
+ * It exists so this side can tell "the network is not there, nothing was written, the
+ * installed copy still works" apart from "the install failed". The first is not worth
+ * reporting to anyone or retrying; the second is.
+ */
+export const EXIT_NO_SOURCE = 3
+
+/** What an update attempt that reached nobody reports. */
+export const NO_SOURCE_ERROR = 'no release source is reachable — keeping the installed version'
+
+/**
+ * Did this source answer AT ALL?
+ *
+ * Any status counts — the question is whether the host replied, not whether it liked
+ * the path — so a 404 from a live host is reachable while a refused or blackholed
+ * connection is not. `-f` is deliberately absent (it would turn a 404 into a failure)
+ * and `%{http_code}` is read instead, because curl prints `000` when no response
+ * arrived: only that definite answer counts as unreachable. An empty or unparsable
+ * answer means the probe itself said nothing, and guessing "down" there would stop an
+ * update that might have worked.
+ *
+ * `-I` (HEAD), not a plain GET: the releases page is ~234 KB on GitHub (measured) and
+ * only the answer is wanted. Measured on both hosts: HEAD answers `200` with
+ * `size_download=0` in 0.23 s (GitHub) / 0.39 s (gitcode).
+ */
+export function sourceReachable(source: ReleaseSource, options: { run?: Runner } = {}): boolean {
+  const run = options.run ?? runShell
+  const result = run('curl', [
+    '-sS',
+    '-I',
+    '-o', nullDevice(),
+    '-w', '%{http_code}',
+    '--connect-timeout', CONNECT_TIMEOUT,
+    '--max-time', PROBE_TIMEOUT,
+    source.base,
+  ])
+  return result.stdout.trim() !== '000'
+}
+
+/** What `routeUpgrade` decided about where an update would come from. */
+export type SourceRoute =
+  /** One source to hand the installer as `QIALIKE_INSTALL_BASE_URL`. */
+  | { kind: 'pinned'; source: ReleaseSource }
+  /** Some source is there, but nothing could be compared: let the installer decide. */
+  | { kind: 'unpinned' }
+  /** Nothing answered (case 4): no attempt is worth making. */
+  | { kind: 'unreachable' }
+
+/**
+ * Where the update should come from — the source policy, applied by the updater.
+ *
+ * The four cases are the installer's (`scripts/install.d/30-version.sh`), applied in
+ * the same order, and they are applied here as well because the updater used to leave
+ * this entirely to the DEPLOYED `/install`: with no comparison of its own, a throttled
+ * GitHub stayed in the automatic path whatever this repository said.
+ *
+ *   1. only the mirror answers -> pin the mirror
+ *   2. only the primary answers -> pin the primary
+ *   3. both answer -> sample both, pin the faster one
+ *   4. neither answers -> unreachable, and nothing is spawned
+ *
+ * CONNECTIVITY FIRST, then throughput: a host that cannot be reached is not a
+ * candidate for anything, and sampling it would only buy a connect timeout. The two
+ * questions are different — a host can answer "what is your newest release" and then
+ * crawl on the 55 MB body, which is why case 3 has to measure at all.
+ *
+ * `measure: false` is the documented `QIALIKE_INSTALL_MEASURE=0`: no comparison, so
+ * the installer's own list decides — but the connectivity question is still asked,
+ * because case 4 is about whether an attempt is worth making at all.
+ */
+export function routeUpgrade(
+  sources: readonly ReleaseSource[],
+  version: string,
+  options: { measure?: boolean; target?: string; run?: Runner } = {},
+): SourceRoute {
+  const run = options.run ?? runShell
+  const measure = options.measure ?? true
+
+  const reachable = sources.filter((source) => sourceReachable(source, { run }))
+  if (reachable.length === 0) return { kind: 'unreachable' }
+  if (reachable.length === 1) return { kind: 'pinned', source: reachable[0] as ReleaseSource }
+
+  // Two or more answered, so the body decides — unless the comparison was refused.
+  if (measure) {
+    const fastest = fastestSource(reachable, version, { target: options.target, run })
+    if (fastest !== undefined) return { kind: 'pinned', source: fastest }
+  }
+  return { kind: 'unpinned' }
+}
+
 /** The version the installed binary reports, or undefined if it will not run. */
 export function installedVersion(options: { dir?: string; run?: Runner; platform?: NodeJS.Platform } = {}): string | undefined {
   const dir = options.dir ?? installDir()
@@ -494,6 +588,13 @@ export interface UpgradeResult {
   /** The version the installed binary reports afterwards. */
   version?: string
   error?: string
+  /**
+   * Case 4 of the source policy: nobody answered, so NOTHING was attempted and the
+   * installed copy is untouched. Callers branch on this instead of on `error` text —
+   * an automatic check keeps the installed version and says nothing, while an explicit
+   * `qialike upgrade` tells the user why there is nothing to install.
+   */
+  unreachable?: boolean
 }
 
 /**
@@ -562,7 +663,15 @@ export function upgrade(
   const explicit = env.QIALIKE_INSTALL_BASE_URL !== undefined || env.QIALIKE_INSTALL_SOURCES !== undefined
   const measure = options.measure ?? env.QIALIKE_INSTALL_MEASURE !== '0'
   const sources = releaseSources(env)
-  const pinned = measure && !explicit ? fastestSource(sources, target, { run }) : undefined
+  let pinned: ReleaseSource | undefined
+  if (!explicit) {
+    const route = routeUpgrade(sources, target, { measure, run })
+    // Case 4: with no reachable source there is nothing to try. Not spawning bash at
+    // all is the point — the installer would reach the same conclusion, twice (once
+    // per attempt), and report it as a failure of an attempt that was never possible.
+    if (route.kind === 'unreachable') return { ok: false, unreachable: true, error: NO_SOURCE_ERROR }
+    if (route.kind === 'pinned') pinned = route.source
+  }
 
   // The winner goes in as `QIALIKE_INSTALL_BASE_URL`, which EVERY installer version
   // understands — including the ones deployed before the measurement existed. The
@@ -578,9 +687,16 @@ export function upgrade(
       ? attempt({})
       : attempt({ QIALIKE_INSTALL_BASE_URL: pinned.base, QIALIKE_INSTALL_MEASURE: '0' })
     if (first.status === 0 || pinned === undefined) return first
+    // The retry is worth making even when the pinned host answered case 4: the host may
+    // have gone away between the measurement and the download, and the other source is
+    // still there.
     return attempt({})
   })
   if (result === undefined) return { ok: false, error: 'another upgrade is already running' }
+  // The installer decided case 4 for itself (a host died, or the pin pointed at a
+  // network that is gone): report it as "keep the installed version", not as a failed
+  // attempt — that is the same distinction, one layer down.
+  if (result.status === EXIT_NO_SOURCE) return { ok: false, unreachable: true, error: NO_SOURCE_ERROR }
   if (result.status !== 0) {
     const detail = result.stderr.trim().split('\n').pop() ?? `exit ${result.status}`
     return { ok: false, error: `installer failed: ${detail}` }

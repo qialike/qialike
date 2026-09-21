@@ -443,7 +443,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the source list is
     expect(spawnSync(dest, ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe(`qialike ${TAG}`)
   })
 
-  test('the primary is preferred when it answers, and the mirror is never contacted', () => {
+  test('an unreachable mirror is named, and the primary installs anyway', () => {
     const work = tempDir('qialike-fixture-primary-')
     publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
     publish('sha256sums.txt', undefined)
@@ -452,30 +452,68 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the source list is
     const { status, output } = install(
       home,
       [],
-      // The mirror is listed but points at a dead port: if the probe did not stop at
-      // the first source that answered, this install could not succeed.
+      // The mirror is listed but points at a dead port. It IS asked whether it is
+      // there — case 2 is decided by connectivity, not by guessing — and the answer
+      // costs one refused connection, because port 1 fails instantly. What must not
+      // happen is the install depending on it.
       { QIALIKE_INSTALL_SOURCES: `${fixtureBase},http://127.0.0.1:1/releases` },
       null,
     )
 
     expect(status, output).toBe(0)
+    // The canonical host answered, so this is the ordinary install: a note that names
+    // the dead mirror, and NOT the mirror-lag warning (nothing is being read from it).
+    expect(output).toContain('not reachable')
     expect(output).not.toContain('did not answer')
+    // One reachable source means nothing to compare.
+    expect(output).not.toContain('source speeds')
     expect(existsSync(join(home, '.dsh', 'bin', INNER))).toBe(true)
+  })
+
+  test('case 4: neither source answers — the update stops and writes nothing at all', () => {
+    // The user-visible half of the policy: with no reachable source there is nothing
+    // to download, nothing to fall back to, and nothing that may be touched. Both
+    // ports refuse immediately, so this is about the decision, not a timeout budget.
+    const home = makeHome()
+    const rc = join(home, '.bashrc')
+    writeFileSync(rc, '# mine\n')
+
+    const { status, output } = install(
+      home,
+      [],
+      { QIALIKE_INSTALL_SOURCES: 'http://127.0.0.1:1/releases,http://127.0.0.1:2/releases' },
+      null,
+    )
+
+    // Its own exit status (3), which is how the automatic updater tells this apart
+    // from a failed install and keeps the installed version instead of reporting.
+    expect(status, output).toBe(3)
+    expect(output).toContain('no release source is reachable')
+    expect(output).toContain('nothing was installed')
+    // Both hosts are named, so the user can see it was not one bad host.
+    expect(output).toContain('http://127.0.0.1:1/releases')
+    expect(output).toContain('http://127.0.0.1:2/releases')
+    // Nothing was written: no install dir, no PATH line, no archive.
+    expect(existsSync(join(home, '.dsh'))).toBe(false)
+    expect(readFileSync(rc, 'utf8')).toBe('# mine\n')
+    expect(output).not.toContain('installing qialike')
   })
 
   test('an explicit --base-url is the ONLY source, so there is no silent fallback', () => {
     // A configured host must be the whole truth: the public mirrors are not appended
     // to it, or a deliberately dead host would be papered over and this would install
-    // something the operator did not ask for.
+    // something the operator did not ask for. With that one host down, the policy's
+    // fourth case applies — nothing is installed and the public hosts are never named.
     const home = makeHome()
     publish(ASSET!, undefined)
 
     const { status, output } = install(home, [], { QIALIKE_VERSION: TAG }, 'http://127.0.0.1:1/releases')
 
-    expect(status).not.toBe(0)
-    expect(output).toContain('download failed:')
+    expect(status, output).toBe(3)
+    expect(output).toContain('no release source is reachable')
     expect(output).toContain('http://127.0.0.1:1/releases')
     expect(output).not.toContain('gitcode.com')
+    expect(output).not.toContain('github.com')
     expect(existsSync(join(home, '.dsh', 'bin'))).toBe(false)
   })
 })

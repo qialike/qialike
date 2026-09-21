@@ -44,6 +44,8 @@ import {
   type InstallMethod,
 } from '@yourname/qialike-app/src/upgrade-policy.ts'
 import {
+  assetFor,
+  detectTarget,
   downloadUrls,
   installMethod,
   latestVersion,
@@ -210,8 +212,16 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
     // user learns a newer release exists.
     const latest = latestVersion({ sources: releaseSources(env) })
     // No network, a rate-limited host or an unpublished platform all mean "we do
-    // not know of a newer version" — say nothing rather than interrupting.
-    if (latest === undefined) { report('unknown'); return 0 }
+    // not know of a newer version" — say nothing rather than interrupting. The report
+    // still says WHICH it was, so the source policy's fourth case (nobody answered, the
+    // installed version is kept) can be told apart from a platform with no release.
+    if (latest === undefined) {
+      const target = detectTarget()
+      report('unknown', {
+        reason: target === undefined || assetFor(target) === undefined ? 'unsupported-platform' : 'no-source',
+      })
+      return 0
+    }
 
     const decision = decideUpdate({
       installed: io.installed,
@@ -241,9 +251,22 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
     }
 
     const result = upgrade(decision.version, { env, platform })
-    if (result.ok) io.out(`updated to qialike ${result.version ?? decision.version} — restart to use it`)
-    else io.out(`automatic update failed: ${result.error ?? 'unknown error'} — run 'qialike upgrade' to retry`)
-    report('install', { version: decision.version, ok: result.ok })
+    if (result.ok) {
+      io.out(`updated to qialike ${result.version ?? decision.version} — restart to use it`)
+      report('install', { version: decision.version, ok: true })
+      return 0
+    }
+    if (result.unreachable) {
+      // Case 4 of the source policy: nobody answered, so nothing was downloaded and
+      // nothing was written. SILENT on purpose — this runs in the background of
+      // somebody's session, the installed version keeps working, and there is nothing
+      // for the user to do about a network that is not there. The report still carries
+      // the reason, so a caller that wants to know can.
+      report('install', { version: decision.version, ok: false, reason: 'no-source' })
+      return 0
+    }
+    io.out(`automatic update failed: ${result.error ?? 'unknown error'} — run 'qialike upgrade' to retry`)
+    report('install', { version: decision.version, ok: false })
     return 0
   }
 
@@ -268,7 +291,10 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
       return target === undefined ? 1 : 0
     }
     if (target === undefined) {
-      io.err('qialike: could not determine the newest version (no network?) — pass one explicitly:')
+      // Case 4: nobody answered. Naming it is the honest answer to "is there a newer
+      // release?" — and the installed copy is untouched either way.
+      io.err('qialike: no release source is reachable — keeping the installed version')
+      io.err('         check a version you name instead:')
       io.err('         qialike upgrade --check <version>')
       return 1
     }
@@ -314,7 +340,8 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
 
   const target = flags.version ?? latestVersion({ sources: releaseSources(env) })
   if (target === undefined) {
-    io.err('qialike: could not determine the newest version (no network?) — pass one explicitly:')
+    io.err('qialike: no release source is reachable — keeping the installed version')
+    io.err('         name a version to install it anyway:')
     io.err('         qialike upgrade <version>')
     return 1
   }
@@ -327,6 +354,12 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
   io.out(`upgrading qialike ${io.installed} -> ${target}`)
   const result = upgrade(target, { env, platform })
   if (!result.ok) {
+    if (result.unreachable) {
+      // The user asked by name, so this is not silent — but it is still not a failure
+      // of the install: nothing was touched, and the running version stays.
+      io.err(`qialike: no release source is reachable — keeping qialike ${io.installed}`)
+      return 1
+    }
     io.err(`qialike: ${result.error ?? 'upgrade failed'}`)
     return 1
   }

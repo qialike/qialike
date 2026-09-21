@@ -36,9 +36,12 @@ PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
 # than GitHub would have given — which is exactly why the updater refuses to move
 # backwards (see `compareVersions` in packages/qialike-app/src/upgrade-policy.ts).
 #
-# A source is `<base>` or `<base>|<api>`, comma-separated, the first that answers
-# winning. The API is optional because it is DERIVED for the hosts that need one
-# (`qialike_api_for`), so the list is normally just host names.
+# A source is `<base>` or `<base>|<api>`, comma-separated. Which one is used is the
+# four-case policy in `qialike_decide_source` (30-version.sh): the mirror when only it
+# answers, the primary when only IT answers, the faster of the two by throughput when
+# both do, and a STOP with nothing written when neither does. The API is optional
+# because it is DERIVED for the hosts that need one (`qialike_api_for`), so the list
+# is normally just host names.
 # `packages/qialike-app/src/self-update.ts` carries the same list, and
 # `tests/self-update.test.ts` fails if the two ever drift apart.
 DEFAULT_SOURCES='https://github.com/qialike/qialike/releases,https://gitcode.com/qialike/qialike/releases'
@@ -62,6 +65,16 @@ SOURCE_APIS=()
 SOURCE_INDEX=0
 BASE_URL=''
 RESOLVED_TAG=''
+
+# What `qialike_probe_sources` found, filled in together and read by the decision
+# (`qialike_decide_source`) and the download (`qialike_fetch_archive`):
+#
+#   PROBE_INDEXES     sources that ANSWERED, in configured order
+#   PROBE_TAGS        tag each of those named, '' when it answered without one
+#   PROBE_UNREACHABLE sources that did not answer at all
+PROBE_INDEXES=()
+PROBE_TAGS=()
+PROBE_UNREACHABLE=()
 
 # The releases API for a host with no `latest` redirect, derived from the base
 # rather than hardcoded per repository: `<host>/<owner>/<repo>/releases` becomes
@@ -148,4 +161,27 @@ warn() { printf '%s: warning — %s\n' "$APP" "$*" >&2; }
 die() {
   printf '%s: %s\n' "$APP" "$*" >&2
   exit 1
+}
+
+# Case 4 of the source policy — no configured source is reachable — exits with THIS
+# status rather than 1, so a caller can tell "the network is not there, nothing was
+# touched, the installed copy still works" apart from "the install failed". Only the
+# second is worth reporting to a user or retrying; the automatic updater maps this
+# one onto "keep what is installed" and stays quiet. `apps/tui-bin/src/upgrade-
+# command.ts` and `packages/qialike-app/src/self-update.ts` carry the same number.
+EXIT_NO_SOURCE=3
+
+# Stop an update because not one source answered.
+#
+# `die` would be the wrong shape: this is the policy's fourth case, not a
+# malfunction, and the message has to carry the only fact that matters to the user —
+# that nothing was downloaded and nothing was written over.
+qialike_stop_no_source() {
+  local keep='nothing was installed'
+  if [[ -f "$INSTALL_DIR/$BIN" ]]; then
+    keep='keeping the installed version'
+  fi
+  printf '%s: no release source is reachable (tried: %s) — %s\n' \
+    "$APP" "$(qialike_source_list)" "$keep" >&2
+  exit "$EXIT_NO_SOURCE"
 }

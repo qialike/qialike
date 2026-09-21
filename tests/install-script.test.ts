@@ -194,6 +194,119 @@ describe('arguments', () => {
   })
 })
 
+/**
+ * The four-case source policy, pinned OFFLINE.
+ *
+ * The probes are replaced, so what is under test is the DECISION — which of the two
+ * hosts is used, what the user is told, and what happens when neither answers — and
+ * not curl. `parse_args` runs first because the decision walks the source list it
+ * builds. The exit status matters as much as the text: case 4 has its own (3) so the
+ * updater can tell "the network is gone, keep what is installed" from a failure.
+ */
+describe('the source policy: connectivity first, throughput only when both answer', () => {
+  /**
+   * Who answers, picked by `QIALIKE_TEST_CASE`:
+   * 1 = gitcode only, 2 = github only, 3 = both, 4 = neither.
+   * `qialike_source_tag` answers only for the hosts that are up, exactly as the real
+   * one does — a dead host cannot name a release.
+   */
+  const STUBS = `
+qialike_source_tag() {
+  case "$1" in
+    *github*) case "$QIALIKE_TEST_CASE" in 2|3) printf '0.6.3\\n'; return 0 ;; esac ;;
+    *gitcode*) case "$QIALIKE_TEST_CASE" in 1|3) printf '0.6.3\\n'; return 0 ;; esac ;;
+  esac
+  return 1
+}
+qialike_source_reachable() {
+  case "$1" in
+    *github*) case "$QIALIKE_TEST_CASE" in 2|3) return 0 ;; esac ;;
+    *gitcode*) case "$QIALIKE_TEST_CASE" in 1|3) return 0 ;; esac ;;
+  esac
+  return 1
+}
+qialike_measure_speed() { case "$1" in *github*) printf '100000\\n' ;; *) printf '900000\\n' ;; esac; }
+`
+
+  function decide(testCase: string, extra = '') {
+    // `extra` comes AFTER the stubs so a test can replace one of them — bash takes
+    // the last definition, and the reverse order would silently drop the override.
+    return library(
+      `parse_args\n${STUBS}${extra}\nqialike_decide_source qialike-linux-x64.tar.gz\nprintf 'index=%s tag=%s\\n' "$SOURCE_INDEX" "$RESOLVED_TAG"`,
+      { home: fakeHome(), env: { QIALIKE_TEST_CASE: testCase } },
+    )
+  }
+
+  test('case 1: only the mirror answers — the mirror is used, and warned about', () => {
+    const { status, output } = decide('1')
+    expect(status, output).toBe(0)
+    // The canonical host leads the list, so a mirror-only install can lag behind it.
+    expect(output).toContain('did not answer')
+    expect(output).toContain('can lag behind')
+    expect(output).toContain('index=1 tag=0.6.3')
+    // One candidate means no comparison: sampling it could not change the answer.
+    expect(output).not.toContain('source speeds')
+  })
+
+  test('case 2: only the primary answers — the primary is used, and nothing is sampled', () => {
+    const { status, output } = decide('2')
+    expect(status, output).toBe(0)
+    // The dead host is named rather than passed over in silence: half an outage that
+    // nobody mentions looks exactly like everything working.
+    expect(output).toContain('source github.com — gitcode.com not reachable')
+    expect(output).toContain('index=0 tag=0.6.3')
+    expect(output).not.toContain('source speeds')
+  })
+
+  test('case 3: both answer — the real asset is sampled and the faster one wins', () => {
+    const { status, output } = decide('3')
+    expect(status, output).toBe(0)
+    expect(output).toContain('source speeds')
+    expect(output).toContain('downloading from gitcode.com')
+    // Both are up, so neither is reported as unreachable.
+    expect(output).not.toContain('not reachable')
+    expect(output).toContain('index=1 tag=0.6.3')
+  })
+
+  test('case 4: neither answers — the update stops with nothing written, exit 3', () => {
+    const { status, output } = decide('4')
+    // A status of its own, not 1: this is the policy's fourth case, and the automatic
+    // updater reads it as "keep the installed version" instead of as a failure.
+    expect(status, output).toBe(3)
+    expect(output).toContain('no release source is reachable')
+    expect(output).toContain('github.com/qialike/qialike/releases')
+    expect(output).toContain('gitcode.com/qialike/qialike/releases')
+    expect(output).toContain('nothing was installed')
+    // It stops before doing anything: no plan line, no download, no profile edit.
+    expect(output).not.toContain('installing qialike')
+  })
+
+  test('a pinned version is a connectivity question only, never a tag read', () => {
+    const { status, output } = decide(
+      '3',
+      // If the pinned path read a tag it would take this one and install the wrong
+      // version — the point is that where to get it is the only open question.
+      "REQUESTED_VERSION=v0.6.0\nqialike_source_tag() { printf '9.9.9\\n'; return 0; }\n",
+    )
+    expect(status, output).toBe(0)
+    expect(output).toContain('index=1 tag=0.6.0')
+  })
+
+  test('a reachable host that publishes no such asset is a FAILURE, not case 4', () => {
+    // The hosts answer; the release simply is not there (an unpublished platform, a
+    // pulled version). Reporting this as "no source is reachable" would send the user
+    // after a network problem that does not exist.
+    const { status, output } = decide(
+      '4',
+      "qialike_source_reachable() { return 0; }\nqialike_source_tag() { return 1; }\n",
+    )
+    expect(status, output).toBe(1)
+    expect(output).toContain('could not resolve the latest version')
+    expect(output).toContain('none of them publishes qialike-linux-x64.tar.gz')
+    expect(output).not.toContain('no release source is reachable')
+  })
+})
+
 describe('platforms map to their release asset', () => {
   // The six targets `build.mjs` can produce, all of which the 0.6.0 release
   // publishes. A dry run pins the mapping and needs no network.

@@ -25,6 +25,7 @@ import {
   DEFAULT_RELEASES_URL,
   detectTarget,
   downloadUrls,
+  EXIT_NO_SOURCE,
   fastestSource,
   installDir,
   installMethod,
@@ -35,6 +36,7 @@ import {
   MEASURE_TIMEOUT,
   measureSpeed,
   MIRROR_RELEASES_URL,
+  NO_SOURCE_ERROR,
   nullDevice,
   parseTagFromJson,
   parseTagFromRedirect,
@@ -42,6 +44,8 @@ import {
   RELEASE_SOURCES,
   releaseSources,
   releaseLock,
+  routeUpgrade,
+  sourceReachable,
   upgrade,
   withUpgradeLock,
   type Runner,
@@ -572,5 +576,131 @@ describe('choosing the host by throughput', () => {
       env: { QIALIKE_INSTALL_MEASURE: '0' },
     })
     expect(measured).toBe(0)
+  })
+})
+
+/**
+ * The four-case source policy on the updater's side.
+ *
+ * The installer applies the same policy for a fresh `curl | bash`, but the automatic
+ * update has to reach the same conclusion BEFORE it spawns anything: the deployed
+ * `/install` is fetched from the network at run time, so what it does is not under
+ * this repository's control. Case 4 in particular is the one the user asked for — no
+ * source reachable means STOP, and the installed version keeps working.
+ */
+describe('routing the update by connectivity, then by throughput', () => {
+  /** The exact command `sourceReachable` runs, so `fakeRunner` can answer per host. */
+  const probeKey = (base: string) =>
+    `curl -sS -I -o ${nullDevice()} -w %{http_code} --connect-timeout ${CONNECT_TIMEOUT}` +
+    ` --max-time ${PROBE_TIMEOUT} ${base}`
+
+  /** The exact command `measureSpeed` runs, per host. */
+  const sampleKey = (base: string) =>
+    `curl -fsSL -r 0-${MEASURE_BYTES - 1} --connect-timeout ${CONNECT_TIMEOUT} --max-time ${MEASURE_TIMEOUT}` +
+    ` -o ${nullDevice()} -w %{speed_download} ${base}/download/0.6.1/qialike-linux-x64.tar.gz`
+
+  test('any answer counts as reachable; only curl\'s `000` counts as down', () => {
+    // Connectivity is "did the host reply", not "did it like the path": a 404 from a
+    // live host is reachable, and that is what keeps an unpublished asset from being
+    // misread as a network outage.
+    const ok = fakeRunner({ [probeKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '404' } })
+    expect(sourceReachable({ base: DEFAULT_RELEASES_URL }, { run: ok.run })).toBe(true)
+
+    const down = fakeRunner({ [probeKey(DEFAULT_RELEASES_URL)]: { status: 7, stdout: '000' } })
+    expect(sourceReachable({ base: DEFAULT_RELEASES_URL }, { run: down.run })).toBe(false)
+
+    // An answer the probe could not read means the PROBE failed, not the host. Guessing
+    // "down" would stop an update that might have worked, so it counts as reachable.
+    const mute = fakeRunner({ [probeKey(DEFAULT_RELEASES_URL)]: { status: 1 } })
+    expect(sourceReachable({ base: DEFAULT_RELEASES_URL }, { run: mute.run })).toBe(true)
+  })
+
+  test('both reachable: the faster one is pinned', () => {
+    const { run } = fakeRunner({
+      [probeKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '200' },
+      [probeKey(MIRROR_RELEASES_URL)]: { status: 0, stdout: '200' },
+      [sampleKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '12000.000' },
+      [sampleKey(MIRROR_RELEASES_URL)]: { status: 0, stdout: '640000.000' },
+    })
+    const route = routeUpgrade(RELEASE_SOURCES, '0.6.1', { target: 'linux-x64', run })
+    expect(route).toMatchObject({ kind: 'pinned', source: { base: MIRROR_RELEASES_URL } })
+  })
+
+  test('one reachable: it is pinned, and nothing is sampled', () => {
+    const { run, calls } = fakeRunner({
+      [probeKey(DEFAULT_RELEASES_URL)]: { status: 7, stdout: '000' },
+      [probeKey(MIRROR_RELEASES_URL)]: { status: 0, stdout: '200' },
+    })
+    const route = routeUpgrade(RELEASE_SOURCES, '0.6.1', { target: 'linux-x64', run })
+    // Case 1 (mirror only). Pinning it is what makes the choice the updater's own;
+    // measuring the one candidate could not change anything.
+    expect(route).toMatchObject({ kind: 'pinned', source: { base: MIRROR_RELEASES_URL } })
+    expect(calls.some((call) => call.args.includes('%{speed_download}'))).toBe(false)
+  })
+
+  test('none reachable: unreachable, and no installer is spawned at all', () => {
+    const dir = join(tempDir('qialike-upg-'), '.dsh', 'bin')
+    spawnSync('mkdir', ['-p', dir])
+    writeFileSync(join(dir, 'qialike'), '#!/bin/sh\n')
+
+    const { run, calls } = fakeRunner({
+      'bash --version': { status: 0 },
+      'curl -fsSL https://install.test/install': { status: 0, stdout: 'script\n' },
+      [probeKey(DEFAULT_RELEASES_URL)]: { status: 7, stdout: '000' },
+      [probeKey(MIRROR_RELEASES_URL)]: { status: 7, stdout: '000' },
+    })
+
+    expect(routeUpgrade(RELEASE_SOURCES, '0.6.1', { target: 'linux-x64', run })).toEqual({ kind: 'unreachable' })
+
+    const result = upgrade('0.6.1', {
+      installUrl: 'https://install.test/install', dir, run, platform: 'linux', env: {},
+    })
+    // Case 4 is reported as its own outcome, not as a failure: the caller has to be able
+    // to keep the installed version without telling the user anything is wrong.
+    expect(result).toEqual({ ok: false, unreachable: true, error: NO_SOURCE_ERROR })
+    // And the point of deciding here rather than in the installer: bash is never started.
+    expect(calls.filter((call) => call.cmd === 'bash' && call.args.length === 0)).toEqual([])
+  })
+
+  test('an installer that decides case 4 itself is not reported as a failure', () => {
+    // The deployed script makes the same decision one layer down, so the status it
+    // exits with has to survive the trip: a pinned attempt that reaches nobody is a
+    // reason to keep the version, not to print "automatic update failed".
+    const dir = join(tempDir('qialike-upg-'), '.dsh', 'bin')
+    spawnSync('mkdir', ['-p', dir])
+    writeFileSync(join(dir, 'qialike'), '#!/bin/sh\n')
+
+    const { run } = fakeRunner({
+      'bash --version': { status: 0 },
+      'curl -fsSL https://install.test/install': { status: 0, stdout: 'script\n' },
+      'curl -sS': { status: 0, stdout: '200' },
+      [probeKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '200' },
+      [probeKey(MIRROR_RELEASES_URL)]: { status: 7, stdout: '000' },
+      'bash ': { status: EXIT_NO_SOURCE, stderr: 'qialike: no release source is reachable\n' },
+    })
+
+    const result = upgrade('0.6.1', {
+      installUrl: 'https://install.test/install', dir, run, platform: 'linux', env: {},
+    })
+    expect(result).toEqual({ ok: false, unreachable: true, error: NO_SOURCE_ERROR })
+    // The status the installer used is the one this side compares against, so the two
+    // files cannot drift apart.
+    expect(EXIT_NO_SOURCE).toBe(3)
+  })
+
+  test('QIALIKE_INSTALL_MEASURE=0 still stops when nothing is reachable', () => {
+    // The escape hatch turns the COMPARISON off, not the connectivity question: with no
+    // host answering there is still nothing to attempt.
+    const { run } = fakeRunner({
+      [probeKey(DEFAULT_RELEASES_URL)]: { status: 7, stdout: '000' },
+      [probeKey(MIRROR_RELEASES_URL)]: { status: 7, stdout: '000' },
+    })
+    expect(routeUpgrade(RELEASE_SOURCES, '0.6.1', { measure: false, target: 'linux-x64', run }))
+      .toEqual({ kind: 'unreachable' })
+
+    // ...and with a host up it makes no choice of its own.
+    const up = fakeRunner({ [probeKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '200' } })
+    expect(routeUpgrade(RELEASE_SOURCES, '0.6.1', { measure: false, target: 'linux-x64', run: up.run }))
+      .toEqual({ kind: 'unpinned' })
   })
 })

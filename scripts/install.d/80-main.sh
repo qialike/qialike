@@ -39,7 +39,7 @@ main() {
       fi
     done
     if (( SOURCE_MEASURE == 1 )); then
-      say "          source    the faster of the above (up to ${MEASURE_BYTES} B each); --source github|gitcode pins one"
+      say "          policy    github.com, else gitcode.com, else the faster of the two (sampled, up to ${MEASURE_BYTES} B); neither reachable = stop, keep what is installed"
     fi
     say "          install   $INSTALL_DIR/$BIN"
     if [[ "$NO_MODIFY_PATH" == true ]]; then
@@ -50,16 +50,14 @@ main() {
     return 0
   fi
 
-  # NOT `tag=$(…)`: the resolve records which source answered in globals, and a
-  # command substitution would throw that away (see 30-version.sh).
-  qialike_resolve_into_globals "$asset"
+  # NOT `tag=$(…)`: the decision records which source answered in globals, and a
+  # command substitution would throw that away (see 30-version.sh). It also applies
+  # the four-case source policy — including case 4, which exits here with nothing
+  # downloaded and nothing written — and, in case 3, samples the sources and moves
+  # the download to the faster one. The tag is fixed before that sampling, so the
+  # comparison can only reorder the download, never change the version installed.
+  qialike_decide_source "$asset"
   tag=$RESOLVED_TAG
-
-  # Reachability decided which source could NAME the release; the body is a separate
-  # question, so with more than one source the real asset is sampled and the fastest
-  # one wins (see 40-fetch.sh). This can only reorder the download — the tag is
-  # already fixed, so a slow primary cannot cost anyone a version.
-  qialike_choose_source "$tag" "$asset"
 
   QIALIKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/qialike-install.XXXXXX") || die "could not create a temporary directory"
   # `qialike_cleanup` reads a global rather than a local: the trap fires after

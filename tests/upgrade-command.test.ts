@@ -359,3 +359,52 @@ describe('a newer release is announced in the shape this copy can act on', () =>
     expect(windows.out).toEqual([])
   })
 })
+
+/**
+ * Case 4 of the source policy on the CLI-startup path — the shape the automatic check
+ * runs on Linux and macOS, and the one the user asked for: when neither host answers,
+ * the update STOPS and the installed version stays.
+ *
+ * A refused port is used rather than a fixture: it fails instantly (measured: curl
+ * prints `000` and exits 7 in ~0 ms), so the case costs no waiting and needs no host.
+ */
+describe('nobody reachable: the update stops and the installed version stays', () => {
+  const DEAD = { QIALIKE_INSTALL_BASE_URL: 'http://127.0.0.1:1/releases' } as NodeJS.ProcessEnv
+
+  test('--auto stays silent and exits 0: there is nothing for the user to do', () => {
+    // The startup check runs in the background of somebody's session. Reporting a
+    // network outage there would be noise on every launch, and the installed copy is
+    // working — so the human channel carries nothing at all, and the machine-readable
+    // line still records which case it was.
+    const { out, err, sink } = io('0.6.2')
+    expect(runUpgrade(['--auto', '--json'], { ...sink, env: DEAD })).toBe(0)
+    expect(out).toHaveLength(1)
+    expect(JSON.parse(out[0] as string)).toEqual({
+      decision: 'unknown',
+      reason: 'no-source',
+      installed: '0.6.2',
+      newest: null,
+      relation: null,
+      canSelfInstall: false,
+      downloads: ['http://127.0.0.1:1/releases'],
+    })
+    expect(err).toEqual([])
+
+    // Without `--json` the run says NOTHING: no notice, no "automatic update failed",
+    // and no hint of an install that never happened.
+    const quiet = io('0.6.2')
+    expect(runUpgrade(['--auto'], { ...quiet.sink, env: DEAD })).toBe(0)
+    expect(quiet.out).toEqual([])
+    expect(quiet.err).toEqual([])
+  })
+
+  test('--check names the case instead of blaming an unnamed network', () => {
+    const { out, err, sink } = io('0.6.2')
+    expect(runUpgrade(['--check'], { ...sink, env: DEAD })).toBe(1)
+    const told = err.join('\n')
+    expect(told).toContain('no release source is reachable — keeping the installed version')
+    // Still actionable: a version the user names can be checked offline.
+    expect(told).toContain('qialike upgrade --check <version>')
+    expect(out).toEqual([])
+  })
+})
