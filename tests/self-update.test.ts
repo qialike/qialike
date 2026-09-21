@@ -25,11 +25,15 @@ import {
   DEFAULT_RELEASES_URL,
   detectTarget,
   downloadUrls,
+  fastestSource,
   installDir,
   installMethod,
   installedVersion,
   latestVersion,
   lockPath,
+  MEASURE_BYTES,
+  MEASURE_TIMEOUT,
+  measureSpeed,
   MIRROR_RELEASES_URL,
   nullDevice,
   parseTagFromJson,
@@ -432,5 +436,141 @@ describe('upgrading runs the installer', () => {
       'bash ': { status: 0 },
     })
     expect(upgrade('0.6.1', { dir, lock, run, platform: 'linux' }).error).toBe('another upgrade is already running')
+  })
+})
+
+describe('choosing the host by throughput', () => {
+  /** The exact command `measureSpeed` runs, so `fakeRunner` can answer per host. */
+  const measureKey = (base: string) =>
+    `curl -fsSL -r 0-${MEASURE_BYTES - 1} --connect-timeout ${CONNECT_TIMEOUT} --max-time ${MEASURE_TIMEOUT}` +
+    ` -o ${nullDevice()} -w %{speed_download} ${base}/download/0.6.1/qialike-linux-x64.tar.gz`
+
+  test('a source is measured by what it can actually deliver', () => {
+    // Reachability says nothing about a 55 MB body: GitHub answers the small redirect
+    // from github.com and serves the body from release-assets.githubusercontent.com.
+    const { run, calls } = fakeRunner({ [measureKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '437207.000' } })
+    expect(measureSpeed({ base: DEFAULT_RELEASES_URL }, '0.6.1', { target: 'linux-x64', run })).toBe(437207)
+    // A range request: a 256 KB sample, not the whole release.
+    expect(calls[0]?.args).toContain(`0-${MEASURE_BYTES - 1}`)
+    expect(calls[0]?.args).toContain(MEASURE_TIMEOUT)
+  })
+
+  test('a source that cannot serve the tag is not a candidate', () => {
+    // A 404 (a mirror behind the tag) or a dead host: curl exits non-zero AND reports
+    // zero bytes, and that is what disqualifies it.
+    const missing = fakeRunner({ curl: { status: 22, stdout: '0.000' } })
+    expect(measureSpeed({ base: MIRROR_RELEASES_URL }, '0.6.1', { target: 'linux-x64', run: missing.run })).toBeUndefined()
+
+    const dead = fakeRunner({ curl: { status: 7, stdout: '' } })
+    expect(measureSpeed({ base: MIRROR_RELEASES_URL }, '0.6.1', { target: 'linux-x64', run: dead.run })).toBeUndefined()
+  })
+
+  test('an aborted sample still counts: the slow source is the one that times out', () => {
+    // Measured with the real curl: a trickling source answers `200 131072 16380` and
+    // exits 28. Reading the exit status would throw away exactly the measurement that
+    // matters, so only the number is read.
+    const { run } = fakeRunner({ curl: { status: 28, stdout: '16380.000' } })
+    expect(measureSpeed({ base: DEFAULT_RELEASES_URL }, '0.6.1', { target: 'linux-x64', run })).toBe(16380)
+  })
+
+  test('the fastest source wins, and ties keep the earlier one', () => {
+    const { run } = fakeRunner({
+      [measureKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '12000.000' },
+      [measureKey(MIRROR_RELEASES_URL)]: { status: 0, stdout: '890000.000' },
+    })
+    expect(fastestSource(RELEASE_SOURCES, '0.6.1', { target: 'linux-x64', run })?.base).toBe(MIRROR_RELEASES_URL)
+
+    const tied = fakeRunner({ curl: { status: 0, stdout: '5000.000' } })
+    expect(fastestSource(RELEASE_SOURCES, '0.6.1', { target: 'linux-x64', run: tied.run })?.base).toBe(DEFAULT_RELEASES_URL)
+  })
+
+  test('nothing to compare means no choice is made', () => {
+    const { run, calls } = fakeRunner({ curl: { status: 0, stdout: '900000.000' } })
+    expect(fastestSource([RELEASE_SOURCES[0] as { base: string }], '0.6.1', { target: 'linux-x64', run })).toBeUndefined()
+    expect(calls).toEqual([])
+
+    // Every source 404s this tag (or none answers): the probe's order stands.
+    const none = fakeRunner({ curl: { status: 22, stdout: '0.000' } })
+    expect(fastestSource(RELEASE_SOURCES, '0.6.1', { target: 'linux-x64', run: none.run })).toBeUndefined()
+  })
+
+  test('upgrade pins the measured host, and retries without it when that fails', () => {
+    const dir = join(tempDir('qialike-upg-'), '.dsh', 'bin')
+    spawnSync('mkdir', ['-p', dir])
+    writeFileSync(join(dir, 'qialike'), '#!/bin/sh\n')
+
+    // First bash attempt fails, the second succeeds — the shape of "the fast host died
+    // mid-download, fall back to the installer's own list".
+    let attempts = 0
+    const { run, calls } = fakeRunner({
+      'bash --version': { status: 0 },
+      'curl -fsSL https://install.test/install': { status: 0, stdout: 'script\n' },
+      [measureKey(DEFAULT_RELEASES_URL)]: { status: 0, stdout: '11000.000' },
+      [measureKey(MIRROR_RELEASES_URL)]: { status: 0, stdout: '900000.000' },
+      'bash ': { status: 0 },
+      [join(dir, 'qialike')]: { status: 0, stdout: 'qialike 0.6.1\n' },
+    })
+    const counting: Runner = (cmd, args, options) => {
+      // Delegate FIRST so the call (and its env) is recorded, then force the first
+      // installer attempt to fail.
+      const result = run(cmd, args, options)
+      if (cmd === 'bash' && args.length === 0) {
+        attempts += 1
+        if (attempts === 1) return { status: 1, stdout: '', stderr: 'qialike: download failed\n' }
+      }
+      return result
+    }
+
+    const result = upgrade('0.6.1', {
+      installUrl: 'https://install.test/install', dir, run: counting, platform: 'linux', env: {},
+    })
+    expect(result).toEqual({ ok: true, version: '0.6.1' })
+
+    const piped = calls.filter((call) => call.cmd === 'bash' && call.args.length === 0)
+    expect(piped).toHaveLength(2)
+    // The winner is handed over as `QIALIKE_INSTALL_BASE_URL`, which every installer
+    // version understands — including the ones deployed before the measurement existed.
+    expect(piped[0]?.env?.QIALIKE_INSTALL_BASE_URL).toBe(MIRROR_RELEASES_URL)
+    // ...and it says "do not compare again", since the comparison already happened.
+    expect(piped[0]?.env?.QIALIKE_INSTALL_MEASURE).toBe('0')
+    // The retry drops the pin so the installer's own list (and its own fallback) applies.
+    expect(piped[1]?.env?.QIALIKE_INSTALL_BASE_URL).toBeUndefined()
+  })
+
+  test('an explicit configuration is never overridden by the comparison', () => {
+    const dir = join(tempDir('qialike-upg-'), '.dsh', 'bin')
+    spawnSync('mkdir', ['-p', dir])
+    writeFileSync(join(dir, 'qialike'), '#!/bin/sh\n')
+
+    const key = `curl -fsSL -r 0-${MEASURE_BYTES - 1} --connect-timeout ${CONNECT_TIMEOUT} --max-time ${MEASURE_TIMEOUT} -o ${nullDevice()} -w %{speed_download}`
+    let measured = 0
+    const { run, calls } = fakeRunner({
+      'bash --version': { status: 0 },
+      'curl -fsSL https://install.test/install': { status: 0, stdout: 'script\n' },
+      [join(dir, 'qialike')]: { status: 0, stdout: 'qialike 0.6.1\n' },
+    })
+    const watching: Runner = (cmd, args, options) => {
+      if (cmd === 'curl' && args.join(' ').startsWith(key)) measured += 1
+      return run(cmd, args, options)
+    }
+
+    // A user-chosen host is exactly that host, and nothing is sampled.
+    upgrade('0.6.1', {
+      installUrl: 'https://install.test/install', dir, run: watching, platform: 'linux',
+      env: { QIALIKE_INSTALL_BASE_URL: 'https://mirror.test/rel' },
+    })
+    expect(measured).toBe(0)
+    const pinned = calls.find((call) => call.cmd === 'bash' && call.args.length === 0)
+    // The user's own value is forwarded untouched, and the updater does not force the
+    // installer to skip its own comparison — nothing here was decided for them.
+    expect(pinned?.env?.QIALIKE_INSTALL_BASE_URL).toBe('https://mirror.test/rel')
+    expect(pinned?.env?.QIALIKE_INSTALL_MEASURE).toBeUndefined()
+
+    // And `QIALIKE_INSTALL_MEASURE=0` is the documented way to refuse the comparison.
+    upgrade('0.6.1', {
+      installUrl: 'https://install.test/install', dir, run: watching, platform: 'linux',
+      env: { QIALIKE_INSTALL_MEASURE: '0' },
+    })
+    expect(measured).toBe(0)
   })
 })

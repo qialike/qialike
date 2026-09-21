@@ -81,6 +81,12 @@ export const DEFAULT_RELEASES_URL = 'https://github.com/qialike/qialike/releases
 /** Where the installer script is fetched from when upgrading. */
 export const DEFAULT_INSTALL_URL = 'https://qialike.com/install'
 
+/** How much of an asset a source is asked to deliver when it is being measured. */
+export const MEASURE_BYTES = 262144
+
+/** How long one source gets to deliver that sample, in seconds. */
+export const MEASURE_TIMEOUT = '8'
+
 /** The mirror used when the primary release host does not answer. */
 export const MIRROR_RELEASES_URL = 'https://gitcode.com/qialike/qialike/releases'
 
@@ -344,6 +350,77 @@ export function downloadUrls(
   return sources.map((source) => `${source.base}/download/${version}/${asset}`)
 }
 
+/**
+ * How fast one source can actually deliver this release, in bytes per second, or
+ * undefined when it cannot serve it at all.
+ *
+ * This is the same measurement the installer makes (`scripts/install.d/40-fetch.sh`),
+ * and it exists here for a reason the installer cannot cover: the updater's choice of
+ * host used to be whatever the DEPLOYED `/install` decided, so a deployed script
+ * without the measurement — which is exactly what was live when this was written —
+ * kept a throttled GitHub in the path. Measuring here makes the choice the updater's
+ * own.
+ *
+ * Reachability is a different question from throughput: GitHub answers the small
+ * `latest/download` redirect from `github.com` and serves the body from
+ * `release-assets.githubusercontent.com`, so a GitHub whose asset CDN is throttled
+ * passes every probe and then crawls.
+ *
+ * The exit status is deliberately ignored: the source that needs measuring most is the
+ * one that hits `--max-time`, and curl still prints the speed it managed. Only "not a
+ * single byte" (a dead host, or a mirror that has not caught up to this tag and 404s)
+ * means "not a candidate".
+ */
+export function measureSpeed(
+  source: ReleaseSource,
+  version: string,
+  options: { target?: string; run?: Runner } = {},
+): number | undefined {
+  const target = options.target ?? detectTarget()
+  const asset = target === undefined ? undefined : assetFor(target)
+  if (asset === undefined) return undefined
+
+  const run = options.run ?? runShell
+  const result = run('curl', [
+    '-fsSL',
+    '-r', `0-${MEASURE_BYTES - 1}`,
+    '--connect-timeout', CONNECT_TIMEOUT,
+    '--max-time', MEASURE_TIMEOUT,
+    '-o', nullDevice(),
+    '-w', '%{speed_download}',
+    `${source.base}/download/${version}/${asset}`,
+  ])
+  const speed = Number.parseFloat(result.stdout.trim())
+  if (!Number.isFinite(speed) || speed <= 0) return undefined
+  return speed
+}
+
+/**
+ * The fastest source that can serve this release, or undefined when none can.
+ *
+ * Ties keep the earlier source, so an inconclusive comparison leaves the configured
+ * order exactly as it was.
+ */
+export function fastestSource(
+  sources: readonly ReleaseSource[],
+  version: string,
+  options: { target?: string; run?: Runner } = {},
+): ReleaseSource | undefined {
+  if (sources.length < 2) return undefined
+
+  let best: ReleaseSource | undefined
+  let bestSpeed = 0
+  for (const source of sources) {
+    const speed = measureSpeed(source, version, options)
+    if (speed === undefined) continue
+    if (best === undefined || speed > bestSpeed) {
+      best = source
+      bestSpeed = speed
+    }
+  }
+  return best
+}
+
 /** The version the installed binary reports, or undefined if it will not run. */
 export function installedVersion(options: { dir?: string; run?: Runner; platform?: NodeJS.Platform } = {}): string | undefined {
   const dir = options.dir ?? installDir()
@@ -445,6 +522,8 @@ export function upgrade(
     run?: Runner
     env?: NodeJS.ProcessEnv
     platform?: NodeJS.Platform
+    /** Override the measurement decision (tests, and the env hatch it mirrors). */
+    measure?: boolean
   } = {},
 ): UpgradeResult {
   const run = options.run ?? runShell
@@ -475,9 +554,32 @@ export function upgrade(
     return { ok: false, error: `could not fetch the installer from ${url}` }
   }
 
-  const result = withUpgradeLock(lock, () =>
-    run('bash', [], { input: script.stdout, env: { ...(options.env ?? process.env), QIALIKE_VERSION: target } }),
-  )
+  const env = options.env ?? process.env
+  // Which host to hand the installer, decided HERE rather than left to the deployed
+  // script (`measureSpeed` explains why). Only for the built-in pair: an explicit
+  // `QIALIKE_INSTALL_BASE_URL` or `QIALIKE_INSTALL_SOURCES` is the user's call, and
+  // `QIALIKE_INSTALL_MEASURE=0` is the documented way to refuse the comparison.
+  const explicit = env.QIALIKE_INSTALL_BASE_URL !== undefined || env.QIALIKE_INSTALL_SOURCES !== undefined
+  const measure = options.measure ?? env.QIALIKE_INSTALL_MEASURE !== '0'
+  const sources = releaseSources(env)
+  const pinned = measure && !explicit ? fastestSource(sources, target, { run }) : undefined
+
+  // The winner goes in as `QIALIKE_INSTALL_BASE_URL`, which EVERY installer version
+  // understands — including the ones deployed before the measurement existed. The
+  // price is that a pinned host has no fallback, so a failed attempt is retried once
+  // without the pin, and that retry gets the installer's own list (and its own
+  // comparison, if it has one). Both attempts are inside the lock: another upgrade
+  // must not slip between them.
+  const result = withUpgradeLock(lock, () => {
+    const attempt = (extra: NodeJS.ProcessEnv) =>
+      run('bash', [], { input: script.stdout, env: { ...env, QIALIKE_VERSION: target, ...extra } })
+
+    const first = pinned === undefined
+      ? attempt({})
+      : attempt({ QIALIKE_INSTALL_BASE_URL: pinned.base, QIALIKE_INSTALL_MEASURE: '0' })
+    if (first.status === 0 || pinned === undefined) return first
+    return attempt({})
+  })
   if (result === undefined) return { ok: false, error: 'another upgrade is already running' }
   if (result.status !== 0) {
     const detail = result.stderr.trim().split('\n').pop() ?? `exit ${result.status}`
