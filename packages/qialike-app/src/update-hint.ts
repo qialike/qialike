@@ -124,14 +124,16 @@ export function isNewerAvailable(report: UpdateReport): boolean {
 /**
  * The one-line hint shown while a newer release is waiting.
  *
- * Kept short on purpose: it is painted in the hero's row under the card and in the
- * docked status bar, both of which truncate, so the LEADING part has to be the fact
- * ("a newer release exists") and the tail the way to act on it. The URLs are NOT
- * here — two 85-character links cannot fit a status line; `/upgrade` puts them in the
- * transcript instead (see {@link updateNoticeLines}).
+ * Kept short on purpose: it is painted in the hero's row under the card and at the RIGHT
+ * of the docked status bar, both of which truncate, so the LEADING part has to be the
+ * fact ("a newer release exists") and the tail the way to act on it. The installed
+ * version is deliberately not named — the user asked for this wording, and the line has
+ * to survive a narrow terminal — and the URLs are NOT here: two 85-character links
+ * cannot fit a status line, so `/upgrade` puts them in the transcript instead (see
+ * {@link updateNoticeLines}).
  */
 export function updateHintText(offer: UpdateOffer): string {
-  return `⬆ qialike ${offer.version} available (you have ${offer.installed}) — /upgrade for the download links`
+  return `Update available: ${offer.version} - /upgrade for links`
 }
 
 /**

@@ -27,22 +27,41 @@ const { App, store, tui } = await import('./src/index.tsx')
 const conv = await import('./src/panels/conversation.tsx')
 conv.apply({ get: (key) => (key === 'tuiStore' ? store : key === 'tui' ? tui : undefined) })
 
+// Frame size is MUTABLE, and the fake stdout is the source of truth: Ink lays out from
+// `stdout.columns`, so `store.setSize` alone changes the model but not the frame — a
+// "narrow terminal" check written that way re-renders the same 100 columns and proves
+// nothing. `resize()` drives both, and `capture()` reads the live dimensions.
 const W = 100
 const H = 30
+let frameWidth = W
+let frameHeight = H
 const writes = []
 class FakeStdout extends Writable {
   constructor() { super(); this.columns = W; this.rows = H; this.isTTY = true }
   _write(chunk, _encoding, callback) { writes.push(chunk.toString('utf8')); callback() }
+  resize(columns, rows) {
+    this.columns = columns
+    this.rows = rows
+    this.emit('resize')
+  }
 }
 
 const GITHUB = 'https://github.com/qialike/qialike/releases/download/0.6.3/qialike-windows-x64.zip'
 const GITCODE = 'https://gitcode.com/qialike/qialike/releases/download/0.6.3/qialike-windows-x64.zip'
 
 store.setSize(W, H)
+const stdout = new FakeStdout()
 const app = render(
   React.createElement(App, { onSubmit: () => {}, onCancel: () => {}, onConnect: () => {} }),
-  { stdout: new FakeStdout(), stdin: process.stdin, stderr: process.stderr, patchConsole: false },
+  { stdout, stdin: process.stdin, stderr: process.stderr, patchConsole: false },
 )
+/** Resize BOTH the terminal Ink draws into and the model the panel lays out from. */
+function resize(columns, rows) {
+  frameWidth = columns
+  frameHeight = rows
+  stdout.resize(columns, rows)
+  store.setSize(columns, rows)
+}
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 /** Matching form for a flattened frame: padding and box glyphs removed. */
 const flatOf = (screen) => screen.join('').replace(/\s+/g, '').replace(/[│─╭╮╰╯]/g, '')
@@ -51,10 +70,10 @@ await pause(150)
 
 // Replay every write so far onto a fresh grid, so each capture is the CURRENT screen.
 function capture() {
-  const cells = Array.from({ length: H }, () => Array(W).fill(' '))
+  const cells = Array.from({ length: frameHeight }, () => Array(frameWidth).fill(' '))
   let row = 0
   let col = 0
-  const clearRow = (target) => { for (let i = 0; i < W; i += 1) cells[target][i] = ' ' }
+  const clearRow = (target) => { for (let i = 0; i < frameWidth; i += 1) cells[target][i] = ' ' }
   for (const chunk of writes) {
     let i = 0
     while (i < chunk.length) {
@@ -69,14 +88,14 @@ function capture() {
           // Ink positions with cursorTo/cursorMove, which are the ABSOLUTE forms (CHA
           // `\x1b[<n>G`, VPA `\x1b[<n>d`) as often as the relative ones — skipping them
           // makes the replay drift and every check below lie.
-          else if (fin === 'G') col = Math.min(W - 1, (parseInt(param, 10) || 1) - 1)
-          else if (fin === 'd') row = Math.min(H - 1, (parseInt(param, 10) || 1) - 1)
+          else if (fin === 'G') col = Math.min(frameWidth - 1, (parseInt(param, 10) || 1) - 1)
+          else if (fin === 'd') row = Math.min(frameHeight - 1, (parseInt(param, 10) || 1) - 1)
           else if (fin === 'A') row = Math.max(0, row - (parseInt(param, 10) || 1))
-          else if (fin === 'B') row = Math.min(H - 1, row + (parseInt(param, 10) || 1))
-          else if (fin === 'C') col = Math.min(W - 1, col + (parseInt(param, 10) || 1))
+          else if (fin === 'B') row = Math.min(frameHeight - 1, row + (parseInt(param, 10) || 1))
+          else if (fin === 'C') col = Math.min(frameWidth - 1, col + (parseInt(param, 10) || 1))
           else if (fin === 'D') col = Math.max(0, col - (parseInt(param, 10) || 1))
           else if (fin === 'K') { if (param === '2' || param === '') clearRow(row) }
-          else if (fin === 'J') { if (param === '0' || param === '') { for (let y = row; y < H; y += 1) clearRow(y) } else { for (let y = 0; y < H; y += 1) clearRow(y) } }
+          else if (fin === 'J') { if (param === '0' || param === '') { for (let y = row; y < frameHeight; y += 1) clearRow(y) } else { for (let y = 0; y < frameHeight; y += 1) clearRow(y) } }
           i = j + 1
           continue
         }
@@ -84,9 +103,9 @@ function capture() {
         continue
       }
       if (ch === '\r') { col = 0; i += 1; continue }
-      if (ch === '\n') { row = Math.min(H - 1, row + 1); col = 0; i += 1; continue }
+      if (ch === '\n') { row = Math.min(frameHeight - 1, row + 1); col = 0; i += 1; continue }
       if (ch === '\b') { col = Math.max(0, col - 1); i += 1; continue }
-      if (col < W) cells[row][col] = ch
+      if (col < frameWidth) cells[row][col] = ch
       col += 1
       i += 1
     }
@@ -115,7 +134,7 @@ const hero = capture()
 console.log('\n=== hero, hint up ===')
 for (const [index, line] of hero.screen.entries()) if (line.trim() !== '') console.log(`${String(index + 1).padStart(2)} | ${line}`)
 
-const HINT = '⬆ qialike 0.6.3 available (you have 0.6.2) — /upgrade for the download links'
+const HINT = 'Update available: 0.6.3 - /upgrade for links'
 if (!hero.flat.includes(need(HINT))) {
   console.error('\nrepro-update-hint: FAIL — the hero frame does not carry the hint')
   process.exit(1)
@@ -131,10 +150,13 @@ if (hero.screen.filter((line) => line.trim() !== '').length > 12) {
   process.exit(1)
 }
 
-// ── 2. CONVERSATION: the same hint, in the docked status bar ───────────────────
+// ── 2. CONVERSATION: the same hint, at the RIGHT of the docked status bar ──────
 // `hero` is about SESSION state, so leaving it takes a session; the read-only phase is
-// the documented way to be docked without one.
+// the documented way to be docked without one. Stats are injected on purpose: the
+// placement to verify is "immediately LEFT of the stats, both on the right", and an
+// empty session paints no stats at all.
 store.beginReadOnlySession('repro-session')
+store.setStats({ turns: 3, steps: 7, llmMs: 1200, toolMs: 300, inputTokens: 4200, outputTokens: 900 })
 await pause(300)
 const conversation = capture()
 console.log('\n=== conversation, hint in the status bar ===')
@@ -144,18 +166,65 @@ if (store.hero) {
   console.error('\nrepro-update-hint: FAIL — expected the docked conversation view')
   process.exit(1)
 }
-if (!conversation.flat.includes(need(HINT))) {
+// The leading FACT has to be visible even when the stats share the bar: the hint is
+// what yields space (`flexShrink={1}`), so it can be truncated but never absent.
+if (!conversation.flat.includes(need('Update available: 0.6.3'))) {
   console.error('\nrepro-update-hint: FAIL — the docked frame does not carry the hint')
   process.exit(1)
 }
 // The hint lives INSIDE the bottom status bar (the last painted box), not in a
 // transcript row that would slide away as the conversation grows.
-const hintRow = conversation.rows.findIndex((row) => flatOf([row]).includes(need('qialike0.6.3available')))
+const hintRow = conversation.rows.findIndex((row) => flatOf([row]).includes(need('Updateavailable:0.6.3')))
 const barTop = conversation.rows.findIndex((row) => row.includes('╭'))
 if (hintRow < 0 || barTop < 0 || hintRow <= barTop) {
   console.error(`\nrepro-update-hint: FAIL — the hint is not inside the status bar (hintRow=${hintRow}, barTop=${barTop})`)
   process.exit(1)
 }
+// The placement the user asked for: the hint is on the RIGHT — after the busy
+// indicator, and immediately LEFT of the stats, which keep the row's right edge.
+const bar = (conversation.rows[hintRow] ?? '').replace(/[│|]\s*$/, '')
+const at = (needle) => bar.indexOf(needle)
+const spinnerAt = at('⠿')
+const hintAt = at('Update available:')
+const stepsAt = at('7 steps')
+const tokAt = at('4.2k')
+// Right of the busy indicator, left of the stats: the placement the user asked for.
+if (!(spinnerAt >= 0 && hintAt > spinnerAt && stepsAt > hintAt && tokAt > stepsAt)) {
+  console.error(`\nrepro-update-hint: FAIL — wrong order in the status bar: spinner=${spinnerAt} hint=${hintAt} steps=${stepsAt} tok=${tokAt}`)
+  process.exit(1)
+}
+// The hint must not touch the busy indicator (the spacer can collapse on a full row).
+if (bar.slice(spinnerAt, hintAt).endsWith('Idle') && !/\s$/.test(bar.slice(0, hintAt))) {
+  console.error(`\nrepro-update-hint: FAIL — the hint butts against the busy indicator: [${bar}]`)
+  process.exit(1)
+}
+// ...and the stats still END the row: the right edge was not given away to the hint.
+if (!bar.replace(/\s+$/, '').endsWith('tok out')) {
+  console.error(`\nrepro-update-hint: FAIL — the stats no longer end the status bar: [${bar}]`)
+  process.exit(1)
+}
+// A narrow terminal must truncate the HINT, never push the stats off.
+resize(64, H)
+await pause(300)
+const narrow = capture()
+const narrowBar = (narrow.rows.find((row) => row.includes('tok out')) ?? '').trimEnd()
+if (!narrow.flat.includes(need('tokout'))) {
+  console.error('\nrepro-update-hint: FAIL — a 64-column status bar lost the stats')
+  process.exit(1)
+}
+console.log(`\n=== narrow (64 cols) status bar ===\n${narrowBar}`)
+// Wide enough for the hint AND the stats: now the full wording has to be on screen,
+// which is what pins the text itself (at 100 columns it is clipped by design).
+resize(140, H)
+await pause(300)
+const wide = capture()
+if (!wide.flat.includes(need(HINT))) {
+  console.error('\nrepro-update-hint: FAIL — a 140-column status bar does not show the whole hint')
+  process.exit(1)
+}
+console.log(`\n=== 140 cols (whole hint) ===\n${(wide.rows.find((row) => row.includes('tok out')) ?? '').trimEnd()}`)
+resize(W, H)
+await pause(200)
 
 app.unmount()
 console.log('\nrepro-update-hint: PASS — the hint lands in the hero row and in the docked status bar,')

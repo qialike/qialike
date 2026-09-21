@@ -3427,22 +3427,23 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
                 // the user must be able to read why the session did not open.
                 ? <Text color={theme.error} wrap="truncate">{store.loadError!}</Text>
                 : <BusyIndicator animate={store.running} paused={store.paused} />}
-        {/* The update hint (Windows): a newer release is waiting and this copy cannot
-            install it by itself, so the user has to fetch it. It sits right after the
-            busy/status slot — before the flex spacer — so the stats stay pinned to the
-            right edge and a narrow terminal truncates the HINT rather than pushing the
-            stats off. Absent on every non-update day, which is why it cannot disturb
-            the docked layout. */}
-        {store.updateHint !== undefined && (
-          <Box flexShrink={0} marginLeft={1}>
-            <Text color={theme.warning} wrap="truncate">{store.updateHint}</Text>
-          </Box>
-        )}
         {/* The steps/turns · tokens stats are pinned to the RIGHT edge of the
             status bar regardless of the busy indicator's width: an explicit
             flex spacer pushes the stats group flush right, and the group
             truncates instead of wrapping if the terminal is narrow. */}
         <Box flexGrow={1} />
+        {/* The update hint (Windows): a newer release is waiting and this copy cannot
+            install it by itself, so the user has to fetch it. It sits AFTER the spacer —
+            on the RIGHT of the status bar, immediately left of the stats — which is the
+            placement the user asked for. `flexShrink={1}` is load bearing there: when the
+            row runs out of room the HINT is what truncates, while the stats keep their
+            `flexShrink={0}` and stay flush right. Absent on every non-update day, so it
+            cannot disturb the docked layout. */}
+        {store.updateHint !== undefined && (
+          <Box flexShrink={1} marginLeft={1} marginRight={1}>
+            <Text color={theme.warning} wrap="truncate">{store.updateHint}</Text>
+          </Box>
+        )}
         {statsParts.length > 0 && (
           <Box flexShrink={0}>
             {/* Two-tone stat text: the NUMBERS use the regular text color,

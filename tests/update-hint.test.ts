@@ -112,7 +112,7 @@ describe('reading the launcher report', () => {
 describe('what the user is shown', () => {
   test('the hint leads with the fact and names the way to get the links', () => {
     const hint = updateHintText({ installed: '0.6.2', version: '0.6.3', urls: [GITHUB, GITCODE] })
-    expect(hint).toBe('⬆ qialike 0.6.3 available (you have 0.6.2) — /upgrade for the download links')
+    expect(hint).toBe('Update available: 0.6.3 - /upgrade for links')
     // A status line is one row in a bordered bar: the two 85-character URLs cannot be
     // in it, or the fact itself would be the part that gets truncated away.
     expect(hint.length).toBeLessThan(90)
