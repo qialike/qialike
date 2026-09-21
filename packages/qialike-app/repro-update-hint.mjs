@@ -5,8 +5,9 @@
 //
 //  - on the HERO (blank session, startup) the row under the card is the only status
 //    line there is, and the hero is chrome-free by design (no status bar at all);
-//  - in a CONVERSATION it has to sit in the docked status bar, next to the busy
-//    indicator and before the stats, without pushing the stats off the right edge.
+//  - in a CONVERSATION it has to sit in the docked status bar, after the busy
+//    indicator and holding the right edge; while it is up it REPLACES the stats
+//    group instead of sharing the row with it (side by side, the two did not fit).
 //
 // It is self-checking: it renders through the real App/store, reconstructs each screen
 // from the ANSI stream, and fails if the hint is missing, appears on the wrong row, or
@@ -153,8 +154,8 @@ if (hero.screen.filter((line) => line.trim() !== '').length > 12) {
 // ── 2. CONVERSATION: the same hint, at the RIGHT of the docked status bar ──────
 // `hero` is about SESSION state, so leaving it takes a session; the read-only phase is
 // the documented way to be docked without one. Stats are injected on purpose: the
-// placement to verify is "immediately LEFT of the stats, both on the right", and an
-// empty session paints no stats at all.
+// placement to verify is that the hint takes the row's right edge AND covers those
+// figures, and an empty session paints no stats that could be covered at all.
 store.beginReadOnlySession('repro-session')
 store.setStats({ turns: 3, steps: 7, llmMs: 1200, toolMs: 300, inputTokens: 4200, outputTokens: 900 })
 await pause(300)
@@ -166,7 +167,7 @@ if (store.hero) {
   console.error('\nrepro-update-hint: FAIL — expected the docked conversation view')
   process.exit(1)
 }
-// The leading FACT has to be visible even when the stats share the bar: the hint is
+// The leading FACT has to be visible: the hint owns the row's right side, and it is
 // what yields space (`flexShrink={1}`), so it can be truncated but never absent.
 if (!conversation.flat.includes(need('Update available: 0.6.3'))) {
   console.error('\nrepro-update-hint: FAIL — the docked frame does not carry the hint')
@@ -181,50 +182,59 @@ if (hintRow < 0 || barTop < 0 || hintRow <= barTop) {
   process.exit(1)
 }
 // The placement the user asked for: the hint is on the RIGHT — after the busy
-// indicator, and immediately LEFT of the stats, which keep the row's right edge.
-const bar = (conversation.rows[hintRow] ?? '').replace(/[│|]\s*$/, '')
+// indicator, holding the row's right edge, because the stats it covers are not painted.
+const barRow = conversation.rows[hintRow] ?? ''
+const bar = barRow.replace(/[│|]\s*$/, '')
+// `flat` is the whitespace-stripped form, which is what text assertions must use.
+const flat = flatOf([barRow])
 const at = (needle) => bar.indexOf(needle)
 const spinnerAt = at('⠿')
 const hintAt = at('Update available:')
-const stepsAt = at('7 steps')
-const tokAt = at('4.2k')
-// Right of the busy indicator, left of the stats: the placement the user asked for.
-if (!(spinnerAt >= 0 && hintAt > spinnerAt && stepsAt > hintAt && tokAt > stepsAt)) {
-  console.error(`\nrepro-update-hint: FAIL — wrong order in the status bar: spinner=${spinnerAt} hint=${hintAt} steps=${stepsAt} tok=${tokAt}`)
+// Right of the busy indicator, and clear of it (the spacer can collapse on a full row).
+if (!(spinnerAt >= 0 && hintAt > spinnerAt)) {
+  console.error(`\nrepro-update-hint: FAIL — the hint is not on the right of the status bar: [${bar}]`)
   process.exit(1)
 }
-// The hint must not touch the busy indicator (the spacer can collapse on a full row).
-if (bar.slice(spinnerAt, hintAt).endsWith('Idle') && !/\s$/.test(bar.slice(0, hintAt))) {
+if (!/\s$/.test(bar.slice(0, hintAt))) {
   console.error(`\nrepro-update-hint: FAIL — the hint butts against the busy indicator: [${bar}]`)
   process.exit(1)
 }
-// ...and the stats still END the row: the right edge was not given away to the hint.
-if (!bar.replace(/\s+$/, '').endsWith('tok out')) {
-  console.error(`\nrepro-update-hint: FAIL — the stats no longer end the status bar: [${bar}]`)
+// It REPLACES the stats: the figures must be gone while the hint is up, and the hint
+// itself must be whole (sharing the row is what used to clip it to `… for lin…`).
+if (!flat.includes(need(HINT))) {
+  console.error(`\nrepro-update-hint: FAIL — the status bar does not carry the whole hint: [${bar}]`)
   process.exit(1)
 }
-// A narrow terminal must truncate the HINT, never push the stats off.
+if (flat.includes(need('tok out')) || flat.includes(need('steps'))) {
+  console.error(`\nrepro-update-hint: FAIL — the stats were not covered by the hint: [${bar}]`)
+  process.exit(1)
+}
+// The hint ends the row: it owns the right edge while it is up.
+if (!flat.endsWith(need('/upgrade for links'))) {
+  console.error(`\nrepro-update-hint: FAIL — the hint does not end the status bar: [${bar}]`)
+  process.exit(1)
+}
+console.log(`\n=== docked status bar (hint covers the stats) ===\n${bar}`)
+// A narrow terminal must still show the whole hint (nothing competes for the slot now).
 resize(64, H)
 await pause(300)
 const narrow = capture()
-const narrowBar = (narrow.rows.find((row) => row.includes('tok out')) ?? '').trimEnd()
-if (!narrow.flat.includes(need('tokout'))) {
-  console.error('\nrepro-update-hint: FAIL — a 64-column status bar lost the stats')
+if (!narrow.flat.includes(need(HINT))) {
+  console.error('\nrepro-update-hint: FAIL — a 64-column status bar clipped the hint')
   process.exit(1)
 }
-console.log(`\n=== narrow (64 cols) status bar ===\n${narrowBar}`)
-// Wide enough for the hint AND the stats: now the full wording has to be on screen,
-// which is what pins the text itself (at 100 columns it is clipped by design).
-resize(140, H)
-await pause(300)
-const wide = capture()
-if (!wide.flat.includes(need(HINT))) {
-  console.error('\nrepro-update-hint: FAIL — a 140-column status bar does not show the whole hint')
-  process.exit(1)
-}
-console.log(`\n=== 140 cols (whole hint) ===\n${(wide.rows.find((row) => row.includes('tok out')) ?? '').trimEnd()}`)
+console.log(`\n=== 64 cols ===\n${(narrow.rows.find((row) => row.includes('/upgrade for links')) ?? '').trimEnd()}`)
+// Clearing the hint gives the slot back: that is the other half of "covers".
 resize(W, H)
 await pause(200)
+store.clearUpdateHint()
+await pause(300)
+const restored = capture()
+if (!restored.flat.includes(need('tokout')) || restored.flat.includes(need('Update available:'))) {
+  console.error('\nrepro-update-hint: FAIL — clearing the hint did not restore the stats')
+  process.exit(1)
+}
+console.log(`\n=== 100 cols, hint cleared (stats back) ===\n${(restored.rows.find((row) => row.includes('tok out')) ?? '').trimEnd()}`)
 
 app.unmount()
 console.log('\nrepro-update-hint: PASS — the hint lands in the hero row and in the docked status bar,')

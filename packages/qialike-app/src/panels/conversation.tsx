@@ -3434,17 +3434,19 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
         <Box flexGrow={1} />
         {/* The update hint (Windows): a newer release is waiting and this copy cannot
             install it by itself, so the user has to fetch it. It sits AFTER the spacer —
-            on the RIGHT of the status bar, immediately left of the stats — which is the
-            placement the user asked for. `flexShrink={1}` is load bearing there: when the
-            row runs out of room the HINT is what truncates, while the stats keep their
-            `flexShrink={0}` and stay flush right. Absent on every non-update day, so it
-            cannot disturb the docked layout. */}
+            on the RIGHT of the status bar — and it REPLACES the stats group rather than
+            sharing the row with it: the figures are always there, the release notice is
+            news, and side by side the two simply did not fit, which truncated the hint
+            to `… /upgrade for lin…`. `flexShrink={1}` still lets a very narrow terminal
+            clip the hint instead of pushing the busy indicator off. */}
         {store.updateHint !== undefined && (
-          <Box flexShrink={1} marginLeft={1} marginRight={1}>
+          <Box flexShrink={1} marginLeft={1}>
             <Text color={theme.warning} wrap="truncate">{store.updateHint}</Text>
           </Box>
         )}
-        {statsParts.length > 0 && (
+        {/* The stats group yields the slot to the hint: showing both side by side did
+            not fit, which clipped the hint. */}
+        {store.updateHint === undefined && statsParts.length > 0 && (
           <Box flexShrink={0}>
             {/* Two-tone stat text: the NUMBERS use the regular text color,
                 while their labels ("steps", "turns", "tok in", "tok out") and
