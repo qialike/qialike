@@ -1,9 +1,38 @@
 # qialike — 基于 DeepSeek Harness 构建的 AI 编程 Agent 终端界面（TUI）
 
+[English](README.md) | 中文
+
+```
+########  ##    ######  ##        ##  ##    ##  ########
+##    ##  ##        ##  ##        ##  ##  ##    ##    ##
+##    ##  ##  ########  ##        ##  ####      ########
+##    ##  ##  ##    ##  ##        ##  ##  ##    ##
+########  ##  ########  ########  ##  ##    ##  ########
+      ##
+```
+
 > **文档定位：** 本文为**用户手册**，主要描述 qialike 的使用方法。
 
 `qialike` 是基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 构建的编程 Agent 终端 TUI：
 支持系统：Linux、macOS、Windows，全屏、会话恢复、沙箱执行、单文件二进制、任意模型、插件化设计。
+
+## 目录
+
+- [是什么](#是什么)
+- [快速使用](#快速使用)
+- [环境要求](#环境要求)
+- [安全边界](#安全边界)
+- [数据与责任](#数据与责任)
+- [从源码构建](#从源码构建)
+- [安装为命令](#安装为命令)
+- [更新](#更新)
+- [运行](#运行)
+- [插件化架构（"一切皆插件"）](#插件化架构一切皆插件)
+- [文件放在哪里](#文件放在哪里)
+- [故障排查](#故障排查)
+- [问题反馈与参与](#问题反馈与参与)
+- [致谢](#致谢)
+- [许可证](#许可证)
 
 ## 是什么
 
@@ -28,14 +57,62 @@ qialike 是一个跑在终端里的全屏 AI 编程 Agent：你在项目目录�
   harness 检出。
 - **扩展不用重编译**：放入 skills 目录或挂上 MCP server 即可生效，无需构建、无需安装。
 
+## 快速使用
+
+三步就能开始。这里只给最短路径，每一步的完整说明在对应章节。
+
+### 1. 安装
+
+```sh
+curl -fsSL https://qialike.com/install | bash
+```
+
+适用于 **Linux、macOS、WSL，以及 Windows 上的 Git Bash / MSYS2 / Cygwin**——各含 x64 与 arm64，共六个
+发布目标，均已发布。需要 `bash` 与 `curl`；Linux 用系统 `tar` 解包，macOS 与 Windows 的 `.zip` 另需 `unzip`。
+
+Windows 原生终端（Windows Terminal / PowerShell / cmd）里没有 bash，所以上面这条**安装命令**用不了——
+需手动下载解压、自行配置环境变量：见 [Windows 终端](#windows-终端powershell--cmd)。注意这**只影响安装**，装好后的 `qialike.exe` 是原生
+程序，在 Windows Terminal / PowerShell 里照常运行。
+
+装到 `~/.dsh/bin`。安装器会把该目录写进 shell profile，但**当前这个 shell 里还没生效**——按它打印的提示
+`source ~/.bashrc`（zsh 用 `~/.zshrc`），或直接**重开终端**；之后任意目录都可直接执行 `qialike`，用
+`qialike --version` 校验。参数（指定版本、不改 PATH、只打印计划）见「安装为命令」。
+
+### 2. 启动 qialike
+
+进入工作区运行。
+
+```sh
+qialike
+```
+
+首次启动显示 hero 首屏；此时若还没配模型，首屏会提示 `No provider yet — use /models to add one`，模型标
+签显示 `not set`。配置模型：
+
+- **添加模型厂商**（共 62 家）：启动后输入 `/models`，在 `＋ Add provider` 里选一家并设置 API key（已配
+  置的提供商会显示网关实时模型列表）；也可在 `＋ Add a custom provider` 里填自定义端点。
+  **key 需自己到该提供商的官网/控制台申请**，qialike 不代申请、也不内置任何 key。
+
+详见「界面特性」与「提供商目录与推理强度声明」。
+
+### 3. 开启会话
+
+模型配好后**不必重启**——就在当前界面输入你的要求并回车，hero 首屏随即让位给会话界面，会话自此开始。
+
+进入后随时输入 `/` 唤起命令面板（`/models`、`/sessions`、`/theme`、`/export` 等），`/exit` 退出。会话
+自动持久化，之后输入 `/sessions` 挑一个历史会话即可继续，或在 shell 里用 `qialike resume`。详见「运行」。
+
 ## 环境要求
 
-- **平台**：Linux、macOS、Windows（各 x64 / arm64，共六个目标）；其余平台不受支持，见「安装为命令」。
+- **平台**：Linux（含 WSL）、macOS、Windows；各 x64 / arm64，共六个发布目标。**运行**只需对应的原生
+  可执行体（Windows 上即 `qialike.exe`）；只有 `curl | bash` 那条**安装命令**要 bash，故 Windows 上需经
+  Git Bash / MSYS2 / Cygwin 或 WSL。其余平台不受支持，见「安装为命令」。
 - **终端**：需要真正的 TTY——全屏界面、流式输出与鼠标交互都以交互式终端为前提。
 - **无需预装运行时**：产物是单一可执行文件，运行时不需要 Node.js、bun、`pnpm`、`node_modules`，也不需要一
   份 harness 检出。
 - **API key**：跑真实会话至少需要一个提供商的 key——内置 DeepSeek 端点用 `DEEPSEEK_API_KEY`（环境变量、
-  `~/.dsh` 设置或 `.env`），换别的提供商在 `/models` 里设 key 即可。
+  `~/.dsh` 设置或 `.env`），换别的提供商在 `/models` 里设 key 即可。key 一律由**各提供商自己签发**（到其官网
+  /控制台申请），qialike 不代申请、也不内置任何 key。
 - **工作区**：默认当前目录（`cwd`），或用 `--workspace` 指定；会话状态、设置与凭据存放在 `~/.dsh`。
 - **磁盘**：下载归档约 45–58 MB（因平台而异），解包后的单文件约 96 MB。
 - **`qialike web` 另需**：系统里已装 `dsh` CLI（在 PATH 上，或设 `$QIALIKE_DSH` 指向它），且版本不低于本构
@@ -97,9 +174,10 @@ QIALIKE_COLOR=24bit qialike
   DeepSeek 端点。关闭方式：`DSH_TELEMETRY_MODE=DISABLED`，或把 `DSH_TELEMETRY_DISABLED` 设为任意非空值（含
   `0`）。qialike 的 TUI **未接入 `/feedback`**（该命令注册在 harness 的 commands 服务上，本界面不消费它），
   所以目前没有可触发它的界面入口。
-- **qialike 自身**：没有自有的分析或遥测。它自己发起的网络请求只有两类——发给**你配置的提供商**（模型列表
-  与对话请求），以及**你主动执行 `/upgrade`** 时的版本检查与下载（GitHub / gitcode / qialike.com）；
-  **启动时不联网**。API key 不会进入 transcript、也不会发给模型。
+- **qialike 自身**：没有自有的分析或遥测。它自己发起的网络请求有三类——发给**你配置的提供商**（模型列表
+  与对话请求）、**你主动执行 `/upgrade`** 时的版本检查与下载（GitHub / gitcode / qialike.com），以及**启动
+  约 1 秒后的一次自动更新检查**（可用 `QIALIKE_DISABLE_AUTOUPDATE=1` 关闭，见「更新」）。API key 不会进入
+  transcript、也不会发给模型。
 
 ## 从源码构建
 
@@ -138,38 +216,44 @@ qialike web [flags]      # 打开 DeepSeek Harness 浏览器 UI（转发已安�
 `node_modules`——只需 `DEEPSEEK_API_KEY`（环境变量 / `~/.dsh` settings / `.env`）与一个工作区
 （默认 `cwd`，或 `--workspace`）。会话状态、设置与凭据存放在 `~/.dsh`。
 
-`qialike web` 运行已安装的 `dsh` CLI，其版本应不低于本 qialike 构建内嵌的 harness 版本：
-两端读写同一份 `~/.dsh/sessions` 日志，更旧的 `dsh` 读取器会把新版范围压缩的
-`sourceEventSeqs` 误判为损坏历史（`SessionPersistenceCorruptionError`）。启动前会先核对
-`dsh`：未安装或版本与本 qialike 内嵌不一致时，告警并打印安装命令（版本不一致时不启动 web、
-直接退出）。
+### Windows 终端（PowerShell / cmd）
 
-`dsh web` 绑定 `127.0.0.1:3080`，启动后打印一条**带本次运行认证 token 的 URL**
-（`http://127.0.0.1:3080/?token=…`）并用默认浏览器打开它。请**就用那条 URL**：不带 token
-访问会得到 `401 dsh web authentication required; reopen the URL printed by dsh web.`；
-它种下的认证 cookie 只对签发时的那一个 authority 有效（`127.0.0.1:3080` 与
-`localhost:3080` 是两个不同的 authority），所以选定一个主机名后别再换。`--port <n>` 可换端口；
-若端口已被占用，第二个服务会以 `EADDRINUSE` 退出，而浏览器仍在跟旧的那个服务说话——它的
-token 你并没有。
+Windows Terminal 里没有 bash，上面那条 `curl | bash` 用不了，只能手动安装：
 
-### 无头 / 远程访问：本机跑服务，别机浏览器访问
+1. 从 [Releases](https://github.com/qialike/qialike/releases) 下载 `qialike-windows-x64.zip`（ARM 设备选
+   `-arm64`；镜像站点见 `gitcode.com/qialike/qialike/releases`）。
 
-服务端保持默认回环绑定（`127.0.0.1`），从**有浏览器的那台机器**做 SSH 隧道即可——服务全程不暴露到网络，任何
-网络下都可以照此使用。**不要**用 `--host 0.0.0.0` 直接对外提供：web profile 会拒绝
-（`error: --host 0.0.0.0 is intentionally not supported yet …`）。隧道做法：
+2. 解压得到单个 `qialike.exe`，放进 `%USERPROFILE%\.dsh\bin\`——`qialike uninstall` 只扫这个目录与
+   `~/.local/bin`，放这里才能被它一并清除。
 
-```sh
-# 无头 / 纯终端主机上（无本地浏览器，故加 --no-open）
-qialike web --no-open                  # 记下打印出的 http://127.0.0.1:3080/?token=… 这条 URL
+3. 把该目录加入**用户** PATH（系统设置 → 环境变量，或用下面这条 PowerShell），然后**重开终端**。
 
-# 在有浏览器的机器上
-ssh -L 3080:localhost:3080 user@headless-host
-# 然后在本机浏览器打开上面那条打印出来的 URL（http://127.0.0.1:3080/?token=…）
-```
+   ```powershell
+   [Environment]::SetEnvironmentVariable('Path',
+     "$env:USERPROFILE\.dsh\bin;" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')
+   ```
 
-本机 3080 也被占用时，**只改本地映射**即可——服务端不用重启，token URL 也不变：
-`ssh -L 8080:localhost:3080 user@headless-host`，再打开 `http://127.0.0.1:8080/?token=…`。只有**服务端**
-3080 被占用时才需要 `qialike web --port <n>`，并同步改用新的隧道目标与 URL。
+4. 启动后用 `/models` 添加提供商。
+
+校验：`qialike --version`。上面四步是目前唯一途径——联网安装器只在 bash 下运行；若把 `qialike.exe` 放
+在别处，`qialike uninstall` 不会替你删掉它。
+
+## 更新
+
+Linux 与 macOS **自动更新**：启动约 1 秒后，后台以子进程检查一次新版本（不阻塞界面，失败静默）。只有
+**补丁版**（patch）会**静默安装**；**小版本**（minor）与 **大版本**（major）只在状态栏提示。
+
+- **能被自动更新的前提**：二进制位于安装目录 `~/.dsh/bin`（即 `curl` 安装器装的那份）。自行编译的
+  检出构建不会被替换，也不参与自动更新。
+- **关闭或改为只提示**：设置项 `qialike-update.auto` 可取 `true`（默认，静默装补丁版）/ `false`（完
+  全不检查）/ `"notify"`（只提示、从不自动装）；也可用 `QIALIKE_DISABLE_AUTOUPDATE=1` 全局关闭，或用
+  `QIALIKE_ALWAYS_NOTIFY_UPDATE=1` 强制只提示。
+- **手动更新**：`qialike upgrade` 升级到最新版、`qialike upgrade <版本>` 装指定版本、
+  `qialike upgrade --check` 只报告不安装。TUI 内也可用 `/upgrade`。
+
+**Windows 只能手动更新**：运行中的 `.exe` 无法被替换，安装器也是 bash，所以 Windows 上没有自动更新。
+`qialike upgrade --check` 只检查并打印下载链接，更新方式即[手动安装](#windows-终端powershell--cmd)：
+下载新 `.zip`、退出 qialike、替换 `qialike.exe`。
 
 ## 运行
 
@@ -192,6 +276,41 @@ qialike --help                       # 全部参数（--dump-config、--no-proje
 - 恢复某会话或向其发消息即标记为最近使用，状态行标注 `(resumed)`。显式 `--resume <sessionId>` 始终优先。
 - 想让**每次启动都自动续接**，设 `~/.dsh/qialike.json` 的 `resume_last: true`（或环境变量
   `QIALIKE_RESUME_LAST=1`）——默认 `false`，即每次启动全新开始。
+
+### 浏览器 UI 与无头 / 远程访问
+
+`qialike web` 运行已安装的 `dsh` CLI，其版本应不低于本 qialike 构建内嵌的 harness 版本：
+两端读写同一份 `~/.dsh/sessions` 日志，更旧的 `dsh` 读取器会把新版范围压缩的
+`sourceEventSeqs` 误判为损坏历史（`SessionPersistenceCorruptionError`）。启动前会先核对
+`dsh`：未安装或版本与本 qialike 内嵌不一致时，告警并打印安装命令（版本不一致时不启动 web、
+直接退出）。
+
+`dsh web` 绑定 `127.0.0.1:3080`，启动后打印一条**带本次运行认证 token 的 URL**
+（`http://127.0.0.1:3080/?token=…`）并用默认浏览器打开它。请**就用那条 URL**：不带 token
+访问会得到 `401 dsh web authentication required; reopen the URL printed by dsh web.`；
+它种下的认证 cookie 只对签发时的那一个 authority 有效（`127.0.0.1:3080` 与
+`localhost:3080` 是两个不同的 authority），所以选定一个主机名后别再换。`--port <n>` 可换端口；
+若端口已被占用，第二个服务会以 `EADDRINUSE` 退出，而浏览器仍在跟旧的那个服务说话——它的
+token 你并没有。
+
+#### 本机跑服务，别机浏览器访问
+
+服务端保持默认回环绑定（`127.0.0.1`），从**有浏览器的那台机器**做 SSH 隧道即可——服务全程不暴露到网络，任何
+网络下都可以照此使用。**不要**用 `--host 0.0.0.0` 直接对外提供：web profile 会拒绝
+（`error: --host 0.0.0.0 is intentionally not supported yet …`）。隧道做法：
+
+```sh
+# 无头 / 纯终端主机上（无本地浏览器，故加 --no-open）
+qialike web --no-open                  # 记下打印出的 http://127.0.0.1:3080/?token=… 这条 URL
+
+# 在有浏览器的机器上
+ssh -L 3080:localhost:3080 user@headless-host
+# 然后在本机浏览器打开上面那条打印出来的 URL（http://127.0.0.1:3080/?token=…）
+```
+
+本机 3080 也被占用时，**只改本地映射**即可——服务端不用重启，token URL 也不变：
+`ssh -L 8080:localhost:3080 user@headless-host`，再打开 `http://127.0.0.1:8080/?token=…`。只有**服务端**
+3080 被占用时才需要 `qialike web --port <n>`，并同步改用新的隧道目标与 URL。
 
 ### 界面特性
 
@@ -331,8 +450,51 @@ API key 经 credentials 服务写入 `~/.dsh/.credentials.yaml`（按各提供�
 
 `qialike uninstall` 会清空 `~/.dsh`（**含上面的凭据**），见「安装为命令」。
 
+## 故障排查
+
+按你看到的现象查；每条末尾指向展开说明的章节。
+
+**`qialike: command not found`（刚装完）**：PATH 写进了 profile，但当前 shell 还没读到——
+  `source ~/.bashrc`（zsh 用 `~/.zshrc`）或**重开终端**。见「快速使用」第 1 步。
+
+**`Model: not set` / 首屏提示 `No provider yet`**：还没配模型，或已配的都被隐藏了——`/models` 里添加或重新
+  设 key。见「界面特性」。
+
+**`Terminal too small — keys paused`**：终端高度不足，此界面最小需要 **14 行**（宽 ≥110 列才显示右侧栏）
+  ——把窗口调高即可，按键会自动恢复。
+
+**`SANDBOX_UNAVAILABLE`**：本机两级沙箱（bubblewrap / Landlock）都无法强制，`workspace-write` /
+  `read-only` 下 bash 直接拒绝——改用文件工具，或（知情前提下）切到 `danger-full-access`。见「安全边界」。
+
+**深色方案下输入卡片与页面糊成一片**：终端支持 24 位色却没声明，qialike 落到 256 色档——设
+  `COLORTERM=truecolor` 或 `QIALIKE_COLOR=24bit`。**16 色终端**下这是已知降级，无法修复。见
+  「终端颜色档位」。
+
+**`401 dsh web authentication required`**：用了不带 token 的地址——用服务启动时打印的那条 URL，且别在
+  `127.0.0.1` 与 `localhost` 之间切换。
+
+**`EADDRINUSE`**：端口被占。**服务端**冲突用 `qialike web --port <n>` 换端口；**只在本机**冲突则只改 SSH
+  映射即可（`-L 8080:localhost:3080`），服务端不必重启、token URL 也不变。
+
+**`SessionPersistenceCorruptionError`**：系统里的 `dsh` 比本构建内嵌的 harness 旧——升级它（
+  `npm install -g @deepseek-ai/dsh`）。见「安装为命令」。
+
+## 问题反馈与参与
+
+- **报告问题 / 提需求**：[GitHub Issues](https://github.com/qialike/qialike/issues)。
+- **参与开发**：见 [CONTRIBUTING.zh.md](CONTRIBUTING.zh.md)——构建前提、测试与校验命令、插件编写与信任契约、提交规范。
+
 ## 致谢
 
 qialike 基于 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 构建。qialike 是独立的社区
 项目，与深度求索不存在隶属、合作、授权或背书关系。"DeepSeek Harness" 是深度求索公司的注册商标，此处仅用于准
 确说明技术来源及与上游软件的关系。
+
+## 许可证
+
+[MIT](LICENSE)
+
+**名称与字标不在许可证授权范围内**：MIT 授予的使用、修改与再分发权利只覆盖**软件本身**，不包含对
+`qialike` 名称或字标的任何授权——它们仅用于标识本项目。再分发或修改代码时，请勿暗示官方背书或合作。
+
+第三方依赖及其许可证见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
