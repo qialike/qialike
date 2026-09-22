@@ -50,12 +50,17 @@ Windows rung to work inside the single file: its `koffi` dependency (replaced by
 `bun:ffi` shim) and the **runner process itself** — the harness locates it by module specifier, which
 a compiled binary cannot answer, so qialike carries the harness's own runner and launches it (see
 `apps/tui-bin/src/windows-acl-shim.ts`). The `permission` presets row is therefore enabled
-everywhere. User-visible security behavior lives in the README's "安全边界" section.
+everywhere. User-visible security behavior lives in the README's "Security boundaries" section.
 
 ## Distributing as a plugin bundle
 
-`@yourname/qialike-app` is an out-of-tree Cordis bundle; once published it can be added to a
-profile:
+**This repository does not distribute through npm** — the binary comes from the `curl | bash`
+installer and the GitHub/gitcode releases, and never needs npm. The path below is therefore
+**not available today**; it is kept only to describe the capability the architecture has, and what
+enabling it would take.
+
+`@yourname/qialike-app` is an out-of-tree Cordis bundle; given a registry and scope we control, it
+could be added to a profile like this:
 
 ```sh
 dsh plugin --profile tui add <scope>/qialike-app
@@ -66,17 +71,17 @@ dsh --profile tui --workspace ~/proj
 `profiles/node_modules` fallback, so the consumer runs against the **installed harness**, not this
 checkout.
 
-Three things must be true before a release — **none hold today, and the command 404s**:
+Enabling that path would first require three things (a record of the current state, not a
+to-do list):
 
-- **The package is not published**: `npm view @yourname/qialike-app` returns 404. `@yourname/` is a
-  placeholder scope (it also appears in `package.json` as `@yourname/qialike-root` and in
-  `LICENSE`), and must be replaced with a real scope before publishing.
-- **The peer range excludes prereleases**: every peer dependency declares `^0.1.1`, and under npm's
-  semver `^0.1.1` does **not** accept a prerelease — the published harness is `0.1.5-rc.2`, and
-  `semver.satisfies("0.1.5-rc.2", "^0.1.1")` is `false`. Either widen the range or wait for a
-  non-prerelease harness.
-- **The harness itself is already published** (`@deepseek-ai/dsh`, `latest` = `0.1.5-rc.2`), so that
-  is no longer a blocker.
+- The root package is `private: true`, so `npm publish` refuses outright; all three `package.json` names
+  use the `@yourname/` **placeholder scope, which this project does not own** (`@yourname/qialike-root`,
+  `@yourname/qialike-app`, `@yourname/qialike-bin`); and `npm view @yourname/qialike-app` returns 404.
+- Every peer dependency declares `^0.1.1`, and under npm's semver `^0.1.1` does **not** accept a
+  prerelease — the published harness is `0.1.5-rc.2`, and `semver.satisfies("0.1.5-rc.2", "^0.1.1")` is
+  `false`.
+- The harness itself **is already on npm** (`@deepseek-ai/dsh`, `latest` = `0.1.5-rc.2`) — not an
+  obstacle.
 
 ## Writing your own plugin
 

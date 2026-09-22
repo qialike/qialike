@@ -49,24 +49,28 @@ harness 用模块 specifier 定位它，而编译后的二进制答不了这个�
 
 ## 作为插件 bundle 分发
 
-`@yourname/qialike-app` 是一个树外（out-of-tree）Cordis bundle，发布后可加到某个 profile：
+**本仓库不经 npm 分发**——二进制只由 `curl | bash` 安装器与 GitHub/gitcode Releases 提供，从不需要 npm。
+下面这条路径因此**当前不可用**，保留它只为说明架构上存在的能力，以及启用它需要什么。
+
+`@yourname/qialike-app` 是一个树外（out-of-tree）Cordis bundle；若将来有一个可控的 npm 注册表与 scope，
+它可以这样加到某个 profile：
 
 ```sh
 dsh plugin --profile tui add <scope>/qialike-app
 dsh --profile tui --workspace ~/proj
 ```
 
-`dsh plugin add` 通过安装目录的 `profiles/node_modules` fallback 解析 `@deepseek-ai/*` peer 依赖，因此
-消费方用的是**已安装的 harness**，而不是本检出。
+`dsh plugin add` 通过安装目录的 `profiles/node_modules` fallback 解析 `@deepseek-ai/*` peer 依赖，因此消费
+方用的是**已安装的 harness**，而不是本检出。
 
-发版前需确认以下三项——**当前尚未满足，命令会 404**：
+要启用这条路径，需先解决三件事（这是现状记录，不是待办清单）：
 
-- **包本身还没上架**：`npm view @yourname/qialike-app` 返回 404。`@yourname/` 是占位 scope（同样出现在
-  `package.json` 的 `@yourname/qialike-root` 与 `LICENSE`），发布前须换成真实 scope。
-- **peer 版本区间**：peer 依赖统一声明 `^0.1.1`，而按 npm 的 semver，`^0.1.1` **不接受**预发布版本——
-  已发布的 harness 是 `0.1.5-rc.2`，`semver.satisfies("0.1.5-rc.2", "^0.1.1")` 为 `false`。发版前要么
-  放宽区间，要么等 harness 出正式版。
-- **harness 本身已上架**（`@deepseek-ai/dsh`，`latest` = `0.1.5-rc.2`），这一项不再是阻塞。
+- 根包是 `private: true`，`npm publish` 会直接拒绝；三处 `package.json` 的 name 都用 `@yourname/` 这个
+  **不属于本项目的占位 scope**（`@yourname/qialike-root`、`@yourname/qialike-app`、`@yourname/qialike-bin`）；
+  `npm view @yourname/qialike-app` 返回 404。
+- peer 依赖统一声明 `^0.1.1`，而 npm 的 semver 下 `^0.1.1` **不接受**预发布版本——已发布的 harness 是
+  `0.1.5-rc.2`，`semver.satisfies("0.1.5-rc.2", "^0.1.1")` 为 `false`。
+- harness 本身**已在 npm 上架**（`@deepseek-ai/dsh`，`latest` = `0.1.5-rc.2`）——这一项不是障碍。
 
 ## 编写自己的插件
 
@@ -86,7 +90,6 @@ qialike plugin trust my-plugin
 改动都会让信任失效（`node_modules/` 与 `.git/` 刻意不在哈希内：重装依赖不算篡改，所以哈希覆盖的是你审阅过
 的代码，不是它拉进来的依赖树）。本地插件**在本进程内以完整权限运行**，所以信任是显式、逐个、可撤销的
 （`qialike plugin untrust <name>`）。
-的代码，不是它拉进来的依赖树）。撤销用 `qialike plugin untrust <name>`。
 
 overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内建行（换 persona、关掉某个工具）。两种写错
 会被明确拒绝并给出原因——插件加载器自己对这两种都是静默的：`insert` 里写了本构建未打包的插件，或行的 `id`
