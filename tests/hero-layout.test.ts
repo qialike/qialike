@@ -50,6 +50,7 @@ import {
   heroWordmarkFits,
 } from '../packages/qialike-app/src/hero-layout.ts'
 import { visualWidth } from '../packages/qialike-app/src/markdown.tsx'
+import { heroVersionCaption } from '../packages/qialike-app/src/version-footer.ts'
 import { COMPOSER_MIN_HEIGHT } from '../packages/qialike-app/src/layout-budget.ts'
 
 const BASE = { rows: 30, boxH: 5, brandLines: HERO_WORDMARK.length + 1, hintLines: 1 }
@@ -348,14 +349,22 @@ describe('size gates and hero copy', () => {
       .toMatch(/^Describe what you want to build/)
   })
 
-  test('the caption under the brand mark is the project site, not the version', () => {
-    expect(HERO_CAPTION_URL).toBe('qialike.com')
-    // ASCII-only, so it centers exactly (no East-Asian-Ambiguous glyph drift).
-    expect(visualWidth(HERO_CAPTION_URL)).toBe(HERO_CAPTION_URL.length)
+  test('the caption under the brand mark carries the version and the project site', () => {
+    // User call, 2026-09-22: the plate names the build AND the site. The line
+    // itself is composed by `heroVersionCaption` (pinned in
+    // tests/version-footer.test.ts); what belongs HERE is that the URL half is
+    // the site with its scheme, and that the whole caption still fits under
+    // every width the mark is drawn at.
+    expect(HERO_CAPTION_URL).toBe('https://qialike.com')
+    const line = heroVersionCaption('0.6.3', 'beta', HERO_CAPTION_URL)
+    expect(line).toBe('Ver: 0.6.3 beta . URL: https://qialike.com')
+    // ASCII, so the renderer's width table and the terminal agree: centered
+    // exactly rather than drifting a column on an ambiguous-width glyph.
+    expect(visualWidth(line)).toBe(line.length)
     // And it must survive every width the brand mark itself is drawn at: the
     // caption is painted under the mark, so the mark's own floor is the widest
     // the caption can ever be asked to fit.
-    expect(visualWidth(HERO_CAPTION_URL)).toBeLessThanOrEqual(HERO_ART_MIN_WIDTH)
+    expect(visualWidth(line)).toBeLessThanOrEqual(HERO_ART_MIN_WIDTH)
   })
 })
 

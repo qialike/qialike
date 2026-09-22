@@ -67,14 +67,17 @@ export const HERO_TITLE_EN = 'Into the Unknown'
 export const HERO_TITLE = HERO_TITLE_EN
 
 /**
- * The caption line UNDER the brand mark (user call, 2026-09-13). It used to be
- * the qialike VERSION; it is now the project's site — the version keeps its
- * actionable homes (the docked sidebar footer and `--version`), so the hero
- * reads as a brand plate instead of a build stamp. 11 columns wide, so it
- * survives every width the brand mark itself is drawn at (the mark's floor is
- * {@link HERO_ART_MIN_WIDTH} = 52 columns).
+ * The site the caption line UNDER the brand mark points at (user call,
+ * 2026-09-13; the line gained the version + build channel on 2026-09-22 — see
+ * `heroVersionCaption` in `version-footer.ts`). It is no longer the whole
+ * caption: it is the `URL:` half of it, scheme included, because a reader who
+ * copies it wants a URL rather than a host name.
+ *
+ * 19 columns, and the whole caption stays at 37–42 columns (ASCII, so the
+ * renderer's width table and every terminal agree on it), well inside every width
+ * the brand mark itself is drawn at (its floor is {@link HERO_ART_MIN_WIDTH} = 52).
  */
-export const HERO_CAPTION_URL = 'qialike.com'
+export const HERO_CAPTION_URL = 'https://qialike.com'
 
 /** Rows between the title (end of the brand block) and the composer card when
  *  nothing sits in between (the hero draws no workspace line). */

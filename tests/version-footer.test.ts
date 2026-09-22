@@ -16,7 +16,9 @@
 import { describe, expect, test } from 'bun:test'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { versionFooterSuffix } from '../packages/qialike-app/src/version-footer.ts'
+import { versionFooterSuffix, heroVersionCaption } from '../packages/qialike-app/src/version-footer.ts'
+import { visualWidth } from '../packages/qialike-app/src/markdown.tsx'
+import { HERO_ART_MIN_WIDTH } from '../packages/qialike-app/src/hero-layout.ts'
 
 describe('versionFooterSuffix', () => {
   test('beta and dev append their own word', () => {
@@ -47,6 +49,38 @@ describe('versionFooterSuffix', () => {
   test('the two channels never cross-contaminate', () => {
     expect(versionFooterSuffix('0.5.2-beta', 'dev')).toBe(' dev')
     expect(versionFooterSuffix('0.5.2-dev', 'beta')).toBe(' beta')
+  })
+})
+
+describe('heroVersionCaption (the line under the brand mark)', () => {
+  const URL = 'https://qialike.com'
+
+  test('the three channels read as the user asked for them', () => {
+    // User call, 2026-09-22: `Ver: <version> <channel> . URL: <site>`, the channel
+    // spelled as the word itself (`beta` / `dev`), never a glyph.
+    expect(heroVersionCaption('0.6.3', 'beta', URL)).toBe(`Ver: 0.6.3 beta . URL: ${URL}`)
+    expect(heroVersionCaption('0.6.3', 'dev', URL)).toBe(`Ver: 0.6.3 dev . URL: ${URL}`)
+    expect(heroVersionCaption('0.6.3', 'prod', URL)).toBe(`Ver: 0.6.3 . URL: ${URL}`)
+  })
+
+  test('a version that already spells the channel is not marked twice', () => {
+    // Same rule as the footer: `0.5.2-beta` in beta mode must not read
+    // `0.5.2-beta beta`, while a dev-mode build of it still gets its own mark.
+    expect(heroVersionCaption('0.5.2-beta', 'beta', URL)).toBe(`Ver: 0.5.2-beta . URL: ${URL}`)
+    expect(heroVersionCaption('0.5.2-beta', 'dev', URL)).toBe(`Ver: 0.5.2-beta dev . URL: ${URL}`)
+    expect(heroVersionCaption('0.5.2-dev', 'dev', URL)).toBe(`Ver: 0.5.2-dev . URL: ${URL}`)
+  })
+
+  test('it stays narrow enough for the brand mark it is centered under', () => {
+    // The caption is centered under the wordmark, whose floor is
+    // HERO_ART_MIN_WIDTH — so every channel's caption has to fit inside it, and
+    // the mark is ASCII, so this app's width table and the terminal agree on it
+    // (a glyph like `β` is East-Asian-Ambiguous and drifts the centering there).
+    for (const mode of ['beta', 'dev', 'prod'] as const) {
+      const line = heroVersionCaption('0.6.3', mode, URL)
+      expect(visualWidth(line), `${mode}: ${line}`).toBeLessThanOrEqual(HERO_ART_MIN_WIDTH)
+      expect(visualWidth(line)).toBe(line.length)
+    }
   })
 })
 

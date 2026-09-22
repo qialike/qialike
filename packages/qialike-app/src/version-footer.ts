@@ -38,3 +38,35 @@ export function versionFooterSuffix(version: string, mode: BuildMode): string {
   if (mode === 'dev') return version.includes('dev') ? '' : ' dev'
   return ''
 }
+
+/**
+ * The mark the HERO caption puts beside the version, one per build channel.
+ *
+ * The channel's own word — `beta` / `dev` / nothing for `prod` (user call,
+ * 2026-09-22: "通道标记直接使用 beta 或者 dev 类似的吧"). It mirrors what the
+ * docked sidebar footer says, so the two surfaces never disagree about which
+ * build is running.
+ *
+ * ASCII on purpose: the caption is CENTERED under the brand mark, and a glyph
+ * whose width a terminal may disagree about (East-Asian-Ambiguous, or an emoji
+ * drawn two columns wide) would drift the centering by a column on those
+ * terminals. This app's width table and every terminal agree on `beta`/`dev`.
+ */
+export const HERO_CAPTION_MARKS: Record<BuildMode, string> = { beta: 'beta', dev: 'dev', prod: '' }
+
+/**
+ * The hero's caption line, under the brand mark: `Ver: <version>[ <mark>] . URL: <url>`.
+ *
+ * It replaced the bare `qialike.com` on 2026-09-22 (user call): the plate now
+ * says WHICH build is running, which is the one fact a brand string cannot
+ * carry — the docked sidebar footer says it too, but the hero is the first
+ * screen and the channel is exactly what a beta user needs to quote in a report.
+ *
+ * The channel is only marked when the version does not already spell it, reusing
+ * {@link versionFooterSuffix}: a released `0.5.2-beta` build must not read
+ * `0.5.2-beta β`, and `prod` adds nothing.
+ */
+export function heroVersionCaption(version: string, mode: BuildMode, url: string): string {
+  const mark = versionFooterSuffix(version, mode) === '' ? '' : HERO_CAPTION_MARKS[mode] ?? ''
+  return `Ver: ${version}${mark === '' ? '' : ` ${mark}`} . URL: ${url}`
+}

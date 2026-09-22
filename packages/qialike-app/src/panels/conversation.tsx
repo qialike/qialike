@@ -31,6 +31,8 @@ import {
   type TuiService,
 } from '../index.tsx'
 import { MarkdownText, markdownPlain, estimateMarkdownHeight, visualWidth, countWrappedLines } from '../markdown.tsx'
+import { BUILD_MODE } from '../build-mode.ts'
+import { heroVersionCaption } from '../version-footer.ts'
 import { sanitizeTerminalText, stripTerminalControls } from '../terminal-safe.ts'
 import { SIDEBAR_MIN_WIDTH, WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import {
@@ -2566,12 +2568,15 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     }
     heroHintPaint.splice(Math.max(0, heroB.hintLines))
   }
-  // The caption under the brand mark is the project's site (user call,
-  // 2026-09-13), not the version: the version still reads from the docked
-  // sidebar footer and `--version`. Painted PLAIN (see the render) — a brand
-  // plate, not a build stamp. The string is the pure module's constant so a
-  // unit test pins it.
-  const heroCaptionLine = HERO_CAPTION_URL
+  // The caption under the brand mark: `Ver: <version>[ <mark>] . URL: <site>`
+  // (user call, 2026-09-22 — it used to be the site alone). The version and the
+  // build channel (`beta` / `dev` / nothing for prod) come from the BAKED
+  // constants `APP_VERSION` / `BUILD_MODE`, so a released binary cannot be
+  // relabelled by the environment it is launched in, and the channel is marked
+  // only when the version does not spell it out (`heroVersionCaption` owns both
+  // rules; `tests/version-footer.test.ts` pins them). Painted PLAIN (see the
+  // render) — a brand plate, not a build stamp.
+  const heroCaptionLine = heroVersionCaption(APP_VERSION, BUILD_MODE, HERO_CAPTION_URL)
 
   const filtered = useMemo(
     () => filteredCommands(props.tui),
@@ -3226,7 +3231,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
               ))}
             </Box>
           ) : null}
-          {/* Brand caption (the project's site): PLAIN (no accent color / no
+          {/* Brand caption (`Ver: … . URL: …`): PLAIN (no accent color / no
               emphasis) — it reads as a neutral label under the brand art
               instead of competing with it. Nothing drops it: below the hero
               minimum the whole stack is replaced by the notice. */}
