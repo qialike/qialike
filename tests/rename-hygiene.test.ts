@@ -56,7 +56,10 @@ const LEGACY_ALLOWLIST: Readonly<Record<string, readonly [count: number, reason:
   // now zero — and a zero-hit file must NOT appear in this map, which asserts the
   // recorded count. Pre-rename cleanup on the uninstall side is unaffected
   // (`bin.ts` still sweeps `~/.dsh/bin/dsh-tui`).
-  'scripts/uninstall.sh': [1, 'removes a pre-rename dev symlink'],
+  // `scripts/uninstall.sh` was listed here until it was deleted: it removed the
+  // `~/.local/bin/dsh-tui` symlink the removed `scripts/install.sh` created, and
+  // `uninstallSelf()` in `bin.ts` sweeps that same path and name itself, so the
+  // script had no remaining producer and no unique job.
 }
 
 function walk(path: string, out: string[] = []): string[] {

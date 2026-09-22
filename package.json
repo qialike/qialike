@@ -27,7 +27,6 @@
     "test": "node tests/smoke.mjs",
     "typecheck": "tsc -p tsconfig.typecheck.json",
     "install:remote": "bash scripts/install",
-    "uninstall:local": "bash scripts/uninstall.sh",
     "test:unit": "bun test tests/"
   },
   "devDependencies": {
