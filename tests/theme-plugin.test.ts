@@ -8,6 +8,9 @@
  */
 
 import { describe, expect, test, afterEach } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { theme } from '../packages/qialike-app/src/theme.ts'
 import {
   BUILTIN_SCHEMES, DEFAULT_SCHEME, applyScheme, resolveScheme, schemeRegistry, apply,
@@ -49,12 +52,16 @@ describe('colorscheme registry', () => {
 
 describe('plugin apply wiring', () => {
   test('registers /theme (dialog) + themes panel and applies the configured scheme at startup', () => {
+    // The colorscheme persists in `qialike.json` since 0.1.7 (readSection).
+    const home = mkdtempSync(join(tmpdir(), 'qialike-theme-apply-'))
+    const previous = process.env.DSH_HOME
+    process.env.DSH_HOME = home
+    writeFileSync(join(home, 'qialike.json'), JSON.stringify({ theme: { colorscheme: 'light', colors: {} } }))
     const commands: { name: string; run: (arg: string) => void }[] = []
     const panels: { id?: string; mode?: string }[] = []
     const opened: string[] = []
     const ctx = {
       get(id: string) {
-        if (id === 'settings') return { register: () => ({ get: () => ({ colorscheme: 'light', colors: {} }) }) }
         if (id === 'tui') return {
           commands: { register: (c: { name: string; run: (arg: string) => void }) => commands.push(c) },
           panels: { register: (d: { id?: string; mode?: string }) => panels.push(d) },
@@ -63,7 +70,13 @@ describe('plugin apply wiring', () => {
         return undefined
       },
     }
-    apply(ctx as never)
+    try {
+      apply(ctx as never)
+    } finally {
+      if (previous === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = previous
+      rmSync(home, { recursive: true, force: true })
+    }
     expect(theme.bg).toBe(BUILTIN_SCHEMES.light.bg)
     expect(commands.map((c) => c.name)).toContain('theme')
     expect(panels.some((p) => p.id === 'themes' && p.mode === 'fullscreen')).toBe(true)

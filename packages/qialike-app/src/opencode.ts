@@ -19,10 +19,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
-import z from '@deepseek-ai/schemastery'
 import type { TuiProviderTemplate } from './llm.ts'
-import { registerWithLegacy } from './legacy-names.ts'
+import { readSection } from './config.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-opencode-gateways'
@@ -30,13 +28,6 @@ export const name = 'tui-opencode-gateways'
 /** Services required: settings (the enabled switch) and the template registry. */
 export const inject = ['settings', 'tuiLlmTemplates']
 
-/** The `qialike-opencode:` settings namespace holding the enabled switch. */
-const NS = 'qialike-opencode'
-/** Pre-rename namespace: read as a `base` fallback, never written. */
-const LEGACY_NS = 'dsh-tui-opencode'
-
-/** Schema: `enabled` defaults to true when absent (explicit false unloads). */
-const OpenCodeSchema = z.object({ enabled: z.boolean() })
 
 /** The two opencode gateway templates registered when the plugin is enabled. */
 export const OPENCODE_TEMPLATES: readonly TuiProviderTemplate[] = [
@@ -87,22 +78,17 @@ export const OPENCODE_TEMPLATES: readonly TuiProviderTemplate[] = [
 ]
 
 export function apply(ctx: Context): void {
-  const settings = ctx.get('settings') as {
-    register(ns: unknown, schema: unknown, options?: unknown): SettingsScope<unknown>
-    get(ns: unknown): unknown
-    describe(): { ns: string; user?: unknown }[]
-  } | undefined
   const templates = ctx.get('tuiLlmTemplates') as {
     add(templates: readonly TuiProviderTemplate[]): void
     hideRoutes(routes: readonly string[]): void
   } | undefined
-  if (settings === undefined || templates === undefined) return
-  const scope = registerWithLegacy(settings, NS, LEGACY_NS, OpenCodeSchema as never)
+  if (templates === undefined) return
+  // The switch lives in `qialike.json` since 0.1.7 (`readSection`).
   // Explicit `enabled: false` unloads the gateways — templates AND any
   // user-configured opencode-zen/opencode-go routes vanish from the /models
   // list and the adapter; absent (or true) keeps them, the default, so
   // upgrading never removes a gateway the user already uses.
-  const enabled = (scope.get() as { enabled?: boolean } | undefined)?.enabled
+  const enabled = readSection('opencode')?.enabled
   if (enabled === false) {
     templates.hideRoutes(['opencode-zen', 'opencode-go'])
     return

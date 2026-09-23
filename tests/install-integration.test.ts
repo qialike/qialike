@@ -51,8 +51,31 @@ const INSTALLER = join(REPO, 'scripts', 'install')
  */
 const BINARY_CANDIDATES = [join(REPO, 'dist', 'qialike'), join(REPO, 'dist', 'linux-x64', 'qialike')]
 
-/** The tag the fixture publishes — a patch above any real release. */
-const TAG = '0.6.9'
+/**
+ * The fixture's version pair, derived from the tree.
+ *
+ * The cases need TWO relationships, and hardcoding either end breaks one of them:
+ *   * `--auto` with the REAL artifact as the managed copy needs the published tag
+ *     to be above the build under test, or the policy correctly refuses it as
+ *     "not an update" (`fae9975`) and the case sees an empty output;
+ *   * the cases that inject `installed` need the published tag to be exactly one
+ *     PATCH above it, because they assert the "patch update available" wording.
+ *
+ * So derive both from `package.json`: `PATCH_BELOW` is the tree's own version (what
+ * those cases pretend is installed) and `TAG` is one patch above it. Hardcoding
+ * `0.6.0`/`0.6.9` did exactly the stale thing when the tree moved to `0.7.0`.
+ */
+function treeVersion(): string {
+  const version = (JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { version: string }).version
+  const match = /^(\d+\.\d+\.\d+)/.exec(version)
+  if (match === null) throw new Error(`unparseable package version: ${version}`)
+  return match[1]
+}
+const PATCH_BELOW = treeVersion()
+const TAG = (() => {
+  const [major, minor, patch] = PATCH_BELOW.split('.')
+  return `${major}.${minor}.${Number(patch) + 1}`
+})()
 
 /**
  * The target the INSTALLER will detect on this host, so the unpinned cases fetch a
@@ -645,7 +668,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
     const out: string[] = []
     const err: string[] = []
     const code = runUpgrade(['--check'], {
-      installed: '0.6.0',
+      installed: PATCH_BELOW,
       out: (line) => out.push(line),
       err: (line) => err.push(line),
       // Deliberately NOT `...process.env`: the base URL exists only here, so a
@@ -672,7 +695,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
     const out: string[] = []
     const err: string[] = []
     const code = runUpgrade(['--auto', '--json'], {
-      installed: '0.6.0',
+      installed: PATCH_BELOW,
       out: (line) => out.push(line),
       err: (line) => err.push(line),
       platform: 'win32',
@@ -685,13 +708,13 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
     const report = JSON.parse(out[out.length - 1] as string)
     expect(report).toMatchObject({
       decision: 'notify',
-      installed: '0.6.0',
+      installed: PATCH_BELOW,
       newest: TAG,
       canSelfInstall: false,
       downloads: [`${fixtureBase}/download/${TAG}/${ASSET}`],
     })
     const notice = out.slice(0, -1).join('\n')
-    expect(notice).toContain(`qialike ${TAG} is available (you have 0.6.0)`)
+    expect(notice).toContain(`qialike ${TAG} is available (you have ${PATCH_BELOW})`)
     expect(notice).toContain('download it and replace the file by hand:')
     expect(notice).not.toContain("run 'qialike upgrade'")
     // Nothing was installed, and nothing tried to be.
@@ -707,7 +730,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
     const out: string[] = []
     const err: string[] = []
     const code = runUpgrade(['--check', '--json'], {
-      installed: '0.6.0',
+      installed: PATCH_BELOW,
       out: (line) => out.push(line),
       err: (line) => err.push(line),
       env: { QIALIKE_INSTALL_BASE_URL: 'http://127.0.0.1:1/releases' } as NodeJS.ProcessEnv,
@@ -719,7 +742,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
       // `decision` is part of the contract (it is how a caller tells "could not
       // check" from "up to date"), and the emitter always sets it.
       decision: 'check',
-      installed: '0.6.0',
+      installed: PATCH_BELOW,
       newest: null,
       relation: null,
       canSelfInstall: false,
@@ -750,7 +773,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the upgrade path r
     const dir = join(home, '.dsh', 'bin')
     mkdirSync(dir, { recursive: true })
     // A managed copy, because upgrade() refuses to install over nothing.
-    writeFileSync(join(dir, 'qialike'), '#!/bin/sh\necho "qialike 0.6.0"\n')
+    writeFileSync(join(dir, 'qialike'), `#!/bin/sh\necho "qialike ${PATCH_BELOW}"\n`)
     chmodSync(join(dir, 'qialike'), 0o755)
 
     const result = upgrade(TAG, {

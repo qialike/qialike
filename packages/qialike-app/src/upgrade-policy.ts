@@ -31,19 +31,16 @@
  * @module @yourname/qialike-app/upgrade-policy
  */
 
-import type { Context } from '@deepseek-ai/cordis'
-import z from '@deepseek-ai/schemastery'
+import { readSection } from './config.ts'
 import { BUILD_MODE } from './build-mode.ts'
 import type { BuildMode } from './version-footer.ts'
-
-/** The settings namespace holding the update switch. */
-export const UPDATE_NS = 'qialike-update'
 
 /**
  * `auto` mirrors opencode's three-state switch: `true` (install patch releases),
  * `false` (never even check) and `"notify"` (check, announce, never install).
+ * It lives in `qialike.json` (`readSection('update')`) since 0.1.7 removed the
+ * harness's runtime settings namespaces.
  */
-const UpdateSchema = z.object({ auto: z.union([z.boolean(), z.union(['notify'])]) })
 
 /** The `qialike-update.auto` values. */
 export type AutoMode = boolean | 'notify'
@@ -206,19 +203,6 @@ export function buildMode(): BuildMode {
 }
 
 /**
- * Register the settings namespace.
- *
- * Called from the existing `tui-runtime` plugin rather than from a plugin of its
- * own: the updater is not a Cordis child plugin (it must also work outside the
- * tree), so this is one registration call, not a new row in `cordis.patch.yml`.
- */
-export function registerUpdateSettings(ctx: Context): void {
-  const settings = ctx.get('settings') as { register(ns: string, schema: unknown, options?: unknown): unknown } | undefined
-  if (settings === undefined) return
-  settings.register(UPDATE_NS, UpdateSchema as never, {})
-}
-
-/**
  * The configured `auto` value, defaulting to `true` (install patch releases).
  *
  * An unregistered or malformed section falls back to the default rather than
@@ -226,9 +210,8 @@ export function registerUpdateSettings(ctx: Context): void {
  * never silently turn updates into "off" either — the explicit `false` is the
  * only way to stop checking.
  */
-export function readUpdateSettings(ctx: Context): AutoMode {
-  const settings = ctx.get('settings') as { get(ns: string): unknown } | undefined
-  const node = settings?.get(UPDATE_NS)
+export function readUpdateSettings(): AutoMode {
+  const node = readSection('update')
   if (node !== null && typeof node === 'object' && 'auto' in node) {
     const auto = (node as { auto?: unknown }).auto
     if (auto === true || auto === false || auto === 'notify') return auto

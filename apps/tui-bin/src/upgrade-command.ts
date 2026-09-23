@@ -200,7 +200,9 @@ export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
     }
     // The policy's own gates first, so a disabled or dev build does nothing —
     // not even a network request.
-    const auto = io.ctx === undefined ? true : readUpdateSettings(io.ctx)
+    // No tree context needed: the switch lives in `qialike.json`, which this
+    // process reads directly (the `qialike upgrade` launcher runs without one).
+    const auto = readUpdateSettings()
     if (policy.disabled || auto === false) { report('skip', { reason: 'disabled' }); return 0 }
     if (buildMode() === 'dev') { report('skip', { reason: 'dev-build' }); return 0 }
 

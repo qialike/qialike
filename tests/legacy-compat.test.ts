@@ -25,10 +25,9 @@ import {
   homeFilePath,
   legacyAwarePath,
   mirrorLegacyEnv,
-  registerWithLegacy,
-  type LegacySettingsHost,
 } from '../packages/qialike-app/src/legacy-names.ts'
 import { HERO_WORDMARK } from '../packages/qialike-app/src/hero-layout.ts'
+import { SECTION_NAMESPACES } from '../packages/qialike-app/src/config.ts'
 
 const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
 const previousHome = process.env.DSH_HOME
@@ -134,66 +133,6 @@ describe('legacy environment variables', () => {
   })
 })
 
-describe('legacy settings namespaces', () => {
-  const scope = { get: () => ({}), update: async () => {}, replace: async () => {}, watch: () => () => {} }
-
-  function host(legacyUser: unknown, onRegister?: (ns: string) => void): LegacySettingsHost {
-    return {
-      register(ns: string) {
-        onRegister?.(ns)
-        return scope as never
-      },
-      describe: () => (legacyUser === undefined ? [] : [{ ns: 'dsh-tui-theme', user: legacyUser }]),
-    }
-  }
-
-  test('the legacy user section becomes the base layer of the current namespace', () => {
-    const registered: string[] = []
-    registerWithLegacy(host({ colorscheme: 'gruvbox' }, (ns) => registered.push(ns)), 'qialike-theme', 'dsh-tui-theme', {})
-    expect(registered, 'the legacy namespace is read first').toEqual(['dsh-tui-theme', 'qialike-theme'])
-  })
-
-  test('the base is the legacy USER layer, so a current write still wins', () => {
-    // The scope receives `{ base }`; schema defaults and the current user layer
-    // resolve on top, which is exactly "read the old name, write the new one".
-    let options: unknown
-    const settings: LegacySettingsHost = {
-      register(ns: string, _schema: unknown, opts?: unknown) {
-        if (ns === 'qialike-theme') options = opts
-        return scope as never
-      },
-      describe: () => [{ ns: 'dsh-tui-theme', user: { colorscheme: 'gruvbox' } }],
-    }
-    registerWithLegacy(settings, 'qialike-theme', 'dsh-tui-theme', {})
-    expect(options).toEqual({ base: { colorscheme: 'gruvbox' } })
-  })
-
-  test('no legacy section, or a non-object one, registers with no base', () => {
-    for (const legacyUser of [undefined, null, 'nonsense']) {
-      let options: unknown = 'unset'
-      const settings: LegacySettingsHost = {
-        register(_ns: string, _schema: unknown, opts?: unknown) { options = opts; return scope as never },
-        describe: () => (legacyUser === undefined ? [] : [{ ns: 'dsh-tui-theme', user: legacyUser }]),
-      }
-      registerWithLegacy(settings, 'qialike-theme', 'dsh-tui-theme', {})
-      expect(options).toEqual({})
-    }
-  })
-
-  test('an unreadable legacy section never blocks the current registration', () => {
-    const registered: string[] = []
-    const settings: LegacySettingsHost = {
-      register(ns: string) {
-        registered.push(ns)
-        if (ns === 'dsh-tui-theme') throw new Error('legacy section fails the schema')
-        return scope as never
-      },
-      describe: () => [],
-    }
-    expect(() => registerWithLegacy(settings, 'qialike-theme', 'dsh-tui-theme', {})).not.toThrow()
-    expect(registered).toEqual(['dsh-tui-theme', 'qialike-theme'])
-  })
-})
 
 describe('renamed product surfaces', () => {
   test('the ASCII fallback wordmark spells the new name at the same 5x27 size', () => {
@@ -210,19 +149,24 @@ describe('renamed product surfaces', () => {
     ])
   })
 
-  test('every settings namespace keeps a legacy read-through constant', () => {
-    const files: readonly (readonly [file: string, marker: string])[] = [
-      ['llm.ts', "export const TUI_LLM_LEGACY_NS = 'dsh-tui-llm'"],
-      ['theme-plugin.ts', "const LEGACY_NS = 'dsh-tui-theme'"],
-      ['opencode.ts', "const LEGACY_NS = 'dsh-tui-opencode'"],
-      ['azure.ts', "const LEGACY_NS = 'dsh-tui-azure'"],
-      ['china-gateways.ts', "const LEGACY_NS = 'dsh-tui-china-gateways'"],
-      ['foreign-gateways.ts', "const LEGACY_NS = 'dsh-tui-foreign-gateways'"],
-    ]
-    for (const [file, marker] of files) {
-      const source = readFileSync(join(REPO, 'packages/qialike-app/src', file), 'utf8')
-      expect(source, `${file} declares its legacy namespace`).toContain(marker)
-      expect(source, `${file} registers through the fallback helper`).toContain('registerWithLegacy(settings,')
+  test('every settings section keeps its pre-rename spelling, current first', () => {
+    // The legacy READ-THROUGH used to be a per-plugin constant plus
+    // `registerWithLegacy`. Harness 0.1.7 removed runtime settings namespaces, so
+    // both moved into ONE table that the one-time migration walks (config.ts) —
+    // the property to preserve is the same: every section still resolves under
+    // its `dsh-tui-*` spelling, and the current name wins when both are present.
+    expect(SECTION_NAMESPACES).toEqual({
+      llm: ['qialike-llm', 'dsh-tui-llm'],
+      opencode: ['qialike-opencode', 'dsh-tui-opencode'],
+      azure: ['qialike-azure', 'dsh-tui-azure'],
+      china_gateways: ['qialike-china-gateways', 'dsh-tui-china-gateways'],
+      foreign_gateways: ['qialike-foreign-gateways', 'dsh-tui-foreign-gateways'],
+      theme: ['qialike-theme', 'dsh-tui-theme'],
+      update: ['qialike-update'],
+    })
+    for (const [key, namespaces] of Object.entries(SECTION_NAMESPACES)) {
+      expect(namespaces.length, `${key} has at least one spelling`).toBeGreaterThan(0)
+      expect(namespaces[0]!.startsWith('qialike-'), `${key} lists the current spelling first`).toBe(true)
     }
   })
 })

@@ -27,7 +27,7 @@
  * tree.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 /** Idempotency marker of the token-integrity edit. */
 export const TOKEN_INTEGRITY_MARKER = 'setTokenIntegrityLow';
@@ -302,6 +302,42 @@ function lowLabelEdits() {
 }
 
 /**
+ * Find the bundled chunk that carries the ACL token code.
+ *
+ * The upstream bundler names split chunks with a CONTENT HASH
+ * (`types-<hash>.js`), so a name pinned here goes stale on the next harness
+ * rebuild: 0.1.5-rc.2 shipped `types-DuU3lSVe.js`, 0.1.7-alpha.2 ships
+ * `types-DxezulnA.js` — and the pinned path turned the whole build into a raw
+ * `ENOENT` from `readFileSync`. Resolve by CONTENT instead: the chunk carrying
+ * any edit's anchor OR its idempotency marker (so the same search works before
+ * and after patching).
+ * @param root - the vendored package `lib` directory.
+ * @param edits - the edits that must land in that chunk.
+ * @param readFile - injected reader.
+ * @returns the chunk path, or undefined when no chunk carries the anchor.
+ */
+function findTokenChunk(root, edits, readFile) {
+    let entries;
+    try {
+        entries = readdirSync(root, { withFileTypes: true });
+    } catch {
+        return undefined;
+    }
+    for (const entry of entries) {
+        if (!entry.isFile() || !/^types-.*\.js$/.test(entry.name)) continue;
+        const file = `${root}/${entry.name}`;
+        let source;
+        try {
+            source = String(readFile(file, 'utf8'));
+        } catch {
+            continue;
+        }
+        if (edits.some((edit) => source.includes(edit.anchor) || source.includes(edit.marker))) return file;
+    }
+    return undefined;
+}
+
+/**
  * Apply the P0-A delete-constraint patch to the vendored ACL package.
  * @param options - patch options.
  * @param options.root - the vendored package `lib` directory.
@@ -313,10 +349,18 @@ function lowLabelEdits() {
 export function patchDeleteConstraint({ root, readFile, writeFile, log = () => {} }) {
     const reader = readFile ?? readFileSync;
     const writer = writeFile ?? writeFileSync;
-    const chunk = `${root}/types-DuU3lSVe.js`;
     const sourceToken = `${root}/types/token.js`;
+    const tokenEdits = [...tokenIntegrityEdits('\t', '"', 'throwLastError$1'), ...lowLabelEdits()];
+    const chunk = findTokenChunk(root, tokenEdits, reader);
+    if (chunk === undefined) {
+        throw new Error(
+            `delete-constraint: no types-*.js under ${root} carries the ACL token anchor;`
+            + ' the upstream bundle layout changed — re-check apps/tui-bin/harness-patches/delete-constraint.mjs'
+            + ' against the harness version',
+        );
+    }
     const changed = [];
-    if (applyEdits(chunk, [...tokenIntegrityEdits('\t', '"', 'throwLastError$1'), ...lowLabelEdits()], reader, writer)) {
+    if (applyEdits(chunk, tokenEdits, reader, writer)) {
         changed.push(chunk);
         log(`delete-constraint: patched ${chunk}`);
     } else {

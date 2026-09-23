@@ -21,7 +21,7 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,6 +44,12 @@ test.skipIf(!existsSync(bin))('exiting qialike writes nothing visible after the 
   if (process.platform === 'win32') return // script(1) is not available
 
   const out = join(tmpdir(), `qialike-exit-${process.pid}.typescript`)
+  // A throwaway HOME/DSH_HOME: since 0.1.7 the launcher MATERIALIZES the profile
+  // under `$DSH_HOME/profiles/tui/` on startup, so booting against the real home
+  // would depend on it being writable (it is not under this workspace's file
+  // sandbox, where the app dies with EROFS before painting). The scenario only
+  // asserts the exit byte sequence, so which home it boots is irrelevant.
+  const home = mkdtempSync(join(tmpdir(), `qialike-exit-home-${process.pid}-`))
   // Declare a NORMAL pty size inside the session: with stdin piped, script(1)
   // hands the child a 0x0 tty (measured `stty size` → "0 0"), and qialike PAUSES
   // every key below the 14-row minimum (the "terminal too small" notice keeps
@@ -55,7 +61,10 @@ test.skipIf(!existsSync(bin))('exiting qialike writes nothing visible after the 
     ? ['-q', out, 'sh', '-c', sized] // BSD script: `script [-q] [file [command ...]]`
     : ['-qec', sized, out] // util-linux: `script [-q] -e -c command [file]`
   let spawnFailed = false
-  const child = spawn('script', scriptArgs, { stdio: ['pipe', 'ignore', 'ignore'] })
+  const child = spawn('script', scriptArgs, {
+    stdio: ['pipe', 'ignore', 'ignore'],
+    env: { ...process.env, HOME: home, DSH_HOME: home, QIALIKE_DISABLE_AUTOUPDATE: '1' },
+  })
   child.on('error', () => { spawnFailed = true }) // script not installed: skip
 
   await new Promise((resolve) => setTimeout(resolve, BOOT_MS))
@@ -70,6 +79,7 @@ test.skipIf(!existsSync(bin))('exiting qialike writes nothing visible after the 
 
   let text = readFileSync(out, 'utf8')
   rmSync(out, { force: true })
+  rmSync(home, { recursive: true, force: true })
   // Strip script's own envelope: the "Script started/done" header/footer lines
   // are written by script(1), not by qialike.
   const footer = text.lastIndexOf('Script done')

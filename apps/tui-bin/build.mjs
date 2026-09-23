@@ -52,7 +52,7 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-versio
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.1.5-rc.2'
+const HARNESS_VERSION_MAX = '0.1.7-alpha.2'
 
 /**
  * The oldest bun whose runtime may be baked into an artifact.
@@ -659,7 +659,11 @@ function createResolveFarm() {
   // never walks up into the harness's own node_modules store, which would
   // resolve real, untransformed packages transitively.
   rmSync(join(nm, '@deepseek-ai'), { recursive: true, force: true })
-  for (const [name, dir] of scanPackages()) {
+  const harnessPackages = [...scanPackages()]
+  // Before linking: the vendored packages may import a dep the hoisted mirror
+  // does not carry (see linkUnhoistedHarnessDeps).
+  linkUnhoistedHarnessDeps(nm, harnessPackages)
+  for (const [name, dir] of harnessPackages) {
     link(name, transformPackageCopy(name, dir))
   }
   link('@yourname/qialike-app', join(ROOT, 'packages/qialike-app'))
@@ -735,6 +739,7 @@ function createResolveFarm() {
 
   // Bun gaps in the Node builtins the bundled harness uses (see the function).
   patchBunNodeUtilGaps()
+  patchBunModuleGaps()
   patchBunSeaWorkerEntries()
   patchBunSeaWorkflowWorker()
   // P0-A: the delete constraint lives inside the ACL package (the confined token
@@ -775,6 +780,94 @@ function createResolveFarm() {
  * This edits `apps/tui-bin/x/**` (our transform of the harness's compiled
  * `lib/`), never the harness checkout — the same rule as the Ink patches.
  */
+/**
+ * Shim the `node:module` APIs this Bun runtime does not implement.
+ *
+ * Harness 0.1.7-alpha.2 added `@deepseek-ai/dsh-ptc-runtime-node` (mounted by the
+ * BASE composition), which imports `stripTypeScriptTypes` from `node:module` — a
+ * Node >= 22.13 API. Bun has no such export, and because it is a NAMED import the
+ * whole binary died at STARTUP:
+ *
+ *   SyntaxError: Export named 'stripTypeScriptTypes' not found in module 'node:module'.
+ *
+ * Same rule as {@link patchBunNodeUtilGaps}: edit `apps/tui-bin/x/**` (our
+ * transform of the harness's compiled `lib/`), never the harness checkout. The
+ * names are dropped from the import and a local implementation is appended.
+ *
+ * The shim is faithful for the one call site that exists: the PTC runtime wraps
+ * the program in `async function __dsh_program__() { ... }` and then slices the
+ * FIXED prefix/suffix back off (`stripped.slice(35, -2)`), so the wrapper bytes
+ * must survive verbatim. It therefore transpiles the whole wrapped function with
+ * Bun's own TypeScript transpiler — the equivalent of Node's `strip` mode as far
+ * as the caller is concerned — and re-attaches the ORIGINAL wrapper line, keeping
+ * those offsets exact. If Bun's transpiler is unavailable it throws a named error
+ * instead of silently returning unstripped source.
+ */
+function patchBunModuleGaps() {
+  const farm = join(ROOT, 'apps/tui-bin/x')
+  if (!existsSync(farm)) return
+  const files = []
+  const collect = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) collect(path)
+      else if (entry.name.endsWith('.js')) files.push(path)
+    }
+  }
+  collect(farm)
+  const shim = [
+    '/* qialike: node:module.stripTypeScriptTypes is not implemented by Bun. */',
+    'let __qialikeTsStrip;',
+    'const stripTypeScriptTypes = (source) => {',
+    '  const text = String(source);',
+    '  if (__qialikeTsStrip === undefined) {',
+    '    __qialikeTsStrip = (typeof Bun !== "undefined" && typeof Bun.Transpiler === "function")',
+    '      ? new Bun.Transpiler({ loader: "ts" })',
+    '      : null;',
+    '  }',
+    '  if (__qialikeTsStrip === null) {',
+    '    throw new Error("qialike: node:module.stripTypeScriptTypes is unavailable on this runtime (Bun has no such API)");',
+    '  }',
+    '  const out = __qialikeTsStrip.transformSync(text);',
+    '  const open = out.indexOf("{");',
+    '  const close = out.lastIndexOf("}");',
+    '  const nl = text.indexOf("\\n");',
+    '  if (open < 0 || close <= open || nl < 0 || !text.endsWith("\\n}")) {',
+    '    return out;',
+    '  }',
+    '  return text.slice(0, nl + 1) + out.slice(open + 1, close) + "\\n}";',
+    '};',
+  ].join('\n')
+  let patched = 0
+  for (const file of files) {
+    const text = readFileSync(file, 'utf8')
+    if (!text.includes('stripTypeScriptTypes')) continue
+    if (text.includes('qialike: node:module.stripTypeScriptTypes')) continue
+    // Only a file that IMPORTS the name from `node:module` gets the shim: a file
+    // that merely DEFINES its own `stripTypeScriptTypes` (the web-preview worker
+    // host has one that throws) must keep it, and appending a second declaration
+    // would be a duplicate binding.
+    let imported = false
+    const next = text.replace(
+      /import\s*\{([^}]*)\}\s*from\s*(["'])node:module\2;?/g,
+      (match, names) => {
+        const kept = String(names)
+          .split(',')
+          .map((name) => name.trim())
+          .filter((name) => name !== '')
+        if (!kept.includes('stripTypeScriptTypes')) return match
+        imported = true
+        const rest = kept.filter((name) => name !== 'stripTypeScriptTypes')
+        return rest.length > 0 ? `import { ${rest.join(', ')} } from "node:module";` : ''
+      },
+    )
+    if (!imported) continue
+    writeFileSync(file, `${next}\n${shim}\n`)
+    patched += 1
+  }
+  if (patched > 0) console.log(`qialike: patched Bun node:module gaps in ${patched} bundled file(s)`)
+}
+
 function patchBunNodeUtilGaps() {
   const farm = join(ROOT, 'apps/tui-bin/x')
   if (!existsSync(farm)) return
@@ -1242,6 +1335,63 @@ function patchRipgrepPath() {
 }
 
 /** Symlink every entry of the harness virtual-store `node_modules` we don't own. */
+/**
+ * Link the vendored harness packages' dependencies that pnpm did NOT hoist.
+ *
+ * `mirrorHarnessStore` mirrors only the HOISTED view
+ * (`<harness>/node_modules/.pnpm/node_modules`), so a dependency pnpm kept
+ * private to one package is invisible to the bundle: 0.1.7-alpha.2 added
+ * `@deepseek-ai/dsh-plugin-manager` -> `execa@10`, which is present in
+ * `.pnpm/execa@10.0.0/` but absent from the hoisted mirror, and esbuild failed
+ * with `Could not resolve: "execa"`.
+ *
+ * Read each vendored package's declared runtime dependencies and link any that
+ * is missing from the farm to its `.pnpm/<name>@<version>/node_modules/<name>`
+ * home. Only the TOP-LEVEL name needs linking: the dependency's own transitive
+ * deps resolve through the symlinks inside that directory.
+ * @param nm - the farm's `node_modules`.
+ * @param packages - `[name, dir]` pairs from {@link scanPackages}.
+ */
+function linkUnhoistedHarnessDeps(nm, packages) {
+  const pnpm = join(HARNESS, 'node_modules/.pnpm')
+  if (!existsSync(pnpm)) return
+  let pnpmEntries
+  try {
+    pnpmEntries = readdirSync(pnpm)
+  } catch {
+    return
+  }
+  const linked = []
+  for (const [, dir] of packages) {
+    let manifest
+    try {
+      manifest = readJson(join(dir, 'package.json'))
+    } catch {
+      continue
+    }
+    for (const name of Object.keys(manifest.dependencies ?? {})) {
+      if (name.startsWith('@deepseek-ai/')) continue // vendored: linked by the caller
+      const target = join(nm, ...name.split('/'))
+      if (existsSync(target)) continue
+      // pnpm's store directory name: `name@version`, with `/` -> `+` for scopes
+      // and possibly a peer suffix (e.g. `execa@10.0.0_abc123`).
+      const flat = name.replace('/', '+')
+      const candidate = pnpmEntries.find((entry) => entry.startsWith(`${flat}@`) || entry.startsWith(`${flat}_`))
+      if (candidate === undefined) continue
+      const src = join(pnpm, candidate, 'node_modules', ...name.split('/'))
+      if (!existsSync(src)) continue
+      mkdirSync(dirname(target), { recursive: true })
+      try {
+        symlinkSync(src, target, 'dir')
+        linked.push(name)
+      } catch {
+        // Already linked by an earlier package with the same dependency.
+      }
+    }
+  }
+  if (linked.length > 0) console.log(`qialike: linked ${linked.length} unhoisted harness dep(s): ${linked.join(', ')}`)
+}
+
 function mirrorHarnessStore(nm) {
   const store = join(HARNESS, 'node_modules/.pnpm/node_modules')
   if (!existsSync(store)) return

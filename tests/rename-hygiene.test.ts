@@ -41,12 +41,11 @@ const LEGACY_ALLOWLIST: Readonly<Record<string, readonly [count: number, reason:
   'packages/qialike-app/src/index.tsx': [1, 'comment on the first import that mirrors legacy env vars'],
   'packages/qialike-app/src/log.ts': [1, 'comment on the lazy log path the migration may rename'],
   'packages/qialike-app/src/selftest.ts': [1, 'accepts a pre-rename checkout root package name'],
-  'packages/qialike-app/src/llm.ts': [1, 'legacy settings namespace constant'],
-  'packages/qialike-app/src/theme-plugin.ts': [1, 'legacy settings namespace constant'],
-  'packages/qialike-app/src/opencode.ts': [1, 'legacy settings namespace constant'],
-  'packages/qialike-app/src/azure.ts': [1, 'legacy settings namespace constant'],
-  'packages/qialike-app/src/china-gateways.ts': [1, 'legacy settings namespace constant'],
-  'packages/qialike-app/src/foreign-gateways.ts': [1, 'legacy settings namespace constant'],
+  // The six per-plugin settings-namespace constants used to be listed here, one
+  // hit each. Harness 0.1.7 removed runtime settings namespaces, so those
+  // spellings all live in ONE table now (the migration's `SECTION_NAMESPACES`):
+  // 6 `dsh-tui-*` entries + the docblock that names the spelling pattern.
+  'packages/qialike-app/src/config.ts': [7, 'the legacy settings namespaces the one-time migration reads'],
   'apps/tui-bin/src/bin.ts': [5, 'pre-rename rc marker, temp-dir sweep, alias resolution comment'],
   'apps/tui-bin/src/main.ts': [1, 'comment on the first import that mirrors legacy env vars'],
   'apps/tui-bin/build.mjs': [4, 'legacy patch markers and the alias-specifier mapping'],

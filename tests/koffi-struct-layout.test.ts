@@ -437,7 +437,11 @@ describe('drift guards', () => {
     ].filter((file) => existsSync(file))
     const used = new Set<string>()
     for (const file of sources) {
-      for (const match of readFileSync(file, 'utf8').matchAll(/\bkoffi\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
+      // `(?<![\w./-])` — NOT a bare \b: 0.1.7-alpha.2 spells its internal import
+      // `from './koffi.ts'`, whose file-name tail `koffi.ts` matched the old
+      // pattern and reported a phantom missing member (`ts`). Only a real member
+      // access counts, so nothing may precede the name except a non-identifier.
+      for (const match of readFileSync(file, 'utf8').matchAll(/(?<![\w./-])koffi\.([A-Za-z_][A-Za-z0-9_]*)/g)) {
         used.add(match[1])
       }
     }

@@ -19,10 +19,8 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
-import z from '@deepseek-ai/schemastery'
 import type { TuiProviderTemplate } from './llm.ts'
-import { registerWithLegacy } from './legacy-names.ts'
+import { readSection } from './config.ts'
 import azureData from './azure-templates.json' with { type: 'json' }
 
 /** Stable Cordis plugin name. */
@@ -31,31 +29,19 @@ export const name = 'tui-azure'
 /** Services required: settings (the enabled switch) and the template registry. */
 export const inject = ['settings', 'tuiLlmTemplates']
 
-/** The `qialike-azure:` settings namespace holding the enabled switch. */
-const NS = 'qialike-azure'
-/** Pre-rename namespace: read as a `base` fallback, never written. */
-const LEGACY_NS = 'dsh-tui-azure'
-
-/** Schema: `enabled` defaults to true when absent (explicit false unloads). */
-const AzureSchema = z.object({ enabled: z.boolean() })
 
 /** The Azure template registered when the plugin is enabled (data file
  *  `azure-templates.json`, generated from the models.dev catalog). */
 export const AZURE_TEMPLATES: readonly TuiProviderTemplate[] = azureData
 
 export function apply(ctx: Context): void {
-  const settings = ctx.get('settings') as {
-    register(ns: unknown, schema: unknown, options?: unknown): SettingsScope<unknown>
-    get(ns: unknown): unknown
-    describe(): { ns: string; user?: unknown }[]
-  } | undefined
   const templates = ctx.get('tuiLlmTemplates') as {
     add(templates: readonly TuiProviderTemplate[]): void
     hideRoutes(routes: readonly string[]): void
   } | undefined
-  if (settings === undefined || templates === undefined) return
-  const scope = registerWithLegacy(settings, NS, LEGACY_NS, AzureSchema as never)
-  const enabled = (scope.get() as { enabled?: boolean } | undefined)?.enabled
+  if (templates === undefined) return
+  // The switch lives in `qialike.json` since 0.1.7 (`readSection`).
+  const enabled = readSection('azure')?.enabled
   const routes = AZURE_TEMPLATES.map((t) => t.route)
   if (enabled === false) {
     templates.hideRoutes(routes)

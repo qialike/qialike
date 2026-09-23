@@ -74,10 +74,17 @@ function policyEdits() {
     ].join('\n');
     return [
         {
+            // 0.1.7-alpha.2 stopped importing anything from `dsh-sandbox` here
+            // (`canonicalPath` is gone from the file entirely), so the old
+            // "extend the existing import" anchor no longer exists. Anchor on the
+            // cordis import the service class extends and give ours its own line.
+            // The MARKER is unchanged, so a future harness that imports
+            // `writableRoots` itself simply skips this edit and the sentence edit
+            // below still has what it needs.
             name: 'policy allow-list import',
             marker: 'writableRoots } from "@deepseek-ai/dsh-sandbox"',
-            anchor: 'import { canonicalPath } from "@deepseek-ai/dsh-sandbox";',
-            text: 'import { canonicalPath, writableRoots } from "@deepseek-ai/dsh-sandbox";',
+            anchor: 'import { Service } from "@deepseek-ai/cordis";',
+            text: 'import { Service } from "@deepseek-ai/cordis";\nimport { writableRoots } from "@deepseek-ai/dsh-sandbox";',
         },
         {
             name: 'policy allow-list sentence',

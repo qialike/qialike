@@ -16,8 +16,7 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
-import { registerWithLegacy } from './legacy-names.ts'
+import { onSectionChange, readSection } from './config.ts'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { logErrorFileOnly } from './log.ts'
@@ -37,6 +36,7 @@ import {
   type LlmModelInfo,
   type LlmResolvedModelInfo,
   type Message,
+  type RequestMessage,
   type TokenUsage,
   type FinishReason,
 } from '@deepseek-ai/dsh-llm'
@@ -45,13 +45,12 @@ import {
 export const name = 'tui-llm'
 
 /** Services required before adapter registration can run. */
-export const inject = ['settings', 'credentials', 'llm']
+export const inject = ['credentials', 'llm']
 
-/** The `qialike-llm:` settings namespace holding user provider profiles. */
+/** Identifier the provider directory reports for these profiles; the values
+ *  themselves live at `qialike.json`'s `llm` key since 0.1.7 (which removed the
+ *  harness's runtime settings namespaces — see `config.ts`). */
 export const TUI_LLM_NS = 'qialike-llm'
-
-/** Pre-rename namespace: read as a `base` fallback, never written. */
-export const TUI_LLM_LEGACY_NS = 'dsh-tui-llm'
 
 /** One provider route profile as configured under `qialike-llm.providers`. */
 export interface TuiProviderProfile {
@@ -278,10 +277,6 @@ const TuiProviderSchema = z.object({
   effortWire: z.union(['reasoning-effort']),
   catalogProvider: z.string(),
   catalogModel: z.string(),
-})
-
-const TuiLlmSchema = z.object({
-  providers: z.dict(TuiProviderSchema),
 })
 
 /** Structural validation for the bundled `provider-templates.json` rows (the
@@ -534,7 +529,7 @@ interface AnthropicToolResultBlock { type: 'tool_result'; tool_use_id: string; c
 const IMAGE_REQUEST_POLICY = { maxPixels: 1024 * 1024, maxBytes: 2 * 1024 * 1024 }
 
 /** Whether any message in a request carries an image block. */
-function hasImages(messages: readonly Message[]): boolean {
+function hasImages(messages: readonly RequestMessage[]): boolean {
   return messages.some((message) => message.content.some((block) => block.type === 'image'))
 }
 
@@ -623,7 +618,7 @@ function serializeAssistant(message: Message): WireMessage {
  */
 export async function serializeMessagesOpenAI(
   ctx: Context,
-  messages: readonly Message[],
+  messages: readonly RequestMessage[],
   system: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<WireMessage[]> {
@@ -638,19 +633,22 @@ export async function serializeMessagesOpenAI(
       wire.push(serializeAssistant(message))
       continue
     }
-    const toolResults = message.content.filter((block) => block.type === 'tool-result')
+    // 0.1.7 models a tool RESULT as its own message (`role: 'tool'`), not as a
+    // `tool-result` content block carried by the user/assistant message, so it
+    // becomes one wire message here instead of being filtered out of `content`.
+    if (message.role === 'tool') {
+      wire.push({
+        role: 'tool',
+        tool_call_id: message.toolCallId,
+        content: flattenText(message.content) || '(no output)',
+      })
+      continue
+    }
     const parts = await userContentParts(ctx, message, signal)
-    if (parts.length > 0 || toolResults.length === 0) {
+    if (parts.length > 0) {
       wire.push({
         role: 'user',
         content: parts.length === 1 && parts[0].type === 'text' ? parts[0].text : parts,
-      })
-    }
-    for (const result of toolResults) {
-      wire.push({
-        role: 'tool',
-        tool_call_id: result.toolCallId,
-        content: flattenText(result.content) || '(no output)',
       })
     }
   }
@@ -660,7 +658,7 @@ export async function serializeMessagesOpenAI(
 /** One user message's text/image content parts (OpenAI). */
 async function userContentParts(
   ctx: Context,
-  message: Message,
+  message: RequestMessage,
   signal: AbortSignal | undefined,
 ): Promise<readonly (WireTextPart | WireImagePart)[]> {
   const parts: (WireTextPart | WireImagePart)[] = []
@@ -690,7 +688,7 @@ async function userContentParts(
  */
 export async function serializeMessagesAnthropic(
   ctx: Context,
-  messages: readonly Message[],
+  messages: readonly RequestMessage[],
   system: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<{ systemText: string | undefined; messages: AnthropicWireMessage[] }> {
@@ -719,8 +717,19 @@ export async function serializeMessagesAnthropic(
       wire.push({ role: 'assistant', content })
       continue
     }
-    // user role: text/images plus expanded tool results.
-    const toolResults = message.content.filter((block) => block.type === 'tool-result')
+    // Tool results are their own message in 0.1.7 (see the OpenAI path above).
+    if (message.role === 'tool') {
+      wire.push({
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: message.toolCallId,
+          content: flattenText(message.content) || '(no output)',
+        }],
+      })
+      continue
+    }
+    // user role: text/images.
     const content: (AnthropicTextBlock | AnthropicImageBlock)[] = []
     for (const block of message.content) {
       if (block.type === 'text') {
@@ -733,18 +742,8 @@ export async function serializeMessagesAnthropic(
         content.push({ type: 'image', source: { type: 'base64', media_type: encoded.mediaType, data: encoded.data } })
       }
     }
-    if (content.length > 0 || toolResults.length === 0) {
+    if (content.length > 0) {
       wire.push({ role: 'user', content })
-    }
-    for (const result of toolResults) {
-      wire.push({
-        role: 'user',
-        content: [{
-          type: 'tool_result',
-          tool_use_id: result.toolCallId,
-          content: flattenText(result.content) || '(no output)',
-        }],
-      })
     }
   }
   return { systemText: systemParts.length > 0 ? systemParts.join('\n\n') : undefined, messages: wire }
@@ -929,7 +928,7 @@ interface GoogleContent {
  */
 export async function serializeMessagesGoogle(
   ctx: Context,
-  messages: readonly Message[],
+  messages: readonly RequestMessage[],
   system: string | undefined,
   signal: AbortSignal | undefined,
 ): Promise<{ systemInstruction: string | undefined; contents: GoogleContent[] }> {
@@ -943,6 +942,15 @@ export async function serializeMessagesGoogle(
       continue
     }
     const parts: GooglePart[] = []
+    if (message.role === 'tool') {
+      // Tool results are their own message in 0.1.7; Gemini answers them with a
+      // `functionResponse` part on a user turn (see the OpenAI/Anthropic paths).
+      const text = flattenText(message.content)
+      let response: unknown = {}
+      try { response = JSON.parse(text || '{}') as unknown } catch { response = text }
+      contents.push({ role: 'user', parts: [{ functionResponse: { name: message.toolCallId, response } }] })
+      continue
+    }
     for (const block of message.content) {
       if (block.type === 'text') {
         if (block.text !== '') parts.push({ text: block.text })
@@ -956,11 +964,6 @@ export async function serializeMessagesGoogle(
         let args: unknown = {}
         try { args = JSON.parse(block.arguments) as unknown } catch { /* malformed args: send {} */ }
         parts.push({ functionCall: { name: block.name, args } })
-      } else if (block.type === 'tool-result') {
-        const text = flattenText(block.content)
-        let response: unknown = {}
-        try { response = JSON.parse(text || '{}') as unknown } catch { response = text }
-        parts.push({ functionResponse: { name: block.toolCallId, response } })
       }
     }
     if (parts.length > 0) contents.push({ role: message.role === 'assistant' ? 'model' : 'user', parts })
@@ -1742,10 +1745,13 @@ class TuiLlmAdapter extends LlmAdapter {
       const meter = this.ctx.get('tokenMeter') as
         | { estimateMessage?(message: Message): number }
         | undefined
+      // Synthesised probe, not a stored message: 0.1.7's assistant content union
+      // no longer structurally overlaps a hand-built text block, so go through
+      // `unknown` (the meter only reads role + text).
       return meter?.estimateMessage?.({
         role: 'assistant',
         content: [{ type: 'text', text }],
-      } as Message)
+      } as unknown as Message)
     } catch {
       return undefined
     }
@@ -1956,18 +1962,12 @@ function directoryEntries(
 
 /** Register the adapter and directory, re-registering live on settings changes. */
 export function apply(ctx: Context): void {
-  const settings = ctx.get('settings') as {
-    register(ns: unknown, schema: unknown, options?: unknown): SettingsScope<unknown>
-    get(ns: unknown): unknown
-    describe(): { ns: string; user?: unknown }[]
-  } | undefined
   const llm = ctx.get('llm') as {
     registerAdapter(providers: readonly string[], adapter: LlmAdapter): { replace(providers: readonly string[]): void }
     registerConfigurableProviders(entries: readonly LlmConfigurableProvider[]): { replace(entries: readonly LlmConfigurableProvider[]): void }
   } | undefined
-  if (settings === undefined || llm === undefined) return
-  const scope = registerWithLegacy(settings, TUI_LLM_NS, TUI_LLM_LEGACY_NS, TuiLlmSchema as never)
-  const section = (): TuiLlmSection => (scope.get() as TuiLlmSection | undefined) ?? {}
+  if (llm === undefined) return
+  const section = (): TuiLlmSection => (readSection('llm') as TuiLlmSection | undefined) ?? {}
   const profiles = (): Map<string, TuiProviderProfile> => effectiveProviders(section())
   // The template directory is extensible: sibling plugins (e.g.
   // tui-opencode-gateways) register extra templates through this service,
@@ -2021,9 +2021,8 @@ export function apply(ctx: Context): void {
   const adapter = new TuiLlmAdapter(ctx, profiles)
   adapterReg = llm.registerAdapter(adapterRoutes(), adapter)
   directoryReg = llm.registerConfigurableProviders(directoryEntries(profiles(), templateService.list()))
-  // Live reload: a settings edit (web or hand-written) re-registers routes and
-  // the directory without a restart.
-  scope.watch(() => {
-    reRegister()
-  })
+  // Live reload: an edit to `qialike.json` (hand-written, or by /models
+  // activating a dormant route) re-registers routes and the directory without a
+  // restart. `ctx.effect` ties the subscription to this plugin's lifetime.
+  ctx.effect(() => onSectionChange('llm', reRegister))
 }

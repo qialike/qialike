@@ -10,9 +10,11 @@
  * @module @yourname/qialike-app/config
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { basename, dirname, join } from 'node:path'
+import { parse as parseYaml } from 'yaml'
 import { homeFilePath } from './legacy-names.ts'
+import { logErrorFileOnly } from './log.ts'
 
 /** Terminal width (columns) below which the right sidebar hides (auto). */
 export const SIDEBAR_MIN_WIDTH = 110
@@ -60,6 +62,28 @@ export const RESUME_LAST_ENV = 'QIALIKE_RESUME_LAST'
  *  survives restarts; the `/sidebar` command and a Steps-title click cycle it. */
 export type SidebarMode = 'auto' | 'on' | 'off'
 
+/** A qialike-owned switch section, stored in `qialike.json`.
+ *
+ *  Harness 0.1.5 let a plugin register an arbitrary settings namespace at runtime
+ *  (`settings.register(ns, schema)`), and qialike kept its own switches there.
+ *  0.1.7 removed that capability — a section now belongs to a plugin's own
+ *  `Config` — so they live in the config file this app already owns. The
+ *  `qialike-*` spelling is current, `dsh-tui-*` is the pre-rename one. */
+export type PluginSectionKey =
+  | 'llm' | 'opencode' | 'azure' | 'china_gateways' | 'foreign_gateways' | 'theme' | 'update'
+
+/** The settings namespaces each section used to be registered under, CURRENT
+ *  spelling first so it wins when a document carries both. */
+export const SECTION_NAMESPACES: Record<PluginSectionKey, readonly string[]> = {
+  llm: ['qialike-llm', 'dsh-tui-llm'],
+  opencode: ['qialike-opencode', 'dsh-tui-opencode'],
+  azure: ['qialike-azure', 'dsh-tui-azure'],
+  china_gateways: ['qialike-china-gateways', 'dsh-tui-china-gateways'],
+  foreign_gateways: ['qialike-foreign-gateways', 'dsh-tui-foreign-gateways'],
+  theme: ['qialike-theme', 'dsh-tui-theme'],
+  update: ['qialike-update'],
+}
+
 /** The parsed config document. */
 export interface TuiConfig {
   /** Whether launch auto-resumes the newest session in the same directory. */
@@ -68,6 +92,17 @@ export interface TuiConfig {
   hidden_providers?: string[]
   /** Right-sidebar visibility mode (persisted). */
   sidebar_mode?: SidebarMode
+  /** LLM provider routes/templates (`TuiLlmSection`, typed at its consumer). */
+  llm?: Record<string, unknown>
+  opencode?: { enabled?: boolean }
+  azure?: { enabled?: boolean }
+  china_gateways?: { enabled?: boolean }
+  foreign_gateways?: { enabled?: boolean }
+  theme?: { colorscheme?: string; colors?: Record<string, string> }
+  update?: { auto?: boolean | 'notify' }
+  /** One-time record of the settings.yaml migration. Its PRESENCE is the latch:
+   *  a section the user deletes later is never resurrected by a re-run. */
+  settings_migrated?: { from: string; at: string; keys: readonly string[] }
 }
 
 /** Absolute path of the qialike config file. */
@@ -115,15 +150,51 @@ export function resolveResumeLast(): boolean {
   return fromConfig ?? DEFAULT_RESUME_LAST
 }
 
-/** Write a config document atomically (create the home dir if needed). */
-function persistConfig(config: TuiConfig): void {
+/** Write the config document (create the home dir if needed).
+ *  @returns whether the write landed; callers that report failure need this. */
+function persistConfig(config: TuiConfig): boolean {
   const path = configPath()
   try {
     mkdirSync(dirname(path), { recursive: true })
-    writeFileSync(path, JSON.stringify(config, null, 2) + '\n')
+    writeFileSync(path, JSON.stringify(config, null, 2) + '\n', { mode: 0o600 })
+    // `mode` only applies when the file is CREATED; an older 0664 file keeps its
+    // bits, so tighten explicitly (user configuration, like profiles/tui's 0700).
+    chmodSync(path, 0o600)
+    return true
   } catch {
     // Persisting is best-effort; an unwritable home must not crash the TUI.
+    return false
   }
+}
+
+const sectionListeners = new Map<PluginSectionKey, Set<() => void>>()
+
+/** One qialike-owned switch section, or `undefined` when unset (never throws). */
+export function readSection<K extends PluginSectionKey>(key: K): TuiConfig[K] {
+  return readConfig()[key]
+}
+
+/** Persist one section and notify its in-process watchers.
+ *  @returns whether the write landed (watchers run either way). */
+export function writeSection<K extends PluginSectionKey>(key: K, value: TuiConfig[K]): boolean {
+  const written = persistConfig({ ...readConfig(), [key]: value } as TuiConfig)
+  for (const listener of sectionListeners.get(key) ?? []) {
+    try {
+      listener()
+    } catch (error) {
+      logErrorFileOnly('config', error)
+    }
+  }
+  return written
+}
+
+/** Watch one section; returns the unsubscribe. This replaces the settings
+ *  service's `scope.watch()`, which 0.1.7 no longer offers. */
+export function onSectionChange(key: PluginSectionKey, listener: () => void): () => void {
+  const set = sectionListeners.get(key) ?? new Set<() => void>()
+  sectionListeners.set(key, set)
+  set.add(listener)
+  return () => { set.delete(listener) }
 }
 
 /** Provider routes hidden from the /models first-level list (never throws). */
@@ -146,4 +217,83 @@ export function readSidebarMode(): SidebarMode {
 /** Persist the right-sidebar visibility mode (best-effort). */
 export function setSidebarMode(mode: SidebarMode): void {
   persistConfig({ ...readConfig(), sidebar_mode: mode })
+}
+
+/** The harness's pre-0.1.7 settings document and the name it renames it to.
+ *  0.1.7's own importer renames `settings.yaml` to `.imported` before its first
+ *  write, so BOTH spellings have to be read — `.imported` is the newer state. */
+function legacySettingsSource(): string | undefined {
+  const home = dirname(configPath())
+  const imported = join(home, 'settings.yaml.imported')
+  if (existsSync(imported)) return imported
+  const plain = join(home, 'settings.yaml')
+  return existsSync(plain) ? plain : undefined
+}
+
+/** One section's raw value from a legacy document, current namespace first. */
+function legacySection(document: Record<string, unknown>, key: PluginSectionKey): unknown {
+  for (const ns of SECTION_NAMESPACES[key]) {
+    const value = document[ns]
+    if (value !== undefined) return value
+  }
+  return undefined
+}
+
+/**
+ * Move qialike's own switches from the harness's legacy `settings.yaml` into
+ * `qialike.json`, ONCE, at the very start of `main()`.
+ *
+ * WHY IT IS NEEDED: through 0.1.5 qialike registered seven settings namespaces at
+ * runtime (`qialike-llm`, `qialike-theme`, the four gateways, `qialike-update`)
+ * and users' values live in `settings.yaml`. 0.1.7 removed runtime namespace
+ * registration, and its own importer cannot take these either: `update(ns, …)`
+ * rejects a namespace with no configurable plugin entry (`No configurable plugin
+ * entry "…"`), so every qialike section would be logged and left behind in the
+ * renamed document — i.e. silently dropped from the app's point of view.
+ *
+ * ORDERING: it runs before the plugin tree boots (and therefore before the
+ * settings service's importer can rename the file), right after
+ * `migrateLegacyHomeFiles()`. Whatever happens, the source file is left ALONE —
+ * renaming it is the harness's job and two writers would corrupt it.
+ *
+ * SAFETY: only ADDS keys, never overwrites one already present in `qialike.json`
+ * (a user's newer choice wins), never blocks boot, and leaves no marker behind
+ * when it could not read the document, so the next launch retries.
+ */
+export function migrateLegacySettings(): void {
+  try {
+    const current = readConfig()
+    if (current.settings_migrated !== undefined) return
+    const source = legacySettingsSource()
+    if (source === undefined) return
+    const parsed: unknown = parseYaml(readFileSync(source, 'utf8'))
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      logErrorFileOnly('config', new Error(`legacy settings ${source}: not a mapping; left in place`))
+      return
+    }
+    const document = parsed as Record<string, unknown>
+    const next: Record<string, unknown> = { ...current }
+    const keys: string[] = []
+    const skipped: string[] = []
+    for (const key of Object.keys(SECTION_NAMESPACES) as PluginSectionKey[]) {
+      if (next[key] !== undefined) continue
+      const value = legacySection(document, key)
+      if (value === undefined) continue
+      if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+        skipped.push(key)
+        continue
+      }
+      next[key] = value
+      keys.push(key)
+    }
+    next.settings_migrated = { from: basename(source), at: new Date().toISOString(), keys }
+    persistConfig(next as TuiConfig)
+    if (skipped.length > 0) {
+      logErrorFileOnly('config', new Error(`legacy settings: skipped non-mapping section(s): ${skipped.join(', ')}`))
+    }
+  } catch (error) {
+    // A migration hiccup must never keep the app from booting. No marker is
+    // written, and the source stays untouched, so the next launch retries.
+    logErrorFileOnly('config', error)
+  }
 }

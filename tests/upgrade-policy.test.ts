@@ -11,7 +11,10 @@
  * @module qialike/upgrade-policy-test
  */
 
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   buildMode,
   decideUpdate,
@@ -19,8 +22,6 @@ import {
   platformKind,
   readEnvPolicy,
   readUpdateSettings,
-  registerUpdateSettings,
-  UPDATE_NS,
   type PolicyInput,
 } from '../packages/qialike-app/src/upgrade-policy.ts'
 
@@ -176,29 +177,36 @@ describe('environment overrides', () => {
 })
 
 describe('settings access', () => {
-  test('the namespace is registered under the documented name', () => {
-    let registered: string | undefined
-    registerUpdateSettings({
-      get: () => ({ register: (ns: string) => { registered = ns } }),
-    } as never)
-    expect(registered).toBe(UPDATE_NS)
-    expect(UPDATE_NS).toBe('qialike-update')
-  })
-
-  test('a missing settings service is not fatal', () => {
-    expect(() => registerUpdateSettings({ get: () => undefined } as never)).not.toThrow()
-    expect(readUpdateSettings({ get: () => undefined } as never)).toBe(true)
+  // The switch moved from a runtime-registered settings namespace to
+  // `qialike.json` (`update.auto`) when 0.1.7 removed those namespaces, so these
+  // cases write that file instead of faking the settings service.
+  let home = ''
+  const withSection = (section: unknown): void => {
+    home = mkdtempSync(join(tmpdir(), 'qialike-update-settings-'))
+    process.env.DSH_HOME = home
+    writeFileSync(join(home, 'qialike.json'), JSON.stringify(section === undefined ? {} : { update: section }))
+  }
+  afterEach(() => {
+    if (home !== '') rmSync(home, { recursive: true, force: true })
+    home = ''
+    delete process.env.DSH_HOME
   })
 
   test('auto defaults to true, and only explicit values are honoured', () => {
-    const withNode = (node: unknown) => ({ get: () => ({ get: () => node }) }) as never
-    expect(readUpdateSettings(withNode(undefined))).toBe(true)
-    expect(readUpdateSettings(withNode({}))).toBe(true)
-    expect(readUpdateSettings(withNode({ auto: true }))).toBe(true)
-    expect(readUpdateSettings(withNode({ auto: false }))).toBe(false)
-    expect(readUpdateSettings(withNode({ auto: 'notify' }))).toBe('notify')
+    withSection(undefined)
+    expect(readUpdateSettings()).toBe(true)
+    withSection({})
+    expect(readUpdateSettings()).toBe(true)
+    withSection({ auto: true })
+    expect(readUpdateSettings()).toBe(true)
+    withSection({ auto: false })
+    expect(readUpdateSettings()).toBe(false)
+    withSection({ auto: 'notify' })
+    expect(readUpdateSettings()).toBe('notify')
     // A malformed value falls back to the default rather than disabling updates.
-    expect(readUpdateSettings(withNode({ auto: 'bogus' }))).toBe(true)
-    expect(readUpdateSettings(withNode('nonsense'))).toBe(true)
+    withSection({ auto: 'bogus' })
+    expect(readUpdateSettings()).toBe(true)
+    withSection('nonsense')
+    expect(readUpdateSettings()).toBe(true)
   })
 })

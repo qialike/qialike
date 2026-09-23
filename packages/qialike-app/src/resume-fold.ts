@@ -119,6 +119,33 @@ export interface ResumeFoldOptions {
  *  process is appending to concurrently (e.g. the web and a qialike holding
  *  the same session): the file is usually healthy and the read merely raced
  *  the writer's frame boundary. */
+/** The path of ANOTHER session's log whose `open()` failed, or undefined when
+ *  `message` is not that kind of failure.
+ *
+ *  Harness 0.1.7 reads every log's generation header while it resolves a
+ *  `resumeSessionId`, and its skip list covers only
+ *  `SessionFormatUnsupportedError` / `SessionPersistenceCorruptionError` — a
+ *  plain `EACCES` from an unrelated, permission-mangled log therefore rejects
+ *  the WHOLE resume. F4 (a requested resume that cannot be honoured is fatal)
+ *  is about the log the user actually asked for, so the attach uses this to
+ *  tell the two apart: a foreign path means "stay read-only and explain"
+ *  instead of killing a TUI the user was only reading.
+ *
+ *  Deliberately narrow: an errno that names an unreadable file, an
+ *  `open '<path>'` payload, a path that IS a session log, and a path that is
+ *  not the requested session's own. Anything else keeps F4's behaviour. */
+export function foreignUnreadableLog(message: string, resumeId: string | undefined): string | undefined {
+  if (!/\b(EACCES|EPERM|ENOENT|EISDIR|EIO)\b/.test(message)) return undefined
+  const m = /open '([^']+)'/.exec(message)
+  if (m === null) return undefined
+  const path = m[1]
+  if (path === undefined || path === '') return undefined
+  if (!path.includes('/sessions/') || !path.includes('session')) return undefined
+  const requested = resumeId === undefined ? '' : String(resumeId)
+  if (requested !== '' && path.includes(requested)) return undefined
+  return path
+}
+
 export function isCorruptLogMessage(message: string): boolean {
   return /corrupt( Zstandard)? session log/.test(message)
 }

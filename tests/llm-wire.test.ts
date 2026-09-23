@@ -95,10 +95,9 @@ describe('serializeRequestResponses', () => {
           role: 'assistant',
           content: [{ type: 'tool-call', id: 'call_1', name: 'read', arguments: '{"path":"/a"}' }],
         },
-        {
-          role: 'user',
-          content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: 'ok' }] }],
-        },
+        // 0.1.7: the result is its OWN message (role 'tool'), not a content block
+        // on the user turn.
+        { role: 'tool', toolCallId: 'call_1', content: [{ type: 'text', text: 'ok' }] },
       ],
     } as never
     const body = await serializeRequestResponses(
@@ -211,10 +210,7 @@ describe('serializeMessagesGoogle', () => {
           role: 'assistant',
           content: [{ type: 'tool-call', id: 'call_1', name: 'read', arguments: '{"path":"/a"}' }],
         },
-        {
-          role: 'user',
-          content: [{ type: 'tool-result', toolCallId: 'call_1', content: [{ type: 'text', text: '{"ok":true}' }] }],
-        },
+        { role: 'tool', toolCallId: 'call_1', content: [{ type: 'text', text: '{"ok":true}' }] },
       ] as never,
       undefined,
       undefined,

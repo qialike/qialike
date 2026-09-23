@@ -9,24 +9,40 @@
  */
 
 import { describe, expect, test } from 'bun:test'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { FOREIGN_GATEWAY_TEMPLATES, apply, name } from '../packages/qialike-app/src/foreign-gateways.ts'
 
-function runApply(settingsValue: unknown): { added: { route: string }[]; hidden: string[] } {
+/**
+ * The `enabled` switch lives in `qialike.json` since 0.1.7 (`readSection`), so a
+ * case writes that file instead of faking the harness settings service.
+ */
+function runApply(section: unknown): { added: { route: string }[]; hidden: string[] } {
+  const home = mkdtempSync(join(tmpdir(), 'qialike-foreign-gateways-'))
+  const previous = process.env.DSH_HOME
+  process.env.DSH_HOME = home
+  writeFileSync(join(home, 'qialike.json'), JSON.stringify({ foreign_gateways: section }))
   const added: { route: string }[] = []
   const hidden: string[] = []
-  const ctx = {
-    get(id: string) {
-      if (id === 'settings') return { register: () => ({ get: () => settingsValue }) }
-      if (id === 'tuiLlmTemplates') {
-        return {
-          add: (templates: readonly { route: string }[]) => added.push(...templates),
-          hideRoutes: (routes: readonly string[]) => hidden.push(...routes),
+  try {
+    const ctx = {
+      get(id: string) {
+        if (id === 'tuiLlmTemplates') {
+          return {
+            add: (templates: readonly { route: string }[]) => added.push(...templates),
+            hideRoutes: (routes: readonly string[]) => hidden.push(...routes),
+          }
         }
-      }
-      return undefined
-    },
+        return undefined
+      },
+    }
+    apply(ctx as never)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previous
+    rmSync(home, { recursive: true, force: true })
   }
-  apply(ctx as never)
   return { added, hidden }
 }
 

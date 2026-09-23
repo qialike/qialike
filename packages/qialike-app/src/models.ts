@@ -14,18 +14,20 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import {
   resolveDefaultEffort,
   effectiveProfile,
-  TUI_LLM_NS,
   type ReasoningEffortOption,
   type TuiProviderProfile,
   type TuiProviderTemplate,
 } from './llm.ts'
 import { effortsFor } from './effort-catalog.ts'
+import { readSection, writeSection } from './config.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-models'
 
-/** Services required before provider enumeration / writes can run. */
-export const inject = ['settings', 'credentials', 'llm']
+/** Services required before provider enumeration / writes can run. The provider
+ *  profiles persist in `qialike.json` since 0.1.7, so the harness settings
+ *  service is no longer injected. */
+export const inject = ['credentials', 'llm']
 
 /** Service provided by this plugin and injected by the TUI runtime. */
 export const TUI_MODELS_SERVICE = 'tuiModels'
@@ -164,13 +166,12 @@ export function apply(ctx: Context): void {
     listConfigurableProviders(): { provider: string; displayName: string; declared: boolean }[]
     listModels(provider: string): Promise<readonly { id: string; name: string }[]>
   } | undefined
-  const settings = () => ctx.get('settings') as { get(ns: unknown): unknown; update(ns: unknown, patch: unknown): Promise<void> } | undefined
   /** The merged template directory (core + plugin-registered), read live. */
   const templates = (): readonly TuiProviderTemplate[] =>
     (ctx.get('tuiLlmTemplates') as { list(): readonly TuiProviderTemplate[] } | undefined)?.list() ?? []
-  /** The qialike-llm providers dict as configured (`{ <route>: profile }`). */
+  /** The configured provider profiles (`qialike.json` -> `llm.providers`). */
   const piProviders = (): Record<string, TuiProviderProfile> | undefined =>
-    (settings()?.get(TUI_LLM_NS) as { providers?: Record<string, TuiProviderProfile> } | undefined)?.providers
+    (readSection('llm') as { providers?: Record<string, TuiProviderProfile> } | undefined)?.providers
   const service: TuiModelsService = {
     listProviders() {
       // The configurable-provider directory: the self-hosted adapter's
@@ -275,11 +276,11 @@ export function apply(ctx: Context): void {
         baseURL,
         models: models.map((id) => ({ id })),
       }
-      try {
-        await (ctx.get('settings') as { update(ns: unknown, patch: unknown): Promise<void> })
-          .update(TUI_LLM_NS, { providers: { [route]: profile } })
-      } catch (error) {
-        return { ok: false, error: `settings write failed: ${error instanceof Error ? error.message : String(error)}` }
+      // Merge like the settings service's `update` did: keep every other route
+      // in the section, add/replace this one, then persist + notify the adapter.
+      const current = piProviders() ?? {}
+      if (!writeSection('llm', { ...(readSection('llm') ?? {}), providers: { ...current, [route]: profile } })) {
+        return { ok: false, error: 'settings write failed: could not write qialike.json' }
       }
       const key = input.apiKey.trim()
       if (key !== '') {
@@ -293,8 +294,7 @@ export function apply(ctx: Context): void {
       return { ok: true }
     },
     async keyConfigured(provider) {
-      const section = (ctx.get('settings') as { get(ns: unknown): unknown } | undefined)
-        ?.get(TUI_LLM_NS) as { providers?: Record<string, TuiProviderProfile> } | undefined
+      const section = readSection('llm') as { providers?: Record<string, TuiProviderProfile> } | undefined
       const refName = keyRefOf(provider, section?.providers, templates())
       if (process.env[refName]?.trim()) return true
       const credentials = ctx.get('credentials') as { describe?: (ref: unknown) => Promise<{ configured: boolean }> } | undefined
@@ -318,28 +318,22 @@ export function apply(ctx: Context): void {
         if (template === undefined) {
           return { ok: false, error: `provider "${provider}" is not configured; add it through the custom-provider form first` }
         }
-        try {
-          await settings()?.update(TUI_LLM_NS, {
-            providers: {
-              [provider]: {
-                displayName: template.name,
-                baseURL: template.baseURL,
-                apiKeyEnv: refName,
-                ...(template.excludeModelPrefixes !== undefined
-                  ? { excludeModelPrefixes: template.excludeModelPrefixes }
-                  : {}),
-                ...(template.includeModelPrefixes !== undefined
-                  ? { includeModelPrefixes: template.includeModelPrefixes }
-                  : {}),
-                ...(template.modelsApi !== undefined
-                  ? { modelsApi: template.modelsApi }
-                  : {}),
-                models: template.models,
-              },
-            },
-          })
-        } catch (error) {
-          return { ok: false, error: `settings write failed: ${error instanceof Error ? error.message : String(error)}` }
+        const profile = {
+          displayName: template.name,
+          baseURL: template.baseURL,
+          apiKeyEnv: refName,
+          ...(template.excludeModelPrefixes !== undefined
+            ? { excludeModelPrefixes: template.excludeModelPrefixes }
+            : {}),
+          ...(template.includeModelPrefixes !== undefined
+            ? { includeModelPrefixes: template.includeModelPrefixes }
+            : {}),
+          ...(template.modelsApi !== undefined ? { modelsApi: template.modelsApi } : {}),
+          models: template.models,
+        }
+        const merged = { ...(piProviders() ?? {}), [provider]: profile }
+        if (!writeSection('llm', { ...(readSection('llm') ?? {}), providers: merged })) {
+          return { ok: false, error: 'settings write failed: could not write qialike.json' }
         }
       }
       try {

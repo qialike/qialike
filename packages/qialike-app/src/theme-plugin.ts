@@ -39,9 +39,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import type { SettingsScope } from '@deepseek-ai/dsh-settings'
-import { registerWithLegacy } from './legacy-names.ts'
-import z from '@deepseek-ai/schemastery'
+import { readSection, writeSection } from './config.ts'
 import { theme, type ThemePalette } from './theme.ts'
 import { colorLevel, quantizePalette } from './color-depth.ts'
 import type { Store, TuiPanelDefinition } from './index.tsx'
@@ -51,20 +49,10 @@ import { CLASSIC_SCHEMES } from './classic-schemes.ts'
 /** Stable Cordis plugin name. */
 export const name = 'tui-theme'
 
-/** Services required: settings (colorscheme persistence), tui (commands), tuiStore (live re-render). */
-export const inject = ['settings', 'tui', 'tuiStore']
-
-/** The `qialike-theme:` settings namespace (vimrc-analogous persistence). */
-const NS = 'qialike-theme'
-
-/** Pre-rename namespace: read as a `base` fallback, never written. */
-const LEGACY_NS = 'dsh-tui-theme'
-
-/** Schema: `colorscheme` name + optional per-role overrides. */
-const ThemeSchema = z.object({
-  colorscheme: z.string(),
-  colors: z.dict(z.string()),
-})
+/** Services required: tui (commands), tuiStore (live re-render). The colorscheme
+ *  persists in `qialike.json` since 0.1.7 (`readSection`/`writeSection`), so the
+ *  harness settings service is no longer an injected dependency. */
+export const inject = ['tui', 'tuiStore']
 
 /** Directory that holds user colorschemes (`~/.dsh/themes/<name>.json`). */
 function themesDir(): string {
@@ -199,23 +187,16 @@ function parseHex(value: string): string | undefined {
 }
 
 export function apply(ctx: Context): void {
-  const settings = ctx.get('settings') as {
-    register(ns: unknown, schema: unknown, options?: unknown): SettingsScope<unknown>
-    get(ns: unknown): unknown
-    describe(): { ns: string; user?: unknown }[]
-    update?(ns: unknown, patch: unknown): Promise<void>
-  } | undefined
   const tui = ctx.get('tui') as {
     commands: { register(c: { name: string; hint: string; run: (arg: string) => void }): void }
     panels?: { register(def: TuiPanelDefinition): void }
   } | undefined
   const store = ctx.get('tuiStore') as Store | undefined
-  if (settings === undefined || tui === undefined) return
+  if (tui === undefined) return
 
   const rerender = (): void => { try { store?.bumpTheme?.() } catch { /* best-effort */ } }
-  const scope = registerWithLegacy(settings, NS, LEGACY_NS, ThemeSchema as never)
   const read = (): { colorscheme?: string; colors?: Record<string, string> } =>
-    (scope.get() as { colorscheme?: string; colors?: Record<string, string> } | undefined) ?? {}
+    readSection('theme') ?? {}
 
   // Startup: apply the configured colorscheme (+ overrides).
   const cfg = read()
@@ -229,7 +210,7 @@ export function apply(ctx: Context): void {
     isUserScheme: (name) => name in userSchemes(),
     current: () => applied,
     apply: (name) => { applyScheme(name, read().colors ?? {}); rerender() },
-    persist: (name) => { void settings.update?.(NS, { colorscheme: name, colors: read().colors ?? {} }) },
+    persist: (name) => { writeSection('theme', { colorscheme: name, colors: read().colors ?? {} }) },
     rerender,
     restore: (palette, name) => {
       applied = name
@@ -261,7 +242,7 @@ export function apply(ctx: Context): void {
       if (resolved !== undefined) {
         applyScheme(resolved, current.colors)
         rerender()
-        void settings.update?.(NS, { colorscheme: resolved, colors: current.colors ?? {} })
+        writeSection('theme', { colorscheme: resolved, colors: current.colors ?? {} })
         status(`colorscheme: ${resolved}`)
         return
       }
@@ -272,7 +253,7 @@ export function apply(ctx: Context): void {
         if (key in theme && hex !== undefined) {
           applyScheme(applied, { ...current.colors, [key]: hex })
           rerender()
-          void settings.update?.(NS, { colorscheme: applied, colors: { ...current.colors, [key]: hex } })
+          writeSection('theme', { colorscheme: applied, colors: { ...current.colors, [key]: hex } })
           status(`theme: ${key} ${hex}`)
           return
         }

@@ -60,7 +60,6 @@ import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
 import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
-import { registerUpdateSettings } from './upgrade-policy.ts'
 import { isNewerAvailable, parseUpdateReport, updateHintText, updateNoticeLines, type UpdateOffer } from './update-hint.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
@@ -72,7 +71,7 @@ import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
 import { isMultiSelect } from './question-layout.ts'
-import { describeResumeFailure, isCorruptLogMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
+import { describeResumeFailure, foreignUnreadableLog, isCorruptLogMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import { armPostExitNotices, flushPostExitNotices, postExitNotice } from './post-exit-notice.ts'
 import { outsideOpenDialogList } from './list-geometry.ts'
@@ -3704,13 +3703,9 @@ export function apply(ctx: Context, config: Config): void {
   // (UI state) and the `tui` aggregate (panel/command registration, notify).
   ctx.provide('tuiStore', store)
   ctx.provide('tui', tui)
-  // Declare the `qialike-update` settings namespace (`auto: true | false | "notify"`).
-  // Registered from THIS plugin rather than from a plugin of its own: the updater
-  // is not a Cordis child plugin — it must also run outside the tree
-  // (`qialike upgrade`) — so this is one registration call, not a new row in
-  // cordis.patch.yml. It runs here, during boot, so the automatic check that the
-  // launcher schedules afterwards can read the user's choice.
-  registerUpdateSettings(ctx)
+  // The `qialike-update` switch (`auto: true | false | "notify"`) needs no
+  // registration any more: 0.1.7 removed runtime settings namespaces and the
+  // value lives in `qialike.json` (`readSection('update')`).
   // The repository overlay is applied without asking: name it in the status bar
   // (long flash, visible on the hero) and leave a line in the transcript.
   const overlayNotice = projectOverlayNotice()
@@ -4363,6 +4358,26 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
           break
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
+          // F4 (fatal + explain) is for the log the user ASKED for. When the
+          // harness instead tripped on ANOTHER session's unreadable log, the
+          // requested one is fine — killing the TUI here would lose the
+          // read-only transcript the user is reading for no good reason. Stay in
+          // the read-only view, say which file is at fault, and stop deferring
+          // the pure-UI commands so `/sessions` (the way OUT of a broken
+          // session) still works. The gate is deliberately left unpaid, so
+          // `start()` stays suspended exactly as it was before the trigger.
+          const foreign = readOnly ? foreignUnreadableLog(message, resumeId) : undefined
+          if (foreign !== undefined) {
+            logErrorFileOnly('resume', `attach blocked by another session's unreadable log: ${foreign}`)
+            store.endSessionLoading()
+            store.beginReadOnlySession(fileFirstId ?? '')
+            store.append('status', `sessions: another session's log is unreadable (${foreign}) — the session was not attached; fix its permissions or delete it, or use /sessions`, true)
+            store.beforeCommand = undefined
+            logErrorFileOnly('boot', 'phases: attach given up (foreign unreadable log); staying read-only')
+            // Never settles: `attachAttempt.then(...)` must not release the gate,
+            // because `start()` would then assert a handle that cannot exist.
+            await new Promise<void>(() => { /* given up */ })
+          }
           if (!NO_FACTORY.test(message) || Date.now() >= factoryRetryDeadline) throw error
           await new Promise<void>((resolve) => { setTimeout(resolve, 25) })
         }

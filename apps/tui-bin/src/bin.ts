@@ -31,14 +31,15 @@ import { createHash } from 'node:crypto'
 // `QIALIKE_*` at module load, before this file's own module-scope env reads
 // (SPLASH_DELAY_MS) and before any other module's.
 import { migrateLegacyHomeFiles, LEGACY_PRODUCT } from '@yourname/qialike-app/src/legacy-names.ts'
+import { migrateLegacySettings } from '@yourname/qialike-app/src/config.ts'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { Context, FiberState } from '@deepseek-ai/cordis'
+import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Group from '@deepseek-ai/cordis-plugin-group'
-import { assertEntriesActivated, installFailLoud, loadLayeredEnv, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
+import { auditStartupEntries, installFailLoud, loadLayeredEnv, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
 import { DSH_HOME_DIR_NAME, dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generated/config-embed.js'
@@ -321,6 +322,31 @@ function referencedLocalPlugins(layers: readonly (readonly PatchOptions[])[]): s
   return [...names].sort()
 }
 
+/**
+ * Fail loud for every local plugin an overlay references that the ledger does
+ * not vouch for — BEFORE the tree mounts.
+ *
+ * WHY THIS IS NOT LEFT TO THE INCLUDE: harness 0.1.7 downgraded a failing
+ * OPTIONAL entry to a warning (`auditStartupEntries`), so the refusal raised
+ * inside `SeaInclude.import` no longer stops startup — measured on the
+ * `plugin-dynamic` fixture: the tree loaded, the row reported only
+ * `dyn-probe (probe-plugin): failed to import`, and the process exited
+ * non-zero purely because `resume` found nothing to resume. A trust gate is a
+ * security boundary: it must stay FATAL and it must say WHY, so it runs here
+ * with the very same `assertPluginTrusted` the include would have applied.
+ * @param layers - the parsed user/project overlays (embedded layers are bundled).
+ * @param ledger - the trust ledger to check against.
+ */
+function assertReferencedPluginsTrusted(
+  layers: readonly (readonly PatchOptions[])[],
+  ledger: TrustLedger,
+): void {
+  for (const name of referencedLocalPlugins(layers)) {
+    const local = resolveLocalPlugin(name)
+    if (local !== undefined) assertPluginTrusted(name, local, ledger)
+  }
+}
+
 /** Human-readable trust state of one candidate (used by `plugin list`). */
 function trustState(target: string, ledger: TrustLedger): string {
   const local = localPluginTarget(target)
@@ -506,7 +532,9 @@ async function bootSea(
     })
     await ctx.get('loader')?.await()
     if (ctx.get('loader') === undefined) return ctx
-    await assertEntriesActivated(ctx, binName)
+    // 0.1.7-alpha.2 renamed this (it now also WARNS about optional entries
+    // instead of folding them into the error; required entries still throw).
+    await auditStartupEntries(ctx, binName)
     return ctx
   } catch (cause) {
     await ctx.fiber.dispose()
@@ -1327,6 +1355,11 @@ async function main(): Promise<void> {
   // Rename any pre-rename `$DSH_HOME` state file onto its current name before
   // a single read or append, so nothing writes the old file back.
   migrateLegacyHomeFiles()
+  // …and move qialike's own switch sections out of the harness's legacy
+  // `settings.yaml` (0.1.7 dropped runtime settings namespaces). It runs BEFORE
+  // the plugin tree boots, i.e. before the settings service's own importer can
+  // rename that file, and it leaves the source alone.
+  migrateLegacySettings()
 
   // Launcher flags are handled before the app owns the command line. Their
   // names live in `launcher-modes.ts` because `main.ts` (the thin entry) must
@@ -1496,9 +1529,38 @@ async function main(): Promise<void> {
   const patches = [...structuredClone(base), ...structuredClone(tui),
     ...structuredClone(user), ...structuredClone(project)]
 
+  assertReferencedPluginsTrusted([user, project], readTrustLedger())
   setTrustLedger(readTrustLedger())
   const ctx = await bootSea(NAME, profile.root, patches, (hostCtx) => {
     app.current = hostCtx
+    // 0.1.7-alpha.2 moved the active profile into a LAUNCHER-provided service.
+    // The base bundle now gates `plugin-manager`, `config-editor`, `settings` and
+    // `hmr` behind `disabled: !!js "!ctx.get('profileContext')"` — and `settings`
+    // is what nearly every TUI row injects, so without this service all 22 of them
+    // stay "pending (waiting for service: settings)" and the surface never
+    // activates (measured: boot printed `22 entries did not activate` and the TUI
+    // never painted). `dsh` provides it from its own launcher
+    // (harness `apps/cli/src/profile-boot.ts`); this binary IS the launcher, so it
+    // provides the same shape from the profile it already materializes.
+    //
+    // `dir` / `patchPath` / `installAnchor` are read by the plugins that persist
+    // edits (22 / 10 / 3 uses in plugin-manager + config-editor), so they must be
+    // the real paths, not placeholders: the profile dir this build owns, the USER
+    // overlay it already applies last, and the `<dir>/package.json` anchor the
+    // harness's own preview profile seeds. `overlays` is empty because qialike
+    // hands its whole patch stack to `bootSea` directly — listing them here as well
+    // would let a consumer apply them twice.
+    hostCtx.provide('profileContext', {
+      name: 'tui',
+      dir: profileDir(),
+      patchPath: userPatchPath(),
+      installAnchor: join(profileDir(), 'package.json'),
+      cwd: process.cwd(),
+      home: dshHomePath(),
+      startedBundles: [],
+      overlays: [],
+      telemetryDisabledEnv: process.env.DSH_TELEMETRY_DISABLED,
+    })
     hostCtx.provide('dshLaunchEnvironment', environment)
     provideCmdline(hostCtx, {
       args,
