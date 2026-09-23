@@ -65,8 +65,12 @@ pnpm build        # 产出 dist/qialike（单文件可执行）
 而不是把 CI 的结论信到超出它的范围。它缺失也不阻塞你的改动：CI 里没有任何一环依赖它。
 
 **发布脚本在本仓库内**，位于 `scripts/release/` —— `build-qialike.sh`（升版、编译、可选打标签与归档）、
-`tag-qialike.sh`（提交与 annotated tag）、`release-archive.sh`（源码 `.tar.gz` / `.zip`）。官方发布跑的就是它们，
+`tag-qialike.sh`（提交与 annotated tag）、`release-archive.sh`（源码 `.tar.gz` / `.zip`）、
+`push-qialike-release.sh`（把 6 个二进制与 `sha256sums.txt` 上传到两个发布源）。官方发布跑的就是它们，
 所以你可以读到一次发布究竟做了什么，也能复现打包过程。你无法复现的是它们所依赖的那套 pty 套件。
+
+`push-qialike-release.sh` **不含任何凭据** —— 令牌只从环境变量 `GITHUB_TOKEN` / `GITCODE_TOKEN` 读，
+所以它与其余三个放在一起是安全的。它是唯一需要那两个令牌的一步，且普通编译绝不会触发它。
 
 ## 贡献
 

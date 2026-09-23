@@ -72,10 +72,15 @@ suite here as a known gap, not as an invitation to trust CI further than it goes
 also why its absence is not a blocker for your change: nothing in CI depends on it.
 
 The **release scripts are in this repository**, under `scripts/release/` — `build-qialike.sh`
-(version bump, build, optional tag and archive), `tag-qialike.sh` (commit and annotated tag) and
-`release-archive.sh` (source `.tar.gz` / `.zip`). They are what an official release actually runs, so
-you can read exactly what a release does and reproduce the packaging. What you cannot reproduce is
-the pty suite they gate on.
+(version bump, build, optional tag and archive), `tag-qialike.sh` (commit and annotated tag),
+`release-archive.sh` (source `.tar.gz` / `.zip`) and `push-qialike-release.sh` (upload the six
+binaries plus `sha256sums.txt` to the two release hosts). They are what an official release actually
+runs, so you can read exactly what a release does and reproduce the packaging. What you cannot
+reproduce is the pty suite they gate on.
+
+`push-qialike-release.sh` carries **no credentials** — it reads `GITHUB_TOKEN` / `GITCODE_TOKEN`
+from the environment — which is why it is safe to keep here with the rest. Running it is the only
+step that needs those tokens, and it is never triggered by a plain build.
 
 ## Contributions
 
