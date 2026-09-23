@@ -1715,7 +1715,11 @@ export function patchInkFrameController(nm) {
         // box-drawing-range heuristic). Skips them so e.g. copying a code block yields
         // the code, not its border box.
         const __deco = /^[\\u2500-\\u257F]$/;
-        const __invAppend = (cell, line) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code) || __deco.test(cell.value)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; line.v += cell.value; };
+        // TEXT and HIGHLIGHT are separate concerns. A cell that is ALREADY inverse — a dialog's
+        // selected row, a hovered tool row, the palette's highlighted command — must still
+        // enter the COPY (dropping it silently lost whole lines when a drag crossed one of
+        // those rows); it just must not be inverted a second time.
+        const __invAppend = (cell, line) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || __deco.test(cell.value)) return; line.v += cell.value; if (!cell.styles.some((s) => s.code === __code)) cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; };
         // LINE/FLOW selection: walk from the anchor cell to the
         // focus cell following the text flow. Highlighting + copying both use the
         // SAME flow, so a drag from the start of a line into the middle of the next
@@ -1723,7 +1727,7 @@ export function patchInkFrameController(nm) {
         // column-aligned box. Falls back to a rectangle when endpoints are absent.
         const __a = __fc.anchor, __f = __fc.focus;
         let __txt = '';
-        const __rect = () => { const inv = (cell) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null || cell.styles.some((s) => s.code === __code)) return; cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; }; let t = ''; for (let y = __dshSel.y1; y <= __dshSel.y2; y++) { const row = output[y]; if (!row) continue; let l = ''; for (let x = __dshSel.x1; x <= __dshSel.x2; x++) { const cell = row[x]; if (!cell || __deco.test(cell.value)) continue; inv(cell); l += cell.value; } t += l.replace(/\\s+$/, '') + '\\n'; } return t.replace(/\\n+$/, ''); };
+        const __rect = () => { const inv = (cell) => { if (!cell || cell.type !== 'char' || cell.value === '' || cell.value == null) return; if (!cell.styles.some((s) => s.code === __code)) cell.styles = [...cell.styles, { type: 'ansi', code: __code, endCode: __end }]; }; let t = ''; for (let y = __dshSel.y1; y <= __dshSel.y2; y++) { const row = output[y]; if (!row) continue; let l = ''; for (let x = __dshSel.x1; x <= __dshSel.x2; x++) { const cell = row[x]; if (!cell || __deco.test(cell.value)) continue; inv(cell); l += cell.value; } t += l.replace(/\\s+$/, '') + '\\n'; } return t.replace(/\\n+$/, ''); };
         if (__a && __f && typeof __a.row === 'number' && typeof __f.row === 'number') {
             const ar = __a.row - 1, ac = __a.col - 1, fr = __f.row - 1, fc2 = __f.col - 1;
             let sR = ar, sC = ac, eR = fr, eC = fc2;
