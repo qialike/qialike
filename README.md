@@ -603,6 +603,8 @@ Look up what you are seeing; each entry points at the chapter that explains it.
   commands, the plugin-authoring and trust contract, and the commit conventions.
 - **Report a vulnerability**: **not** through a public issue — see [SECURITY.md](SECURITY.md) for the
   private channel, the scope, and what counts as working as designed.
+- **See what changed**: [CHANGELOG.md](CHANGELOG.md) covers 0.6.0 onward; earlier releases are on the
+  [releases page](https://github.com/qialike/qialike/releases).
 
 ## Acknowledgements
 
