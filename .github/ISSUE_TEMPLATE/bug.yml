@@ -1,0 +1,128 @@
+name: Bug report
+description: Something does not work the way the manual says it should.
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not report a security vulnerability here.** This issue is public the moment you submit
+        it. See [SECURITY.md](https://github.com/qialike/qialike/blob/main/SECURITY.md) for the
+        private channel — sandbox escapes, approval bypasses, credential leaks and plugin-trust
+        problems all belong there.
+
+  - type: markdown
+    attributes:
+      value: |
+        Two screens' worth of facts below will usually get a fix in one round instead of five. The
+        version and the sandbox rung are the two that are asked for most often, so they are required.
+
+  - type: input
+    id: version
+    attributes:
+      label: qialike version
+      description: The exact output of `qialike --version`. Also paste the harness version the sidebar shows, if you can see it.
+      placeholder: qialike 0.7.0 (deepseek-harness 0.1.7-alpha.2)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux x64
+        - Linux arm64
+        - macOS arm64 (Apple Silicon)
+        - macOS x64 (Intel)
+        - Windows x64
+        - Windows arm64
+        - WSL
+        - Other (say which below)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS and terminal
+      description: The OS release, and the terminal you are running qialike in. Terminal version matters more than you would think — mouse reporting, colour depth and key encoding all differ.
+      placeholder: Ubuntu 24.04, GNOME Terminal 3.52 / Windows Terminal 1.22 / iTerm2 3.5
+    validations:
+      required: true
+
+  - type: dropdown
+    id: sandbox
+    attributes:
+      label: Sandbox rung in force
+      description: |
+        Which confinement was active when it happened. `qialike` refuses bash with `SANDBOX_UNAVAILABLE`
+        when neither bubblewrap nor Landlock can be enforced on Linux. If you deliberately switched
+        rungs, please say which one you were on — a bug in `danger-full-access` is not the same bug
+        as one under `workspace-write`.
+      options:
+        - bubblewrap (Linux)
+        - Landlock (Linux, embedded launcher)
+        - Seatbelt (macOS)
+        - Windows ACL restricted token
+        - danger-full-access (opted out of confinement)
+        - SANDBOX_UNAVAILABLE / not sure
+        - Not applicable (no shell command involved)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How it was installed
+      options:
+        - curl -fsSL https://qialike.com/install | bash
+        - Downloaded a release archive by hand
+        - Built from source
+        - Updated from an older version (`qialike upgrade` / `/upgrade`)
+        - Other (say which below)
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead. If the screen is the evidence, say what was on it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Smallest reproduction
+      description: |
+        The shortest set of steps that still shows the problem — a command line, the keys you pressed,
+        the workspace shape if it matters. If it only happens with a particular session file, say how
+        big it is; giant sessions and small ones fail differently.
+      placeholder: |
+        1. cd into a project with …
+        2. run `qialike`
+        3. type … and press Enter
+        4. see …
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        `~/.dsh/qialike.log` is the error and crash log. Paste only the lines around the failure —
+        and **read them before you paste**: they can contain file paths and fragments of your
+        conversation. There is no need to attach the whole file.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots or a recording help a great deal for a TUI. A screen recording beats a still.
+    validations:
+      required: false

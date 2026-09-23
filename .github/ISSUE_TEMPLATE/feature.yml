@@ -1,0 +1,61 @@
+name: Feature request
+description: Suggest a capability, or a change to how something behaves.
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you write: qialike deliberately keeps the DeepSeek Harness core unmodified, and
+        everything it adds is a Cordis plugin. A request that fits that shape is far more likely to
+        be accepted than one that needs the harness forked. See
+        [CONTRIBUTING.md](https://github.com/qialike/qialike/blob/main/CONTRIBUTING.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that you cannot do today? Describe the situation rather than the solution — it often has a better answer than the one either of us started with.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: Your suggested behaviour, if you have one. Concrete input and output beats a description of a feature.
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you tried instead
+      description: Other tools, a workaround, an MCP server, a skill. Knowing the workaround tells us how much the gap actually costs you.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface
+      description: qialike is the TUI; the browser UI is the harness's own (`qialike web` forwards to `dsh web`).
+      options:
+        - The terminal UI
+        - The agent's behaviour or tools
+        - Providers / models / API keys
+        - Sandbox, approvals or permissions
+        - Install, update or uninstall
+        - The browser UI (report it upstream instead — `qialike web` just forwards to `dsh`)
+        - Not sure
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and this is not already reported.
+          required: true
+        - label: This is not a security issue (those go to SECURITY.md, never a public issue).
+          required: true
