@@ -100,3 +100,26 @@ describe('the version the tree claims is the version it ships', () => {
     expect(root.version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
   })
 })
+
+describe('the release asset list is one list', () => {
+  test('the build script packages exactly the targets the build compiles', () => {
+    // `build-qialike.sh` writes `dist/sha256sums.txt` by iterating its own copy of the
+    // target list, while `build.mjs` decides which targets exist. Let them drift and the
+    // manifest either omits an asset the release publishes — that platform's install then
+    // dies on a missing digest — or names one that was never built. Neither shows up
+    // until someone tries to install, which is the worst time to find out.
+    const allTargets = BUILD.match(/^const ALL_TARGETS = \[([\s\S]*?)^\]/m)
+    if (!allTargets) throw new Error('release-consistency: ALL_TARGETS not found in build.mjs')
+    const compiled = [...allTargets[1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+
+    const script = read('scripts/release/build-qialike.sh')
+    const declared = script.match(/^\s*ALL_TARGETS=\(([^)]*)\)/m)
+    if (!declared) throw new Error('release-consistency: ALL_TARGETS not found in build-qialike.sh')
+    const packaged = declared[1].trim().split(/\s+/)
+
+    expect(compiled.length, 'build.mjs should list at least one target').toBeGreaterThan(0)
+    // Compared as an ordered list, not a set: the manifest is written in this order, and
+    // a stable order is what makes two runs over the same release comparable.
+    expect(packaged).toEqual(compiled)
+  })
+})
