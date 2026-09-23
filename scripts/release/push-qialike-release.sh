@@ -241,6 +241,15 @@ explain_push_failure() {  # $1 = label，$2 = git 的 stderr
      或当前账号不是该仓库的协作者。" ;;
     *'Could not resolve host'* | *'Connection timed out'* | *'Connection refused'*)
       hint="网络/DNS 不通 —— 这条与凭据无关。" ;;
+    # 22 端口被中间网络切断时的典型形态：TCP 连上了，但对端在密钥交换前就关掉。
+    # SSH 侧与凭据无关（换密钥不会好），要么换网络，要么让 github.com 走 443。
+    *'kex_exchange_identification'*)
+      hint="22 端口被中间网络切断（TCP 通、但密钥交换前就被关）—— 与密钥无关。
+     让 GitHub 走 443：在 ~/.ssh/config 里加
+         Host github.com
+             HostName ssh.github.com
+             Port 443
+             User git" ;;
     *) hint="（git 原文见上；未能自动归类，请按它自己的提示处理。）" ;;
   esac
   printf '     %s\n' "$hint" >&2
@@ -311,10 +320,22 @@ sync_tag() {  # $1 = remote 名或 URL，$2 = 标签
   ok "$label：tag $TAG 已重推到 $want"
 }
 
+# ── 凭据（先取值，检查放在下面的标签同步【之前】）────────────────────────────
+GH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+GC_TOKEN="${GITCODE_TOKEN:-${GITCODE_ACCESS_TOKEN:-}}"
+
 if [[ "$ALLOW_MISSING_TAG" == 1 ]]; then
   warn "--allow-missing-tag：跳过标签同步，交给源的 release API 自建 tag（可能指向错误的提交）"
 elif [[ "$DRY" == 0 && "$VERIFY_ONLY" == 0 ]]; then
-  # 先把**所有**目标 remote 检查一遍，再动手推。反过来做（查到哪个推哪个）会在第二个
+  # 凭据先查，**在碰任何远端之前**。token 只用于后面的 API 上传，标签同步（git 推送）不需要
+  # 它 —— 但如果把它放到标签同步之后，缺令牌的一次运行会**先把标签推到远端**、再在"该上传了"
+  # 处停下，留下"tag 已推、release 没建"的半截状态。这跟下面那条"先检查全部 remote 再动手"
+  # 是同一个原则：任何远端写入之前，先把所有能提前发现的问题发现完。
+  [[ "$SOURCE" == gitcode || -n "$GH_TOKEN" ]] || die "缺少 GITHUB_TOKEN（或 GH_TOKEN）"
+  [[ "$SOURCE" == github || -n "$GC_TOKEN" ]] || die "缺少 GITCODE_TOKEN（或 GITCODE_ACCESS_TOKEN）"
+  ok "两个 API 令牌已就位"
+
+  # 再把**所有**目标 remote 检查一遍，最后才动手推。反过来做（查到哪个推哪个）会在第二个
   # remote 连不上时留下半截状态：一边的 tag 已更新、另一边没有，而 release 还没建。
   SYNC_LABELS=(); SYNC_REMOTES=()
   if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
@@ -338,14 +359,6 @@ if [[ "$DRY" == 1 ]]; then
   printf '  上传清单：\n'
   for f in "${UPLOAD_LIST[@]}"; do printf '    %s\n' "$f"; done
   exit 0
-fi
-
-# ── 凭据 ────────────────────────────────────────────────────────────────────
-GH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
-GC_TOKEN="${GITCODE_TOKEN:-${GITCODE_ACCESS_TOKEN:-}}"
-if [[ "$VERIFY_ONLY" == 0 ]]; then
-  [[ "$SOURCE" == gitcode || -n "$GH_TOKEN" ]] || die "缺少 GITHUB_TOKEN（或 GH_TOKEN）"
-  [[ "$SOURCE" == github || -n "$GC_TOKEN" ]] || die "缺少 GITCODE_TOKEN（或 GITCODE_ACCESS_TOKEN）"
 fi
 
 # ── 通用小工具 ──────────────────────────────────────────────────────────────
