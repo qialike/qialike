@@ -2,8 +2,7 @@
 
 [English](CHANGELOG.md) | 中文
 
-qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录；此前的版本（0.1.0 至 0.5.4，共 52 个）
-见 [GitHub Releases](https://github.com/qialike/qialike/releases)，它们在本仓库里都有对应的 tag。
+qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。

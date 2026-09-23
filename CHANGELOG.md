@@ -1,9 +1,6 @@
 # Changelog
 
-Notable changes to qialike, newest first. This file starts at **0.6.0**; the releases before it
-(0.1.0 through 0.5.4, 52 versions) are listed on
-[GitHub Releases](https://github.com/qialike/qialike/releases) with their tags, and every one of them
-is tagged in this repository.
+Notable changes to qialike, newest first. This file starts at **0.6.0**.
 
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
