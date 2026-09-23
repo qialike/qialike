@@ -744,9 +744,15 @@ qialike_resolve_version() {
 # takes, and without it the fallback would never trigger — the connect succeeds and
 # curl waits forever on a body that never arrives.
 #
-# Checksums: `sha256sums.txt` is not published on either source yet, so an absent
-# manifest is a normal outcome and NOT an error — but when one IS published it is
-# enforced, against the source the archive came from.
+# Checksums: `sha256sums.txt` is REQUIRED, and it is fetched from the same source the
+# archive came from — a mirror that has the asset but not the manifest is a missing
+# manifest, not a reason to trust a different host's numbers. The bytes must match the
+# digest it lists; a MISMATCH is fatal on the spot, because bytes that contradict their
+# published digest are corruption or substitution and shopping for a second opinion is
+# the wrong response to that. A source that simply cannot produce a usable manifest is
+# different: the next source is tried first, since one host may carry a complete release
+# while another does not. Only when no reachable source can vouch for the bytes does the
+# install stop — unless `QIALIKE_ALLOW_UNVERIFIED=1` says to proceed anyway.
 #
 # Fallback: the source the decision chose is tried first, then the other REACHABLE
 # ones (case 3's order). A host can answer the small "what is newest" request and
@@ -898,39 +904,67 @@ qialike_fetch_archive() {
   done
 
   out="$dest/$asset"
+  local unverified=''
   for ((attempt = 0; attempt < count; attempt += 1)); do
     i=${rotated[$attempt]}
     base=${SOURCE_BASES[$i]}
 
-    if qialike_try_download "$base" "$tag" "$asset" "$out"; then
-      qialike_verify_checksum "$base" "$tag" "$asset" "$out"
+    if ! qialike_try_download "$base" "$tag" "$asset" "$out"; then
+      rm -f "$out"
+      if (( attempt + 1 < count )); then
+        warn "download from $base failed — trying the next source"
+      fi
+      continue
+    fi
+
+    # A digest mismatch dies inside the check. Only "this source cannot vouch for the
+    # bytes" comes back as 1, and that is worth another host.
+    if qialike_verify_checksum "$base" "$tag" "$asset" "$out"; then
       printf '%s\n' "$out"
       return 0
     fi
 
-    rm -f "$out"
+    unverified="$base"
     if (( attempt + 1 < count )); then
-      warn "download from $base failed — trying the next source"
+      warn "$base publishes no usable sha256sums.txt for $asset — trying the next source"
+      rm -f "$out"
     fi
   done
+
+  # Every reachable source served bytes it could not vouch for. The file is kept only
+  # when the LAST source delivered it, so the opt-out below never hands back a path
+  # that a later failed attempt already removed.
+  if [[ -n "$unverified" && -f "$out" ]]; then
+    if [[ "${QIALIKE_ALLOW_UNVERIFIED:-0}" != 1 ]]; then
+      rm -f "$out"
+      die "no reachable source publishes a usable sha256sums.txt for $asset (tag $tag) — refusing to install unverified bytes (tried: $tried)
+     the release is incomplete; set QIALIKE_ALLOW_UNVERIFIED=1 to install anyway"
+    fi
+    warn "installing $asset WITHOUT integrity verification (QIALIKE_ALLOW_UNVERIFIED=1)"
+    printf '%s\n' "$out"
+    return 0
+  fi
 
   die "download failed: $asset (tag $tag) — no source could provide it (tried: $tried)"
 }
 
-# Verify against the release's `sha256sums.txt` when that file exists, on the source
-# the archive came from: a mirror that has the asset but not the manifest is a
-# missing manifest, not a reason to trust a different host's numbers.
+# Verify `file` against the release's `sha256sums.txt`, fetched from the SAME source the
+# archive came from (see the module header for why that source and no other).
+#
+# Returns 0 when the bytes match the published digest. Returns 1 when THIS source cannot
+# vouch for them — no manifest, or the asset is not listed in it — so the caller can try
+# a source that can. A mismatch does not return at all: it dies.
 qialike_verify_checksum() {
   local base=$1 tag=$2 asset=$3 file=$4 sums expected actual
 
   sums=$(curl -fsSL "$base/download/$tag/sha256sums.txt" 2>/dev/null || true)
   if [[ -z "$sums" ]]; then
-    return 0
+    return 1
   fi
 
   expected=$(printf '%s\n' "$sums" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }')
   if [[ -z "$expected" ]]; then
-    return 0
+    return 1
   fi
 
   if command -v sha256sum >/dev/null 2>&1; then
@@ -940,8 +974,11 @@ qialike_verify_checksum() {
   fi
 
   if [[ "$expected" != "$actual" ]]; then
-    die "SHA256 mismatch for $asset (expected $expected, got $actual)"
+    die "SHA256 mismatch for $asset (expected $expected, got $actual) — refusing to install"
   fi
+
+  note "verified $asset against $base/download/$tag/sha256sums.txt"
+  return 0
 }
 
 # Unpack the archive. Echoes the path of the binary inside it.

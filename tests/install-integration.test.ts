@@ -243,6 +243,17 @@ function publish(name: string, bytes: Uint8Array | undefined): void {
   else writeFileSync(path, bytes)
 }
 
+/**
+ * Publish `asset` together with a manifest that lists its digest — the shape of a
+ * COMPLETE release, which is what the installer now requires before it will place
+ * anything. Tests that are about the manifest itself (`publish('sha256sums.txt', …)`)
+ * deliberately bypass this.
+ */
+function publishRelease(asset: string, bytes: Uint8Array): void {
+  publish(asset, bytes)
+  publish('sha256sums.txt', Buffer.from(`${sha256(bytes)}  ${asset}\n`))
+}
+
 beforeAll(async () => {
   const root = tempDir('qialike-fixture-')
   fixtureRoot = root
@@ -341,10 +352,8 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('a published asset 
   test('the host archive: fetched, unpacked, placed, put on PATH, and verified', () => {
     const work = tempDir('qialike-fixture-a-')
     const bytes = stubArchive(work, KIND, INNER, TAG)
-    publish(ASSET!, bytes)
-    // A correct manifest, so the checksum branch runs for real (it is dead code
-    // against the live release, which publishes none).
-    publish('sha256sums.txt', Buffer.from(`${sha256(bytes)}  ${ASSET}\n`))
+    // A complete release: the asset and the manifest that vouches for it.
+    publishRelease(ASSET!, bytes)
 
     const home = makeHome()
     const { status, output } = install(home)
@@ -360,8 +369,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('a published asset 
 
   test('a zip is unpacked with unzip and keeps its .exe name on Windows', () => {
     const work = tempDir('qialike-fixture-b-')
-    publish('qialike-windows-x64.zip', stubArchive(work, 'zip', 'qialike.exe', TAG))
-    publish('sha256sums.txt', undefined) // no manifest: the branch must simply skip
+    publishRelease('qialike-windows-x64.zip', stubArchive(work, 'zip', 'qialike.exe', TAG))
 
     const home = makeHome()
     const { status, output } = install(home, [], { QIALIKE_INSTALL_TARGET: 'windows-x64' })
@@ -410,6 +418,9 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('failures are repor
   test('a checksum that disagrees with the asset is refused', () => {
     const work = tempDir('qialike-fixture-c-')
     publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    // A manifest that lists this asset with a digest the bytes do not have. Unlike a
+    // MISSING manifest, this is not a reason to try another host: bytes that contradict
+    // their published digest are corruption or substitution.
     publish('sha256sums.txt', Buffer.from(`${'0'.repeat(64)}  ${ASSET}\n`))
 
     const home = makeHome()
@@ -420,11 +431,63 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('failures are repor
     expect(existsSync(join(home, '.dsh', 'bin', INNER))).toBe(false)
   })
 
+  test('a release with no manifest is refused rather than installed unverified', () => {
+    const work = tempDir('qialike-fixture-manifest-missing-')
+    // The bytes are right there and intact; only the manifest that could vouch for
+    // them is missing. Installing anyway would mean the one check standing between a
+    // release host and the user's shell silently did nothing.
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    // Explicitly unpublished, not merely not-published: the fixture directory is shared
+    // across tests, so a case that needs an ABSENT manifest has to remove whatever a
+    // previous case left there.
+    publish('sha256sums.txt', undefined)
+
+    const home = makeHome()
+    const { status, output } = install(home)
+
+    expect(status).not.toBe(0)
+    expect(output).toContain('refusing to install unverified bytes')
+    // Refusing without naming the way out leaves the user stuck, so the override has
+    // to be in the message.
+    expect(output).toContain('QIALIKE_ALLOW_UNVERIFIED=1')
+    expect(existsSync(join(home, '.dsh', 'bin', INNER))).toBe(false)
+    // Nothing half-done: no PATH line either.
+    expect(readFileSync(join(home, '.bashrc'), 'utf8')).toBe('# mine\n')
+  })
+
+  test('a manifest that does not list this asset proves nothing about it', () => {
+    const work = tempDir('qialike-fixture-manifest-unlisted-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    // A manifest for some other platform: present, well-formed, and silent about the
+    // bytes we were served.
+    publish('sha256sums.txt', Buffer.from(`${'a'.repeat(64)}  qialike-other-x64.tar.gz\n`))
+
+    const home = makeHome()
+    const { status, output } = install(home)
+
+    expect(status).not.toBe(0)
+    expect(output).toContain('refusing to install unverified bytes')
+    expect(existsSync(join(home, '.dsh', 'bin', INNER))).toBe(false)
+  })
+
+  test('QIALIKE_ALLOW_UNVERIFIED=1 installs anyway, and says so', () => {
+    const work = tempDir('qialike-fixture-manifest-optout-')
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    // Same shared-fixture caveat as the refusal case above: absent means removed.
+    publish('sha256sums.txt', undefined)
+
+    const home = makeHome()
+    const { status, output } = install(home, [], { QIALIKE_ALLOW_UNVERIFIED: '1' })
+
+    expect(status, output).toBe(0)
+    expect(output).toContain('WITHOUT integrity verification')
+    expect(existsSync(join(home, '.dsh', 'bin', INNER))).toBe(true)
+  })
+
   test('an asset that disagrees with its tag is reported, but the install still succeeds', () => {
     const work = tempDir('qialike-fixture-d-')
     // The archive says 0.6.8 while the release tag is 0.6.9.
-    publish(ASSET!, stubArchive(work, KIND, INNER, '0.6.8'))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, '0.6.8'))
 
     const home = makeHome()
     const { status, output } = install(home)
@@ -444,8 +507,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the source list is
     // `/latest/download/...` with an HTML page exactly as gitcode does, so the tag
     // can only come from its API — the whole fallback chain, resolve and download.
     const work = tempDir('qialike-fixture-mirror-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
 
     const home = makeHome()
     const { status, output } = install(
@@ -468,8 +530,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the source list is
 
   test('an unreachable mirror is named, and the primary installs anyway', () => {
     const work = tempDir('qialike-fixture-primary-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
 
     const home = makeHome()
     const { status, output } = install(
@@ -557,8 +618,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('with two sources t
     // 302 and never asks for the body), so reachability alone would pick it and then
     // crawl. Sampling the real asset is the only thing that can tell them apart.
     const work = tempDir('qialike-fixture-speed-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
     slow('github', true)
     try {
       const home = makeHome()
@@ -580,8 +640,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('with two sources t
     // rather than as a winner, or the install would fail on the mirror and only then
     // retry — which is the retry the measurement exists to avoid.
     const work = tempDir('qialike-fixture-speed2-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
     slow('github', true)
     try {
       const home = makeHome()
@@ -607,8 +666,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('with two sources t
     // `install-script.test.ts`; a live `--source gitcode` here would download from the
     // real mirror, which this suite must never do.)
     const work = tempDir('qialike-fixture-speed3-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
 
     // (i) `--base-url`, redirect-shaped host: one source, resolved through its 302.
     const one = makeHome()
@@ -632,8 +690,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('with two sources t
     // The escape hatch, and the reason the older order tests keep their meaning: with
     // MEASURE=0 nothing is sampled and the first source that answered is used.
     const work = tempDir('qialike-fixture-speed4-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
     slow('github', true)
     try {
       const home = makeHome()
@@ -663,7 +720,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
     // the asset to exist to get its redirect, so without this the case would only
     // pass as part of the whole file and fail under a `-t` filter.
     const work = tempDir('qialike-fixture-g-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
 
     const out: string[] = []
     const err: string[] = []
@@ -688,7 +745,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
     // injected because the suite runs on whatever host is at hand — the point is
     // the decision, and `--auto` must not reach for bash on the way.
     const work = tempDir('qialike-fixture-h-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
     // The fixture already serves the REAL installer at /install (see `beforeAll`),
     // and this case must never fetch it — that is half of what is being pinned.
 
@@ -766,8 +823,7 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the release host c
 describe.skipIf(TARGET === undefined || ASSET === undefined)('the upgrade path runs the real installer over a real pipe', () => {
   test('upgrade() fetches /install, pipes it to bash, and reports what landed', () => {
     const work = tempDir('qialike-fixture-e-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
 
     const home = makeHome()
     const dir = join(home, '.dsh', 'bin')
@@ -792,13 +848,48 @@ describe.skipIf(TARGET === undefined || ASSET === undefined)('the upgrade path r
     expect(result.version).toBe(TAG)
   })
 
+  test('an unverifiable release stops the upgrade, and leaves the install alone', () => {
+    const work = tempDir('qialike-fixture-upgrade-unverified-')
+    // The asset is served; the manifest that could vouch for it is not.
+    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
+    // Explicitly removed: the fixture directory is shared with the cases above.
+    publish('sha256sums.txt', undefined)
+
+    const home = makeHome()
+    const dir = join(home, '.dsh', 'bin')
+    mkdirSync(dir, { recursive: true })
+    const managed = join(dir, 'qialike')
+    writeFileSync(managed, `#!/bin/sh\necho "qialike ${PATCH_BELOW}"\n`)
+    chmodSync(managed, 0o755)
+
+    const result = upgrade(TAG, {
+      dir,
+      installUrl: `${fixtureBase}/install`,
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin',
+        QIALIKE_INSTALL_BASE_URL: fixtureBase,
+      } as NodeJS.ProcessEnv,
+    })
+
+    // The updater downloads nothing itself: it fetches `/install` and pipes it to bash,
+    // so the installer's refusal is the only thing standing between an unverifiable
+    // release and the user's machine. This pins that the delegation really carries the
+    // check — "the updater verifies too" is true by construction, and a construction is
+    // exactly the kind of claim that quietly stops being true.
+    expect(result.ok).toBe(false)
+    expect(result.error).toContain('QIALIKE_ALLOW_UNVERIFIED')
+    // The point of refusing: what is already installed is untouched.
+    expect(spawnSync(managed, ['--version'], { encoding: 'utf8' }).stdout.trim()).toBe(`qialike ${PATCH_BELOW}`)
+  })
+
   const binary = BINARY_CANDIDATES.find((path) => existsSync(path))
   test.skipIf(binary === undefined)('--auto installs a patch through the real binary', () => {
     // The strongest form available offline: the REAL artifact runs the policy, the
     // resolution, the installer fetch and the replacement, against a local host.
     const work = tempDir('qialike-fixture-f-')
-    publish(ASSET!, stubArchive(work, KIND, INNER, TAG))
-    publish('sha256sums.txt', undefined)
+    publishRelease(ASSET!, stubArchive(work, KIND, INNER, TAG))
 
     const home = makeHome()
     const dir = join(home, '.dsh', 'bin')
