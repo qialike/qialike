@@ -83,12 +83,12 @@ describe('store workspace', () => {
     // free (no notify, no extra frame).
     const store = new Store()
     expect(store.workspace).toBe('')
-    store.setWorkspace('/home/pipo/deepseek')
-    expect(store.workspace).toBe('/home/pipo/deepseek')
+    store.setWorkspace('/home/dev/project')
+    expect(store.workspace).toBe('/home/dev/project')
     let notified = 0
     const original = store.notify.bind(store)
     store.notify = () => { notified += 1; original() }
-    store.setWorkspace('/home/pipo/deepseek') // unchanged
+    store.setWorkspace('/home/dev/project') // unchanged
     expect(notified).toBe(0)
     store.setWorkspace('/tmp/other')
     expect(notified).toBe(1)

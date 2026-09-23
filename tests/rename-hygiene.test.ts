@@ -49,6 +49,10 @@ const LEGACY_ALLOWLIST: Readonly<Record<string, readonly [count: number, reason:
   'apps/tui-bin/src/bin.ts': [5, 'pre-rename rc marker, temp-dir sweep, alias resolution comment'],
   'apps/tui-bin/src/main.ts': [1, 'comment on the first import that mirrors legacy env vars'],
   'apps/tui-bin/build.mjs': [3, 'legacy patch markers and the alias-specifier family the generated map answers'],
+  // The archive step lists what else sits in the release output directory, and
+  // pre-rename `dsh-tui-<version>` packages are the historical release records
+  // that live there. It lists them; it never deletes them.
+  'scripts/release/release-archive.sh': [3, 'the pre-rename archives the release output listing must not hide'],
   // `scripts/install` used to be listed here (3 hits: it removed a pre-rename
   // installed binary and reported a stale pre-rename PATH entry). The installer
   // became a networked downloader and that migration was dropped, so the count is

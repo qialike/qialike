@@ -27,7 +27,7 @@ const APP = join(REPO, 'packages', 'qialike-app')
 const SRC = join(APP, 'src')
 const read = (path: string): string => readFileSync(path, 'utf8')
 
-const SESSION_ID = 'session-675efa95-12d1-4821-87bd-a680c4d1693f'
+const SESSION_ID = 'session-01234567-89ab-4cde-8f01-23456789abcd'
 const FOOTER = ['deepseek-harness: 0.1.5-rc.2', 'qialike: 0.4.16-beta']
 const STEPS = ['✓ one', '✓ two', '→ three', '· four']
 const SECTION: SidebarSectionBudget = { id: 'goal-bar', order: 10, full: 2, compact: 1 }

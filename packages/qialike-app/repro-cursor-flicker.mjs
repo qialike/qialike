@@ -203,7 +203,7 @@ const app = render(
   { stdout: fakeStdout, stdin: fakeStdin, stderr: realStdout, patchConsole: false, exitOnCtrlC: false },
 )
 conv.installFrameSuffix()
-store.setWorkspace(process.env.REPRO_WORKSPACE ?? '/home/pipo/deepseek')
+store.setWorkspace(process.env.REPRO_WORKSPACE ?? process.cwd())
 store.setModelLabel('DeepSeek V4 Flash')
 if (MODE === 'docked') {
   // Leave the hero the way `/new` or a resumed session does: attach a session

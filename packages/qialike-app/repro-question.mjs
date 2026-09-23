@@ -1,9 +1,11 @@
 import { Writable } from 'node:stream'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { patchInkFullScreen } from '../../apps/tui-bin/build.mjs'
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
-const OUT = '/home/pipo/deepseek/.opencode-research/align'
+const OUT = process.env.REPRO_OUT ?? join(tmpdir(), 'qialike-repro', 'align')
 mkdirSync(OUT, { recursive: true })
 patchInkFullScreen(ROOT + 'node_modules')
 const { render } = await import('ink')

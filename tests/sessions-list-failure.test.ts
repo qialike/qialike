@@ -28,7 +28,7 @@ import { Store } from '../packages/qialike-app/src/index.tsx'
 import { apply } from '../packages/qialike-app/src/sessions.tsx'
 import { projectKey } from '../packages/qialike-app/src/session-files.ts'
 
-const WORKSPACE = '/home/pipo/deepseek'
+const WORKSPACE = '/home/dev/project'
 let home: string
 let realHome: string | undefined
 

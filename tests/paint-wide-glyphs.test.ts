@@ -182,7 +182,7 @@ describe('the reserved second cell is a real space (render level)', () => {
     const { MarkdownText, tableGrid } = await import('../packages/qialike-app/src/markdown.tsx')
     const React = (await import('../packages/qialike-app/node_modules/react/index.js')).default
     const { Box, render } = await import('../packages/qialike-app/node_modules/ink/build/index.js')
-    // The weather table as it appeared in session-4ad2e9af-… (the ☀️ cell).
+    // A weather table whose emoji cell is drawn two columns wide (the ☀️ case).
     const source = ['| 项目 | 数据 |', '| --- | --- |', '| 天气 | ☀️ 晴 |', '| 气温 | 32°C |'].join('\n')
     const chunks: string[] = []
     class Sink extends Writable {
