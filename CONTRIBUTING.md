@@ -45,12 +45,18 @@ Interactive token streaming needs a TTY and a provider key, so the smoke test st
 non-zero exit is the baseline — only new errors matter.
 
 **CI covers the commands above and nothing more.** The release gate used for official builds also
-runs a real-machine pty suite (52 scenarios, ~17 minutes each, driving the packaged binary in a
-real terminal against a seeded `$HOME`) plus a documentation audit. **That harness and the release
-scripts are not part of this repository today** — they live in the maintainers' release workspace —
-so an outside contributor cannot reproduce a release locally, and CI cannot run the suite for you. A
-green CI run is not by itself a statement that a release is shippable; treat the absence of that
-harness here as a known gap, not as an invitation to trust CI further than it goes.
+runs a real-machine pty suite (52 scenarios, ~17 minutes each, driving the packaged binary in a real
+terminal against a seeded `$HOME`) plus a documentation audit. **That suite is not part of this
+repository today** — it lives in the maintainers' release workspace — so CI cannot run it for you and
+a green CI run is not by itself a statement that a release is shippable. Treat the absence of that
+suite here as a known gap, not as an invitation to trust CI further than it goes. The pty suite is
+also why its absence is not a blocker for your change: nothing in CI depends on it.
+
+The **release scripts are in this repository**, under `scripts/release/` — `build-qialike.sh`
+(version bump, build, optional tag and archive), `tag-qialike.sh` (commit and annotated tag) and
+`release-archive.sh` (source `.tar.gz` / `.zip`). They are what an official release actually runs, so
+you can read exactly what a release does and reproduce the packaging. What you cannot reproduce is
+the pty suite they gate on.
 
 ## Contributions
 
@@ -66,6 +72,9 @@ harness here as a known gap, not as an invitation to trust CI further than it go
 ```
 packages/qialike-app/   the bundle: cordis.patch.yml + startup/index/invariant plugins
 apps/tui-bin/           src/bin.ts (SEA/bun launcher) + build.mjs
+scripts/release/        the release scripts CI does not run (see "Tests and checks")
+packages/qialike-app/repro-*.mjs
+                        headless render harnesses for real rendering defects
 examples/cordis.yml     a deploy overlay pinning model + workspace
 tests/smoke.mjs          keyless REAL-composition boot smoke
 ```

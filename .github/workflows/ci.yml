@@ -60,6 +60,13 @@ jobs:
       - name: Product-identity and rename guards
         run: bun test tests/rename-hygiene.test.ts
 
+      # `release-consistency` compares `HARNESS_REF` above with the range the
+      # build enforces, and the three package.json versions with each other. Run
+      # it HERE, before the expensive leg: it is the one guard that can prove the
+      # expensive leg is about to validate the right thing.
+      - name: Release consistency guards
+        run: bun test tests/release-consistency.test.ts
+
   build-and-test:
     name: Typecheck, unit suite, build, smoke
     runs-on: ubuntu-24.04

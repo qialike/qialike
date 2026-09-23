@@ -41,9 +41,13 @@ pnpm build        # 产出 dist/qialike（单文件可执行）
 `wrap-ansi` TS7016（缺类型声明）；非零退出是基线，只看新增错误。
 
 **CI 只覆盖上面这些命令，仅此而已。** 官方构建所用的发布门还会跑一套真机 pty 套件（52 个场景，每个约 17 分钟，
-在真实终端里驱动打包后的二进制、配一份预置 `$HOME`）以及一次文档审计。**该套件与发布脚本当前不在本仓库内**
-——它们位于维护者的发布工作区——所以外部贡献者无法在本地复现一次发布，CI 也无法替你跑这套件。CI 全绿本身
-**不等于**可以发版；请把「本仓库里没有这套件」当作一个已知缺口，而不是把 CI 的结论信到超出它的范围。
+在真实终端里驱动打包后的二进制、配一份预置 `$HOME`）以及一次文档审计。**该套件当前不在本仓库内**——它位于维护者
+的发布工作区——所以 CI 无法替你跑它，**CI 全绿本身不等于可以发版**。请把「本仓库里没有这套件」当作一个已知缺口，
+而不是把 CI 的结论信到超出它的范围。它缺失也不阻塞你的改动：CI 里没有任何一环依赖它。
+
+**发布脚本在本仓库内**，位于 `scripts/release/` —— `build-qialike.sh`（升版、编译、可选打标签与归档）、
+`tag-qialike.sh`（提交与 annotated tag）、`release-archive.sh`（源码 `.tar.gz` / `.zip`）。官方发布跑的就是它们，
+所以你可以读到一次发布究竟做了什么，也能复现打包过程。你无法复现的是它们所依赖的那套 pty 套件。
 
 ## 贡献
 
@@ -57,6 +61,9 @@ pnpm build        # 产出 dist/qialike（单文件可执行）
 ```
 packages/qialike-app/   bundle：cordis.patch.yml + startup/index/invariant 插件
 apps/tui-bin/           src/bin.ts（SEA/bun 启动器）+ build.mjs
+scripts/release/        发布脚本（CI 不跑它们，见「测试与校验」）
+packages/qialike-app/repro-*.mjs
+                        真机渲染缺陷用的 headless 复现装置
 examples/cordis.yml     一处部署 overlay：固化模型与工作区
 tests/smoke.mjs         无 key 的 REAL-composition 启动冒烟
 ```
