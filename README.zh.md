@@ -483,6 +483,7 @@ API key 经 credentials 服务写入 `~/.dsh/.credentials.yaml`（按各提供�
 
 - **报告问题 / 提需求**：[GitHub Issues](https://github.com/qialike/qialike/issues)。
 - **参与开发**：见 [CONTRIBUTING.zh.md](CONTRIBUTING.zh.md)——构建前提、测试与校验命令、插件编写与信任契约、提交规范。
+- **报告漏洞**：**不要**走公开 issue——见 [SECURITY.zh.md](SECURITY.zh.md)：私密渠道、受理范围，以及哪些行为属于设计而非缺陷。
 
 ## 致谢
 

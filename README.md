@@ -601,6 +601,8 @@ Look up what you are seeing; each entry points at the chapter that explains it.
 - **Report a problem / request a feature**: [GitHub Issues](https://github.com/qialike/qialike/issues).
 - **Contribute**: see [CONTRIBUTING.md](CONTRIBUTING.md) — build prerequisites, the test and check
   commands, the plugin-authoring and trust contract, and the commit conventions.
+- **Report a vulnerability**: **not** through a public issue — see [SECURITY.md](SECURITY.md) for the
+  private channel, the scope, and what counts as working as designed.
 
 ## Acknowledgements
 
