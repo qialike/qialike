@@ -10,27 +10,47 @@
 
 前提：
 
-- Node.js `^22.19 || >=24`，bun（供 `bun build --compile` 打包与 `pnpm test:unit`）
+- Node.js `^22.19 || >=24`，bun **`>= 1.4.2`**（供 `bun build --compile` 打包与 `pnpm test:unit`）。
+  这条 bun 下限不是形式要求：`--compile` 会把**构建机上的 bun 运行时**烘进每一个目标产物，而 1.3.x
+  构建出的 Windows 二进制会在首次模型调用前就结束每一轮 —— 所以构建脚本会直接拒绝更旧的 bun。
 - 一份 **DeepSeek Harness 检出**，且**该检出本身已构建**（在其目录里先跑 `pnpm install && pnpm build`）——
-  qialike 的构建直接读各包已构建的 `lib/`，未构建会失败
-- 该检出须落在版本区间 `0.1.0-rc.7 .. 0.1.5-rc.2`（构建脚本按 git tag 判定，越界会明确报错）；位置用
-  `DSH_HARNESS` 指定，默认 `../deepseek-harness`
+  qialike 的构建直接读各包已构建的 `lib/`，未构建会失败。位置用 `DSH_HARNESS` 指定，默认
+  `../deepseek-harness`。
+- 该检出须落在构建脚本强制的版本区间内。**该区间的唯一事实来源是 `apps/tui-bin/build.mjs`**
+  （`HARNESS_VERSION_MIN` / `HARNESS_VERSION_MAX`）—— 请去那里读，不要相信任何文档里写的数字，包括本文。
+  CI 在 `HARNESS_REF` 里钉同一个发布版；抬高上限时，先用新版本验证，再把两者一起改。
 
 ```sh
 pnpm install
 pnpm build        # 产出 dist/qialike（单文件可执行）
 ```
 
+`pnpm build` 同时会建出解析农场（`node_modules/@deepseek-ai/*` 以及本仓库自己的 scope），单元测试在运行时
+正是通过它 import 的。**请在 `pnpm test:unit` 之前先跑构建**，否则那些 import 了 harness 包的测试会解析
+失败 —— 那不是你的改动弄坏的。
+
 ## 测试与校验
 
 | 命令 | 作用 |
 | --- | --- |
-| `pnpm test` | 冒烟：启动真实的 `dsh-base` + `qialike-app` 组合树并解析 TUI 命令面，**无需 API key** |
-| `pnpm test:unit` | 单元测试（`bun test tests/`） |
+| `pnpm test` | 冒烟：在打包后的二进制里启动真实的 `dsh-base` + `qialike-app` 组合树并解析 TUI 命令面，**无需 API key**；需先 `pnpm build` |
+| `pnpm test:unit` | 单元测试（`bun test tests/`）；需先 `pnpm build`（见上） |
 | `pnpm typecheck` | 类型检查 |
 
 交互式 token 流式输出需要 TTY 与提供商 key，因此冒烟测试止于 `--help`。`pnpm typecheck` 会报 **3 处既有的**
 `wrap-ansi` TS7016（缺类型声明）；非零退出是基线，只看新增错误。
+
+**CI 只覆盖上面这些命令，仅此而已。** 官方构建所用的发布门还会跑一套真机 pty 套件（52 个场景，每个约 17 分钟，
+在真实终端里驱动打包后的二进制、配一份预置 `$HOME`）以及一次文档审计。**该套件与发布脚本当前不在本仓库内**
+——它们位于维护者的发布工作区——所以外部贡献者无法在本地复现一次发布，CI 也无法替你跑这套件。CI 全绿本身
+**不等于**可以发版；请把「本仓库里没有这套件」当作一个已知缺口，而不是把 CI 的结论信到超出它的范围。
+
+## 贡献
+
+- **许可**：贡献按本仓库现行的 [MIT](LICENSE) 许可接收（inbound = outbound）。提交 pull request 即表示你
+  确认有权按该条款提交这份工作；没有单独的 CLA 需要签。
+- **安全**：漏洞**不要**开公开 issue —— 见 [SECURITY.zh.md](SECURITY.zh.md)。
+- **提交**：沿用 Conventional Commits（见文末）。一个改动要能独立评审；历史按主题合并，不按作者。
 
 ## 仓库布局
 
@@ -49,28 +69,33 @@ harness 用模块 specifier 定位它，而编译后的二进制答不了这个�
 
 ## 作为插件 bundle 分发
 
-**本仓库不经 npm 分发**——二进制只由 `curl | bash` 安装器与 GitHub/gitcode Releases 提供，从不需要 npm。
-下面这条路径因此**当前不可用**，保留它只为说明架构上存在的能力，以及启用它需要什么。
+**本仓库当前不经 npm 分发**——二进制只由 `curl | bash` 安装器与 GitHub/gitcode Releases 提供，从不需要 npm。
+下面这条路径因此**当前不可用**，保留它只为说明架构上存在的能力，以及启用它还需要什么。它是生态最主要的
+发现通道（插件市场、`awesome-*` 榜单、`dsh plugin add`），所以关掉它是个分发决策，不是细节。
 
-`@yourname/qialike-app` 是一个树外（out-of-tree）Cordis bundle；若将来有一个可控的 npm 注册表与 scope，
-它可以这样加到某个 profile：
+`@qialike/qialike-app` 是一个树外（out-of-tree）Cordis bundle；各包现已使用 `@qialike` scope，
+所以它会长这样：
 
 ```sh
-dsh plugin --profile tui add <scope>/qialike-app
+dsh plugin --profile tui add @qialike/qialike-app
 dsh --profile tui --workspace ~/proj
 ```
 
 `dsh plugin add` 通过安装目录的 `profiles/node_modules` fallback 解析 `@deepseek-ai/*` peer 依赖，因此消费
 方用的是**已安装的 harness**，而不是本检出。
 
-要启用这条路径，需先解决三件事（这是现状记录，不是待办清单）：
+目前仍挡在这棵树与那条命令之间的东西（这是现状记录，不是待办清单）：
 
-- 根包是 `private: true`，`npm publish` 会直接拒绝；三处 `package.json` 的 name 都用 `@yourname/` 这个
-  **不属于本项目的占位 scope**（`@yourname/qialike-root`、`@yourname/qialike-app`、`@yourname/qialike-bin`）；
-  `npm view @yourname/qialike-app` 返回 404。
-- peer 依赖统一声明 `^0.1.1`，而 npm 的 semver 下 `^0.1.1` **不接受**预发布版本——已发布的 harness 是
-  `0.1.5-rc.2`，`semver.satisfies("0.1.5-rc.2", "^0.1.1")` 为 `false`。
-- harness 本身**已在 npm 上架**（`@deepseek-ai/dsh`，`latest` = `0.1.5-rc.2`）——这一项不是障碍。
+- **scope 必须真的在注册表上被本项目控制。** 三处 `package.json` 的 name 是 `@qialike/qialike-root`、
+  `@qialike/qialike-app`、`@qialike/qialike-bin`；只有当 npm 上的 `@qialike` scope 归本项目所有，
+  发布才成立，且 `npm view @qialike/qialike-app` 必须不再返回 404。
+- **根包是 `private: true`**，所以 `npm publish` 在根目录会被直接拒绝。这是对的——只有
+  `packages/qialike-app` 是可发布的 bundle——但意味着发布必须在该目录里执行（或用 `--filter`），
+  绝不能在根目录执行。
+- **所有 peer 依赖都声明 `^0.1.1`，而 npm 的 semver 下 `^0.1.1` 不接受预发布版本。** 构建所针对的 harness
+  是预发布版，所以 `semver.satisfies(<该版本>, "^0.1.1")` 为 `false`；消费方安装这个 bundle 时，peer 会被
+  报为未满足。要修，要么把声明的范围放宽到实际的预发布版本，要么等 harness 脱离预发布后改用正式的 caret 范围。
+- harness 本身**已在 npm 上架**（`@deepseek-ai/dsh`）——这一项不是障碍。
 
 ## 编写自己的插件
 

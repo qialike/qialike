@@ -10,28 +10,56 @@ binary as described in [README.md](README.md) under "Install as a command".
 
 Prerequisites:
 
-- Node.js `^22.19 || >=24`, plus bun (for the `bun build --compile` package and `pnpm test:unit`)
+- Node.js `^22.19 || >=24`, plus bun **`>= 1.4.2`** (for the `bun build --compile` package and
+  `pnpm test:unit`). The bun floor is not cosmetic: `--compile` bakes the BUILD HOST's bun runtime
+  into every target, and a 1.3.x build produces a Windows binary that ends every turn before the
+  first model call — so the build refuses an older bun.
 - A **DeepSeek Harness checkout that is itself built** (run `pnpm install && pnpm build` inside it first)
-  — the qialike build reads each package’s built `lib/` and fails without it
-- That checkout must fall within `0.1.0-rc.7 .. 0.1.5-rc.2` (the build script reads the git tag and
-  rejects anything outside it); point `DSH_HARNESS` at it, default `../deepseek-harness`
+  — the qialike build reads each package’s built `lib/` and fails without it. Point `DSH_HARNESS` at
+  it; the default is `../deepseek-harness`.
+- That checkout must fall inside the version range the build enforces. **The range's single source of
+  truth is `apps/tui-bin/build.mjs`** (`HARNESS_VERSION_MIN` / `HARNESS_VERSION_MAX`) — read it
+  there rather than trusting a number written in a document, including this one. CI pins the same
+  release in `HARNESS_REF`; when you raise the ceiling, validate against the new release and move
+  both together.
 
 ```sh
 pnpm install
 pnpm build        # dist/qialike (single-file executable)
 ```
 
+`pnpm build` also creates the resolution farm (`node_modules/@deepseek-ai/*`, plus this repo's own
+scope) that the unit suite imports through at runtime. **Run it before `pnpm test:unit`**, or the
+tests that import a harness package fail to resolve — not because your change broke them.
+
 ## Tests and checks
 
 | Command | What it does |
 | --- | --- |
-| `pnpm test` | Smoke: boots the real `dsh-base` + `qialike-app` composition tree and parses the TUI command surface — **no API key needed** |
-| `pnpm test:unit` | Unit tests (`bun test tests/`) |
+| `pnpm test` | Smoke: boots the real `dsh-base` + `qialike-app` composition tree inside the packaged binary and parses the TUI command surface — **no API key needed**; needs `pnpm build` first |
+| `pnpm test:unit` | Unit tests (`bun test tests/`); needs `pnpm build` first (see above) |
 | `pnpm typecheck` | Type check |
 
 Interactive token streaming needs a TTY and a provider key, so the smoke test stops at `--help`.
 `pnpm typecheck` reports **3 pre-existing** `wrap-ansi` TS7016 errors (missing type declarations); a
 non-zero exit is the baseline — only new errors matter.
+
+**CI covers the commands above and nothing more.** The release gate used for official builds also
+runs a real-machine pty suite (52 scenarios, ~17 minutes each, driving the packaged binary in a
+real terminal against a seeded `$HOME`) plus a documentation audit. **That harness and the release
+scripts are not part of this repository today** — they live in the maintainers' release workspace —
+so an outside contributor cannot reproduce a release locally, and CI cannot run the suite for you. A
+green CI run is not by itself a statement that a release is shippable; treat the absence of that
+harness here as a known gap, not as an invitation to trust CI further than it goes.
+
+## Contributions
+
+- **Licence**: contributions are accepted under the [MIT](LICENSE) licence that covers this
+  repository (inbound = outbound). By opening a pull request you confirm you have the right to
+  submit the work under those terms; there is no separate CLA to sign.
+- **Security**: do **not** open a public issue for a vulnerability — see [SECURITY.md](SECURITY.md).
+- **Commits**: Conventional Commits (below). Keep a change reviewable on its own; the repository
+  history is squashed by topic, not by author.
 
 ## Repository layout
 
@@ -54,16 +82,17 @@ everywhere. User-visible security behavior lives in the README's "Security bound
 
 ## Distributing as a plugin bundle
 
-**This repository does not distribute through npm** — the binary comes from the `curl | bash`
+**This repository does not distribute through npm today** — the binary comes from the `curl | bash`
 installer and the GitHub/gitcode releases, and never needs npm. The path below is therefore
-**not available today**; it is kept only to describe the capability the architecture has, and what
-enabling it would take.
+**not available today**; it is kept to describe the capability the architecture has, and what
+enabling it would still take. It is the ecosystem's main discovery channel (plugin markets, the
+`awesome-*` catalogues, `dsh plugin add`), so closing it is a distribution decision, not a detail.
 
-`@yourname/qialike-app` is an out-of-tree Cordis bundle; given a registry and scope we control, it
-could be added to a profile like this:
+`@qialike/qialike-app` is an out-of-tree Cordis bundle; its packages now carry the `@qialike` scope,
+so this is what it would look like:
 
 ```sh
-dsh plugin --profile tui add <scope>/qialike-app
+dsh plugin --profile tui add @qialike/qialike-app
 dsh --profile tui --workspace ~/proj
 ```
 
@@ -71,17 +100,22 @@ dsh --profile tui --workspace ~/proj
 `profiles/node_modules` fallback, so the consumer runs against the **installed harness**, not this
 checkout.
 
-Enabling that path would first require three things (a record of the current state, not a
-to-do list):
+What still stands between the tree and that command (a record of the current state, not a to-do
+list):
 
-- The root package is `private: true`, so `npm publish` refuses outright; all three `package.json` names
-  use the `@yourname/` **placeholder scope, which this project does not own** (`@yourname/qialike-root`,
-  `@yourname/qialike-app`, `@yourname/qialike-bin`); and `npm view @yourname/qialike-app` returns 404.
-- Every peer dependency declares `^0.1.1`, and under npm's semver `^0.1.1` does **not** accept a
-  prerelease — the published harness is `0.1.5-rc.2`, and `semver.satisfies("0.1.5-rc.2", "^0.1.1")` is
-  `false`.
-- The harness itself **is already on npm** (`@deepseek-ai/dsh`, `latest` = `0.1.5-rc.2`) — not an
-  obstacle.
+- **The scope must actually be controlled on the registry.** The three `package.json` names are
+  `@qialike/qialike-root`, `@qialike/qialike-app` and `@qialike/qialike-bin`; publishing only works
+  if the `@qialike` npm scope is owned by this project, and `npm view @qialike/qialike-app` must
+  stop returning 404.
+- **The root package is `private: true`**, so `npm publish` refuses outright at the root. That is
+  correct — only `packages/qialike-app` is a publishable bundle — but it means the publish must run
+  from that directory (or with a `--filter`), never from the root.
+- **Every peer dependency declares `^0.1.1`, and under npm's semver `^0.1.1` does NOT accept a
+  prerelease.** The harness the build targets is a prerelease, so `semver.satisfies(<that
+  version>, "^0.1.1")` is `false`; a consumer installing the bundle would have its peers reported as
+  unsatisfied. Fixing this means either widening the declared ranges to the actual prerelease
+  versions or moving to caret ranges over released versions once the harness leaves prerelease.
+- The harness itself **is already on npm** (`@deepseek-ai/dsh`) — not an obstacle.
 
 ## Writing your own plugin
 
