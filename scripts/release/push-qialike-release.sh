@@ -118,17 +118,26 @@ case "$SOURCE" in
 esac
 
 # ── 版本与 tag ──────────────────────────────────────────────────────────────
-# tag 用**裸版本号**（`0.7.1`，不带 `v`）—— §9.4.10 决策 5，实测 `…/download/v0.5.4/…` = 404。
+# **两套命名空间，这是刻意的**（§9.4.10 决策 5 / §9.4.6 发布断言，实测
+# `…/download/v0.5.4/…` = 404）：
+#   本地 annotated tag 带 `v`（`v0.7.1`）—— `tag-qialike.sh` 造的就是它，`git describe` 也认它；
+#   远端 release tag 是**裸版本号**（`0.7.1`）—— 资产 URL 和安装器的 `$base/download/<tag>/` 都拼它。
+# 脚本因此必须**做映射**：找本地 `v<版本>`，推到远端 `<版本>`。曾有一版直接拿 `$VERSION` 找本地
+# tag，于是永远报"本地没有 tag 0.7.1，先跑 tag-qialike.sh"——而照做只会造出 `v0.7.1`，是个
+# 自己喂自己的死循环。
 [[ -d "$REPO" ]] || die "找不到仓库：$REPO（用 QIALIKE_REPO 指定）"
 if [[ -z "$VERSION" ]]; then
   VERSION="$(node -p "require('$REPO/package.json').version" 2>/dev/null)" \
     || die "读不到 $REPO/package.json 的 version"
 fi
-TAG="$VERSION"
+VERSION="${VERSION#v}"   # 容错：传 0.7.1 或 v0.7.1 都接受
+LOCAL_TAG="v$VERSION"    # 本地：带 v（annotated）
+TAG="$VERSION"           # 远端：裸版本号
 bold "qialike 发布推送"
 echo "  repo     = $REPO"
 echo "  dist     = $DIST"
-echo "  version  = $VERSION   tag = $TAG（裸版本号，不带 v）"
+echo "  version  = $VERSION"
+echo "  本地 tag = $LOCAL_TAG（带 v，annotated）  →  远端 tag = $TAG（裸版本号）"
 echo "  source   = $SOURCE"
 [[ "$DRY" == 1 ]] && echo "  模式     = dry-run（不联网、不写入）"
 [[ "$VERIFY_ONLY" == 1 ]] && echo "  模式     = verify-only（不上传）"
@@ -241,13 +250,15 @@ verify_remote_reachable() {  # $1 = remote 名/URL，$2 = label
 sync_tag() {  # $1 = remote 名或 URL，$2 = 标签
   local remote=$1 label=$2 want have err
   require_remote "$remote" "$label"
-  want="$(git -C "$REPO" rev-parse "refs/tags/$TAG" 2>/dev/null)" \
-    || die "本地没有 tag $TAG —— 先跑 scripts/release/tag-qialike.sh"
+  # 本地找的是**带 v** 的那个；`want` 是 tag 对象的 SHA，而远端 ref 也是 tag 对象，
+  # 所以两者同口径可比（annotated tag 的 `ls-remote` 首行即 tag 对象）。
+  want="$(git -C "$REPO" rev-parse "refs/tags/$LOCAL_TAG" 2>/dev/null)" \
+    || die "本地没有 tag $LOCAL_TAG —— 先跑 scripts/release/tag-qialike.sh（它造的就是带 v 的本地 tag）"
   have="$(remote_tag_sha "$remote")"
 
   if [[ -z "$have" ]]; then
-    echo "  $label：远端没有 $TAG —— 推送本地 tag"
-    if ! err="$(git -C "$REPO" push "$remote" "refs/tags/$TAG" 2>&1)"; then
+    echo "  $label：远端没有 $TAG —— 推送本地 $LOCAL_TAG"
+    if ! err="$(git -C "$REPO" push "$remote" "refs/tags/$LOCAL_TAG:refs/tags/$TAG" 2>&1)"; then
       printf '%s\n' "$err" | sed 's/^/     /' >&2
       explain_push_failure "$label" "$err"
       die "$label 推送 tag $TAG 失败"
@@ -262,13 +273,13 @@ sync_tag() {  # $1 = remote 名或 URL，$2 = 标签
   fi
 
   # 走到这里说明远端指向另一个提交，最常见的原因是本地用 `--move` 挪过标签。
-  warn "$label：tag $TAG 在远端指向 $have，本地是 $want —— 删远端后重推"
+  warn "$label：tag $TAG 在远端指向 $have，本地 $LOCAL_TAG 是 $want —— 删远端后重推"
   if ! err="$(git -C "$REPO" push "$remote" ":refs/tags/$TAG" 2>&1)"; then
     printf '%s\n' "$err" | sed 's/^/     /' >&2
     explain_push_failure "$label" "$err"
     die "$label 删除远端 tag $TAG 失败"
   fi
-  if ! err="$(git -C "$REPO" push "$remote" "refs/tags/$TAG" 2>&1)"; then
+  if ! err="$(git -C "$REPO" push "$remote" "refs/tags/$LOCAL_TAG:refs/tags/$TAG" 2>&1)"; then
     printf '%s\n' "$err" | sed 's/^/     /' >&2
     explain_push_failure "$label" "$err"
     die "$label 重推 tag $TAG 失败 —— 远端现在没有这个 tag 了，请修好后重跑本脚本"
