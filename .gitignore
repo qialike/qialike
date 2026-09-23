@@ -27,6 +27,13 @@ build.log
 # in the release scripts would try to commit a 2 MB foreign repository.
 /.scan/
 
+# Release archives. `scripts/release/*.sh` defaults its output to
+# `../releases-qialike/`, which is deliberately OUTSIDE the repository, so this
+# rule is insurance rather than the mechanism: it only bites if someone points
+# `BUILD_ARCHIVE_OUT` back inside the tree. The release scripts run `git add -A`,
+# so an archive landing here would otherwise be committed by accident.
+/releases-qialike/
+
 # Build-generated sources that are large or vary by build target. The release
 # scripts run `git add -A`, so an unignored artifact here would be committed by
 # accident and then drift from what the next build emits. Both are regenerated
