@@ -772,9 +772,15 @@ export class Store {
    *  suppress) plus the message column's CONTENT right edge (grid col), so the
    *  flow copy stops before the Steps sidebar. The panel clamps to the transcript
    *  viewport so a composer/status selection (which has its own React inverse) is
-   *  never double-highlighted by the frame buffer. */
-  private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number } | null) | null = null
-  setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number } | null): void {
+   *  never double-highlighted by the frame buffer.
+   *
+   *  A guard may also return CLAMPED `anchor`/`focus` (1-based SGR): while a
+   *  dialog is up the guard clamps the drag endpoints to the dialog's text box,
+   *  so a gesture that leaves the box copies the dialog text only and never the
+   *  transcript painted around it. Without them the raw selection endpoints are
+   *  used (the conversation surface's own behavior). */
+  private _frameGuard: ((sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number; anchor?: { row: number; col: number }; focus?: { row: number; col: number } } | null) | null = null
+  setFrameSelectionGuard(fn: (sel: { aRow: number; aCol: number; cRow: number; cCol: number }) => { rect: { x1: number; y1: number; x2: number; y2: number } | null; left: number; right: number; anchor?: { row: number; col: number }; focus?: { row: number; col: number } } | null): void {
     this._frameGuard = fn
   }
 
@@ -3215,8 +3221,8 @@ export class Store {
     // reproduce a LINE/FLOW copy, walking from the anchor cell to
     // the focus cell following the text flow, so e.g. dragging from the start of a
     // line into the middle of the next copies the whole first line + that prefix.
-    g.__dshFrameController.anchor = { row: s.aRow, col: s.aCol }
-    g.__dshFrameController.focus = { row: s.cRow, col: s.cCol }
+    g.__dshFrameController.anchor = gr?.anchor ?? { row: s.aRow, col: s.aCol }
+    g.__dshFrameController.focus = gr?.focus ?? { row: s.cRow, col: s.cCol }
   }
   /** Begin a mouse selection at a terminal cell; clears any previous selection. */
   mousePress(row: number, col: number): void {

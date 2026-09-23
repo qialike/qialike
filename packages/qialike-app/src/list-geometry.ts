@@ -8,7 +8,7 @@
  *  click anywhere on the screen's row range acted on the dialog (a left-click on
  *  the transcript background used to "confirm" the highlighted row). */
 import type { RefObject } from 'react'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import type { DOMElement } from 'ink'
 
 export interface DialogListGeometry {
@@ -84,6 +84,146 @@ export function outsideOpenDialogList(
   if (panel === 'conversation' || at === undefined) return false
   if (!dialogListGeometryRegistered()) return false
   return !dialogListContains(at.row, at.col)
+}
+
+/**
+ * Geometry of the open dialog's TEXT AREA — the Box that directly wraps the
+ * dialog's text rows, i.e. already INSIDE the dialog's border and padding.
+ *
+ * Registered by every dialog so a mouse drag inside it can highlight and copy
+ * the dialog's own text (`text-selection.ts`). The conversation panel's frame
+ * guard turns this into the content column band the frame controller walks:
+ * measuring the inner Box (instead of the bordered outer one) is what keeps
+ * `contentLeft`/`contentRight` free of border/padding constants that could
+ * drift away from the JSX.
+ */
+export interface DialogTextBox {
+  /** 0-based Yoga grid row of the first text row. */
+  readonly top: number
+  /** 0-based grid column of the text area's left edge. */
+  readonly left: number
+  readonly width: number
+  readonly height: number
+}
+type RegisteredTextBox = DialogTextBox & { readonly owner: string }
+type TextBoxHost = { __dshDialogTextBox?: RegisteredTextBox | null }
+
+/**
+ * Publish (`b`) or withdraw (`null`) one surface's text area.
+ *
+ * The slot is global because the conversation panel's frame guard is the single
+ * reader, but several surfaces can be mounted at once — the palette and the
+ * `@file` popup live INSIDE the conversation surface, and React runs a child's
+ * effects before its parent's. Without the `owner` check the parent's
+ * "I am not open" cleanup would wipe a child's live registration (and vice
+ * versa). An owner may only ever clear its own box.
+ *
+ * @param owner - stable id of the publishing surface (`'palette'`, `'models'`, …).
+ * @param b - the measured text area, or null to withdraw this owner's box.
+ */
+export function setDialogTextBox(owner: string, b: DialogTextBox | null): void {
+  const host = globalThis as unknown as TextBoxHost
+  if (b === null) {
+    if (host.__dshDialogTextBox?.owner === owner) host.__dshDialogTextBox = null
+    return
+  }
+  host.__dshDialogTextBox = { ...b, owner }
+}
+
+/** The registered text area, or null when no dialog publishes one (or the box
+ *  is degenerate — a zero-width/height measurement must not become a band). */
+export function dialogTextBox(): DialogTextBox | null {
+  const b = (globalThis as unknown as TextBoxHost).__dshDialogTextBox
+  if (!b || b.width <= 0 || b.height <= 0) return null
+  return b
+}
+
+/** The dialog text area as an INCLUSIVE grid band (0-based rows/cols), or null
+ *  when no dialog publishes one. This is what the frame guard clamps a dialog
+ *  selection to. */
+export function dialogTextBand(): { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number } | null {
+  const b = dialogTextBox()
+  if (b === null) return null
+  return { left: b.left, right: b.left + b.width - 1, top: b.top, bottom: b.top + b.height - 1 }
+}
+
+/** Whether a 1-based SGR mouse point is inside the open dialog's text area —
+ *  the ONLY place a press may ANCHOR a dialog selection. A press outside keeps
+ *  the old consume-without-anchor behavior (the click half of a dialog gesture
+ *  is gated per dialog, see `dialogListContains`). */
+export function dialogTextBoxContains(row: number, col: number): boolean {
+  const band = dialogTextBand()
+  if (band === null) return false
+  const y = row - 1
+  const x = col - 1
+  return y >= band.top && y <= band.bottom && x >= band.left && x <= band.right
+}
+
+/** Attach the returned ref to the Box that wraps a dialog's text rows; it
+ *  registers the measured text area while mounted and clears it on unmount
+ *  (and on every dep change — the deps must cover anything that moves/resizes
+ *  the dialog, typically `store.rows` / `store.width` plus the dialog's mode). */
+export function useDialogTextBox(owner: string, deps: readonly unknown[]): RefObject<DOMElement> {
+  const ref = useRef<DOMElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !el.yogaNode) { setDialogTextBox(owner, null); return }
+    setDialogTextBox(owner, {
+      top: Math.round(measureDomTop(el)),
+      left: Math.round(measureDomLeft(el)),
+      width: Math.round(el.yogaNode.getComputedWidth() ?? 0),
+      height: Math.round(el.yogaNode.getComputedHeight() ?? 0),
+    })
+    return () => setDialogTextBox(owner, null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- measured per dialog state change
+  }, deps)
+  return ref
+}
+
+/** A raw mouse selection, in 1-based SGR cells. */
+export interface SelectionEndpoints {
+  readonly aRow: number
+  readonly aCol: number
+  readonly cRow: number
+  readonly cCol: number
+}
+/** What the frame controller needs to highlight and walk a dialog selection:
+ *  the grid rect, the content column band, and the CLAMPED 1-based endpoints. */
+export interface DialogSelection {
+  readonly rect: { readonly x1: number; readonly y1: number; readonly x2: number; readonly y2: number }
+  readonly left: number
+  readonly right: number
+  readonly anchor: { readonly row: number; readonly col: number }
+  readonly focus: { readonly row: number; readonly col: number }
+}
+
+/**
+ * Clamp a mouse selection onto a dialog's text band.
+ *
+ * The frame controller walks from `anchor` to `focus` over the composited cell
+ * grid, so an unclamped gesture would sweep in whatever is painted beside and
+ * below the dialog — the transcript behind it. Both the row range AND each
+ * endpoint are pulled back to the band; endpoints are clamped INDIVIDUALLY so a
+ * drag that leaves the box keeps its direction instead of collapsing.
+ *
+ * Pure (the band is passed in) so the mapping is unit-testable without a
+ * terminal or a React tree.
+ */
+export function clampSelectionToDialogBand(
+  sel: SelectionEndpoints,
+  band: { readonly left: number; readonly right: number; readonly top: number; readonly bottom: number },
+): DialogSelection {
+  const row0 = (v: number): number => Math.max(band.top, Math.min(v - 1, band.bottom))
+  const col0 = (v: number): number => Math.max(band.left, Math.min(v - 1, band.right))
+  const ar = row0(sel.aRow)
+  const cr = row0(sel.cRow)
+  return {
+    rect: { x1: band.left, y1: Math.min(ar, cr), x2: band.right, y2: Math.max(ar, cr) },
+    left: band.left,
+    right: band.right,
+    anchor: { row: ar + 1, col: col0(sel.aCol) + 1 },
+    focus: { row: cr + 1, col: col0(sel.cCol) + 1 },
+  }
 }
 
 export function measureDomTop(el: DOMElement | null): number {

@@ -28,6 +28,8 @@ import type { RawKey } from './stdin.ts'
 import type { Store, TuiService } from './index.tsx'
 import { theme } from './theme.ts'
 import { visualWidth } from './markdown.tsx'
+import { useDialogTextBox, dialogTextBoxContains } from './list-geometry.ts'
+import { copySelection } from './text-selection.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-file-reference'
@@ -160,6 +162,20 @@ function paletteKey(k: RawKey): void {
   if (k.upArrow) { index = (index - 1 + len) % len; store.repaint(); return }
   if (k.downArrow) { index = (index + 1) % len; store.repaint(); return }
   if (k.escape) { close(activeFileToken(store.input, store.cursor)?.prefix ?? null); return }
+  // Mouse: a press inside the popup anchors a text selection over the candidate
+  // list (a drag copies it — `copySelection` reads the frame buffer); a plain
+  // click stays inert, exactly as it was before this popup had mouse support.
+  if (k.mousePress) {
+    if (dialogTextBoxContains(k.mousePress.row, k.mousePress.col)) {
+      store.mousePress(k.mousePress.row, k.mousePress.col)
+    }
+    return
+  }
+  if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return }
+  if (k.mouseRelease) {
+    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'drag') copySelection(store)
+    return
+  }
   if (k.tab) {
     const c = candidates[index]
     if (c !== undefined && c.kind === 'directory') { pick(c, true); return }
@@ -183,7 +199,11 @@ function paletteKey(k: RawKey): void {
  *  command palette's own formula (`commandPaletteIndexFromRow`): docked leaves 3
  *  rows (message padding + gap) below the box, the hero rests it ON the card's
  *  top border. */
-function render(): React.ReactNode {
+function FileReferencePalette(): React.ReactNode {
+  // The palette's TEXT area, published so a drag across the popup copies the
+  // candidate list rather than the transcript behind it. Called before the
+  // early return so the hook order never depends on the popup being open.
+  const textRef = useDialogTextBox('file-reference', [candidates.length, index, busy, store.rows, store.width, store.hero])
   if (candidates.length === 0 && !busy) return null
   const lift = store.hero ? 1 : 3
   const rows = candidates.slice(0, SHOWN)
@@ -192,6 +212,7 @@ function render(): React.ReactNode {
   return (
     <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end" paddingBottom={lift}>
       <Box borderStyle="round" borderColor={theme.border} flexDirection="column">
+        <Box ref={textRef} flexDirection="column">
         {rows.map((c, i) => {
           const line = `@${fileRowLabel(c)}`
           const trail = `${header}  `
@@ -203,6 +224,7 @@ function render(): React.ReactNode {
           )
         })}
         {rows.length === 0 ? <Text color={theme.textMuted} backgroundColor={theme.bg}>{'  searching…'}</Text> : null}
+        </Box>
       </Box>
     </Box>
   )
@@ -232,7 +254,7 @@ export function apply(ctx: Context): void {
   tui.panels.register({
     id: FILE_PANEL,
     mode: 'overlay',
-    render: () => render(),
+    render: () => <FileReferencePalette />,
     handleKey: (k) => { paletteKey(k); return true },
   })
   ctx.effect(() => store.subscribe(sync), 'tui-file-reference: draft watch')

@@ -9,7 +9,6 @@
 
 import { Box, Text, useStdin, measureElement, type DOMElement } from 'ink'
 import React, { useEffect, useMemo, useState } from 'react'
-import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import { setSandboxMode } from '@deepseek-ai/dsh-sandbox-policy'
 import {
@@ -98,6 +97,12 @@ import { logError, logErrorFileOnly } from '../log.ts'
 import { HARNESS_VERSION } from '../harness-version.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
+import { clampSelectionToDialogBand, dialogTextBand, setDialogTextBox, measureDomTop, measureDomLeft } from '../list-geometry.ts'
+import { copySelection } from '../text-selection.ts'
+
+/** Re-exported so the clipboard writer keeps its historical import site
+ *  (`panels/conversation.ts`) while living in the shared selection module. */
+export { writeClipboard } from '../text-selection.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-panel-conversation'
@@ -2018,42 +2023,6 @@ function selectionText(aRow: number, aCol: number, cRow: number, cCol: number): 
   return `${joined}\n${input}`.slice(Math.min(a, c), Math.max(a, c))
 }
 
-export function writeClipboard(text: string): void {
-  // macOS Terminal.app has no OSC 52, so `pbcopy` is the only reliable path; use
-  // the ABSOLUTE path and BLOCK until it has consumed stdin (spawnSync), so a
-  // Node single-executable binary is guaranteed to deliver the bytes — an async
-  // `spawn` + `stdin.end` race under a busy event loop can leave the child
-  // reading EOF before the text is flushed, silently setting nothing.
-  if (process.platform === 'darwin') {
-    for (const cmd of ['/usr/bin/pbcopy', 'pbcopy']) {
-      const res = spawnSync(cmd, [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
-      if (!res.error && res.status === 0) return
-    }
-    process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
-    return
-  }
-  // Linux: no single clipboard tool is guaranteed (X11 vs Wayland). Try the
-  // Wayland tool and the two X11 tools in order
-  // (wl-copy / xclip / xsel) — so whichever is installed and matches the session
-  // sets the system clipboard. xclip/xsel default to the PRIMARY selection, so
-  // the -selection clipboard / --clipboard flag is required for Ctrl+V paste.
-  if (process.platform === 'win32') {
-    const r = spawnSync('clip', [], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
-    if (!r.error && r.status === 0) return
-  } else if (process.platform === 'linux') {
-    for (const [cmd, args] of [
-      ['wl-copy', []],
-      ['xclip', ['-selection', 'clipboard']],
-      ['xsel', ['--clipboard', '--input']],
-    ] as const) {
-      const r = spawnSync(cmd, [...args], { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
-      if (!r.error && r.status === 0) return
-    }
-  }
-  // No clipboard command succeeded; send OSC 52 (iTerm2 / Kitty / Alacritty / Windows Terminal).
-  process.stdout.write(`\x1b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\x1b\\`)
-}
-
 /** Copy the currently active mouse selection (the one the frame controller is
  *  highlighting) to the system clipboard. Shared by the mouse-release handler and
  *  the Ctrl+Y keyboard fallback.
@@ -2064,24 +2033,14 @@ export function writeClipboard(text: string): void {
  *  across margins and can resolve to '' or the wrong line). No-op unless the
  *  selection spans a real drag. */
 function copyCurrentSelection(): void {
+  // The frame buffer's walked text is the reliable source on EVERY surface (no
+  // drift across item margins). `selectionText` (a transcript-model
+  // reconstruction) is the fallback — `copySelection` ignores it by itself while
+  // a dialog owns the pointer, because there the frame text is the dialog's and a
+  // model fallback would copy the transcript painted behind it.
   const sel = store.selection
-  if (sel === null || (Math.abs(sel.aRow - sel.cRow) + Math.abs(sel.aCol - sel.cCol)) <= 2) return
-  const fc = (globalThis as unknown as { __dshFrameController?: { copiedText?: string } }).__dshFrameController
-  const rect = fc && fc.copiedText ? fc.copiedText : ''
-  const text = rect || selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol)
-  const trimmed = text.trim()
-  if (trimmed !== '') {
-    writeClipboard(trimmed)
-    const long = trimmed.length > 40
-    const preview = long ? trimmed.slice(0, 40) + '…' : trimmed
-    // Show the feedback in the bottom STATUS BAR (transient, not a transcript
-    // item): a `status` transcript row would re-layout / follow-tail auto-scroll
-    // the transcript and slide the screen-coordinate highlight onto the next
-    // block below (the user saw this as the highlight jumping to下文). For a
-    // large selection the status shows the char count, so the FULL copy (which
-    // goes to the clipboard, never truncated) can be trusted.
-    store.flashStatus(long ? `Copied: ${preview} (${trimmed.length} chars)` : `Copied: ${preview}`)
-  }
+  if (sel === null) return
+  copySelection(store, () => selectionText(sel.aRow, sel.aCol, sel.cRow, sel.cCol))
 }
 
 // ── the conversation key handler ────────────────────────────────────────────
@@ -2286,8 +2245,12 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     store.scrollLines(WHEEL_STEP); return
   }
   if (k.mousePress) {
-    if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mousePress.row, tui); if (idx >= 0) { store.setCommandIndex(idx); return } }
-    store.mousePress(k.mousePress.row, k.mousePress.col); return
+    // Anchor a text selection FIRST: the palette is an overlay, so a drag across
+    // it must select the command rows (its own published text box), and the
+    // press still moves the highlight so a plain click can run that row.
+    store.mousePress(k.mousePress.row, k.mousePress.col)
+    if (paletteOpen) { const idx = commandPaletteIndexFromRow(k.mousePress.row, tui); if (idx >= 0) store.setCommandIndex(idx) }
+    return
   }
   if (k.mouseMove) {
     // HOVER: with ?1003 any-motion the terminal reports motion without a button.
@@ -2598,6 +2561,24 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   const [hoverIndex, setHoverIndex] = useState(commandIndex)
   React.useEffect(() => setHoverIndex(commandIndex), [commandIndex])
   const effectiveIndex = filtered.length === 0 ? -1 : (hoverIndex % filtered.length)
+  // The palette's text area (its rows' box, inside the round border): published
+  // so a drag across the popup highlights and copies the COMMAND LIST, not the
+  // transcript behind it. Only while the conversation surface owns the keys —
+  // an open dialog panel paints over the palette and must win the slot.
+  const paletteTextRef = React.useRef<DOMElement>(null)
+  const paletteOpen = isSlash && paletteWin.visible > 0 && store.panel === 'conversation'
+  React.useEffect(() => {
+    const el = paletteTextRef.current
+    // `setDialogTextBox` is ownership-checked, so this never withdraws a child
+    // overlay's (question/approval/file-reference) live registration.
+    if (!paletteOpen || !el || !el.yogaNode) { setDialogTextBox('palette', null); return }
+    setDialogTextBox('palette', {
+      top: Math.round(measureDomTop(el)),
+      left: Math.round(measureDomLeft(el)),
+      width: Math.round(el.yogaNode.getComputedWidth() ?? 0),
+      height: Math.round(el.yogaNode.getComputedHeight() ?? 0),
+    })
+  }, [paletteOpen, paletteWin.visible, paletteWin.first, filtered.length, store.rows, store.width, store.panel])
 
   const status = isRawModeSupported ? '' : '(raw input unsupported) '
 
@@ -3096,6 +3077,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     isSlash && filtered.length > 0 && paletteWin.visible > 0 ? (
     <Box position="absolute" width="100%" height="100%" flexDirection="column" justifyContent="flex-end" alignItems={store.hero ? 'flex-start' : undefined} paddingLeft={heroPaletteLeft} paddingBottom={lift}>
       <Box borderStyle="round" borderColor={theme.border} flexDirection="column" width={store.hero ? heroComposerWidth(store.width) : undefined}>
+        <Box ref={paletteTextRef} flexDirection="column">
         {filtered.slice(paletteWin.first, paletteWin.first + paletteWin.visible).map((c, i) => {
           // `i` is local to the painted window; the SELECTED row is compared in
           // absolute command indices.
@@ -3142,6 +3124,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
             </Text>
           )
         })() : null}
+        </Box>
       </Box>
     </Box>
   ) : null
@@ -3566,6 +3549,13 @@ export function apply(ctx: Context): void {
   store.setFrameSelectionGuard((sel) => {
     const width = store.width
     const rows = store.rows
+    // A DIALOG OWNS THE POINTER while it is up. Its text box (published by the
+    // panel that paints it) is the whole selectable surface: clamp BOTH the row
+    // range and the drag endpoints to it, so a gesture that leaves the box
+    // copies the dialog's text only — never the transcript painted around it,
+    // which is what the transcript band below would otherwise sweep in.
+    const dialog = dialogTextBand()
+    if (dialog !== null) return clampSelectionToDialogBand(sel, dialog)
     const showSidebar = sidebarShown(width, store.rows)
     const usable = convUsableWidth(width, showSidebar)
     const composerTop = composerBand(width, rows).top

@@ -22,14 +22,14 @@
 import { Box, Text, measureElement } from 'ink'
 import type { DOMElement } from 'ink'
 import React from 'react'
-import { spawnSync } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import type { PendingQuestion, TuiService, Store } from '../index.tsx'
 import { visualWidth } from '../markdown.tsx'
 import { WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
-import { measureDomTop, measureDomLeft } from '../list-geometry.ts'
+import { measureDomTop, measureDomLeft, useDialogTextBox, dialogTextBoxContains } from '../list-geometry.ts'
+import { copySelection, writeClipboard } from '../text-selection.ts'
 import {
   questionBodyWindowRows,
   visualWrap,
@@ -50,26 +50,6 @@ export const name = 'tui-panel-question'
 
 /** The store service (see panels/conversation.tsx). */
 let store!: Store
-
-/** Copy text to the system clipboard (pbcopy / clip / wl-copy/xclip/xsel,
- *  falling back to OSC 52) — same strategy the conversation panel uses. */
-function writeClipboard(text: string): void {
-  const commands: { cmd: string; args: string[] }[] =
-    process.platform === 'darwin'
-      ? [{ cmd: '/usr/bin/pbcopy', args: [] }]
-      : process.platform === 'win32'
-        ? [{ cmd: 'clip', args: [] }]
-        : [{ cmd: 'wl-copy', args: [] }, { cmd: 'xclip', args: ['-selection', 'clipboard'] }, { cmd: 'xsel', args: ['-b'] }]
-  for (const { cmd, args } of commands) {
-    try {
-      const r = spawnSync(cmd, args, { input: text, stdio: ['pipe', 'ignore', 'ignore'] })
-      if (r.status === 0 && r.error === undefined) return
-    } catch { /* try the next */ }
-  }
-  try {
-    process.stdout.write(`\x1b]52;c;${Buffer.from(text).toString('base64')}\x1b\\`)
-  } catch { /* best-effort */ }
-}
 
 /** Latest measured geometry of the custom ("Other") input area: where its
  *  first visible row starts on screen and which full-input visual rows it
@@ -477,6 +457,10 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
   // conversation panel, which renders the dock overlay after setLayout).
   const msgScrollable = review && store.layoutContent > store.layoutViewport
   const bodyRef = React.useRef<DOMElement>(null)
+  // The dock's TEXT area (the Box wrapping every dock row), published so a mouse
+  // drag over the dock selects and copies ITS text — the transcript row the dock
+  // sits on is never what a drag here means.
+  const textRef = useDialogTextBox('question', [store.rows, store.width, q.active, q.customMode, q.custom, questionLines.length])
   const dockRef = React.useRef<DOMElement>(null)
   // Report the dock's REAL rendered height (rows): conversation.tsx reserves
   // exactly this many transcript rows (questionH) since the dock lives IN-FLOW
@@ -594,6 +578,9 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
           }`
   return (
     <Box ref={dockRef} flexShrink={0} marginLeft={3} marginRight={3} borderStyle="round" borderColor={theme.accent} flexDirection="column" paddingX={2} paddingY={1}>
+      {/* The box wrapping the dock's TEXT rows: its measured box is the dock's
+          text area, published for mouse drag-select + copy. */}
+      <Box ref={textRef} flexDirection="column">
       <Text color={theme.accent} bold wrap="truncate">{title}<Text dimColor> · waiting</Text></Text>
       {total > 1 && (
         <Box ref={tabsRef} flexDirection="column">
@@ -675,6 +662,7 @@ function QuestionPanel(props: { question: PendingQuestion }): React.JSX.Element 
       )}
       <Box marginTop={1}>
         <Text dimColor>{hint}</Text>
+      </Box>
       </Box>
     </Box>
   )
@@ -819,19 +807,20 @@ function revealOption(index: number): void {
   // Custom ("Other") input mouse: click positions the caret, drag selects
   // (highlighted), release copies the selection. Only mapped when the click
   // lands inside the measured input area; other mouse events are consumed.
-  if (question.customMode && questionInputGeo !== null) {
+  // …but only while NO dock text selection is live: a press that landed outside
+  // the input anchors the DOCK selection instead, and its drag/release must not
+  // be swallowed here (the input's own selection is a different thing —
+  // character indexes inside the text field).
+  if (question.customMode && questionInputGeo !== null && !store.selectionActive) {
     if (k.mousePress) {
       const at = inputCharAt(k.mousePress.row, k.mousePress.col)
-      if (at !== null) store.questionMousePress(at)
-      return true
-    }
-    if (k.mouseDrag) {
+      if (at !== null) { store.questionMousePress(at); return true }
+      // Outside the measured input: fall through and anchor the dock selection.
+    } else if (k.mouseDrag) {
       const at = inputCharAt(k.mouseDrag.row, k.mouseDrag.col)
-      if (at !== null) store.questionMouseDrag(at)
-      return true
-    }
-    if (k.mouseMove) return true
-    if (k.mouseRelease) {
+      if (at !== null) { store.questionMouseDrag(at); return true }
+    } else if (k.mouseMove) return true
+    else if (k.mouseRelease) {
       const range = store.questionMouseEnd()
       const at = inputCharAt(k.mouseRelease.row, k.mouseRelease.col)
       if (at !== null) store.questionCursorTo(at)
@@ -850,7 +839,17 @@ function revealOption(index: number): void {
   // (no-button motion) highlights the option under the cursor via the
   // registered body-window geometry (multi-row options map every row of their
   // block back to the option).
-  if (k.mousePress) return true
+  // A press INSIDE the dock's text area anchors a dock text selection (a drag
+  // copies the dock's own text via `copySelection`); a click still acts on the
+  // option under it (except in the inline "Other" editor, where a click outside
+  // the input has always been inert).
+  if (k.mousePress) {
+    if (dialogTextBoxContains(k.mousePress.row, k.mousePress.col)) {
+      store.mousePress(k.mousePress.row, k.mousePress.col)
+    }
+    return true
+  }
+  if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return true }
   if (k.mouseMove) {
     if (!question.customMode) {
       const owner = optionFromRow(k.mouseMove.row)
@@ -859,7 +858,9 @@ function revealOption(index: number): void {
     return true
   }
   if (k.mouseRelease) {
-    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') {
+    const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
+    if (kind === 'drag') { copySelection(store); return true }
+    if (kind === 'click') {
       // A click only acts when it lands on a real OPTION row (answers it —
       // like Enter; on a multi-select question it CHECKS it instead, like
       // Space). Clicks anywhere else — including a stray click on the

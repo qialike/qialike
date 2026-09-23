@@ -24,7 +24,8 @@ import { WHEEL_STEP, dockInnerWidth } from '../config.ts'
 import type { SidebarMode } from '../config.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
-import { useRowGeometry, dialogRowIndexFromCol, measureDomTop } from '../list-geometry.ts'
+import { useRowGeometry, dialogRowIndexFromCol, measureDomTop, useDialogTextBox, dialogTextBoxContains } from '../list-geometry.ts'
+import { copySelection } from '../text-selection.ts'
 import { pointerRegion, composerStripRows, messageRightFor } from '../pointer-region.ts'
 import { stripTerminalControls } from '../terminal-safe.ts'
 
@@ -186,6 +187,10 @@ export function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.
   // highlights an option that merely shares its column.
   const widths = APPROVAL_CHOICES.map((label) => visualWidth(label))
   useRowGeometry(rowRef, widths, [store.approvalChoice, req.toolName])
+  // The dock's TEXT area, for mouse drag-select + copy (`text-selection.ts`):
+  // a drag over the dock copies the approval text itself, not the transcript
+  // row it happens to sit on.
+  const textRef = useDialogTextBox('approval', [store.rows, store.width, store.input, store.composerImage !== null, req.toolName])
   // Report the dock's REAL rendered row span (like the question dock): the
   // region router classifies rows inside it as dock territory. Fixed 11-row
   // dock, but measured (top moves with the transcript) — falls back to
@@ -212,6 +217,9 @@ export function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.
   }, [store.rows, store.width, store.input, store.composerImage !== null, req.toolName])
   return (
     <Box ref={dockRef} flexShrink={0} borderStyle="round" borderColor={theme.warning} flexDirection="column" paddingX={1} paddingY={1}>
+      {/* The box wrapping the dock's TEXT rows: its measured box is the dock's
+          text area, published for mouse drag-select + copy. */}
+      <Box ref={textRef} flexDirection="column">
       <Text color={theme.warning} bold wrap="wrap">⚠ Permission required · {stripTerminalControls(req.toolName)}</Text>
       {layout.target !== undefined && layout.target.length > 0 && (
         <Box marginTop={1}>
@@ -230,6 +238,7 @@ export function ApprovalDialog(props: { approval: PendingApproval }): React.JSX.
       </Box>
       <Box marginTop={1}>
         <Text dimColor>←/→ choose · Enter confirm · Esc reject</Text>
+      </Box>
       </Box>
     </Box>
   )
@@ -273,17 +282,26 @@ function approvalKey(k: RawKey, tui: TuiService): boolean {
     }
   }
   // Mouse in the dock: hover highlights the action under the cursor (via the
-  // registered row geometry — only on the actions row); a left-click anchors
-  // on that action, then runs the highlighted choice (== Enter). Press/drag
-  // are consumed (no transcript drag).
-  if (k.mousePress) return true
+  // registered row geometry — only on the actions row); a press INSIDE the
+  // dock's text area anchors a text selection (a drag copies the dock's own
+  // text), and a left-CLICK anchors on the action it landed on, then runs the
+  // highlighted choice (== Enter).
+  if (k.mousePress) {
+    if (dialogTextBoxContains(k.mousePress.row, k.mousePress.col)) {
+      store.mousePress(k.mousePress.row, k.mousePress.col)
+    }
+    return true
+  }
+  if (k.mouseDrag) { store.mouseDrag(k.mouseDrag.row, k.mouseDrag.col); return true }
   if (k.mouseMove) {
     const idx = dialogRowIndexFromCol(k.mouseMove.row, k.mouseMove.col)
     if (idx >= 0) store.setApprovalChoice(idx)
     return true
   }
   if (k.mouseRelease) {
-    if (store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col) === 'click') {
+    const kind = store.mouseRelease(k.mouseRelease.row, k.mouseRelease.col)
+    if (kind === 'drag') { copySelection(store); return true }
+    if (kind === 'click') {
       const idx = dialogRowIndexFromCol(k.mouseRelease.row, k.mouseRelease.col)
       if (idx >= 0) store.setApprovalChoice(idx)
       return approvalKey({ return: true } as RawKey, tui)
