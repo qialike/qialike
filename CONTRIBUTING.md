@@ -23,10 +23,29 @@ Prerequisites:
   release in `HARNESS_REF`; when you raise the ceiling, validate against the new release and move
   both together.
 
+### Install and build DeepSeek Harness
+
 ```sh
+cd yourpath
+git clone https://github.com/deepseek-ai/deepseek-harness.git
+cd deepseek-harness
+git checkout dsh-v0.1.7-alpha.2   # the tag must be the version qialike supports
+pnpm install
+pnpm run build
+```
+
+### Install and build qialike
+
+```sh
+cd yourpath
+git clone https://github.com/qialike/qialike.git
+cd qialike
 pnpm install
 pnpm build        # dist/qialike (single-file executable)
 ```
+
+> The two checkouts must sit in the **same parent directory** for the default `../deepseek-harness` to
+> resolve; otherwise point `DSH_HARNESS` at your harness checkout.
 
 `pnpm build` also creates the resolution farm (`node_modules/@deepseek-ai/*`, plus this repo's own
 scope) that the unit suite imports through at runtime. **Run it before `pnpm test:unit`**, or the

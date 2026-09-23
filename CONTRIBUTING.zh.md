@@ -20,10 +20,29 @@
   （`HARNESS_VERSION_MIN` / `HARNESS_VERSION_MAX`）—— 请去那里读，不要相信任何文档里写的数字，包括本文。
   CI 在 `HARNESS_REF` 里钉同一个发布版；抬高上限时，先用新版本验证，再把两者一起改。
 
+### 安装与构建 DeepSeek Harness
+
 ```sh
+cd yourpath
+git clone https://github.com/deepseek-ai/deepseek-harness.git
+cd deepseek-harness
+git checkout dsh-v0.1.7-alpha.2   # 检出的版本应与 qialike 支持的版本相同
+pnpm install
+pnpm run build
+```
+
+### 安装与构建 qialike
+
+```sh
+cd yourpath
+git clone https://github.com/qialike/qialike.git
+cd qialike
 pnpm install
 pnpm build        # 产出 dist/qialike（单文件可执行）
 ```
+
+> 两个检出必须放在**同一个父目录**下，`../deepseek-harness` 这个默认值才成立；否则请用
+> `DSH_HARNESS` 指向你的 harness 检出。
 
 `pnpm build` 同时会建出解析农场（`node_modules/@deepseek-ai/*` 以及本仓库自己的 scope），单元测试在运行时
 正是通过它 import 的。**请在 `pnpm test:unit` 之前先跑构建**，否则那些 import 了 harness 包的测试会解析
