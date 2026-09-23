@@ -176,6 +176,10 @@ qialike_null_device() {
 }
 
 say() { printf '%s: %s\n' "$APP" "$*"; }
+# Like `say`, but on stderr. Needed wherever a function's STDOUT is a protocol rather
+# than a message: `qialike_fetch_archive` echoes the archive path back to its caller
+# through stdout, so anything else written there becomes part of the path.
+note() { printf '%s: %s\n' "$APP" "$*" >&2; }
 warn() { printf '%s: warning — %s\n' "$APP" "$*" >&2; }
 die() {
   printf '%s: %s\n' "$APP" "$*" >&2

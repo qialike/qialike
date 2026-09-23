@@ -322,7 +322,17 @@ function install(home: string, args: string[] = [], env: Record<string, string> 
       ...env,
     },
   })
-  return { status: result.status, output: `${result.stdout ?? ''}${result.stderr ?? ''}` }
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
+
+  // `bash -n` parses the artifact; the bundle guard proves it matches its modules.
+  // Neither notices a call to a helper that no module defines, and `set -e` is
+  // suspended inside an `if` condition — so an undefined function prints
+  // `… : command not found` to stderr and the install SUCCEEDS anyway. That is how a
+  // missing `note()` definition shipped past a green suite once. Asserting here, in
+  // the shared runner, makes every case in this file a guard against it.
+  expect(output, 'the installer called something it never defined').not.toContain('command not found')
+
+  return { status: result.status, output }
 }
 
 /**
