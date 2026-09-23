@@ -5,6 +5,29 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.7.1] - 2026-09-23
+
+### Added
+
+- **The installer verifies what it downloads.** Every release now ships a `sha256sums.txt` beside
+  the six binaries, and `curl … | bash` checks the archive against it. A digest that does not match
+  is refused outright; a host that cannot produce a usable manifest is passed over for the next
+  one, and when none can, the install stops and says so rather than unpacking unverified bytes.
+
+### Fixed
+
+- **The check was written but never ran.** A missing `sha256sums.txt`, and a manifest that did not
+  list the asset, were both treated as "nothing to verify" — which is why it went unnoticed: no
+  release had ever published one. Releases older than this version have no manifest, so installing
+  from one is now refused; `QIALIKE_ALLOW_UNVERIFIED=1` overrides that on purpose.
+
+### Changed
+
+- The release scripts now live in this repository under `scripts/release/` — including a new
+  `push-qialike-release.sh` that uploads a release to both hosts and syncs the tag it points at —
+  so what an official release does can be read rather than guessed. A release build packages all
+  six targets by default and writes `dist/sha256sums.txt` for that script to upload.
+
 ## [0.7.0] - 2026-09-23
 
 ### Changed
