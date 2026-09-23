@@ -16,7 +16,7 @@
  * counts come from question-layout.ts so the dock height and the conversation
  * `modalH` estimate can never drift.
  *
- * @module @yourname/qialike-app/panels-question
+ * @module @qialike/qialike-app/panels-question
  */
 
 import { Box, Text, measureElement } from 'ink'

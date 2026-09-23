@@ -29,7 +29,7 @@
  * discarded after all. Ordered sync writes are what makes the guarantee hold on
  * every platform.
  *
- * @module @yourname/qialike-app/post-exit-notice
+ * @module @qialike/qialike-app/post-exit-notice
  */
 import { writeSync } from 'node:fs'
 

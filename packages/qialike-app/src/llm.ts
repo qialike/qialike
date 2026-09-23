@@ -12,7 +12,7 @@
  * `dsh-llm-deepseek`. Scope is deliberately OpenAI-compatible only, text-only
  * models, no response replay metadata.
  *
- * @module @yourname/qialike-app/llm
+ * @module @qialike/qialike-app/llm
  */
 
 import { Context } from '@deepseek-ai/cordis'

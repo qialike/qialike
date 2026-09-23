@@ -27,7 +27,7 @@
  * window and `probeSessionHead` decodes every complete frame in it; a window
  * that ends inside a frame drops that torn frame rather than failing.
  *
- * @module @yourname/qialike-app/session-head
+ * @module @qialike/qialike-app/session-head
  */
 
 import { closeSync, openSync, readSync, statSync } from 'node:fs'

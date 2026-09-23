@@ -13,7 +13,7 @@
  *    start of a sequence. The caller arms a short timer and calls
  *    {@link StdinDecoder.flushEsc} when nothing followed it.
  *
- * @module @yourname/qialike-app/stdin
+ * @module @qialike/qialike-app/stdin
  */
 
 import { sanitizeTerminalText } from './terminal-safe.ts'

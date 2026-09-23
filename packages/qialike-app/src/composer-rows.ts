@@ -35,7 +35,7 @@
  *
  * Dependency-light on purpose (no React/Ink): the unit tests drive it directly.
  *
- * @module @yourname/qialike-app/composer-rows
+ * @module @qialike/qialike-app/composer-rows
  */
 
 import stringWidth from 'string-width'

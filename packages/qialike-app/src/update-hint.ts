@@ -19,7 +19,7 @@
  * Linux/macOS keep the update flow they already had (silent patch installs, and the
  * `run 'qialike upgrade'` notice for the rest).
  *
- * @module @yourname/qialike-app/update-hint
+ * @module @qialike/qialike-app/update-hint
  */
 
 /**

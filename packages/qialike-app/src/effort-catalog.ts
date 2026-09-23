@@ -14,7 +14,7 @@
  * field (some clients instead translate per provider-SDK family; qialike has one
  * wire, so the gate is the route declaration, not an npm table).
  *
- * @module @yourname/qialike-app/effort-catalog
+ * @module @qialike/qialike-app/effort-catalog
  */
 
 import type { ReasoningEffortOption, TuiProviderProfile } from './llm.ts'

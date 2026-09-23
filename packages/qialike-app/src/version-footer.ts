@@ -14,7 +14,7 @@
  * `--version` keeps printing the bare package version, and only the footer names
  * the channel.
  *
- * @module @yourname/qialike-app/version-footer
+ * @module @qialike/qialike-app/version-footer
  */
 
 /** The build channels the footer distinguishes. */

@@ -7,7 +7,7 @@
  * the value is also written back into the config file, so it persists for later
  * runs without the variable (i.e. "env written into the config file").
  *
- * @module @yourname/qialike-app/config
+ * @module @qialike/qialike-app/config
  */
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

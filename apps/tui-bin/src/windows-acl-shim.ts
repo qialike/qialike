@@ -18,14 +18,14 @@
  * parsing, its `windows-acl-run:` failure dialect, and its exit-code mirroring —
  * so running it unchanged is what keeps that contract from drifting.
  *
- * @module @yourname/qialike/windows-acl-shim
+ * @module @qialike/qialike/windows-acl-shim
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WINDOWS_ACL_RUNNER_FILE, WINDOWS_ACL_RUNNER_BASE64 } from './windows-acl-runner.generated.ts'
-import { WINDOWS_ACL_RUNNER_FLAG } from '@yourname/qialike-app/src/windows-acl-mode.ts'
+import { WINDOWS_ACL_RUNNER_FLAG } from '@qialike/qialike-app/src/windows-acl-mode.ts'
 
 export { WINDOWS_ACL_RUNNER_FLAG }
 

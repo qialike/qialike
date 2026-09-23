@@ -1,5 +1,5 @@
 {
-  "name": "@yourname/qialike-app",
+  "name": "@qialike/qialike-app",
   "description": "The dsh TUI bundle: a full-screen Ink/React terminal surface over dsh-base, with a single interactive agent session.",
   "version": "0.7.0",
   "publishConfig": {
@@ -7,7 +7,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/yourname/qialike.git",
+    "url": "git+https://github.com/qialike/qialike.git",
     "directory": "packages/qialike-app"
   },
   "type": "module",

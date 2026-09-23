@@ -15,7 +15,7 @@
  * theme plugin (no import cycle): the picker never persists or reads settings
  * itself.
  *
- * @module @yourname/qialike-app/theme-picker
+ * @module @qialike/qialike-app/theme-picker
  */
 
 import React, { useRef } from 'react'

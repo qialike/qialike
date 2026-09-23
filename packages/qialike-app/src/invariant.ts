@@ -1,6 +1,6 @@
 /**
- * Package invariant for `@yourname/qialike-app`.
- * @module @yourname/qialike-app/invariant
+ * Package invariant for `@qialike/qialike-app`.
+ * @module @qialike/qialike-app/invariant
  */
 
 import type { Context } from '@deepseek-ai/cordis'

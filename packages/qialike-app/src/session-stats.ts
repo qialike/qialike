@@ -14,7 +14,7 @@
  * `tool/call → tool/result` the tool time — restarts and `/sessions` resumes
  * show the same figures as the live listener.
  *
- * @module @yourname/qialike-app/session-stats
+ * @module @qialike/qialike-app/session-stats
  */
 
 /** Whole-session activity/usage figures for the bottom bar. */

@@ -18,7 +18,7 @@
  * the painted text is Chinese. `intent.approve` is authoritative for which
  * option approves, never position.
  *
- * @module @yourname/qialike-app/plan-review
+ * @module @qialike/qialike-app/plan-review
  */
 
 import type { AskUserQuestionItem, AskUserQuestionOption } from '@deepseek-ai/dsh-user-questions'

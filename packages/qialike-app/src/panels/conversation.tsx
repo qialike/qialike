@@ -4,7 +4,7 @@
  * `conversation` (fullscreen) panel against the `tui` service. Session history
  * management lives in the `/sessions` plugin (`tui-sessions`).
  *
- * @module @yourname/qialike-app/panels-conversation
+ * @module @qialike/qialike-app/panels-conversation
  */
 
 import { Box, Text, useStdin, measureElement, type DOMElement } from 'ink'

@@ -55,6 +55,22 @@ const HARNESS_VERSION_MIN = '0.1.0-rc.7'
 const HARNESS_VERSION_MAX = '0.1.7-alpha.2'
 
 /**
+ * The npm scope this repo's own packages live under, and the placeholder scope
+ * they carried while the project had no scope to publish to.
+ *
+ * Everything the build says about its own packages is derived from
+ * {@link OWN_SCOPE}; {@link LEGACY_OWN_SCOPE} names the old spelling only where
+ * a previously installed tree or a user's existing overlay may still use it, so
+ * a scope change cannot strand either one.
+ */
+const OWN_SCOPE = '@qialike'
+const LEGACY_OWN_SCOPE = '@yourname'
+/** The pre-rename product name, still answered for overlays written before the rename. */
+const LEGACY_APP_NAME = 'dsh-tui-app'
+/** This repo's own app package under the current scope. */
+const APP_SPEC = `${OWN_SCOPE}/qialike-app`
+
+/**
  * The oldest bun whose runtime may be baked into an artifact.
  *
  * `bun build --compile` embeds the BUILD HOST's bun runtime in every target it
@@ -484,8 +500,8 @@ function pluginSpecifiers() {
     const content = readFileSync(file, 'utf8')
     for (const match of content.matchAll(nameRe)) specifiers.add(match[1])
   }
-  specifiers.add('@yourname/qialike-app')
-  specifiers.add('@yourname/qialike-app/startup')
+  specifiers.add('@qialike/qialike-app')
+  specifiers.add('@qialike/qialike-app/startup')
   for (const name of [
     '@deepseek-ai/cordis-plugin-loader',
     '@deepseek-ai/cordis-plugin-include',
@@ -513,10 +529,13 @@ function createResolveFarm() {
   writeFileSync(join(STUB_DIR, 'package.json'), JSON.stringify({ name: '.dsh-native-stub', type: 'module', main: 'index.js' }, null, 2))
   writeFileSync(join(STUB_DIR, 'index.js'), 'export {}\n')
   rmSync(join(ROOT, 'apps/tui-bin/x'), { recursive: true, force: true })
-  // Clean stale @deepseek-ai / @yourname links so every run re-links to the
-  // latest (possibly transformed) target.
+  // Clean stale @deepseek-ai and own-scope links so every run re-links to the
+  // latest (possibly transformed) target. The legacy scope is swept too: a tree
+  // built before the scope change still holds those links, and leaving them
+  // behind would make the same package resolvable under two names.
   rmSync(join(nm, '@deepseek-ai'), { recursive: true, force: true })
-  rmSync(join(nm, '@yourname'), { recursive: true, force: true })
+  rmSync(join(nm, OWN_SCOPE), { recursive: true, force: true })
+  if (LEGACY_OWN_SCOPE !== OWN_SCOPE) rmSync(join(nm, LEGACY_OWN_SCOPE), { recursive: true, force: true })
   // Clear leftover stub dirs so the mirrored store supplies the real packages.
   rmSync(join(nm, '@opentelemetry'), { recursive: true, force: true })
   for (const name of STUB_PACKAGES) rmSync(join(nm, name), { recursive: true, force: true })
@@ -666,7 +685,7 @@ function createResolveFarm() {
   for (const [name, dir] of harnessPackages) {
     link(name, transformPackageCopy(name, dir))
   }
-  link('@yourname/qialike-app', join(ROOT, 'packages/qialike-app'))
+  link('@qialike/qialike-app', join(ROOT, 'packages/qialike-app'))
 
   // Two native-addon stubs live under the harness's `native/` tree, which
   // scanPackages() does not walk, so the link loop above never re-created them
@@ -733,7 +752,7 @@ function createResolveFarm() {
         symlinkSync(resolved, linkPath, 'junction')
       }
     }
-    fixShadowLinks(join(ROOT, 'apps/tui-bin/node_modules/@yourname'))
+    fixShadowLinks(join(ROOT, 'apps/tui-bin/node_modules', OWN_SCOPE))
     fixShadowLinks(join(ROOT, 'packages/qialike-app/node_modules'))
   }
 
@@ -1090,7 +1109,7 @@ function patchWindowsAclRunnerEntry() {
     '',
   ].join('\n')
   const flagImport = 'import { WINDOWS_ACL_RUNNER_FLAG as QIALIKE_WINDOWS_ACL_RUNNER_FLAG }'
-    + ' from "@yourname/qialike-app/src/windows-acl-mode.ts";\n'
+    + ' from "@qialike/qialike-app/src/windows-acl-mode.ts";\n'
   writeFileSync(file, text.replace(firstImport, firstImport + flagImport).replace(anchor, injected + anchor))
   console.log('qialike: patched the windows-acl runner entry in the bundled sandbox-local')
 }
@@ -1263,7 +1282,7 @@ function embedRipgrepBinaries() {
     console.log(`qialike: this build carries no ripgrep for its own host ${hostKey}; glob/grep stay unavailable there`)
   }
   // Generated INTO the app package, next to the shim that imports it: the farm
-  // copy of `@yourname/qialike-app` carries it, and the shim's lazy
+  // copy of `@qialike/qialike-app` carries it, and the shim's lazy
   // `import('./ripgrep-binary.generated.ts')` is what pulls it into the bundle.
   writeFileSync(
     join(ROOT, 'packages/qialike-app/src/ripgrep-binary.generated.ts'),
@@ -1329,7 +1348,7 @@ function patchRipgrepPath() {
     '\t\t} catch { /* no embedded binary for this platform: use the module */ }',
     '',
   ].join('\n')
-  const shimImport = 'import { ripgrepPath as QIALIKE_RIPGREP_PATH } from "@yourname/qialike-app/src/ripgrep-shim.ts";\n'
+  const shimImport = 'import { ripgrepPath as QIALIKE_RIPGREP_PATH } from "@qialike/qialike-app/src/ripgrep-shim.ts";\n'
   writeFileSync(file, text.replace(importAnchor, importAnchor + shimImport).replace(anchor, injected + anchor))
   console.log('qialike: patched the ripgrep path in the bundled tool-fs-search')
 }
@@ -2167,7 +2186,7 @@ export default function stringWidth(string, options = {}) {
  *
  * Derived from the manifest rather than listed by hand: every `./lib/*.js`
  * subpath the exports map exposes must be emitted here, because the SEA bundle
- * resolves `@yourname/qialike-app/<subpath>` through that map. A hand-written
+ * resolves `@qialike/qialike-app/<subpath>` through that map. A hand-written
  * list silently went stale when `./file-reference` was added — `pluginSpecifiers()`
  * picked the specifier up from the patch and `bun build --compile` then failed on
  * an unresolvable import whose source had never been compiled.
@@ -2228,16 +2247,24 @@ function generate(specifiers) {
   lines.push('export const PLUGIN_BUILTINS = {')
   for (const spec of used) lines.push(`  ${JSON.stringify(spec)}: ${bySpec.get(spec)},`)
   lines.push('}')
-  // Pre-rename specifiers: a profile overlay written by the old build names
-  // `@yourname/dsh-tui-app[/<subpath>]`. The same module namespaces answer
-  // those names, so an existing user overlay loads unchanged. They stay OUT of
-  // PLUGIN_BUILTINS on purpose: the bundled-plugin count and the
-  // `--dump-config` listing describe the current names only.
+  // Legacy specifiers: a profile overlay written by an older build may name
+  // this app under the pre-rename product name, under the placeholder scope the
+  // project used before it had a real one, or under both at once. The same
+  // module namespaces answer all three, so an existing user overlay loads
+  // unchanged. They stay OUT of PLUGIN_BUILTINS on purpose: the bundled-plugin
+  // count and the `--dump-config` listing describe the current names only.
   lines.push('')
   lines.push('export const LEGACY_PLUGIN_ALIASES = {')
   for (const spec of used) {
-    const legacy = spec.replace(/^@yourname\/qialike-app/, '@yourname/dsh-tui-app')
-    if (legacy !== spec) lines.push(`  ${JSON.stringify(legacy)}: ${bySpec.get(spec)},`)
+    if (!spec.startsWith(APP_SPEC)) continue
+    const subpath = spec.slice(APP_SPEC.length)
+    for (const prefix of [
+      `${OWN_SCOPE}/${LEGACY_APP_NAME}`,
+      `${LEGACY_OWN_SCOPE}/qialike-app`,
+      `${LEGACY_OWN_SCOPE}/${LEGACY_APP_NAME}`,
+    ]) {
+      lines.push(`  ${JSON.stringify(prefix + subpath)}: ${bySpec.get(spec)},`)
+    }
   }
   lines.push('}')
   writeFileSync(join(GEN_DIR, 'plugins.ts'), lines.join('\n') + '\n')

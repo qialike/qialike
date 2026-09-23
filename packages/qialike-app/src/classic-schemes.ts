@@ -33,7 +33,7 @@
  *   PreProc → info, plus a computed neutral ramp (bg→comment blend) for the
  *   panel/border roles (values from nanotech/jellybeans.vim, MIT).
  *
- * @module @yourname/qialike-app/classic-schemes
+ * @module @qialike/qialike-app/classic-schemes
  */
 
 import type { ThemePalette } from './theme.ts'

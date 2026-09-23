@@ -28,7 +28,7 @@
  *    who downloaded the binary by hand is exactly the one who must download the
  *    next one by hand.
  *
- * @module @yourname/qialike-app/upgrade-policy
+ * @module @qialike/qialike-app/upgrade-policy
  */
 
 import { readSection } from './config.ts'

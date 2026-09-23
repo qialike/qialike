@@ -1,6 +1,6 @@
 # Third-Party Notices
 
-The bundled executable and the `@yourname/qialike-app` bundle draw on third-party packages. This
+The bundled executable and the `@qialike/qialike-app` bundle draw on third-party packages. This
 file lists the ones this repository adds directly; the DeepSeek Harness core and its vendored Cordis
 dependencies carry their own notices in the harness checkout (see its `THIRD_PARTY_NOTICES.md`),
 and the Bun runtime embeds its own license with the compiled binary.

@@ -15,7 +15,7 @@
  *     enabled: false   # unloads the opencode gateways from the catalog
  *   ```
  *
- * @module @yourname/qialike-app/opencode
+ * @module @qialike/qialike-app/opencode
  */
 
 import type { Context } from '@deepseek-ai/cordis'

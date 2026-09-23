@@ -7,7 +7,7 @@
  * because the TUI composer routes to `tui.commands`, not the harness
  * `commands` service.
  *
- * @module @yourname/qialike-app/plan
+ * @module @qialike/qialike-app/plan
  */
 
 import type { Context } from '@deepseek-ai/cordis'

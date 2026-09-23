@@ -41,7 +41,7 @@
  *    that equality check has to come first — otherwise `delete('.')` would pass
  *    and take the whole workspace with it.
  *
- * @module @yourname/qialike-app/fs-tools
+ * @module @qialike/qialike-app/fs-tools
  */
 
 import { rm, rename } from 'node:fs/promises'

@@ -24,7 +24,7 @@
  * both are spellings that differ on Windows, and each silently broke one half of
  * the chain (the probe and the install guard respectively).
  *
- * @module @yourname/qialike-app/self-update
+ * @module @qialike/qialike-app/self-update
  */
 
 import { spawnSync } from 'node:child_process'

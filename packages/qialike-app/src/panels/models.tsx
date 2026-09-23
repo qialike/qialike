@@ -5,7 +5,7 @@
  * `connect` (fullscreen) panel and the `/models` command against the `tui`
  * service, consuming the `tuiModels` capability service.
  *
- * @module @yourname/qialike-app/panels-models
+ * @module @qialike/qialike-app/panels-models
  */
 
 import { Box, Text } from 'ink'

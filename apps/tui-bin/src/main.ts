@@ -30,16 +30,16 @@
  * `--help` shape carries the enter; narrowing the promise here beats claiming a
  * parity the mixed shape does not have.
  *
- * @module @yourname/qialike/main
+ * @module @qialike/qialike/main
  */
 
 import pkg from '../../../package.json' with { type: 'json' }
 // FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto
 // `QIALIKE_*` at module load, before this file's own module-scope env reads
 // (SPLASH_DELAY_MS) and before any other module's.
-import { migrateLegacyHomeFiles } from '@yourname/qialike-app/src/legacy-names.ts'
-import { tuiCommand } from '@yourname/qialike-app/src/startup.ts'
-import { isWindowsAclRunnerArgv } from '@yourname/qialike-app/src/windows-acl-mode.ts'
+import { migrateLegacyHomeFiles } from '@qialike/qialike-app/src/legacy-names.ts'
+import { tuiCommand } from '@qialike/qialike-app/src/startup.ts'
+import { isWindowsAclRunnerArgv } from '@qialike/qialike-app/src/windows-acl-mode.ts'
 import { isLandlockLauncherArgv, isLauncherMode } from './launcher-modes.ts'
 
 const NAME = 'qialike'
@@ -143,7 +143,7 @@ async function main(): Promise<void> {
   // used to be validated inside the `tui-startup` plugin, i.e. while the plugin
   // tree was loading, so `qialike frobnicate` surfaced as
   //   qialike: Error: qialike: plugin tree failed to load: … failed to apply
-  //   loader entry tui-startup (@yourname/qialike-app/startup): unknown argument
+  //   loader entry tui-startup (@qialike/qialike-app/startup): unknown argument
   //   "frobnicate" — did you mean "resume"? (see --help)
   // plus a Bun stack trace (F5) — the right hint, framed as a crash. Validating
   // HERE, with the SAME commander program the full boot parses with, keeps the

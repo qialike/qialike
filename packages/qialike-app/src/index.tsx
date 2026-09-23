@@ -1,5 +1,5 @@
 /**
- * @yourname/qialike-app — a full-screen Ink/React terminal surface. The bundle
+ * @qialike/qialike-app — a full-screen Ink/React terminal surface. The bundle
  * patch rides over dsh-base without an HTTP host or browser; this runtime
  * creates one Agent through the core registry, streams its session events into
  * an Ink transcript, and drives user input back in via `followup()` / `steer()`.
@@ -11,7 +11,7 @@
  *     `--resume <id>` over persisted sessions
  *   - a two-panel layout (conversation + activity) and an input dock
  *
- * @module @yourname/qialike-app
+ * @module @qialike/qialike-app
  */
 
 // FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto

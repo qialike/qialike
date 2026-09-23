@@ -6,7 +6,7 @@
  * renders the /models dialog and consumes this service; nothing here touches
  * the UI store.
  *
- * @module @yourname/qialike-app/models
+ * @module @qialike/qialike-app/models
  */
 
 import type { Context } from '@deepseek-ai/cordis'

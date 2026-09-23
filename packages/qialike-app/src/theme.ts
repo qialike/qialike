@@ -26,7 +26,7 @@
  * Every import of this module reads/writes the same underlying object, so
  * live theme switches work across all surfaces.
  *
- * @module @yourname/qialike-app/theme
+ * @module @qialike/qialike-app/theme
  */
 
 /** The full palette type (all color keys used across the surface). */

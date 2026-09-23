@@ -25,7 +25,7 @@
  * any consumer sees it, and the dialog path is then a second, idempotent pass
  * (see qialike-security.md, 补丁 1).
  *
- * @module @yourname/qialike-app/clipboard
+ * @module @qialike/qialike-app/clipboard
  */
 import { spawnSync } from 'node:child_process'
 import { sanitizeTerminalText } from './terminal-safe.ts'

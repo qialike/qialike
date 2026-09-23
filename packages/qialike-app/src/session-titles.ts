@@ -17,7 +17,7 @@
  * (during a session's first turn) and then frozen, so the cache stays
  * authoritative across restarts without re-reading every session log.
  *
- * @module @yourname/qialike-app/session-titles
+ * @module @qialike/qialike-app/session-titles
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'

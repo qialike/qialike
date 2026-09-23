@@ -10,7 +10,7 @@
  * launcher entry (`apps/tui-bin/src/main.ts`) and the build-injected patch of the
  * bundled harness package can import by name.
  *
- * @module @yourname/qialike-app/windows-acl-mode
+ * @module @qialike/qialike-app/windows-acl-mode
  */
 
 /** The reserved first argument that runs the embedded ACL runner instead of the TUI. */

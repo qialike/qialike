@@ -28,7 +28,7 @@
  * either dock panel). Pure module: no store, no mutable state, so importing it
  * from several panel bundles can never create a second module copy hazard.
  *
- * @module @yourname/qialike-app/pointer-region
+ * @module @qialike/qialike-app/pointer-region
  */
 
 import wrapAnsi from 'wrap-ansi'

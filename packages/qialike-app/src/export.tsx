@@ -16,7 +16,7 @@
  * a client context without a local persistence service would otherwise answer
  * `export: service unavailable`, so the export never depends on that service.
  *
- * @module @yourname/qialike-app/export
+ * @module @qialike/qialike-app/export
  */
 
 import { Box, Text } from 'ink'

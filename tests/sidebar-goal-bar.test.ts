@@ -367,7 +367,7 @@ describe('the extension point is wired end to end', () => {
     // The lib entry points are DERIVED from this manifest (`bundleLibEntryPoints`)
     // rather than hand-listed, so the invariant to pin is the derivation itself:
     // every `./lib/*.js` subpath the exports map exposes must be compiled, because
-    // the SEA bundle resolves `@yourname/qialike-app/<subpath>` through that map.
+    // the SEA bundle resolves `@qialike/qialike-app/<subpath>` through that map.
     // The old hand-written list had gone stale (it omitted `./file-reference`,
     // which the patch names, and the compile then failed on the unbuilt import).
     const { bundleLibEntryPoints } = await import('../apps/tui-bin/build.mjs')
@@ -384,6 +384,6 @@ describe('the extension point is wired end to end', () => {
     expect(entries).toHaveLength(libExports.length)
     const patch = read(join(APP, 'cordis.patch.yml'))
     expect(patch).toContain('tui-goal-bar')
-    expect(patch).toContain("'@yourname/qialike-app/goal-bar'")
+    expect(patch).toContain("'@qialike/qialike-app/goal-bar'")
   })
 })

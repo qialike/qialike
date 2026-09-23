@@ -11,7 +11,7 @@
  * remote client layer used by the web app). The dialog therefore filters the
  * persisted list locally by title/id/cwd.
  *
- * @module @yourname/qialike-app/sessions
+ * @module @qialike/qialike-app/sessions
  */
 
 import { Box, Text } from 'ink'

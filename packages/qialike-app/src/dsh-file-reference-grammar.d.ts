@@ -5,7 +5,7 @@
  * `deepseek-harness/packages/context/file-reference/src/grammar.ts`; this shim
  * exists only so the TUI's typecheck sees the two functions it imports.
  *
- * @module @yourname/qialike-app/dsh-file-reference-grammar
+ * @module @qialike/qialike-app/dsh-file-reference-grammar
  */
 declare module '@deepseek-ai/dsh-file-reference/grammar' {
   export interface ActiveAtToken {

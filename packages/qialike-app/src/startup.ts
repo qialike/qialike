@@ -3,7 +3,7 @@
  * `--workspace`, `--resume`, and `--model` flags plus `--help`, then publishes
  * {@link TUI_STARTUP_SERVICE}. The runtime is an ordinary consumer whose lazy
  * config waits for that service.
- * @module @yourname/qialike-app/startup
+ * @module @qialike/qialike-app/startup
  */
 
 import { Command } from 'commander'

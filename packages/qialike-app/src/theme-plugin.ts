@@ -32,7 +32,7 @@ import React from 'react'
  * The plugin re-renders the whole surface live by bumping the store's theme
  * epoch (`store.bumpTheme()`), which invalidates the memoized transcript rows.
  *
- * @module @yourname/qialike-app/theme-plugin
+ * @module @qialike/qialike-app/theme-plugin
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'

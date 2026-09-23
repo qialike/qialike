@@ -24,7 +24,7 @@
  * suite's `cli-errors` scenario — is what makes that failure mode impossible to
  * reintroduce silently.
  *
- * @module @yourname/qialike/launcher-modes
+ * @module @qialike/qialike/launcher-modes
  */
 
 /** Clears the harness home (`$DSH_HOME`) and the PATH line the install added. */

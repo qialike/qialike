@@ -12,7 +12,7 @@
  * Submit (tui-runtime) reads `store.composerImage` and emits an image content
  * block beside the text.
  *
- * @module @yourname/qialike-app/image-attach
+ * @module @qialike/qialike-app/image-attach
  */
 
 import { readFile } from 'node:fs/promises'

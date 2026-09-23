@@ -1,10 +1,10 @@
 {
-  "name": "@yourname/qialike-bin",
+  "name": "@qialike/qialike-bin",
   "version": "0.7.0",
   "private": true,
   "type": "module",
   "license": "MIT",
   "dependencies": {
-    "@yourname/qialike-app": "workspace:^"
+    "@qialike/qialike-app": "workspace:^"
   }
 }

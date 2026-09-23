@@ -9,7 +9,7 @@
  * `/sidebar on|off|auto` sets the mode directly. The choice persists in
  * `~/.dsh/qialike.json` (`sidebar_mode`).
  *
- * @module @yourname/qialike-app/sidebar-toggle
+ * @module @qialike/qialike-app/sidebar-toggle
  */
 
 import type { Context } from '@deepseek-ai/cordis'

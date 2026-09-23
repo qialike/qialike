@@ -23,7 +23,7 @@
  *  - `--probe` enforces a maximal ruleset for real and reports
  *    `landlock: fully enforced` / `landlock: partially enforced (older ABI)`.
  *
- * @module @yourname/qialike/landlock-shim
+ * @module @qialike/qialike/landlock-shim
  */
 
 import { dlopen, FFIType } from 'bun:ffi'

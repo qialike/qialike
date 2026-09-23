@@ -18,7 +18,7 @@
  * Read-only by design: mutations stay on `/goal` (and the model's goal tools),
  * so this plugin adds no key or mouse surface.
  *
- * @module @yourname/qialike-app/goal-bar
+ * @module @qialike/qialike-app/goal-bar
  */
 import React from 'react'
 import { Box, Text } from 'ink'

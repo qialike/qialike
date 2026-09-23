@@ -13,7 +13,7 @@
  * refs, and the event listeners that close over them — stays in one place;
  * this plugin only registers the command against the `tui` service.
  *
- * @module @yourname/qialike-app/new
+ * @module @qialike/qialike-app/new
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -11,7 +11,7 @@
  * exactly as on the normal surface, forwarded to the conversation panel's own
  * handler), or outside the message column (Steps sidebar: no response).
  *
- * @module @yourname/qialike-app/panels-approval
+ * @module @qialike/qialike-app/panels-approval
  */
 
 import { Box, Text, measureElement } from 'ink'

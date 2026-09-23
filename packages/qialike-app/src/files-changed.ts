@@ -22,7 +22,7 @@
  * Pure and dependency-free so the rules can be unit-tested (the browser plugin
  * is React-bound and the harness ships it compiled).
  *
- * @module @yourname/qialike-app/files-changed
+ * @module @qialike/qialike-app/files-changed
  */
 
 /** The user-facing label of the row (web `produced.label` = "Files changed"). */

@@ -9,7 +9,7 @@
  * translation, so each reason either produces a visible line or is deliberately
  * quiet.
  *
- * @module @yourname/qialike-app/turn-end-notice
+ * @module @qialike/qialike-app/turn-end-notice
  */
 
 /** The part of a `turn/end` reason this notice interprets; every other field is ignored. */

@@ -28,7 +28,7 @@
  * something that will refuse. `updateNotice()` is that fork, kept pure so both
  * shapes are pinned by tests without a network.
  *
- * @module @yourname/qialike/upgrade-command
+ * @module @qialike/qialike/upgrade-command
  */
 
 import { spawn } from 'node:child_process'
@@ -42,7 +42,7 @@ import {
   readEnvPolicy,
   readUpdateSettings,
   type InstallMethod,
-} from '@yourname/qialike-app/src/upgrade-policy.ts'
+} from '@qialike/qialike-app/src/upgrade-policy.ts'
 import {
   assetFor,
   detectTarget,
@@ -51,8 +51,8 @@ import {
   latestVersion,
   releaseSources,
   upgrade,
-} from '@yourname/qialike-app/src/self-update.ts'
-import { parseUpdateReport } from '@yourname/qialike-app/src/update-hint.ts'
+} from '@qialike/qialike-app/src/self-update.ts'
+import { parseUpdateReport } from '@qialike/qialike-app/src/update-hint.ts'
 
 /** What `qialike upgrade --help` explains. */
 export const UPGRADE_HELP = `qialike upgrade — replace the installed binary with a newer release

@@ -44,7 +44,7 @@
  * a background) there, so distinct surfaces are impossible without inventing
  * coloured panels; that mode is documented instead of faked.
  *
- * @module @yourname/qialike-app/color-depth
+ * @module @qialike/qialike-app/color-depth
  */
 
 /** What the terminal can show: 1 = 16 colours, 2 = 256, 3 = 24-bit. */

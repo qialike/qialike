@@ -7,7 +7,7 @@
  * auto-resume can prefer *recently used* sessions. Best-effort persistence —
  * a missing or unparsable file degrades to creation-time ordering.
  *
- * @module @yourname/qialike-app/session-activity
+ * @module @qialike/qialike-app/session-activity
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'

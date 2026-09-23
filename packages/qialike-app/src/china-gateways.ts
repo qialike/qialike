@@ -17,7 +17,7 @@
  *
  * Model lists mirror the models.dev catalog.
  *
- * @module @yourname/qialike-app/china-gateways
+ * @module @qialike/qialike-app/china-gateways
  */
 
 import type { Context } from '@deepseek-ai/cordis'

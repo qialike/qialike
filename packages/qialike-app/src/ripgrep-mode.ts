@@ -15,7 +15,7 @@
  * injects is `ripgrepPath()` in `packages/qialike-app/src/ripgrep-shim.ts`, and
  * this module holds the one value they share.
  *
- * @module @yourname/qialike-app/ripgrep-mode
+ * @module @qialike/qialike-app/ripgrep-mode
  */
 
 /** The directory under the OS temp dir holding the materialized ripgrep binary. */

@@ -8,7 +8,7 @@
  * `commands` service. This plugin registers `/goal` there and forwards it to
  * `ctx.goals`, so creating a goal arms the existing round driver.
  *
- * @module @yourname/qialike-app/goal
+ * @module @qialike/qialike-app/goal
  */
 
 import type { Context } from '@deepseek-ai/cordis'

@@ -24,7 +24,7 @@
  * rows render through their own plain paths elsewhere and never receive the
  * file-name coloring.
  *
- * @module @yourname/qialike-app/markdown
+ * @module @qialike/qialike-app/markdown
  */
 
 import React, { useMemo } from 'react'

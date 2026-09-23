@@ -16,7 +16,7 @@
  * with the `FILE_REFERENCE_PROMPT` the `file-reference-local` row documents to
  * the agent. See `file-palette.ts` for the pure pieces.
  *
- * @module @yourname/qialike-app/file-reference
+ * @module @qialike/qialike-app/file-reference
  */
 import React from 'react'
 import { Box, Text } from 'ink'

@@ -13,7 +13,7 @@
  * key, `~XXXX` escapes). Only ever delete sessions that are NOT the live one —
  * the write-behind coordinator still holds the live session's file open.
  *
- * @module @yourname/qialike-app/session-files
+ * @module @qialike/qialike-app/session-files
  */
 
 import { existsSync, readdirSync } from 'node:fs'

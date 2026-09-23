@@ -17,7 +17,7 @@
  * `file-reference-local` row this bundle inserts). There is no reference id and
  * no `references` field on the prompt: the text IS the protocol.
  *
- * @module @yourname/qialike-app/file-palette
+ * @module @qialike/qialike-app/file-palette
  */
 import { activeAtToken, formatFileMention } from '@deepseek-ai/dsh-file-reference/grammar'
 

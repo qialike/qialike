@@ -11,7 +11,7 @@
  * without pulling React/Ink (or a second copy of the panel) into the dock
  * bundles.
  *
- * @module @yourname/qialike-app/composer-metrics
+ * @module @qialike/qialike-app/composer-metrics
  */
 
 /** The composer's wrap width inside the message column (`max(10, right − 4)`). */

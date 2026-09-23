@@ -14,7 +14,7 @@
  *    `bun test tests/` and echoes a short tail of its summary. Disable with
  *    `QIALIKE_SELFTEST_NO_EXTERNAL=1` or `/selftest sync`.
  *
- * @module @yourname/qialike-app/selftest
+ * @module @qialike/qialike-app/selftest
  */
 
 import { spawn, spawnSync } from 'node:child_process'
@@ -161,6 +161,20 @@ export function formatReport(checks: CheckResult[]): string {
   return `qialike self-test: ${passed}/${checks.length} passed\n${lines.join('\n')}`
 }
 
+/**
+ * Root `package.json` names this repo has carried, newest first.
+ *
+ * The rename to `qialike` and the later move off the placeholder scope each
+ * changed this string, and a developer's checkout is allowed to predate either
+ * one.
+ */
+const ROOT_PACKAGE_NAMES: readonly string[] = [
+  '@qialike/qialike-root',
+  '@yourname/qialike-root',
+  '@qialike/dsh-tui-root',
+  '@yourname/dsh-tui-root',
+]
+
 /** Locate a qialike checkout (root package.json + tests/) near the process. */
 export function findRepo(): string | undefined {
   const candidates = [
@@ -174,10 +188,12 @@ export function findRepo(): string | undefined {
       const pkg = join(c, 'package.json')
       if (!existsSync(pkg) || !existsSync(join(c, 'tests'))) continue
       const parsed = JSON.parse(readFileSync(pkg, 'utf8')) as { name?: unknown }
-      // The pre-rename root package name is accepted too: a developer sitting
-      // in an old checkout should still get the external suite, not a silent
-      // "no repo found".
-      if (parsed.name === '@yourname/qialike-root' || parsed.name === '@yourname/dsh-tui-root') return c
+      // Every root package name this repo has ever shipped is accepted: the
+      // current one, the pre-rename one, and both of those under the placeholder
+      // scope used before the project had a real one. A developer sitting in an
+      // old checkout should still get the external suite, not a silent "no repo
+      // found".
+      if (typeof parsed.name === 'string' && ROOT_PACKAGE_NAMES.includes(parsed.name)) return c
     } catch { /* keep probing */ }
   }
   return undefined

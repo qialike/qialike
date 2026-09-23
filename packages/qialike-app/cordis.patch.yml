@@ -56,7 +56,7 @@
 # `fileReferences` row above; the conversation panel needs no knowledge of it.
 - insert:
     - id: tui-file-reference
-      name: '@yourname/qialike-app/file-reference'
+      name: '@qialike/qialike-app/file-reference'
 
 # ── OS-level sandbox: bwrap/Landlock (Linux) / Seatbelt (macOS) / ACL (Windows)
 #
@@ -113,7 +113,7 @@
 # neither bwrap nor Landlock fails shell calls closed (`SANDBOX_UNAVAILABLE`).
 - insert:
     - id: qialike-fs-tools
-      name: '@yourname/qialike-app/fs-tools'
+      name: '@qialike/qialike-app/fs-tools'
 
 - insert:
     # Gives the model the `ask_user_question` tool, which asks the user for a
@@ -125,58 +125,58 @@
 
     # Reads its cli flags, then drives the long-lived terminal session.
     - id: tui-startup
-      name: '@yourname/qialike-app/startup'
+      name: '@qialike/qialike-app/startup'
 
     # /models capability: provider enumeration + "Add provider" writes. The
     # self-hosted OpenAI-compatible provider layer (`tui-llm`) replaces the
     # base composition's pi-ai twin and the deepseek adapter; both are
     # disabled below.
     - id: tui-llm
-      name: '@yourname/qialike-app/llm'
+      name: '@qialike/qialike-app/llm'
 
     # OpenCode Zen / OpenCode Go gateway templates (loadable): registers the
     # two gateway providers through tui-llm's `tuiLlmTemplates` extension
     # point; `qialike-opencode.enabled: false` in settings unloads them.
     - id: tui-opencode-gateways
-      name: '@yourname/qialike-app/opencode'
+      name: '@qialike/qialike-app/opencode'
 
     # China multi-model gateways (loadable): Qiniu (qiniu-ai) and SiliconFlow
     # (siliconflow / siliconflow-cn) aggregate many vendors' models, so they
     # are registered through `tuiLlmTemplates` instead of the built-in
     # catalog; `qialike-china-gateways.enabled: false` in settings unloads them.
     - id: tui-china-gateways
-      name: '@yourname/qialike-app/china-gateways'
+      name: '@qialike/qialike-app/china-gateways'
 
     # Foreign multi-model gateways / hosting platforms (loadable): OpenRouter,
     # Vercel/Cloudflare gateways, Hugging Face, Baseten, Fireworks, Together,
     # Nvidia, Groq, Cerebras — registered through `tuiLlmTemplates`;
     # `qialike-foreign-gateways.enabled: false` unloads them all.
     - id: tui-foreign-gateways
-      name: '@yourname/qialike-app/foreign-gateways'
+      name: '@qialike/qialike-app/foreign-gateways'
 
     # Azure provider (loadable, deployment-configured): registers the Azure
     # catalog row (models.dev `azure`) through `tuiLlmTemplates`;
     # `qialike-azure.enabled: false` unloads it.
     - id: tui-azure
-      name: '@yourname/qialike-app/azure'
+      name: '@qialike/qialike-app/azure'
 
     # Color scheme (loadable, vim-style `:colorscheme`): built-in + user
     # ~/.dsh/themes/*.json palettes; /theme switches live and persists.
     - id: tui-theme
-      name: '@yourname/qialike-app/theme-plugin'
+      name: '@qialike/qialike-app/theme-plugin'
 
     # Steps sidebar visibility: `/sidebar` command (+ click on the Steps title
     # band) toggles the right panel between auto/on/off; the choice persists in
     # qialike.json.
     - id: tui-sidebar-toggle
-      name: '@yourname/qialike-app/sidebar-toggle'
+      name: '@qialike/qialike-app/sidebar-toggle'
 
 
     - id: tui-models
-      name: '@yourname/qialike-app/models'
+      name: '@qialike/qialike-app/models'
 
     - id: tui-runtime
-      name: '@yourname/qialike-app'
+      name: '@qialike/qialike-app'
       inject: [tuiStartup, tuiModels]
       config:
         workspace: !!js ctx.tuiStartup.workspace
@@ -186,59 +186,59 @@
 
     # ── surface panels (plugins; register against the `tui` service) ────────
     - id: tui-panel-conversation
-      name: '@yourname/qialike-app/panels-conversation'
+      name: '@qialike/qialike-app/panels-conversation'
 
     - id: tui-panel-approval
-      name: '@yourname/qialike-app/panels-approval'
+      name: '@qialike/qialike-app/panels-approval'
 
     - id: tui-panel-question
-      name: '@yourname/qialike-app/panels-question'
+      name: '@qialike/qialike-app/panels-question'
 
     - id: tui-panel-models
-      name: '@yourname/qialike-app/panels-models'
+      name: '@qialike/qialike-app/panels-models'
 
     # /sessions dialog: list / search / resume persisted sessions.
     - id: tui-sessions
-      name: '@yourname/qialike-app/sessions'
+      name: '@qialike/qialike-app/sessions'
 
     # /export: session transcript export (JSON / --markdown, --sanitize).
     - id: tui-export
-      name: '@yourname/qialike-app/export'
+      name: '@qialike/qialike-app/export'
 
     # /new: start a brand-new session in place; the old
     # session is persisted by the harness and stays resumable.
     - id: tui-new
-      name: '@yourname/qialike-app/new'
+      name: '@qialike/qialike-app/new'
 
     # /goal: human command plane over the harness goal domain (the goal
     # service, model tools, and round driver are mounted by the base bundle;
     # only the command reachable from the TUI composer was missing).
     - id: tui-goal
-      name: '@yourname/qialike-app/goal'
+      name: '@qialike/qialike-app/goal'
 
     # Goal bar: a right-sidebar section showing the current goal (phase /
     # objective / rounds / blocker) — the TUI counterpart of the web's
     # `ui-goal` GoalBar. Read-only; mutations stay on /goal and the model tools.
     - id: tui-goal-bar
-      name: '@yourname/qialike-app/goal-bar'
+      name: '@qialike/qialike-app/goal-bar'
 
     # /plan: human command plane over the harness plan-mode service (the
     # plan/mode state, guidance prompt section, and exit_plan_mode review
     # tool are mounted by the base bundle; only the command was missing).
     - id: tui-plan
-      name: '@yourname/qialike-app/plan'
+      name: '@qialike/qialike-app/plan'
 
     # /selftest: in-process read-only self checks (theme registry, stdin
     # decoder, provider templates, panel/command completeness) + optional
     # `bun test tests/` when a checkout with bun is nearby.
     - id: tui-selftest
-      name: '@yourname/qialike-app/selftest'
+      name: '@qialike/qialike-app/selftest'
 
     # Image drag-in: detects a dragged image file (the terminal pastes its path),
     # reads + saves it through the attachment store, and presents a composer
     # [Image: name] chip; submit emits an image content block.
     - id: tui-image-attach
-      name: '@yourname/qialike-app/image-attach'
+      name: '@qialike/qialike-app/image-attach'
 
 # The plugin-package inventory reads every active Loader entry's package.json
 # from disk at each model request; inside the single-file SEA there is no

@@ -15,7 +15,7 @@
  *     enabled: false   # unloads Azure from the catalog
  *   ```
  *
- * @module @yourname/qialike-app/azure
+ * @module @qialike/qialike-app/azure
  */
 
 import type { Context } from '@deepseek-ai/cordis'

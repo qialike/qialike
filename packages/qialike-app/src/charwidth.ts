@@ -23,7 +23,7 @@
  *  - Measured widths are persisted (fingerprinted by a few sentinel glyphs) so
  *    later runs reuse them when the terminal/font has not changed.
  *
- * @module @yourname/qialike-app/charwidth
+ * @module @qialike/qialike-app/charwidth
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

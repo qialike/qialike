@@ -20,7 +20,7 @@
  * window size and scrolls inside it (PgUp/PgDn + selection follow) so every
  * option row is reachable — never cut with '…'.
  *
- * @module @yourname/qialike-app/question-layout
+ * @module @qialike/qialike-app/question-layout
  */
 
 import { visualWidth } from './markdown.tsx'

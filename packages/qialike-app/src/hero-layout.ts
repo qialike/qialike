@@ -10,7 +10,7 @@
  * `bottomSpacer` rows after the hints, and `composerTopRow` is derived from the
  * same numbers — routing can therefore never disagree with what is painted.
  *
- * @module @yourname/qialike-app/hero-layout
+ * @module @qialike/qialike-app/hero-layout
  */
 
 import {

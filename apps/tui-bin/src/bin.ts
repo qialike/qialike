@@ -19,7 +19,7 @@
  * over an empty root config, with the same command-line, environment, and
  * fail-loud guards.
  *
- * @module @yourname/qialike/bin
+ * @module @qialike/qialike/bin
  */
 
 import { basename, dirname, join, resolve, sep } from 'node:path'
@@ -30,8 +30,8 @@ import { createHash } from 'node:crypto'
 // FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto
 // `QIALIKE_*` at module load, before this file's own module-scope env reads
 // (SPLASH_DELAY_MS) and before any other module's.
-import { migrateLegacyHomeFiles, LEGACY_PRODUCT } from '@yourname/qialike-app/src/legacy-names.ts'
-import { migrateLegacySettings } from '@yourname/qialike-app/src/config.ts'
+import { migrateLegacyHomeFiles, LEGACY_PRODUCT } from '@qialike/qialike-app/src/legacy-names.ts'
+import { migrateLegacySettings } from '@qialike/qialike-app/src/config.ts'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
@@ -53,7 +53,7 @@ import type { ProjectRowProblem } from './project-overlay.ts'
 const NAME = 'qialike'
 
 /** Names bundled as-is, plus the pre-rename aliases of the app package (an
- *  overlay written before the rename names `@yourname/dsh-tui-app*`). */
+ *  overlay written before the rename names `@qialike/dsh-tui-app*`). */
 function bundledPlugin(name: string): unknown {
   return PLUGIN_BUILTINS[name] ?? LEGACY_PLUGIN_ALIASES[name]
 }

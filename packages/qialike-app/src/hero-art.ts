@@ -17,7 +17,7 @@
  *   dark  variant B=#f1ecec M=#b7b1b1
  *   light variant B=#201e1e M=#656363
  *
- * @module @yourname/qialike-app/hero-art
+ * @module @qialike/qialike-app/hero-art
  */
 
 /** Source file each variant was rendered from (workspace-relative). */

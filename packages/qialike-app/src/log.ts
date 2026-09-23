@@ -8,7 +8,7 @@
  * session `start()` failure, and (via a `console.error` wrapper) React/Ink
  * warnings such as "Maximum update depth exceeded".
  *
- * @module @yourname/qialike-app/log
+ * @module @qialike/qialike-app/log
  */
 
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'

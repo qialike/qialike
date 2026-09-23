@@ -18,7 +18,7 @@
  * Model lists mirror the models.dev catalog.
  * `needsBaseURL` rows (Cloudflare) keep the deployment-configured form.
  *
- * @module @yourname/qialike-app/foreign-gateways
+ * @module @qialike/qialike-app/foreign-gateways
  */
 
 import type { Context } from '@deepseek-ai/cordis'

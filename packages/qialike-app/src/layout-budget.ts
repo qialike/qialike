@@ -15,7 +15,7 @@
  * bar; at 8 rows it was two rows with the chip row overwritten. This module is
  * the one place those numbers live.
  *
- * @module @yourname/qialike-app/layout-budget
+ * @module @qialike/qialike-app/layout-budget
  */
 
 /** Status-bar rows pinned at the bottom of the docked view. */

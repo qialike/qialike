@@ -40,7 +40,7 @@ const LEGACY_ALLOWLIST: Readonly<Record<string, readonly [count: number, reason:
   'packages/qialike-app/src/legacy-names.ts': [15, 'the compatibility layer itself: legacy file names, namespaces, and the env prefix'],
   'packages/qialike-app/src/index.tsx': [1, 'comment on the first import that mirrors legacy env vars'],
   'packages/qialike-app/src/log.ts': [1, 'comment on the lazy log path the migration may rename'],
-  'packages/qialike-app/src/selftest.ts': [1, 'accepts a pre-rename checkout root package name'],
+  'packages/qialike-app/src/selftest.ts': [2, 'the pre-rename checkout root package names a developer may still be sitting in'],
   // The six per-plugin settings-namespace constants used to be listed here, one
   // hit each. Harness 0.1.7 removed runtime settings namespaces, so those
   // spellings all live in ONE table now (the migration's `SECTION_NAMESPACES`):
@@ -48,7 +48,7 @@ const LEGACY_ALLOWLIST: Readonly<Record<string, readonly [count: number, reason:
   'packages/qialike-app/src/config.ts': [7, 'the legacy settings namespaces the one-time migration reads'],
   'apps/tui-bin/src/bin.ts': [5, 'pre-rename rc marker, temp-dir sweep, alias resolution comment'],
   'apps/tui-bin/src/main.ts': [1, 'comment on the first import that mirrors legacy env vars'],
-  'apps/tui-bin/build.mjs': [4, 'legacy patch markers and the alias-specifier mapping'],
+  'apps/tui-bin/build.mjs': [3, 'legacy patch markers and the alias-specifier family the generated map answers'],
   // `scripts/install` used to be listed here (3 hits: it removed a pre-rename
   // installed binary and reported a stale pre-rename PATH entry). The installer
   // became a networked downloader and that migration was dropped, so the count is
@@ -121,7 +121,7 @@ describe('legacy strings survive only in the allowlist', () => {
     for (const full of surfaceFiles()) {
       if (relative(REPO, full) in LEGACY_ALLOWLIST) continue
       const source = readFileSync(full, 'utf8')
-      for (const gone of ['dist/dsh-tui', 'dsh-tui.log', 'dsh-tui.json', '@yourname/dsh-tui-app/']) {
+      for (const gone of ['dist/dsh-tui', 'dsh-tui.log', 'dsh-tui.json', '@qialike/dsh-tui-app/']) {
         expect(source.includes(gone), `${relative(REPO, full)} must not reference ${gone}`).toBe(false)
       }
     }
@@ -133,10 +133,10 @@ describe('product identity', () => {
     JSON.parse(readFileSync(join(REPO, path), 'utf8')) as Record<string, unknown>
 
   test('packages carry the new name, and the root bin points at dist/qialike', () => {
-    expect(pkg('package.json').name).toBe('@yourname/qialike-root')
+    expect(pkg('package.json').name).toBe('@qialike/qialike-root')
     expect(pkg('package.json').bin).toEqual({ qialike: 'dist/qialike' })
-    expect(pkg('packages/qialike-app/package.json').name).toBe('@yourname/qialike-app')
-    expect(pkg('apps/tui-bin/package.json').name).toBe('@yourname/qialike-bin')
+    expect(pkg('packages/qialike-app/package.json').name).toBe('@qialike/qialike-app')
+    expect(pkg('apps/tui-bin/package.json').name).toBe('@qialike/qialike-bin')
     const versions = ['package.json', 'packages/qialike-app/package.json', 'apps/tui-bin/package.json']
       .map((f) => pkg(f).version)
     expect(new Set(versions).size, 'three versions stay in lockstep').toBe(1)
@@ -156,7 +156,7 @@ describe('product identity', () => {
     expect(build).toContain('`qialike-${name}.tar.gz`')
     expect(build).toContain('`qialike-${name}.zip`')
     // The app package the farm links and the bundles import.
-    expect(build).toContain("link('@yourname/qialike-app', join(ROOT, 'packages/qialike-app'))")
+    expect(build).toContain("link('@qialike/qialike-app', join(ROOT, 'packages/qialike-app'))")
   })
 
   test('the docs and the export filters follow the new package path', () => {

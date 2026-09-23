@@ -17,7 +17,7 @@
  * bytes are written out once per content hash and the path returned — a real
  * file, which is what a spawned process needs.
  *
- * @module @yourname/qialike-app/ripgrep-shim
+ * @module @qialike/qialike-app/ripgrep-shim
  */
 
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
