@@ -42,9 +42,21 @@
 # 用到的 remote（可覆盖）：GITHUB_REMOTE 默认 `origin`；GITCODE_REMOTE 默认 `gitcode`。
 # 两者都接受 remote 名或 URL；缺哪个就在那一步明确报错。
 #
-# 凭据（环境变量，二者都必须能发布该仓库）：
-#   GITHUB_TOKEN  （或 GH_TOKEN）        需 repo 权限；GitHub 用 Bearer
-#   GITCODE_TOKEN （或 GITCODE_ACCESS_TOKEN）  gitcode 的「私人令牌」，作为 access_token 查询参数
+# 凭据**分两类，别混**（这是本流程最容易踩的一步）：
+#
+#   1) 两个 API 令牌（环境变量）—— 用于【建 release 与上传资产】，走 HTTPS API：
+#        GITHUB_TOKEN  （或 GH_TOKEN）        需 repo 权限；GitHub 用 Bearer
+#        GITCODE_TOKEN （或 GITCODE_ACCESS_TOKEN）  gitcode 的「私人令牌」，作为 access_token 查询参数
+#
+#   2) git 推送凭据 —— 用于【同步 tag】（就是上面的 `git push`）。**API 令牌不能代替它**，
+#      认证方式由 remote 地址的协议决定：
+#        SSH   ：remote 写成 SSH 地址，把公钥加到两个账号。本项目用这种方式。
+#                  git remote add origin  git@github.com:qialike/qialike.git
+#                  git remote add gitcode git@gitcode.com:qialike/qialike.git
+#         HTTPS：用令牌当密码，需要 credential helper，否则会卡在交互提示上。
+#      注意 gitcode 的 SSH 主机就是 `gitcode.com`（官方文档给的验证命令是 `ssh -T git@gitcode.com`）。
+#
+#   两类都就绪后，前置检查会分别告诉你哪一类没配好（它把 git 的原文翻译成"该去配什么"）。
 #
 # 可覆盖的常量：
 #   QIALIKE_REPO     仓库路径，默认本脚本同级 qialike/
