@@ -49,14 +49,26 @@
 #        GITCODE_TOKEN （或 GITCODE_ACCESS_TOKEN）  gitcode 的「私人令牌」，作为 access_token 查询参数
 #
 #   2) git 推送凭据 —— 用于【同步 tag】（就是上面的 `git push`）。**API 令牌不能代替它**，
-#      认证方式由 remote 地址的协议决定：
-#        SSH   ：remote 写成 SSH 地址，把公钥加到两个账号。本项目用这种方式。
-#                  git remote add origin  git@github.com:qialike/qialike.git
-#                  git remote add gitcode git@gitcode.com:qialike/qialike.git
-#         HTTPS：用令牌当密码，需要 credential helper，否则会卡在交互提示上。
-#      注意 gitcode 的 SSH 主机就是 `gitcode.com`（官方文档给的验证命令是 `ssh -T git@gitcode.com`）。
+#      认证方式由 remote 地址的协议决定。**本项目两个源各用一种**：
+#
+#        GitHub（SSH，走 443）：
+#          git remote add origin git@github.com:qialike/qialike.git
+#          # 该网络下 22 端口被切断（实测 kex_exchange_identification），在 ~/.ssh/config 里：
+#          #   Host github.com
+#          #       HostName ssh.github.com
+#          #       Port 443
+#          #       User git
+#
+#        gitcode（HTTPS + 访问令牌）：
+#          git remote set-url gitcode https://gitcode.com/qialike/qialike.git
+#          git config --global credential.helper store   # 首次推送输入：用户名 + 令牌当密码
+#          令牌与上面第 1) 类用的是**同一个** PAT（gitcode 已禁用账号密码认证）。
+#
+#      注意 gitcode 的 SSH 主机是 `gitcode.com`（官方验证命令 `ssh -T git@gitcode.com`），
+#      但本项目不用它 —— HTTPS 顺带绕开了 22 端口的问题。
 #
 #   两类都就绪后，前置检查会分别告诉你哪一类没配好（它把 git 的原文翻译成"该去配什么"）。
+#   git 一律以 GIT_TERMINAL_PROMPT=0 运行：缺凭据就快速失败并说明，绝不挂在交互提示上。
 #
 # 可覆盖的常量：
 #   QIALIKE_REPO     仓库路径，默认本脚本同级 qialike/
@@ -66,6 +78,15 @@
 #
 # 退出码：0 全部完成；1 任何一步失败（已在失败处说明原因）。
 set -euo pipefail
+
+# git 只能**非交互**地跑。走 HTTPS 而凭据缺失时，git 默认会去 /dev/tty 提示用户名/密码：
+# 在终端里它**停下来等你输入**，在无 tty 的场景则报一句难懂的
+# `could not read Username … No such device or address`。两种都不是本脚本要的 —— 它可能
+# 在 CI 或管道里跑，且它的失败路径本来就会把原因翻译出来。设成 0 后是确定的快速失败：
+# `… terminal prompts disabled`，正好落在 `explain_push_failure` 的第一类里。
+# 注意这是给**子进程**继承用的，所以必须 export；SSH 那侧无需这个（它要么用 agent，要么
+# 失败，不会提示密码）。
+export GIT_TERMINAL_PROMPT=0
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 仓库根 = 本脚本所在目录（<repo>/scripts/release/）上溯两级；与调用时的 cwd 无关。
@@ -210,11 +231,14 @@ explain_push_failure() {  # $1 = label，$2 = git 的 stderr
     *'could not read Username'* | *'Authentication failed'* | *'terminal prompts disabled'*)
       hint="HTTPS 没有可用凭据 —— 配置 credential helper，或在 remote URL 里带用户名与令牌
      （$label 用访问令牌当密码；该平台已禁用账号密码）。" ;;
+    # "库不存在"要排在 403 之前判：gitcode 对**不存在的库**返回的就是 403，原文里同时含
+    # "could not be found" 与 "error: 403"（实测）。先匹配 403 会把它说成"没有写权限"，
+    # 把人指向完全错误的方向 —— 权限没问题，是地址错了。
+    *'not found'* | *'could not be found'* | *'does not appear to be a git repository'*)
+      hint="远端地址或库名不对，或当前账号无权访问它 —— 核对 $label 的 owner/repo。" ;;
     *'403'* | *'Permission to'* | *'denied to'* | *'not authorized'*)
       hint="认证过了但**没有写权限** —— 令牌缺写范围（GitHub 需 Contents: write；gitcode 需项目范围），
      或当前账号不是该仓库的协作者。" ;;
-    *'not found'* | *'does not appear to be a git repository'* | *'Repository not found'*)
-      hint="远端地址或库名不对，或当前账号无权访问它 —— 核对 $label 的 owner/repo。" ;;
     *'Could not resolve host'* | *'Connection timed out'* | *'Connection refused'*)
       hint="网络/DNS 不通 —— 这条与凭据无关。" ;;
     *) hint="（git 原文见上；未能自动归类，请按它自己的提示处理。）" ;;
