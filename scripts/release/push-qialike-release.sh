@@ -320,6 +320,26 @@ sync_tag() {  # $1 = remote 名或 URL，$2 = 标签
   ok "$label：tag $TAG 已重推到 $want"
 }
 
+# 取 GitHub API 的 **HTTP 状态码**（`GET` 专用，body 丢弃）—— "这次请求成功了吗"的唯一判据。
+#
+# 为什么不沿用 gh_api + "body 非空"：gh_api 刻意用 `--fail-with-body` 把 4xx 的响应体也留在
+# stdout（好让调用方打印服务端到底说了什么）。于是"body 非空"**不是**成功判据 —— 404 的
+# `{"message":"Not Found"}` 与 401 的 `{"message":"Bad credentials"}` 都非空。GitHub 分支曾
+# 据此判"release 已存在"：首次发布时 release 还不存在、GET 必然 404，却被读成"已存在"，于是
+# 永远不进创建分支、永远拿不到 release id —— 每次重跑都停在同一处（0.7.1 首次发布就撞在这
+# 里，见 qialike-development.md §9.4.16）。判据必须是状态码。
+#
+# `-o /dev/null` 丢掉 body，`-w` 给状态码；连不上时 curl 给 `000`，同样能用 case 归类。
+# 位置：必须定义在**下面那道凭据前置检查之前**（bash 按执行顺序解析函数，放到后面的
+# "通用小工具"里就会出现 command not found）。`$GH_TOKEN` 由紧随其后的凭据块赋值。
+gh_api_status() {  # $1=path → stdout 三位状态码（GET）
+  curl -sS -o /dev/null -w '%{http_code}' \
+    -H "Authorization: Bearer $GH_TOKEN" \
+    -H 'Accept: application/vnd.github+json' \
+    -H 'X-GitHub-Api-Version: 2022-11-28' \
+    "$GITHUB_API$1" || true
+}
+
 # ── 凭据（先取值，检查放在下面的标签同步【之前】）────────────────────────────
 GH_TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
 GC_TOKEN="${GITCODE_TOKEN:-${GITCODE_ACCESS_TOKEN:-}}"
@@ -334,6 +354,29 @@ elif [[ "$DRY" == 0 && "$VERIFY_ONLY" == 0 ]]; then
   [[ "$SOURCE" == gitcode || -n "$GH_TOKEN" ]] || die "缺少 GITHUB_TOKEN（或 GH_TOKEN）"
   [[ "$SOURCE" == github || -n "$GC_TOKEN" ]] || die "缺少 GITCODE_TOKEN（或 GITCODE_ACCESS_TOKEN）"
   ok "两个 API 令牌已就位"
+
+  # 令牌"存在"不等于令牌"有效"，而这里正是上面那条原则的落点：任何远端写入之前，先把能提前
+  # 发现的问题发现完。少这一步的代价在 0.7.1 上已经付过：一个非 GitHub 格式的令牌通过了上面
+  # 那条非空检查，于是**标签先被推上远端**，随后才在"该上传了"处 401 停下 —— 留下"tag 已推、
+  # release 没建"的半截状态，而修复它还得再跑一次。
+  if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
+    gh_self_status="$(gh_api_status /user)"
+    case "$gh_self_status" in
+      200) ok "GitHub 令牌有效（GET /user）" ;;
+      401) die "GitHub 令牌无效（401 Bad credentials）—— 换一个 GITHUB_TOKEN 后重跑" ;;
+      000) die "GitHub API 不可达（GET /user）—— 检查网络后重跑" ;;
+      *)   die "GitHub 令牌自检失败（HTTP $gh_self_status）—— 检查令牌后重跑" ;;
+    esac
+    # 令牌有效也可能看不到这个库：**私有库对"无权访问"的令牌返回 404 而不是 403**（避免泄露
+    # 仓库是否存在）。现在就问清楚，好过把 404 当成"release 还不存在"再去创建。
+    gh_repo_status="$(gh_api_status "/repos/$GITHUB_REPO")"
+    case "$gh_repo_status" in
+      200) ok "GitHub 令牌可访问 $GITHUB_REPO" ;;
+      404) die "GitHub 令牌看不到 $GITHUB_REPO（私有库对无权令牌返回 404）—— 确认令牌已授权到该仓库" ;;
+      403) die "GitHub 令牌被拒绝访问 $GITHUB_REPO（403）" ;;
+      *)   die "查询 $GITHUB_REPO 失败（HTTP $gh_repo_status）" ;;
+    esac
+  fi
 
   # 再把**所有**目标 remote 检查一遍，最后才动手推。反过来做（查到哪个推哪个）会在第二个
   # remote 连不上时留下半截状态：一边的 tag 已更新、另一边没有，而 release 还没建。
@@ -453,19 +496,32 @@ if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
   if [[ "$VERIFY_ONLY" == 1 ]]; then
     verify_manifest "$GITHUB_DL" "GitHub"
   else
-    REL="$(gh_api GET "/repos/$GITHUB_REPO/releases/tags/$TAG" 2>/dev/null || true)"
-    if [[ -n "$REL" ]]; then
-      ok "release $TAG 已存在"
-    else
-      PRE='false'
-      [[ "$TAG" == *-* ]] && PRE='true'
-      REL="$(gh_api POST "/repos/$GITHUB_REPO/releases" \
-        -H 'Content-Type: application/json' \
-        -d "$(jq -nc --arg t "$TAG" --arg n "$TAG" --arg b "qialike $TAG" --argjson pre "$PRE" \
-              '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:$pre}')")" \
-        || die "GitHub 创建 release $TAG 失败（tag 是否已推送？）"
-      ok "release $TAG 已创建"
-    fi
+    # 判据是**状态码**（见 gh_api_status）：200 = 已有，取 id 继续；**404 = 还没有，这才是
+    # 创建路径**（上面的前置检查已证明令牌能看到这个库，所以这里的 404 只能是"没有这个
+    # release"）；401/403 = 令牌问题；其余原样报出。
+    gh_release_status="$(gh_api_status "/repos/$GITHUB_REPO/releases/tags/$TAG")"
+    case "$gh_release_status" in
+      200)
+        # 状态码只回答"有没有"。既然有，就再取一次正文拿 release id —— `gh_api` 会把服务端
+        # 的解释原样打印，所以这里非零即真失败。
+        REL="$(gh_api GET "/repos/$GITHUB_REPO/releases/tags/$TAG")" \
+          || die "取 GitHub release $TAG 详情失败（状态码 200，但正文取不到）"
+        ok "release $TAG 已存在"
+        ;;
+      404)
+        PRE='false'
+        [[ "$TAG" == *-* ]] && PRE='true'
+        REL="$(gh_api POST "/repos/$GITHUB_REPO/releases" \
+          -H 'Content-Type: application/json' \
+          -d "$(jq -nc --arg t "$TAG" --arg n "$TAG" --arg b "qialike $TAG" --argjson pre "$PRE" \
+                '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:$pre}')")" \
+          || die "GitHub 创建 release $TAG 失败（tag 是否已推送？）"
+        ok "release $TAG 已创建"
+        ;;
+      401) die "GitHub 令牌无效（401 Bad credentials）—— 换一个 GITHUB_TOKEN 后重跑" ;;
+      403) die "GitHub 令牌无权写 $GITHUB_REPO（403）—— 需要 Contents: Read and write" ;;
+      *)   die "查询 GitHub release $TAG 失败（HTTP $gh_release_status）" ;;
+    esac
     ID="$(jq -r '.id // empty' <<<"$REL")"
     [[ -n "$ID" ]] || die "拿不到 release id：$REL"
     for f in "${UPLOAD_LIST[@]}"; do
