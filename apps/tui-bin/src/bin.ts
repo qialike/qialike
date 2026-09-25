@@ -32,6 +32,7 @@ import { createHash } from 'node:crypto'
 // (SPLASH_DELAY_MS) and before any other module's.
 import { migrateLegacyHomeFiles, LEGACY_PRODUCT } from '@qialike/qialike-app/src/legacy-names.ts'
 import { migrateLegacySettings } from '@qialike/qialike-app/src/config.ts'
+import { describeGenerationMismatch, sessionGenerationStatus } from '@qialike/qialike-app/src/session-files.ts'
 import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
@@ -97,6 +98,32 @@ const VERSION_TOKEN_RE = /(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)/
 function parseVersion(text: string): string | null {
   const match = VERSION_TOKEN_RE.exec(text)
   return match === null ? null : match[1]
+}
+
+/**
+ * Refuse web mode when the session store has been migrated past this build.
+ *
+ * `qialike web` forwards to the installed `dsh`, which writes the SAME store
+ * this TUI reads. A newer harness migrates by writing a NEW immutable
+ * generation file (`session.vN.jsonl.zstd`) and leaving the old one in place,
+ * so a build that only knows the older format silently reads stale history —
+ * or, once it tries to open the new generation, fails with
+ * `SessionFormatUnsupportedError`. The version probe above cannot catch this:
+ * `dsh` may match the embedded harness exactly while the store was migrated by
+ * an older/newer install earlier. Refusing up front (with the file that proves
+ * it) beats a UI whose every history read fails.
+ *
+ * @returns true when the store is readable here (or empty).
+ */
+function preflightWebStore(): boolean {
+  const mismatch = describeGenerationMismatch(sessionGenerationStatus())
+  if (mismatch === undefined) return true
+  process.stderr.write(
+    `${NAME}: web mode refused — ${mismatch}.\n`
+    + '  The store was migrated by a NEWER harness than this build embeds.\n'
+    + `  Upgrade ${NAME} to a build that embeds it, or run the newer \`dsh web\` directly.\n`,
+  )
+  return false
 }
 
 /**
@@ -1388,6 +1415,7 @@ async function main(): Promise<void> {
     const pre = preflightWebDsh()
     if (pre === 'missing') process.exit(127)
     if (pre === 'mismatch') process.exit(1) // version differs: warn, do NOT start web
+    if (!preflightWebStore()) process.exit(1) // store too new: warn, do NOT start web
     process.exit(await runWeb(args))
   }
   // `plugin` owns its whole command line too, and — like the other launcher

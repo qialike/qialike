@@ -148,21 +148,26 @@ const NATIVE_STUB_SOURCE = {
  * subpath and an `exports` map generated from the same keys — a plain
  * `main`-only stub (what {@link NATIVE_STUB_SOURCE} installs) cannot satisfy it.
  *
- * `/flock`'s `tryLockExclusive` grants immediately, mirroring the harness's own
+ * `/flock` is REAL, not a no-op. The earlier no-op mirrored the harness's own
  * single-process worker replacement
- * (`packages/experimental/webworker-runtime/src/node/external_packages/node-addon-system-flock.ts`):
- * the JSONL backend's in-process write claim already excludes every writer, and
- * the kernel lease is new in 0.1.5 — 0.1.2-rc.1 had no lock at all — so a TUI
- * host that never takes it is not losing a protection it previously had. Two
- * `qialike` hosts on the SAME session are consequently no longer kept apart by
- * a kernel lock; nothing else changes (a single host still serializes writes).
+ * (`packages/experimental/webworker-runtime/src/node/external_packages/node-addon-system-flock.ts`),
+ * which assumes the in-process write claim excludes every writer. That
+ * assumption does NOT hold for this host: a qialike TUI shares `~/.dsh` with
+ * `dsh web` and with a second qialike, so with the no-op the harness's
+ * `SessionWriteLease` excluded nobody and two hosts could append ONE log
+ * concurrently — measured as `seq gap` (duplicate/rewound seq) and `torn JSONL
+ * record` failures that made a session unopenable. `packages/qialike-app/src/flock.ts`
+ * implements `flock(2)` over `bun:ffi` (the single-file binary cannot ship the
+ * native addon) with the harness's exact contract, and is re-exported here so
+ * the harness lease and qialike's own `/sessions` delete probe share ONE
+ * implementation. On hosts without `flock(2)` (Windows) it grants with a
+ * one-time stderr warning instead of failing silently.
  */
 const NATIVE_SUBPATH_STUB_SOURCE = {
   '@deepseek-ai/node-addon-system': {
     './landlock-run': readFileSync(join(ROOT, 'apps/tui-bin/stub/landlock-run.js'), 'utf8'),
     './flock': [
-      'export async function tryLockExclusive(_fd) { return undefined }',
-      'export default { tryLockExclusive }',
+      "export { tryLockExclusive } from '@qialike/qialike-app/src/flock.ts'",
       '',
     ].join('\n'),
   },

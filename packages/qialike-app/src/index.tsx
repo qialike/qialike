@@ -71,7 +71,7 @@ import { StdinDecoder, type RawKey } from './stdin.ts'
 import { initCharWidthCalibration } from './charwidth.ts'
 import { isPlanReview, extractPlanMarkdown, EXIT_PLAN_TOOL } from './plan-review.ts'
 import { isMultiSelect } from './question-layout.ts'
-import { describeResumeFailure, foreignUnreadableLog, isCorruptLogMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
+import { describeResumeFailure, foreignUnreadableLog, isCorruptLogMessage, isOwnedSessionMessage, planOlderRanges, planResumeFold, safeBoundaries, tailSlice, withResumeCorruptRetry } from './resume-fold.ts'
 import { initErrorLog, logError, logConsoleError, logErrorFileOnly } from './log.ts'
 import { armPostExitNotices, flushPostExitNotices, postExitNotice } from './post-exit-notice.ts'
 import { outsideOpenDialogList } from './list-geometry.ts'
@@ -457,6 +457,7 @@ export function sessionLoadingText(state: SessionLoadingState, now: number, show
  *  otherwise) stays in the transcript row — a status bar cannot wrap. */
 export function sessionLoadErrorText(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
+  if (isOwnedSessionMessage(message)) return 'Load session failed: open for writing elsewhere — see transcript'
   if (isCorruptLogMessage(message)) return 'Load session failed: corrupt session log — see transcript'
   const first = (message.split('\n')[0] ?? '').trim()
   const clip = first.length > 78 ? `${first.slice(0, 77)}…` : first

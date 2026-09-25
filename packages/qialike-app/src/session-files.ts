@@ -16,12 +16,13 @@
  * @module @qialike/qialike-app/session-files
  */
 
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, type Dirent } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
-import type { SessionId } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, type SessionId } from '@deepseek-ai/dsh-session'
 import { SessionLogReader, type DurableEvent } from './log-frames.ts'
+import { probeSessionLease, type SessionLeaseProbe } from './session-lease.ts'
 import type { SessionHeaderLike, SessionTitlesPersistence } from './session-titles.ts'
 
 /** True for characters the jsonl backend keeps verbatim in path segments. */
@@ -91,13 +92,52 @@ export function sessionDir(cwd: string, id: SessionId): string {
 }
 
 /**
+ * Thrown when a session is deleted while another process holds its write lease.
+ *
+ * Deleting `rm -rf`s the whole session directory. On POSIX that succeeds even
+ * while the holder still has the log open, so the other host keeps appending
+ * into an unlinked inode: everything it writes after this moment is lost, and
+ * its `list()`/resume sees a session that no longer exists. Refusing is the
+ * only safe answer, and the message has to name the other holder because the
+ * user is the one who can close it.
+ */
+export class SessionInUseError extends Error {
+  /**
+   * @param id - the session that is still leased.
+   */
+  constructor(id: SessionId) {
+    const text = String(id)
+    const short = text.length > 16 ? `${text.slice(0, 8)}…${text.slice(-4)}` : text
+    super(
+      `session ${short} is being written by another process (the web UI or another qialike) — `
+      + 'close it there and retry',
+    )
+    this.name = 'SessionInUseError'
+  }
+}
+
+/**
  * Permanently delete one persisted session's directory (and therefore its
  * entry in `list()`). Best-effort: the caller surfaces failures as status.
+ *
+ * Refuses while another process holds the session's write lease — the harness
+ * exposes no delete API, so this is the only place the lease can be honoured
+ * before the directory disappears (`probeSessionLease`).
+ *
  * @param cwd - the session's working directory (header cwd).
  * @param id - the session id to delete.
+ * @param options - injectable lease probe (tests) — defaults to the real one.
+ * @throws {SessionInUseError} when the lease is held elsewhere.
  */
-export async function deleteSession(cwd: string, id: SessionId): Promise<void> {
-  await rm(sessionDir(cwd, id), { recursive: true, force: true })
+export async function deleteSession(
+  cwd: string,
+  id: SessionId,
+  options: { probe?: SessionLeaseProbe } = {},
+): Promise<void> {
+  const dir = sessionDir(cwd, id)
+  const probe = options.probe ?? probeSessionLease
+  if (await probe(dir) === 'busy') throw new SessionInUseError(id)
+  await rm(dir, { recursive: true, force: true })
 }
 
 /**
@@ -136,6 +176,99 @@ export function resolveSessionLogPath(dir: string): string | undefined {
     }
   }
   return best === undefined ? undefined : join(dir, best.name)
+}
+
+/** One canonical generation file found on disk. */
+export interface StoredGeneration {
+  /** Format version encoded in the filename (`session.jsonl[.zstd]` is 0). */
+  version: number
+  /** Absolute path of that log file. */
+  path: string
+}
+
+/** The session format version this build's embedded harness reads and writes. */
+export const SUPPORTED_SESSION_FORMAT_VERSION = SESSION_FORMAT_VERSION
+
+/**
+ * The numerically highest generation stored anywhere under the sessions root.
+ *
+ * Every generation is an immutable file that the harness never rewrites or
+ * deletes, so the newest one names the format the store has been migrated to. A
+ * store whose highest generation is NEWER than this build's harness cannot be
+ * read here (`SessionFormatUnsupportedError`) — worth knowing BEFORE launching
+ * a second frontend that would fail the same way on every history read.
+ *
+ * @param root - sessions root (defaults to `$DSH_HOME/sessions`).
+ * @returns the highest generation, or undefined for an empty/unreadable store.
+ */
+export function highestStoredGeneration(root: string = dshHomePath('sessions')): StoredGeneration | undefined {
+  // `zstd` breaks ties the way `resolveSessionLogPath` does, so the reported
+  // path is the very file the harness would open at that generation.
+  let best: { version: number; zstd: number; path: string } | undefined
+  const consider = (path: string, version: number, zstd: number): void => {
+    if (best === undefined || version > best.version || (version === best.version && zstd > best.zstd)) {
+      best = { version, zstd, path }
+    }
+  }
+  let projects: readonly Dirent[]
+  try {
+    projects = readdirSync(root, { withFileTypes: true })
+  } catch {
+    return undefined
+  }
+  for (const project of projects) {
+    if (!project.isDirectory()) continue
+    let sessions: readonly Dirent[]
+    try {
+      sessions = readdirSync(join(root, project.name), { withFileTypes: true })
+    } catch { continue }
+    for (const session of sessions) {
+      if (!session.isDirectory()) continue
+      const dir = join(root, project.name, session.name)
+      let names: readonly string[]
+      try {
+        names = readdirSync(dir)
+      } catch { continue }
+      for (const name of names) {
+        const match = SESSION_LOG_NAME.exec(name)
+        if (match === null) continue
+        consider(join(dir, name), match[1] === undefined ? 0 : Number(match[1]), match[2] === '.zstd' ? 1 : 0)
+      }
+    }
+  }
+  return best === undefined ? undefined : { version: best.version, path: best.path }
+}
+
+/** The store's highest stored generation against what this build supports. */
+export interface SessionGenerationStatus {
+  /** Format version this build reads and writes. */
+  supported: number
+  /** Highest generation on disk, when the store holds any. */
+  highest?: StoredGeneration
+}
+
+/**
+ * Compare the store on disk with this build's supported format version.
+ * @param root - sessions root (defaults to `$DSH_HOME/sessions`).
+ * @returns the supported version and the highest stored one.
+ */
+export function sessionGenerationStatus(root?: string): SessionGenerationStatus {
+  const highest = highestStoredGeneration(root)
+  return highest === undefined
+    ? { supported: SUPPORTED_SESSION_FORMAT_VERSION }
+    : { supported: SUPPORTED_SESSION_FORMAT_VERSION, highest }
+}
+
+/**
+ * One-line reason the store is too new for this build, or undefined when it is
+ * readable here.
+ * @param status - result of {@link sessionGenerationStatus}.
+ * @returns a user-facing explanation, or undefined.
+ */
+export function describeGenerationMismatch(status: SessionGenerationStatus): string | undefined {
+  const highest = status.highest
+  if (highest === undefined || highest.version <= status.supported) return undefined
+  return `the session store holds format v${highest.version} (${highest.path}) but this build reads v${status.supported}`
 }
 
 /**

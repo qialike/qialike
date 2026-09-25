@@ -150,12 +150,27 @@ export function isCorruptLogMessage(message: string): boolean {
   return /corrupt( Zstandard)? session log/.test(message)
 }
 
+/** Whether a failure is the harness refusing a SECOND writer for one session.
+ *
+ * `SessionAlreadyOwnedError` reads `session "<id>" is already owned by an
+ * active write handle`. The lease is per session directory and process-wide
+ * visible (`flock`), so the holder is another qialike or the web UI; the user
+ * has to close it there, which makes this a different instruction from the
+ * corrupt-log class (where retrying is the right move). */
+export function isOwnedSessionMessage(message: string): boolean {
+  return /is already owned by an active write handle/.test(message)
+}
+
 /** User-facing text for one resume failure. The corrupt-log class gets an
  *  actionable explanation (concurrent writers AND real mid-log damage are both
  *  possible — do not misattribute) instead of the raw harness error; everything
  *  else keeps the previous `resume:` prefix and passes the message through. */
 export function describeResumeFailure(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error)
+  if (isOwnedSessionMessage(message)) {
+    return 'resume: this session is open for WRITING in another process (the web UI or another qialike). '
+      + 'Close it there — or open this session read-only — and retry: two writers are never allowed on one session log.'
+  }
   if (isCorruptLogMessage(message)) {
     return 'resume: the session log was rejected as corrupt (out of order / truncated). Two possible causes: '
       + '(1) another process is appending to the same session right now (the web UI or another qialike) and this read '
