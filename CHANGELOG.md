@@ -5,6 +5,31 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.7.2] - 2026-09-25
+
+### Fixed
+
+- **Two hosts can no longer append one session log at once.** The build replaced the harness's file
+  lock (`@deepseek-ai/node-addon-system/flock`) with a no-op stub, copying the harness's
+  single-process browser worker — but a qialike host shares `~/.dsh/sessions` with `dsh web` and with
+  a second qialike, so the write lease excluded nobody. Two hosts could hold write handles on one
+  session and interleave appends, leaving duplicate/rewound `seq` numbers and torn zstd frames — a
+  session that then refused to open (`seq gap … released v2 row …`). The stub is now a real
+  non-blocking `flock(2)` (via `bun:ffi`, falling back to the harness's native addon) with the
+  harness's exact contract. Readers were never blocked and still are not.
+- **Deleting a session another process is writing is refused.** `/sessions` probes the lease
+  read-only first and reports "being written by another process (the web UI or another qialike)"
+  instead of removing a directory a live writer keeps appending to.
+- **"Already owned" now reads as an instruction.** Resume and the status bar say the session is open
+  for writing elsewhere and to close that holder, instead of echoing the raw harness error.
+- **`qialike web` refuses a session store a newer harness has migrated.** Each format generation is a
+  new immutable `session.vN` file and the old one is never deleted, so the check names the offending
+  file up front rather than failing every history read.
+- **The first publish of a release no longer deadlocks.** `push-qialike-release.sh` decided "release
+  exists" from a non-empty response body, so a `404 Not Found` body read as "already there" and the
+  upload never started; it now decides by HTTP status and checks the token and repository first.
+  (Committed after `v0.7.1`, so it first ships here.)
+
 ## [0.7.1] - 2026-09-23
 
 ### Added
