@@ -30,6 +30,21 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
   upload never started; it now decides by HTTP status and checks the token and repository first.
   (Committed after `v0.7.1`, so it first ships here.)
 
+### Changed
+
+- **The sidebar footer no longer prints the embedded harness version.** It shows just
+  `qialike: <version>` and the workspace path, in the same two bottom rows as before (the harness
+  version still gates plugin trust and stays in the notices/docs). The reserved footer rows shrank
+  from three to two, so the sidebar also draws in a terminal one row shorter.
+- **A default all-target build is testable again.** `tests/smoke.mjs` hardcoded `dist/qialike`, which
+  `BUILD_TARGETS=ALL` never creates (it writes `dist/<os>-<arch>/qialike`), so the boot smoke failed on
+  every release build; it now resolves `$QIALIKE_BIN`, then `dist/qialike`, then the host target.
+- **Release testing is split in two, and both halves are scripted.** What must run before a release now
+  lives in the repository (`scripts/release/test-required.sh`: preconditions, `tsc`, `bun test`, version
+  identity, boot smoke); the real-machine/PTY suite stays outside it (`~/deepseek/test/full-suite.sh`,
+  optional, ~11 min, zero tokens). The interactive release menu moved to the workbench root
+  (`~/deepseek/release-menu.sh`) and follows the release order in the notes.
+
 ## [0.7.1] - 2026-09-23
 
 ### Added
