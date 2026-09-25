@@ -22,6 +22,9 @@ import { sidebarFits, sidebarStepPlan, SIDEBAR_STATUS_BAR_ROWS } from '../packag
 
 const SESSION_ID = 'session-01234567-89ab-4cde-8f01-23456789abcd'
 const TITLE = 'qialike修复Bug'
+/** A footer LARGER than the product sends (the TUI now passes one version line —
+ *  the harness line was removed — and the planner adds the workspace path): the
+ *  budget must still hold for any number of version lines. */
 const FOOTER = ['deepseek-harness: 0.1.5-rc.2', 'qialike: 0.4.9-beta']
 const STEPS = [
   '✓ Fix README.md launch semantics',
@@ -41,9 +44,11 @@ const plan = (rows: number, width: number, steps = STEPS) => sidebarStepPlan({
 
 describe('sidebarFits', () => {
   test('needs room for the status bar, borders, padding, gaps, heading and footer', () => {
-    // 3 status + 2 border + 1 paddingTop + 4 gaps + 1 heading + 3 footer = 14
-    expect(sidebarFits(13)).toBe(false)
-    expect(sidebarFits(14)).toBe(true)
+    // 3 status + 2 border + 1 paddingTop + 4 gaps + 1 heading + 2 footer = 13
+    // (the footer is the qialike version line + the workspace path; the harness
+    // line was removed from the TUI, which moved this floor up by one row)
+    expect(sidebarFits(12)).toBe(false)
+    expect(sidebarFits(13)).toBe(true)
     expect(sidebarFits(37)).toBe(true)
   })
 })
@@ -84,8 +89,8 @@ describe('sidebarStepPlan', () => {
     expect(tight.visible).toBe(0)
     expect(tight.showMore).toBe(false)
     expect(tight.rows).toBeLessThanOrEqual(tight.capacity)
-    expect(sidebarFits(14)).toBe(true)
-    expect(sidebarFits(13)).toBe(false)
+    expect(sidebarFits(13)).toBe(true)
+    expect(sidebarFits(12)).toBe(false)
   })
 
   test('a session with NO steps still budgets its `no plan yet` row', () => {
@@ -129,7 +134,9 @@ describe('sidebarStepPlan', () => {
           expect(p.visible, where).toBeGreaterThanOrEqual(0)
           // The status bar / border / padding / gap / heading / footer floor.
           expect(p.capacity, where).toBe(rows - SIDEBAR_STATUS_BAR_ROWS - 3)
-          if (!sidebarFits(rows)) {
+          // The guard must reserve the SAME footer this sweep feeds the planner
+          // (the fixture is larger than the product's, see FOOTER above).
+          if (!sidebarFits(rows, FOOTER.length + 1)) {
             // Contract: below the floor the renderer does NOT draw the sidebar
             // (`sidebarShown` = width rule AND sidebarFits), so the planner's
             // step budget is 0 and no overflow can reach the composer.

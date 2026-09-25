@@ -28,6 +28,8 @@ const SRC = join(APP, 'src')
 const read = (path: string): string => readFileSync(path, 'utf8')
 
 const SESSION_ID = 'session-01234567-89ab-4cde-8f01-23456789abcd'
+/** A footer LARGER than the product sends (the TUI now passes one version line;
+ *  see sidebar-overflow.test.ts). */
 const FOOTER = ['deepseek-harness: 0.1.5-rc.2', 'qialike: 0.4.16-beta']
 const STEPS = ['✓ one', '✓ two', '→ three', '· four']
 const SECTION: SidebarSectionBudget = { id: 'goal-bar', order: 10, full: 2, compact: 1 }
@@ -131,7 +133,7 @@ describe('sidebarStepPlan budgets plugin sections AFTER the steps', () => {
           const p = plan(rows, width, list, [])
           const where = `${width}x${rows} sections=${list.map((s) => s.full).join(',')}`
           expect(p.visible + p.hidden, where).toBe(0) // conservation (no steps here)
-          if (!sidebarFits(rows)) {
+          if (!sidebarFits(rows, FOOTER.length + 1)) {
             // Below the floor the renderer does not draw the sidebar at all
             // (same contract as the pre-section plan), so only the section
             // drop-out matters here.

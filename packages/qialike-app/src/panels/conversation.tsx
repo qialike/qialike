@@ -94,7 +94,6 @@ export { composerCaretGlobalRow, composerCaretMoveVisual }
 import { formatSessionStatsParts } from '../session-stats.ts'
 import { sessionDisplayTitle } from '../session-titles.ts'
 import { logError, logErrorFileOnly } from '../log.ts'
-import { HARNESS_VERSION } from '../harness-version.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 import { clampSelectionToDialogBand, dialogTextBand, setDialogTextBox, measureDomTop, measureDomLeft } from '../list-geometry.ts'
@@ -2673,7 +2672,7 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
       sessionTitle: sessionDisplayTitle(store.session.id),
       sessionId: String(store.session.id),
     }),
-    footerLines: [`deepseek-harness: ${HARNESS_VERSION}`, `qialike: ${APP_VERSION}${VERSION_FOOTER_SUFFIX}`],
+    footerLines: [`qialike: ${APP_VERSION}${VERSION_FOOTER_SUFFIX}`],
     sections: sidebarSections.map(({ section, full, compact }) => ({ id: section.id, order: section.order, full, compact })),
   })
   const viewportLines = convViewportLines(composerH, 0, modalH)
@@ -3344,17 +3343,16 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
           </Box>
           )}
           <Box flexGrow={1} />
-          {/* Sidebar footer: the two version lines (harness above qialike) and
-              the workspace path form ONE flush 3-row column (gap 0) hugging
-              the sidebar's bottom edge (no bottom padding under it) — the two
-              version lines sit one row lower than the older layout, directly
-              on the path (the blank row that used to separate group from path
-              now sits above the group, absorbed by the flexible spacer).
-              Labels use the regular font; the version numbers use the same
-              message-box Think color as the composer's reasoning-effort chip
-              ("High"), WITHOUT bold — matching its muted weight exactly. */}
+          {/* Sidebar footer: the qialike version line and the workspace path
+              form ONE flush 2-row column (gap 0) hugging the sidebar's bottom
+              edge (no bottom padding under it). The embedded harness version
+              used to head this column; it was removed from the TUI (the value
+              still gates plugin trust and lives in the notices/docs). Keep the
+              row count in step with `SIDEBAR_FOOTER_ROWS`. Labels use the
+              regular font; the version number uses the same message-box Think
+              color as the composer's reasoning-effort chip ("High"), WITHOUT
+              bold — matching its muted weight exactly. */}
           <Box flexDirection="column">
-            <Text color={theme.text} wrap="truncate">deepseek-harness: <Text color={mutedReadable()}>{HARNESS_VERSION}</Text></Text>
             <Text color={theme.text} wrap="truncate">qialike: <Text color={mutedReadable()}>{APP_VERSION}{VERSION_FOOTER_SUFFIX}</Text></Text>
             <Text color={theme.text} wrap="truncate">{store.workspace}</Text>
           </Box>

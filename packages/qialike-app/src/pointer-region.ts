@@ -205,6 +205,14 @@ export function sidebarContentBand(width: number, messageRight: number): { left:
  *  planner's own vocabulary — it used to be a second literal `3`. */
 export const SIDEBAR_STATUS_BAR_ROWS = STATUS_BAR_HEIGHT
 
+/** Rows the sidebar footer itself needs: its version line(s) plus the workspace
+ *  path, each kept to one row by `wrap="truncate"`.
+ *
+ *  The product passes ONE version line (qialike) — the embedded harness version
+ *  was removed from the TUI — so the footer is 2 rows. The planner still derives
+ *  its own count from `footerLines` so a caller may pass more lines. */
+export const SIDEBAR_FOOTER_ROWS = 2
+
 /** Rows of one sidebar Text at `contentWidth` columns, using the SAME wrapper
  *  Ink's `<Text wrap="wrap">` uses (see composerWrap) so the budget below can
  *  never disagree with what is laid out. */
@@ -245,8 +253,9 @@ function sidebarWrappedRows(text: string, contentWidth: number): number {
  *  @param steps - one rendered step text per step, in order (`${icon} ${content}`).
  *  @param sessionTitle - display title, or undefined when there is none.
  *  @param sessionId - the session id shown wrapped under the title, if any.
- *  @param footerLines - the sidebar footer's version lines (harness, qialike);
- *    the workspace path line below them is always counted as one row.
+ *  @param footerLines - the sidebar footer's version lines (qialike); the
+ *    workspace path line below them is always counted as one row, so the footer
+ *    reserves `footerLines.length + 1` rows.
  *  Priority when space runs out: the heading and footer are reserved first (small,
  *  bounded, and they carry the step COUNT and the versions/workspace), then the
  *  STEPS take the slack, then the session block gets what is left over, and only
@@ -308,7 +317,7 @@ export function sidebarStepPlan(input: {
   const contentWidth = Math.max(1, sidebarWidth - 4) // round border (2) + paddingX (1 each side)
   const inner = Math.max(0, input.rows - SIDEBAR_STATUS_BAR_ROWS - 2 /* border */ - 1 /* paddingTop */)
   const heading = 1 // 'Steps n/m'
-  const footer = 3 // two version lines + the workspace path, all wrap="truncate"
+  const footer = input.footerLines.length + 1 // the version line(s) + the workspace path, all wrap="truncate"
   const wanted = [...(input.sections ?? [])]
     .filter((section) => section.full > 0)
     .sort((a, b) => a.order - b.order || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -471,11 +480,17 @@ export function sidebarStepPlan(input: {
 /** Whether the sidebar's MINIMUM content fits in `rows` terminal rows.
  *
  *  The minimum is: status bar (3) + round border (2) + paddingTop (1) + the four
- *  `gap 1` rows + the `Steps` heading (1) + the three footer rows (each kept to
- *  one row by `wrap="truncate"`, so they can never grow). Below that the sidebar
- *  cannot be drawn without overflowing its box (Ink 4 has no `overflow`), so the
- *  renderer hides it entirely instead of painting over the composer. */
-export function sidebarFits(rows: number): boolean {
+ *  `gap 1` rows + the `Steps` heading (1) + the footer rows ({@link SIDEBAR_FOOTER_ROWS};
+ *  each kept to one row by `wrap="truncate"`, so they can never grow). Below that
+ *  the sidebar cannot be drawn without overflowing its box (Ink 4 has no
+ *  `overflow`), so the renderer hides it entirely instead of painting over the
+ *  composer.
+ *
+ *  @param rows - terminal rows.
+ *  @param footerRows - footer rows to reserve (defaults to the product's 2:
+ *    the qialike version line and the workspace path).
+ *  @returns whether the minimum content fits. */
+export function sidebarFits(rows: number, footerRows: number = SIDEBAR_FOOTER_ROWS): boolean {
   const inner = rows - SIDEBAR_STATUS_BAR_ROWS - 2 /* border */ - 1 /* paddingTop */
-  return inner >= 4 /* gaps */ + 1 /* heading */ + 3 /* footer */
+  return inner >= 4 /* gaps */ + 1 /* heading */ + footerRows /* footer */
 }
