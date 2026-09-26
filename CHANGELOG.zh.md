@@ -7,6 +7,14 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.8.1] - 2026-09-26
+
+### 新增
+
+- **一条不需要 `bash` 的 Windows 安装路径：**`npm i -g qialike`。Windows Terminal 跑不了
+  `curl … | bash` 安装器，于是由 npm —— 该平台唯一自带的包管理器 —— 带着两个 Windows 二进制
+  （外加一个小启动器）。Linux 与 macOS 继续用 shell 安装器。**npm 上尚未发布任何包。**
+
 ## [0.8.0] - 2026-09-26
 
 ### 变更

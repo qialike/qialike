@@ -5,6 +5,15 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.8.1] - 2026-09-26
+
+### Added
+
+- **A Windows install path that needs no `bash`:** `npm i -g qialike`. Windows Terminal cannot run
+  the `curl … | bash` installer, so npm — the one package manager that platform ships with — now
+  carries the two Windows binaries behind a small launcher. Linux and macOS keep the shell
+  installer. Nothing is published to npm yet.
+
 ## [0.8.0] - 2026-09-26
 
 ### Changed
