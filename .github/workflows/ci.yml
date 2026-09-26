@@ -11,7 +11,7 @@
 # deepseek-harness: "DeepSeek Harness core source is zero-modified" is the
 # project's first rule. So the build reads each harness package's built `lib/`
 # out of a checkout, gates on the version range in `apps/tui-bin/build.mjs`
-# (currently `0.1.0-rc.7 .. 0.1.7-alpha.2`), and asserts its anchored patches
+# (currently `0.1.0-rc.7 .. 0.1.7-rc.2`), and asserts its anchored patches
 # against that checkout's compiled output. A harness that moved an anchor fails
 # the build loudly — which is the point, and is exactly what this leg buys.
 #
@@ -41,7 +41,7 @@ permissions:
 env:
   # The harness release this build is validated against; keep in sync with
   # HARNESS_VERSION_MAX in apps/tui-bin/build.mjs.
-  HARNESS_REF: dsh-v0.1.7-alpha.2
+  HARNESS_REF: dsh-v0.1.7-rc.2
 
 jobs:
   # Fast, hermetic guards: they read the repository, never the harness, so they

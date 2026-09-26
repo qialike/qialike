@@ -21,7 +21,7 @@ body:
     attributes:
       label: qialike version
       description: The exact output of `qialike --version`. Also paste the harness version the sidebar shows, if you can see it.
-      placeholder: qialike 0.7.0 (deepseek-harness 0.1.7-alpha.2)
+      placeholder: qialike 0.8.0 (deepseek-harness 0.1.7-rc.2)
     validations:
       required: true
 

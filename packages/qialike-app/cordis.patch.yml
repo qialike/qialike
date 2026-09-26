@@ -256,9 +256,21 @@
 # disabled so no route is owned twice:
 #   - llm-pi-ai:   the pi-ai catalog twin (third-party dependency, dropped)
 #   - llm-deepseek: the deepseek adapter (deepseek-official is now provided by
-#                   tui-llm, whose routes and models it advertises the same)
+#                   tui-llm, whose routes and models it advertises the same).
+#                   The ROW ID survived harness 0.1.7-rc.2; only the package
+#                   behind it was split into `dsh-llm-deepseek-api-key`, so this
+#                   id-keyed `disabled` keeps matching across the split.
+#   - llm-deepseek-account: the account-token half of that same split, which
+#                   0.1.7-rc.2 introduced as a NEW base row. It would register
+#                   provider `deepseek-account`, and the TUI has no sign-in
+#                   surface for it — selecting it could only ever fail with
+#                   ACCOUNT_SIGN_IN_REQUIRED. Disabled to keep /models showing
+#                   exactly the providers this build shipped before the upgrade.
 - id: llm-pi-ai
   disabled: true
 
 - id: llm-deepseek
+  disabled: true
+
+- id: llm-deepseek-account
   disabled: true

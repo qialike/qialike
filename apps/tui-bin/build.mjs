@@ -52,7 +52,7 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-versio
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.1.7-alpha.2'
+const HARNESS_VERSION_MAX = '0.1.7-rc.2'
 
 /**
  * The npm scope this repo's own packages live under, and the placeholder scope

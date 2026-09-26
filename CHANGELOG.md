@@ -5,6 +5,16 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.8.0] - 2026-09-26
+
+### Changed
+
+- **Rebuilt on DeepSeek Harness `0.1.7-rc.2`** (up from `0.1.7-alpha.2`). No patch anchor had to be
+  moved; the plugin-specifier manifest grew 123 → 124.
+- **`llm-deepseek-account` is disabled in the TUI composition.** Upstream split the DeepSeek provider
+  plugin in two, and the new account-token route has no sign-in surface in the terminal client —
+  disabling it keeps the model picker exactly as it was.
+
 ## [0.7.2] - 2026-09-25
 
 ### Fixed
