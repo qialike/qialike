@@ -1,6 +1,7 @@
 {
   "name": "qialike-win32-x64",
   "version": "0.0.0-template",
+  "private": true,
   "description": "qialike binary for Windows x64 — installed automatically by the `qialike` package; do not install this directly.",
   "license": "MIT",
   "repository": {

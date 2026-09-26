@@ -1,6 +1,7 @@
 {
   "name": "qialike",
   "version": "0.0.0-template",
+  "private": true,
   "description": "Terminal client for DeepSeek Harness. This channel ships the Windows binaries; Linux and macOS install with the shell installer.",
   "license": "MIT",
   "repository": {

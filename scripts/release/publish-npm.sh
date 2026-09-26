@@ -147,15 +147,27 @@ else
   warn '跳过 tag 检查（--allow-untagged）'
 fi
 
-# 三份模板必须存在且仍是占位版本 —— 若有人手改成了真实版本，说明流程被绕过。
+# 三份模板必须存在，且必须**同时**满足两个相反方向的约束：
+#   · version 是占位符 —— 若有人手改成了真实版本，说明版本注入被绕过，拒绝；
+#   · private = true  —— 这是**误发护栏**：模板目录里的 `qialike.exe` 并不存在
+#     （二进制由本脚本拷进暂存副本），而且没有 `version` 真值，所以直接
+#       cd packages/npm/<pkg> && npm publish
+#     绝不能发出去。npm 在**上传层**（libnpmpublish）无条件抛 EPRIVATE，所以上面
+#     这条命令会以明确错误结束、一个字节都不会上传；本脚本在暂存时把这个字段
+#     删掉（见第 4 步）才放行。
+#   注意：**不能用 `npm publish --dry-run` 验证这条护栏** —— dry-run 不调用上传层，
+#   对 private 包照样返回 0。所以这里显式断言，第 4 步剥完再断言一次。
 for p in "$MAIN" 'qialike-win32-x64' 'qialike-win32-arm64'; do
   t="$NPM_DIR/$p/package.json"
   [[ -f "$t" ]] || die "缺少模板 $t"
   tv="$(node -p "require('$t').version")"
   [[ "$tv" == '0.0.0-template' ]] \
     || die "$t 的版本是 $tv，不是占位符 0.0.0-template —— 模板不应带真实版本，版本由本脚本注入"
+  tp="$(node -p "String(require('$t').private)")"
+  [[ "$tp" == 'true' ]] \
+    || die "$t 的 private 不是 true —— 误发护栏缺失：直接在该目录 npm publish 会发出 0.0.0-template 垃圾版本。请恢复 \"private\": true"
 done
-ok "三份模板就位（版本占位符 0.0.0-template）"
+ok "三份模板就位（版本占位符 0.0.0-template；private=true 误发护栏在位）"
 
 # ---- 3. 前置：二进制齐备且看着对 --------------------------------------------
 bold '二进制产物'
@@ -187,6 +199,10 @@ const fs = require('node:fs')
 const [file, version] = process.argv.slice(2)
 const manifest = JSON.parse(fs.readFileSync(file, 'utf8'))
 manifest.version = version
+// 剥掉模板的误发护栏。模板带 `private: true` 是为了让「在模板目录里直接
+// npm publish」以 EPRIVATE 失败；这份暂存副本正是**要**发布的东西，必须去掉，
+// 否则 npm 连它一起拒（第 6 步会断言这一行确实生效）。
+delete manifest.private
 // 主包的 optionalDependencies 必须**精确**指向本次要发的平台版本：范围
 // （^ / ~）会让 npm 去解析「最接近的已发布版本」，可能拿到上一次的包。
 if (manifest.optionalDependencies) {
@@ -196,7 +212,6 @@ if (manifest.optionalDependencies) {
 }
 fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`)
 NODE
-  rm -f "$dst/.gitignore"
 }
 for spec in "${TARGETS[@]}"; do
   pkg="${spec%%|*}"
@@ -206,7 +221,18 @@ for spec in "${TARGETS[@]}"; do
 done
 stage "$MAIN"
 ok "暂存 $MAIN"
-say "校验注入结果：$(node -p "require('$STAGING/$MAIN/package.json').version") / optional=$(node -p "JSON.stringify(require('$STAGING/$MAIN/package.json').optionalDependencies)")"
+
+# 剥护栏这一步必须**显式验证**：`npm publish --dry-run` 对 private 包返回 0
+# （它不调用上传层），所以预检抓不到"忘了删 private"。这里直接读暂存副本断言，
+# 一个字段都不许残留。
+for p in 'qialike-win32-x64' 'qialike-win32-arm64' "$MAIN"; do
+  sv="$(node -p "require('$STAGING/$p/package.json').version")"
+  sp="$(node -p "String(require('$STAGING/$p/package.json').private)")"
+  [[ "$sv" == "$VERSION" ]] || die "暂存副本 $p 的版本是 $sv，应为 $VERSION"
+  [[ "$sp" == 'undefined' ]] || die "暂存副本 $p 仍带 private=$sp —— 护栏没剥掉，npm 会以 EPRIVATE 拒绝发布"
+done
+ok "暂存副本已剥掉 private、版本已注入 $VERSION"
+say "主包 optionalDependencies = $(node -p "JSON.stringify(require('$STAGING/$MAIN/package.json').optionalDependencies)")"
 
 # ---- 5. 打包预检：内容与体积 -------------------------------------------------
 bold '打包预检（npm pack --dry-run）'
