@@ -42,7 +42,10 @@
 #   ./publish-npm.sh --keep-staging      # 保留暂存目录以便人工检查
 #   ./publish-npm.sh -h
 #
-# 环境变量：NODE_AUTH_TOKEN / NPM_TOKEN —— 传给 npm 的发布凭据（CI 用）。
+# 环境变量：NODE_AUTH_TOKEN / NPM_TOKEN —— 发布凭据（CI 用）。**npm 本身不读它们**；
+#   本脚本把它们接成 `npm_config_//<registry>/:_authToken` 传给 npm 子进程（不写盘、
+#   不进 argv）。手跑 npm publish 时请自行在 ~/.npmrc 写
+#   `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`。NPM_REGISTRY 可换注册表。
 #   **不要**把 token 写进仓库；本脚本只读环境。
 #
 # 退出码：0 = 全部发布成功（或 --dry-run 通过）；1 = 任一环节失败（并指明
@@ -250,15 +253,44 @@ fi
 
 # ---- 6. 凭据与确认 -----------------------------------------------------------
 bold '凭据'
-if [[ -n "${NODE_AUTH_TOKEN:-}" || -n "${NPM_TOKEN:-}" ]]; then
-  ok '检出 NODE_AUTH_TOKEN / NPM_TOKEN（值不回显）'
-else
-  if whoami_out="$(npm whoami 2>&1)"; then
-    ok "npm 已登录：$whoami_out"
+# npm **不读** NODE_AUTH_TOKEN / NPM_TOKEN（实测：npm 10.9.8 的源码、docs、man 里都没有
+# 这个名字；只设该环境变量时 `npm whoami` 报 ENEEDAUTH）。npm 的凭据只来自配置里的
+# **nerf-dart 键** —— `//<registry>/:_authToken` —— 而该键可以来自 .npmrc（支持 ${ENV}
+# 展开）、CLI 参数，或 `npm_config_<键>` 环境变量。
+#
+# 所以「环境里有 token」远不等于「能发布」，唯一可信的判据是 `npm whoami` 真的成功。
+# 本脚本把 token 接成 `npm_config_<nerf-dart 键>` 只传给 npm **子进程的环境**（不写盘、
+# 不进 argv，所以不出现在 `ps` 的 command line 里），这样文档里的 CI 用法才真的成立。
+REGISTRY="${NPM_REGISTRY:-https://registry.npmjs.org/}"
+NERF="//${REGISTRY#*://}"
+TOKEN="${NODE_AUTH_TOKEN:-${NPM_TOKEN:-}}"
+
+# 所有 npm 调用都走它：有 token 就注入子进程环境，没有就直连（靠 ~/.npmrc 里的登录态）。
+npm_auth() {
+  if [[ -n "$TOKEN" ]]; then
+    env "npm_config_${NERF}:_authToken=$TOKEN" npm "$@"
   else
-    die "npm 未登录且环境里没有 token —— 先 npm login，或导出 NODE_AUTH_TOKEN（CI）。
-   ($whoami_out)"
+    npm "$@"
   fi
+}
+
+if [[ -n "$TOKEN" ]]; then
+  say "检出 token 环境变量（值不回显）；以 npm_config_${NERF}:_authToken 注入本次调用的子进程环境"
+fi
+if whoami_out="$(npm_auth whoami 2>&1)"; then
+  ok "npm 凭据可用：$whoami_out"
+elif [[ -n "$TOKEN" ]]; then
+  die "token 被注册表拒绝（$(printf '%s' "$whoami_out" | head -1)）
+   —— 检查它是否已过期、是否有 **Read and write** 权限、以及**是否允许绕过 2FA**
+      （Granular Access Token 勾了 \"bypass 2FA\" 才能在无人值守时发布；否则要加 --otp）"
+else
+  die "npm 未登录，且环境里没有 token。
+   · 交互：npm login（写入 ~/.npmrc）
+   · CI：export NODE_AUTH_TOKEN=<Granular Access Token>，然后重跑本脚本
+     （注意：npm 自身不读这个环境变量 —— 是本脚本把它接成 npm_config_ 键。
+       若你要**手跑** npm publish，得自己在 ~/.npmrc 写一行：
+         ${NERF}:_authToken=\${NODE_AUTH_TOKEN}）
+   ($whoami_out)"
 fi
 
 if [[ "$ASSUME_YES" == 0 ]]; then
@@ -281,7 +313,7 @@ DONE=()
 publish_one() { # $1 = 包名
   local pkg="$1"
   say "发布 $pkg@$VERSION …"
-  if ( cd "$STAGING/$pkg" && npm publish "${PUBLISH_ARGS[@]}" ); then
+  if ( cd "$STAGING/$pkg" && npm_auth publish "${PUBLISH_ARGS[@]}" ); then
     DONE+=("$pkg")
     ok "$pkg 已发布"
   else
