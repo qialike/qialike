@@ -150,6 +150,15 @@ list):
   versions or moving to caret ranges over released versions once the harness leaves prerelease.
 - The harness itself **is already on npm** (`@deepseek-ai/dsh`) — not an obstacle.
 
+> **Do not confuse this with the binary npm channel.** The list above is about publishing the
+> **TUI bundle as a dsh plugin** (`@qialike/qialike-app`, consumed with `dsh plugin add`). A
+> separate, unrelated channel ships the **Windows binary** to npm so Windows users — who have no
+> `bash` and therefore cannot run the `curl | bash` installer — can `npm i -g qialike`. Its
+> packages are `qialike` (a few kB of launcher) plus `qialike-win32-x64` / `qialike-win32-arm64`
+> (one `qialike.exe` each); the templates live in `packages/npm/` and the publish script is
+> `scripts/release/publish-npm.sh`. Both channels follow the same `package.json` version, and
+> neither depends on the other to publish.
+
 ## Writing your own plugin
 
 The overlays can only mount plugins **bundled** into this binary. To run your own plugin, install it

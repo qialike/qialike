@@ -127,6 +127,13 @@ dsh --profile tui --workspace ~/proj
   报为未满足。要修，要么把声明的范围放宽到实际的预发布版本，要么等 harness 脱离预发布后改用正式的 caret 范围。
 - harness 本身**已在 npm 上架**（`@deepseek-ai/dsh`）——这一项不是障碍。
 
+> **别把这条渠道与「二进制 npm 渠道」搞混。** 上面说的是把 **TUI bundle 当 dsh 插件**发布
+> （`@qialike/qialike-app`，消费方用 `dsh plugin add` 装）。另有一条**互不相干**的渠道：把
+> **Windows 二进制产物**发到 npm，让 Windows 用户（没有 bash，用不了 `curl | bash`）能
+> `npm i -g qialike`。那条渠道的包是 `qialike`（几 KB 的启动器）+ `qialike-win32-x64` /
+> `qialike-win32-arm64`（各含一个 `qialike.exe`），模板在 `packages/npm/`，发布脚本是
+> `scripts/release/publish-npm.sh`。**两者版本都跟 `package.json` 走，但发布互不依赖。**
+
 ## 编写自己的插件
 
 overlay 只能挂**打进本二进制**的插件。要跑自己的插件，把它当作普通包装进 profile 再显式信任：
