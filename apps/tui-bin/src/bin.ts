@@ -53,6 +53,14 @@ const NAME = 'qialike'
  *  install directory holding the program itself. */
 const KEPT_HOME_DIR = 'bin'
 
+/** The command that deletes {@link KEPT_HOME_DIR} by hand, spelled for the
+ *  platform the user is on. Quoted, so a home with spaces survives a paste. */
+function manualRemoveCommand(path: string): string {
+  return process.platform === 'win32'
+    ? `Remove-Item -Recurse -Force "${path}"`
+    : `rm -rf "${path}"`
+}
+
 /** The module of a plugin bundled into the binary, or `undefined`. Also answers
  *  the placeholder-scope spelling of the app package, so a profile overlay
  *  written before the project had a real scope still resolves. */
@@ -1203,11 +1211,12 @@ const UNINSTALL_HELP = `${NAME} uninstall — remove qialike's state
 
 Clears the user state under the harness home ($DSH_HOME, default ~/.dsh):
 settings, sessions, attachments, exports, caches, custom themes.
-The install directory ~/.dsh/bin is KEPT — it holds the program itself, and on
-Windows the running executable cannot be deleted — so delete that directory by
-hand to remove qialike completely. Removes the PATH line the installer appended
-to ~/.bashrc / ~/.zshrc and the ~/.local/bin dev symlink. The qialike checkout
-is never touched, and every cleared item is regenerated on the next run.
+The install directory is KEPT: ~/.dsh/bin (Windows: %USERPROFILE%\\.dsh\\bin). It
+holds the program itself, and on Windows the running executable cannot be deleted,
+so delete that directory by hand to remove qialike completely — each run prints
+the exact command for your platform. Removes the PATH line the installer appended
+to ~/.bashrc / ~/.zshrc and the ~/.local/bin dev symlink. The qialike checkout is
+never touched, and every cleared item is regenerated on the next run.
 
 usage: qialike uninstall [--help]
 `
@@ -1233,6 +1242,7 @@ function uninstallSelf(): number {
   let removed = 0
   let failed = false
   let refusedHome = false
+  let keptInstallDir = false
 
   // Clear the user state under the harness home, KEEPING the install directory
   // (`bin/`): that is where the program itself lives, and on Windows the running
@@ -1264,7 +1274,10 @@ function uninstallSelf(): number {
       }
     }
     if (entries.includes(KEPT_HOME_DIR)) {
-      process.stdout.write(`${NAME}: kept ${join(home, KEPT_HOME_DIR)} — that is the program itself; delete it by hand to remove ${NAME} completely\n`)
+      keptInstallDir = true
+      const kept = join(home, KEPT_HOME_DIR)
+      process.stdout.write(`${NAME}: kept ${kept} — that is the program itself; delete it by hand to remove ${NAME} completely:\n`)
+      process.stdout.write(`${NAME}:   ${manualRemoveCommand(kept)}\n`)
     }
   }
 
@@ -1327,8 +1340,11 @@ function uninstallSelf(): number {
     process.stdout.write(`${NAME}: uninstall FAILED — ${removed === 0 ? 'nothing was removed' : 'some items removed'}; see the errors above. Nothing else was changed.\n`)
   } else if (removed === 0) {
     process.stdout.write(`${NAME}: nothing to remove (no user state, PATH entry, or dev symlink found)\n`)
-  } else {
+  } else if (keptInstallDir) {
     process.stdout.write(`${NAME}: uninstalled — user state cleared; the program in ${join(home, KEPT_HOME_DIR)} was kept\n`)
+    process.stdout.write(`${NAME}:   ${manualRemoveCommand(join(home, KEPT_HOME_DIR))}\n`)
+  } else {
+    process.stdout.write(`${NAME}: uninstalled — user state cleared\n`)
   }
   return failed ? 1 : 0
 }

@@ -13,7 +13,8 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 - **`qialike uninstall` 保留安装目录。** 它会清空 harness home（`$DSH_HOME`，默认 `~/.dsh`）下除
   `<home>/bin` 之外的一切 —— 因为程序本体就在那里，而在 Windows 上正在运行的可执行文件删不掉。
-  要彻底移除 qialike，现在需要手动 `rm -rf ~/.dsh/bin`（命令会明确提示这一点）；它追加的 PATH 行仍会移除。
+  要彻底移除 qialike，需要手动删除该目录 —— 每次运行都会打印**可直接粘贴的平台命令**（Unix 上是
+  `rm -rf …`，Windows 上是 `Remove-Item -Recurse -Force …`）；它追加的 PATH 行仍会移除。
 - **移除改名前的 `dsh-tui` 兼容层。** 状态文件、settings 段名、`DSH_TUI_*` 环境变量与旧插件标识符
   都不再被迁移或读取。
 

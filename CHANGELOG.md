@@ -11,8 +11,9 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 - **`qialike uninstall` keeps the install directory.** It clears the rest of the harness home
   (`$DSH_HOME`, default `~/.dsh`) and leaves `<home>/bin` in place, because that is where the program
-  itself lives — and on Windows a running executable cannot be deleted. Removing qialike completely is
-  now a manual `rm -rf ~/.dsh/bin`; the command says so, and the PATH line it added is still removed.
+  itself lives — and on Windows a running executable cannot be deleted. To remove qialike completely,
+  delete that directory by hand: every run prints the exact command for your platform (`rm -rf …` on
+  Unix, `Remove-Item -Recurse -Force …` on Windows). The PATH line it added is still removed.
 - **The pre-rename `dsh-tui` compatibility layer was removed.** State files, settings namespaces,
   `DSH_TUI_*` environment variables and old plugin specifiers are no longer migrated or read.
 
