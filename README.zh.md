@@ -197,7 +197,8 @@ qialike --help
 qialike uninstall        # 从二进制内部卸载：清空 qialike home（与 dsh 共用；$DSH_HOME，
                          #   默认 ~/.dsh——config、日志、主题、settings.yaml、sessions、
                          #   profiles、storages、attachments、exports、凭据 .credentials.yaml），
-                         #   但保留安装目录 ~/.dsh/bin（程序本体；要彻底移除 qialike 需手动删除该目录），
+                         #   但保留安装目录 ~/.dsh/bin（程序本体；要彻底移除 qialike 需手动删除该目录，
+                         #   运行时会打印可直接粘贴的平台命令），
                          #   并移除安装器追加到 ~/.bashrc/~/.zshrc 的 PATH 导出行，以及
                          #   ~/.local/bin/qialike 开发软链；凭据不会自动恢复，需重新填写 API key。
 qialike web [flags]      # 打开 DeepSeek Harness 浏览器 UI（转发已安装的 `dsh web` CLI，Web
@@ -208,7 +209,8 @@ qialike web [flags]      # 打开 DeepSeek Harness 浏览器 UI（转发已安�
 ```
 
 安装目录固定为 `~/.dsh/bin`，**刻意不跟随 `$DSH_HOME`**：`qialike uninstall` 会清空 harness home，但保留
-其中的 `bin/` 目录（程序本体）。六个发布目标——`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`windows-x64`、
+其中的 `bin/` 目录（程序本体），并打印删除它的确切命令（Unix 是 `rm -rf "…"`，
+Windows 是 `Remove-Item -Recurse -Force "…"`）。六个发布目标——`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`、`windows-x64`、
 `windows-arm64`——解包工具由归档名决定（linux 用 `tar.gz`，其余用 `zip`）。Windows 安装为 `qialike.exe`；
 其余平台会在写入任何东西之前按名字明确报错。
 
@@ -224,7 +226,7 @@ Windows Terminal 里没有 bash，上面那条 `curl | bash` 用不了，只能�
    `-arm64`；镜像站点见 `gitcode.com/qialike/qialike/releases`）。
 
 2. 解压得到单个 `qialike.exe`，放进 `%USERPROFILE%\.dsh\bin\`——这就是安装目录，`qialike uninstall`
-   会保留它（要彻底移除 qialike 需手动删除该目录）。
+   会保留它（并打印删除它的确切命令，彻底移除只需粘贴一次）。
 
 3. 把该目录加入**用户** PATH（系统设置 → 环境变量，或用下面这条 PowerShell），然后**重开终端**。
 
@@ -236,7 +238,7 @@ Windows Terminal 里没有 bash，上面那条 `curl | bash` 用不了，只能�
 4. 启动后用 `/models` 添加提供商。
 
 校验：`qialike --version`。上面四步是目前唯一途径——联网安装器只在 bash 下运行；`qialike uninstall`
-会保留安装目录，要移除 `qialike.exe` 需手动删除。
+会保留安装目录（并打印删除它的确切命令），要移除 `qialike.exe` 需手动删除。
 
 ## 更新
 
@@ -437,7 +439,7 @@ API key 经 credentials 服务写入 `~/.dsh/.credentials.yaml`（按各提供�
 
 | 路径 | 内容 |
 | --- | --- |
-| `~/.dsh/bin/qialike` | 程序本体。安装目录固定在此，**刻意不跟随 `$DSH_HOME`**，且 `qialike uninstall` **会保留它** |
+| `~/.dsh/bin/qialike` | 程序本体。安装目录固定在此，**刻意不跟随 `$DSH_HOME`**，且 `qialike uninstall` **会保留它**并打印删除它的命令 |
 | 工作区（默认 `cwd`） | agent 读写的地方；`/export` 的输出也写到这里 |
 | `~/.dsh/qialike.json` | 本界面的设置：`resume_last`、`sidebar_mode`、`hidden_providers` |
 | `~/.dsh/settings.yaml` | harness 设置 |
@@ -448,7 +450,7 @@ API key 经 credentials 服务写入 `~/.dsh/.credentials.yaml`（按各提供�
 | `~/.dsh/skills/` | 技能包（也可放项目的 `.dsh/skills/`） |
 | `~/.dsh/qialike.log` | 出错与崩溃日志；超过阈值轮转为 `.log.1` |
 
-`qialike uninstall` 会清空 `~/.dsh`（**含上面的凭据**）但保留安装目录 `bin/`，见「安装为命令」。
+`qialike uninstall` 会清空 `~/.dsh`（**含上面的凭据**）但保留安装目录 `bin/` 并打印删除它的命令，见「安装为命令」。
 
 ## 故障排查
 
