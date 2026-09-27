@@ -34,10 +34,6 @@
  */
 
 import pkg from '../../../package.json' with { type: 'json' }
-// FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto
-// `QIALIKE_*` at module load, before this file's own module-scope env reads
-// (SPLASH_DELAY_MS) and before any other module's.
-import { migrateLegacyHomeFiles } from '@qialike/qialike-app/src/legacy-names.ts'
 import { tuiCommand } from '@qialike/qialike-app/src/startup.ts'
 import { isWindowsAclRunnerArgv } from '@qialike/qialike-app/src/windows-acl-mode.ts'
 import { isLandlockLauncherArgv, isLauncherMode } from './launcher-modes.ts'
@@ -92,9 +88,6 @@ async function main(): Promise<void> {
     return
   }
 
-  // Same first step as bin.ts's full boot: the pre-rename `$DSH_HOME` state
-  // files must move before this process reads or appends to any of them.
-  migrateLegacyHomeFiles()
   const args = argv
 
   // `--version` is launcher-owned, resolved before the app owns the command

@@ -171,8 +171,6 @@ export function formatReport(checks: CheckResult[]): string {
 const ROOT_PACKAGE_NAMES: readonly string[] = [
   '@qialike/qialike-root',
   '@yourname/qialike-root',
-  '@qialike/dsh-tui-root',
-  '@yourname/dsh-tui-root',
 ]
 
 /** Locate a qialike checkout (root package.json + tests/) near the process. */

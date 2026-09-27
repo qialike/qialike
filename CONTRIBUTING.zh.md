@@ -171,4 +171,4 @@ overlay **最后应用**，所以**不带** `insert` 的行还能按 `id` 改内
 ## 提交信息
 
 沿用 Conventional Commits：`type(scope): 说明`；破坏性变更在 type 或 scope 后加 `!`（如
-`refactor!: rename dsh-tui to qialike`）。仓库内最常用的是 `fix`、`feat`、`chore`。
+`refactor!: adopt the @qialike npm scope`）。仓库内最常用的是 `fix`、`feat`、`chore`。

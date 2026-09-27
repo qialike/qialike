@@ -27,10 +27,6 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
 import { constants, homedir, tmpdir } from 'node:os'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-// FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto
-// `QIALIKE_*` at module load, before this file's own module-scope env reads
-// (SPLASH_DELAY_MS) and before any other module's.
-import { migrateLegacyHomeFiles, LEGACY_PRODUCT } from '@qialike/qialike-app/src/legacy-names.ts'
 import { migrateLegacySettings } from '@qialike/qialike-app/src/config.ts'
 import { describeGenerationMismatch, sessionGenerationStatus } from '@qialike/qialike-app/src/session-files.ts'
 import { createRequire } from 'node:module'
@@ -53,8 +49,13 @@ import type { ProjectRowProblem } from './project-overlay.ts'
 
 const NAME = 'qialike'
 
-/** Names bundled as-is, plus the pre-rename aliases of the app package (an
- *  overlay written before the rename names `@qialike/dsh-tui-app*`). */
+/** The one entry under the harness home that `uninstall` keeps: `bin`, the
+ *  install directory holding the program itself. */
+const KEPT_HOME_DIR = 'bin'
+
+/** The module of a plugin bundled into the binary, or `undefined`. Also answers
+ *  the placeholder-scope spelling of the app package, so a profile overlay
+ *  written before the project had a real scope still resolves. */
 function bundledPlugin(name: string): unknown {
   return PLUGIN_BUILTINS[name] ?? LEGACY_PLUGIN_ALIASES[name]
 }
@@ -517,7 +518,7 @@ class SeaInclude extends Include {
     }
     throw new Error(`${NAME}: cannot resolve plugin "${name}": it is not one of the`
       + ` ${Object.keys(PLUGIN_BUILTINS).length} plugins bundled into this build`
-      + ` (plus ${Object.keys(LEGACY_PLUGIN_ALIASES).length} pre-rename aliases),`
+      + ` (plus ${Object.keys(LEGACY_PLUGIN_ALIASES).length} placeholder-scope aliases),`
       + ` and no local plugin of that name is installed under ${localRoot()}`
       + ` (add one there and run \`${NAME} plugin trust ${name}\`)`)
   }
@@ -628,9 +629,8 @@ function sweepLegacyProfiles(): void {
   try {
     const now = Date.now()
     for (const name of readdirSync(tmp)) {
-      // `qialike-*` is ours now; `dsh-tui-*` is swept too so a pre-rename
-      // crash leaves no directory behind.
-      if (!name.startsWith('qialike-') && !name.startsWith(`${LEGACY_PRODUCT}-`)) continue
+      // `qialike-*` is ours; nothing else in the temp dir belongs to this app.
+      if (!name.startsWith('qialike-')) continue
       const path = join(tmp, name)
       try {
         if (now - statSync(path).mtimeMs < 24 * 60 * 60 * 1000) continue
@@ -957,7 +957,7 @@ function runPlugin(argv: readonly string[]): number {
     const aliases = Object.keys(LEGACY_PLUGIN_ALIASES).sort()
     process.stdout.write(`  bundled plugins: ${names.length}`
       + `${positional.includes('--available') ? `\n      ${names.join('\n      ')}` : ' (pass --available to list them)'}\n`)
-    process.stdout.write(`  pre-rename aliases: ${aliases.length}`
+    process.stdout.write(`  placeholder-scope aliases: ${aliases.length}`
       + `${positional.includes('--available') ? `\n      ${aliases.join('\n      ')}` : ''}\n`)
     const ledger = readTrustLedger()
     const referenced = referencedLocalPlugins([layers[1]!.patches, layers[2]!.patches, layers[3]!.patches])
@@ -1199,30 +1199,33 @@ function canClearHome(dir: string): boolean {
  * from an installer), so `--help` has to be answered before the removal: asking
  * what a destructive command does must never be the thing that runs it.
  */
-const UNINSTALL_HELP = `${NAME} uninstall — remove qialike and the state it created
+const UNINSTALL_HELP = `${NAME} uninstall — remove qialike's state
 
-Clears the harness home ($DSH_HOME, default ~/.dsh): settings, sessions,
-attachments, exports, caches, custom themes, and ~/.dsh/bin. Removes the PATH
-line the installer appended to ~/.bashrc / ~/.zshrc. The qialike checkout is
-never touched, and every cleared item is regenerated on the next run.
+Clears the user state under the harness home ($DSH_HOME, default ~/.dsh):
+settings, sessions, attachments, exports, caches, custom themes.
+The install directory ~/.dsh/bin is KEPT — it holds the program itself, and on
+Windows the running executable cannot be deleted — so delete that directory by
+hand to remove qialike completely. Removes the PATH line the installer appended
+to ~/.bashrc / ~/.zshrc and the ~/.local/bin dev symlink. The qialike checkout
+is never touched, and every cleared item is regenerated on the next run.
 
 usage: qialike uninstall [--help]
 `
 
 /**
- * Uninstall qialike completely: clear the entire harness home
+ * Uninstall qialike's state: clear everything under the harness home
  * (`$DSH_HOME`, default `~/.dsh`) — every qialike-owned file (config, logs,
  * title/activity/pinned caches, custom themes) **and** the harness/dsh shared
  * data under the same root (settings.yaml, sessions, profiles, storages,
- * attachments, exports). All of it is optional user state, never required for
- * startup: each is regenerated on the next run (settings load as defaults,
- * a fresh anonymous id is minted, storage/attachments dirs are recreated), so
- * a cold home never fails. `~/.dsh/bin` is a local-dev install artifact and is
- * not present in production, so no special handling is needed for it — the
- * single recursive remove takes it along. The dev-install symlink at
- * `~/.local/bin` and the PATH export line the repo-root `install` script
- * appended to the shell profiles are removed too. The repo checkout is never
- * touched.
+ * attachments, exports) — while KEEPING the install directory `bin/`, which
+ * holds the program itself (and which Windows will not let a running process
+ * delete). The user removes that directory by hand to complete the uninstall.
+ * All removed items are optional user state, never required for startup: each is
+ * regenerated on the next run (settings load as defaults, a fresh anonymous id
+ * is minted, storage/attachments dirs are recreated), so a cold home never
+ * fails. The dev-install symlink at `~/.local/bin` and the PATH export line the
+ * repo-root `install` script appended to the shell profiles are removed too. The
+ * repo checkout is never touched.
  * @returns the process exit code: 0 on success or when nothing was installed,
  * 1 when a removal failed or the home was refused as unsafe.
  */
@@ -1231,9 +1234,11 @@ function uninstallSelf(): number {
   let failed = false
   let refusedHome = false
 
-  // Clear the entire harness home in one recursive remove. `~/.dsh/bin` (the
-  // production binary copy a dev install creates) lives under the same root and
-  // is just removed with it; production has no such dir.
+  // Clear the user state under the harness home, KEEPING the install directory
+  // (`bin/`): that is where the program itself lives, and on Windows the running
+  // executable cannot be removed at all. Uninstall therefore leaves it for the
+  // user to delete by hand. Every other entry is optional state that regenerates
+  // on the next run.
   const home = dshHomePath()
   if (!canClearHome(home)) {
     // Never rm -rf a path we cannot prove is the dsh data home.
@@ -1241,30 +1246,33 @@ function uninstallSelf(): number {
     failed = true
     process.stderr.write(`${NAME}: refusing to clear harness home "${home}" — not a recognized dsh data directory. Remove it manually.\n`)
   } else {
-    let present = false
+    let entries: string[] = []
     try {
-      readdirSync(home)
-      present = true
+      entries = readdirSync(home)
     } catch {
-      present = false // home absent -> nothing installed
+      entries = [] // home absent -> nothing installed
     }
-    if (present) {
+    for (const entry of entries) {
+      if (entry === KEPT_HOME_DIR) continue
+      const path = join(home, entry)
       try {
-        rmSync(home, { recursive: true, force: true })
+        rmSync(path, { recursive: true, force: true })
         removed += 1
-        process.stdout.write(`${NAME}: removed ${home}\n`)
       } catch (error) {
         failed = true
-        process.stderr.write(`${NAME}: failed to remove ${home}: ${error instanceof Error ? error.message : String(error)}\n`)
+        process.stderr.write(`${NAME}: failed to remove ${path}: ${error instanceof Error ? error.message : String(error)}\n`)
       }
+    }
+    if (entries.includes(KEPT_HOME_DIR)) {
+      process.stdout.write(`${NAME}: kept ${join(home, KEPT_HOME_DIR)} — that is the program itself; delete it by hand to remove ${NAME} completely\n`)
     }
   }
 
-  // The dev-install symlink (created by scripts/install) under ~/.local/bin and
-  // ~/.dsh/bin, under the current name and the pre-rename one. Not the
-  // production copy, so it can be unlinked directly.
-  for (const dir of [join(homedir(), '.local', 'bin'), join(homedir(), '.dsh', 'bin')]) {
-    for (const name of [NAME, LEGACY_PRODUCT]) {
+  // The dev-install symlink `scripts/install` leaves under ~/.local/bin. The
+  // install directory itself (~/.dsh/bin) is deliberately NOT touched: it holds
+  // the program, which is what this command preserves.
+  for (const dir of [join(homedir(), '.local', 'bin')]) {
+    for (const name of [NAME]) {
       const localLink = join(dir, name)
       try {
         const stat = lstatSync(localLink)
@@ -1280,9 +1288,8 @@ function uninstallSelf(): number {
   }
 
   // The PATH export line the repo-root `install` script appends to the shell
-  // profiles. Drop it together with its marker comment (`# qialike`, or the
-  // pre-rename `# dsh-tui`) and the blank line before it, so uninstall restores
-  // the profiles it touched.
+  // profiles. Drop it together with its marker comment (`# qialike`) and the
+  // blank line before it, so uninstall restores the profiles it touched.
   const pathLine = 'export PATH="$HOME/.dsh/bin:$PATH"'
   for (const rc of [join(homedir(), '.bashrc'), join(homedir(), '.zshrc')]) {
     let text: string
@@ -1296,7 +1303,7 @@ function uninstallSelf(): number {
     for (const line of text.split('\n')) {
       if (line === pathLine) {
         dropped = true
-        if (kept.at(-1) === '# qialike' || kept.at(-1) === '# dsh-tui') kept.pop()
+        if (kept.at(-1) === '# qialike') kept.pop()
         if (kept.at(-1)?.trim() === '') kept.pop()
         continue
       }
@@ -1319,9 +1326,9 @@ function uninstallSelf(): number {
     // was locked). Never claim success: report the partial result honestly.
     process.stdout.write(`${NAME}: uninstall FAILED — ${removed === 0 ? 'nothing was removed' : 'some items removed'}; see the errors above. Nothing else was changed.\n`)
   } else if (removed === 0) {
-    process.stdout.write(`${NAME}: nothing to remove (harness home and PATH entry not found)\n`)
+    process.stdout.write(`${NAME}: nothing to remove (no user state, PATH entry, or dev symlink found)\n`)
   } else {
-    process.stdout.write(`${NAME}: uninstalled\n`)
+    process.stdout.write(`${NAME}: uninstalled — user state cleared; the program in ${join(home, KEPT_HOME_DIR)} was kept\n`)
   }
   return failed ? 1 : 0
 }
@@ -1379,10 +1386,7 @@ function runWeb(args: string[]): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  // Rename any pre-rename `$DSH_HOME` state file onto its current name before
-  // a single read or append, so nothing writes the old file back.
-  migrateLegacyHomeFiles()
-  // …and move qialike's own switch sections out of the harness's legacy
+  // Move qialike's own switch sections out of the harness's legacy
   // `settings.yaml` (0.1.7 dropped runtime settings namespaces). It runs BEFORE
   // the plugin tree boots, i.e. before the settings service's own importer can
   // rename that file, and it leaves the source alone.

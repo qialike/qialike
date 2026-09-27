@@ -243,13 +243,14 @@ curl -fsSL https://qialike.com/install | bash      # released binary -> ~/.dsh/b
 #               --dry-run         print the plan, change nothing
 qialike                  # runnable from any directory from here on
 qialike --help
-qialike uninstall        # uninstall from inside the binary: clears the whole qialike home
-                         #   (shared with dsh; $DSH_HOME, default ~/.dsh — config, logs,
-                         #   themes, settings.yaml, sessions, profiles, storages,
-                         #   attachments, exports, the .credentials.yaml credentials and
-                         #   the binary under ~/.dsh/bin), removes the PATH export line the
-                         #   installer added to ~/.bashrc/~/.zshrc, and the legacy
-                         #   ~/.local/bin/qialike dev symlink; credentials are not
+qialike uninstall        # uninstall from inside the binary: clears the qialike home (shared
+                         #   with dsh; $DSH_HOME, default ~/.dsh — config, logs, themes,
+                         #   settings.yaml, sessions, profiles, storages, attachments,
+                         #   exports and the .credentials.yaml credentials), but KEEPS the
+                         #   install directory ~/.dsh/bin, which holds the program itself:
+                         #   delete that by hand to remove qialike completely. Removes the
+                         #   PATH export line the installer added to ~/.bashrc/~/.zshrc and
+                         #   the ~/.local/bin/qialike dev symlink; credentials are not
                          #   restored automatically, so re-enter the API keys.
 qialike web [flags]      # open the DeepSeek Harness browser UI (forwards the installed
                          #   `dsh web` CLI; the Web surface stays the harness's own):
@@ -259,10 +260,11 @@ qialike web [flags]      # open the DeepSeek Harness browser UI (forwards the in
 ```
 
 The install directory is fixed at `~/.dsh/bin` and **deliberately does not follow `$DSH_HOME`**:
-`qialike uninstall` scans only `$HOME/.dsh/bin` and `$HOME/.local/bin`. Six published targets —
-`linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`, `windows-x64`, `windows-arm64` — and the
-archive name decides the extractor (`tar.gz` on Linux, `zip` elsewhere). Windows installs as
-`qialike.exe`; every other platform is refused by name before anything is written.
+`qialike uninstall` clears the harness home but keeps its `bin/` directory, which holds the
+program. Six published targets — `linux-x64`, `linux-arm64`, `darwin-x64`, `darwin-arm64`,
+`windows-x64`, `windows-arm64` — and the archive name decides the extractor (`tar.gz` on Linux,
+`zip` elsewhere). Windows installs as `qialike.exe`; every other platform is refused by name
+before anything is written.
 
 The binary embeds DeepSeek Harness at build time, so `qialike` needs no harness checkout, no `pnpm`
 and no `node_modules` at runtime — only `DEEPSEEK_API_KEY` (environment / `~/.dsh` settings /
@@ -277,8 +279,8 @@ Windows Terminal has no bash, so the `curl | bash` line above does not work ther
    [Releases](https://github.com/qialike/qialike/releases) (on ARM devices take `-arm64`; the mirror
    is at `gitcode.com/qialike/qialike/releases`).
 
-2. Unpack the single `qialike.exe` into `%USERPROFILE%\.dsh\bin\` — `qialike uninstall` scans only
-   that directory and `~/.local/bin`, so this is where it will be cleaned up with the rest.
+2. Unpack the single `qialike.exe` into `%USERPROFILE%\.dsh\bin\` — that is the install directory,
+   which `qialike uninstall` keeps (delete it by hand to remove qialike completely).
 
 3. Add that directory to your **user** PATH (Settings → Environment Variables, or the PowerShell
    below), then **reopen the terminal**.
@@ -291,8 +293,8 @@ Windows Terminal has no bash, so the `curl | bash` line above does not work ther
 4. Add a provider with `/models` after launching.
 
 Verify with `qialike --version`. Those four steps are currently the only route — the networked
-installer runs under bash only; and if you put `qialike.exe` somewhere else, `qialike uninstall`
-will not remove it for you.
+installer runs under bash only; and `qialike uninstall` keeps the install directory, so delete
+`qialike.exe` by hand to remove it.
 
 ## Updates
 
@@ -547,7 +549,7 @@ or Anthropic base64 source blocks.
 
 | Path | Contents |
 | --- | --- |
-| `~/.dsh/bin/qialike` | The program itself. The install directory is fixed here and **deliberately does not follow `$DSH_HOME`** |
+| `~/.dsh/bin/qialike` | The program itself. The install directory is fixed here and **deliberately does not follow `$DSH_HOME`**; `qialike uninstall` **keeps it** |
 | Workspace (default `cwd`) | Where the agent reads and writes; `/export` output goes here too |
 | `~/.dsh/qialike.json` | This interface's settings: `resume_last`, `sidebar_mode`, `hidden_providers` |
 | `~/.dsh/settings.yaml` | harness settings |
@@ -558,8 +560,8 @@ or Anthropic base64 source blocks.
 | `~/.dsh/skills/` | Skill bundles (a project's `.dsh/skills/` works too) |
 | `~/.dsh/qialike.log` | Error and crash log; rotates to `.log.1` past a threshold |
 
-`qialike uninstall` clears `~/.dsh` (**including the credentials above**); see "Install as a
-command".
+`qialike uninstall` clears `~/.dsh` (**including the credentials above**) but keeps the `bin/`
+install directory; see "Install as a command".
 
 ## Troubleshooting
 

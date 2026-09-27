@@ -65,8 +65,6 @@ const HARNESS_VERSION_MAX = '0.1.7-rc.2'
  */
 const OWN_SCOPE = '@qialike'
 const LEGACY_OWN_SCOPE = '@yourname'
-/** The pre-rename product name, still answered for overlays written before the rename. */
-const LEGACY_APP_NAME = 'dsh-tui-app'
 /** This repo's own app package under the current scope. */
 const APP_SPEC = `${OWN_SCOPE}/qialike-app`
 
@@ -1484,26 +1482,6 @@ function patchInkYoga(nm) {
  * internals move so the patch is never silently skipped.
  * @param nm - the resolve-farm `node_modules` root.
  */
-/** Index of a patch marker, accepting the pre-rename spelling of its comment.
- *
- *  Every patch below is idempotent by finding the comment marker of a previous
- *  injection and replacing that block. A farm patched by the pre-rename build
- *  carries the old comment (`// dsh-tui patch: …`), so a guard that only knows
- *  the current spelling would miss it and inject a SECOND copy — which makes
- *  Ink's own declarations collide. Accepting both spellings turns that stale
- *  farm back into a clean replace.
- *  @param text - the file being patched.
- *  @param marker - the current marker comment.
- *  @returns the earliest index of either spelling, or -1. */
-function legacyMarkerIndex(text, marker) {
-  const legacy = marker.replace('qialike patch:', 'dsh-tui patch:')
-  const current = text.indexOf(marker)
-  const old = legacy === marker ? -1 : text.indexOf(legacy)
-  if (current === -1) return old
-  if (old === -1) return current
-  return Math.min(current, old)
-}
-
 export function patchInkFullScreen(nm) {
   const dirs = readdirSync(join(nm, '.pnpm')).filter((d) => d.startsWith('ink@'))
   if (dirs.length === 0) {
@@ -1827,7 +1805,7 @@ globalThis.__dshTuiRepaintLastFrame = () => {
     let changed = false
     // (Re)install the helper block: replace any previous version between the
     // marker comment and the following `const isCi` declaration.
-    const s = legacyMarkerIndex(text, helperStart)
+    const s = text.indexOf(helperStart)
     const e = text.indexOf(helperEnd)
     if (s !== -1 && e !== -1 && e > s) {
       const next = text.slice(0, s) + helper + text.slice(e)
@@ -1934,7 +1912,7 @@ export function patchInkFrameController(nm) {
       throw new Error(`qialike: cannot patch Ink output.js (anchor missing) in ${outputJs}`)
     }
     let changed = false
-    const s = legacyMarkerIndex(text, marker)
+    const s = text.indexOf(marker)
     const a = text.indexOf(anchor)
     if (s !== -1 && a !== -1 && a > s) {
       // Already patched: replace the previous injection (marker..anchor) in place.
@@ -2252,22 +2230,17 @@ function generate(specifiers) {
   lines.push('export const PLUGIN_BUILTINS = {')
   for (const spec of used) lines.push(`  ${JSON.stringify(spec)}: ${bySpec.get(spec)},`)
   lines.push('}')
-  // Legacy specifiers: a profile overlay written by an older build may name
-  // this app under the pre-rename product name, under the placeholder scope the
-  // project used before it had a real one, or under both at once. The same
-  // module namespaces answer all three, so an existing user overlay loads
-  // unchanged. They stay OUT of PLUGIN_BUILTINS on purpose: the bundled-plugin
+  // Legacy specifier: a profile overlay written by an older build may name this
+  // app under the placeholder scope the project used before it had a real one.
+  // The same module namespaces answer it, so an existing user overlay loads
+  // unchanged. Aliases stay OUT of PLUGIN_BUILTINS on purpose: the bundled-plugin
   // count and the `--dump-config` listing describe the current names only.
   lines.push('')
   lines.push('export const LEGACY_PLUGIN_ALIASES = {')
   for (const spec of used) {
     if (!spec.startsWith(APP_SPEC)) continue
     const subpath = spec.slice(APP_SPEC.length)
-    for (const prefix of [
-      `${OWN_SCOPE}/${LEGACY_APP_NAME}`,
-      `${LEGACY_OWN_SCOPE}/qialike-app`,
-      `${LEGACY_OWN_SCOPE}/${LEGACY_APP_NAME}`,
-    ]) {
+    for (const prefix of [`${LEGACY_OWN_SCOPE}/qialike-app`]) {
       lines.push(`  ${JSON.stringify(prefix + subpath)}: ${bySpec.get(spec)},`)
     }
   }
@@ -2408,19 +2381,32 @@ async function main() {
   }
   assertHarnessCompatible()
   assertBunVersion()
-  publishBuildMode()
+  // `--generate-only` must not rewrite the sidebar build channel: the committed
+  // value is written by the release build (QIALIKE_BETA=1), and a plain run
+  // would flip it to `prod` (that mistake has been made and reverted before).
+  const generateOnly = process.argv.slice(2).includes('--generate-only')
+  if (!generateOnly) publishBuildMode()
   // Resolved — and so VALIDATED — before dist is touched: a mistyped
   // `QIALIKE_TARGETS` entry, or `--single` beside it, must not clear the tree
   // and then fail. Same reason the bun gate runs first.
   BUILD_TARGETS = buildTargets()
-  // Fresh dist: every previous artifact (cross-target dirs, tarballs) is stale
-  // for this build and would otherwise linger.
-  rmSync(OUT_DIR, { recursive: true, force: true })
-  mkdirSync(OUT_DIR, { recursive: true })
+  // `--generate-only` refreshes apps/tui-bin/generated/* and stops: the release
+  // flow needs a regeneration without a compile, and a full build would clear
+  // `dist/` (which is exactly what the build must NOT do to a released tree).
+  if (!generateOnly) {
+    // Fresh dist: every previous artifact (cross-target dirs, tarballs) is stale
+    // for this build and would otherwise linger.
+    rmSync(OUT_DIR, { recursive: true, force: true })
+    mkdirSync(OUT_DIR, { recursive: true })
+  }
   const specifiers = pluginSpecifiers()
   createResolveFarm()
   await buildBundleLib()
   generate(specifiers)
+  if (generateOnly) {
+    console.log(`qialike: generated refreshed (${specifiers.size} plugin specifiers; no compile, dist untouched)`)
+    return
+  }
   bundle()
   console.log(`qialike: build complete (${specifiers.size} plugin specifiers)`)
 }

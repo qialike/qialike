@@ -22,7 +22,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { homeFilePath } from './legacy-names.ts'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { foldSessionTitle } from '@deepseek-ai/dsh-session-title'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session'
 import { lastActivity } from './session-activity.ts'
@@ -135,7 +135,7 @@ const shared: TitleState = (() => {
 
 /** Absolute path of the qialike title cache file. */
 function cachePath(): string {
-  return homeFilePath('qialike-titles.json')
+  return dshHomePath('qialike-titles.json')
 }
 
 /** Load the disk cache once; a missing/unparsable file yields an empty map. */
@@ -516,7 +516,7 @@ export async function prewarmTitles(
 
 /** Absolute path of the pinned-sessions file. */
 function pinnedPath(): string {
-  return homeFilePath('qialike-pinned.json')
+  return dshHomePath('qialike-pinned.json')
 }
 
 /** Load the pinned set once; a missing/unparsable file yields an empty set. */

@@ -8,7 +8,7 @@
  * runtime namespace registration, and its own importer cannot take them either —
  * `update(ns, …)` rejects a namespace with no configurable plugin entry — so
  * without this migration every user switch would silently fall back to its
- * default (measured: the maintainer's own `dsh-tui-llm:` section is 1435 lines).
+ * default (measured: one such section was 1435 lines).
  *
  * The properties pinned here are the ones that make the move safe:
  *   * every current AND pre-rename spelling is read;
@@ -49,23 +49,23 @@ const readJson = (): Record<string, unknown> => JSON.parse(readFileSync(configFi
 const readConfigOr = (): Record<string, unknown> => (existsSync(configFile()) ? readJson() : {})
 const writeSettings = (text: string, name = 'settings.yaml'): void => { writeFileSync(join(home, name), text) }
 
-/** One section per spelling that has to keep working, plus a harness-owned one. */
+/** One section per plugin namespace, plus a harness-owned one. */
 const FULL_DOCUMENT = `ui-onboarding:
   completed: true
-dsh-tui-llm:
+qialike-llm:
   providers:
     openrouter:
       displayName: OpenRouter
       apiKeyEnv: OPENROUTER_API_KEY
-dsh-tui-theme:
+qialike-theme:
   colorscheme: gruvbox
-dsh-tui-azure:
+qialike-azure:
   enabled: false
 qialike-opencode:
   enabled: false
-dsh-tui-china-gateways:
+qialike-china-gateways:
   enabled: false
-dsh-tui-foreign-gateways:
+qialike-foreign-gateways:
   enabled: false
 qialike-update:
   auto: notify
@@ -94,19 +94,9 @@ describe('legacy settings.yaml -> qialike.json', () => {
       ['azure', 'china_gateways', 'foreign_gateways', 'llm', 'opencode', 'theme', 'update'])
   })
 
-  test('the current spelling wins when a document carries both', () => {
-    writeSettings(`dsh-tui-theme:
-  colorscheme: gruvbox
-qialike-theme:
-  colorscheme: dracula
-`)
-    migrateLegacySettings()
-    expect((readJson().theme as { colorscheme?: string }).colorscheme).toBe('dracula')
-  })
-
   test('a value already in qialike.json is never overwritten', () => {
     writeFileSync(configFile(), JSON.stringify({ theme: { colorscheme: 'nord' }, sidebar_mode: 'off' }))
-    writeSettings('dsh-tui-theme:\n  colorscheme: gruvbox\n')
+    writeSettings('qialike-theme:\n  colorscheme: gruvbox\n')
     migrateLegacySettings()
     const cfg = readJson()
     expect((cfg.theme as { colorscheme?: string }).colorscheme).toBe('nord')
@@ -150,7 +140,7 @@ qialike-theme:
   })
 
   test('a non-mapping section is skipped; the rest still move', () => {
-    writeSettings('dsh-tui-azure: [not, a, mapping]\nqialike-theme:\n  colorscheme: gruvbox\n')
+    writeSettings('qialike-azure: [not, a, mapping]\nqialike-theme:\n  colorscheme: gruvbox\n')
     migrateLegacySettings()
     const cfg = readJson()
     expect(cfg.azure).toBeUndefined()

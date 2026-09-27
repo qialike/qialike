@@ -13,12 +13,11 @@
 
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { homeFilePath } from './legacy-names.ts'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 
-/** Resolved per use, not at import: the legacy-name migration may rename
- *  `dsh-tui.log` to this name after this module is evaluated. */
+/** Absolute path of the log file under `$DSH_HOME`. */
 function logPath(): string {
-  return homeFilePath('qialike.log')
+  return dshHomePath('qialike.log')
 }
 const MAX_BYTES = 1_048_576 // 1 MB; then rotate to `.1` (one previous run)
 

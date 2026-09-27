@@ -12,7 +12,7 @@
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { homeFilePath } from './legacy-names.ts'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import type { SessionId } from '@deepseek-ai/dsh-session'
 
 /**
@@ -46,7 +46,7 @@ const shared: ActivityState = (() => {
 
 /** Absolute path of the activity file. */
 function activityPath(): string {
-  return homeFilePath('qialike-activity.json')
+  return dshHomePath('qialike-activity.json')
 }
 
 /** Load the activity file once; a missing/unparsable file yields an empty map. */

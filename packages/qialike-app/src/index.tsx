@@ -14,10 +14,6 @@
  * @module @qialike/qialike-app
  */
 
-// FIRST import on purpose: `legacy-names.ts` mirrors `DSH_TUI_*` onto
-// `QIALIKE_*` at module load, before this file's own module-scope env reads
-// (SPLASH_DELAY_MS) and before any other module's.
-import { migrateLegacyHomeFiles } from './legacy-names.ts'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { statSync, writeSync } from 'node:fs'

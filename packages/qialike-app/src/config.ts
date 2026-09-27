@@ -13,7 +13,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { parse as parseYaml } from 'yaml'
-import { homeFilePath } from './legacy-names.ts'
+import { dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { logErrorFileOnly } from './log.ts'
 
 /** Terminal width (columns) below which the right sidebar hides (auto). */
@@ -67,20 +67,18 @@ export type SidebarMode = 'auto' | 'on' | 'off'
  *  Harness 0.1.5 let a plugin register an arbitrary settings namespace at runtime
  *  (`settings.register(ns, schema)`), and qialike kept its own switches there.
  *  0.1.7 removed that capability — a section now belongs to a plugin's own
- *  `Config` — so they live in the config file this app already owns. The
- *  `qialike-*` spelling is current, `dsh-tui-*` is the pre-rename one. */
+ *  `Config` — so they live in the config file this app already owns. */
 export type PluginSectionKey =
   | 'llm' | 'opencode' | 'azure' | 'china_gateways' | 'foreign_gateways' | 'theme' | 'update'
 
-/** The settings namespaces each section used to be registered under, CURRENT
- *  spelling first so it wins when a document carries both. */
+/** The settings namespace each section used to be registered under. */
 export const SECTION_NAMESPACES: Record<PluginSectionKey, readonly string[]> = {
-  llm: ['qialike-llm', 'dsh-tui-llm'],
-  opencode: ['qialike-opencode', 'dsh-tui-opencode'],
-  azure: ['qialike-azure', 'dsh-tui-azure'],
-  china_gateways: ['qialike-china-gateways', 'dsh-tui-china-gateways'],
-  foreign_gateways: ['qialike-foreign-gateways', 'dsh-tui-foreign-gateways'],
-  theme: ['qialike-theme', 'dsh-tui-theme'],
+  llm: ['qialike-llm'],
+  opencode: ['qialike-opencode'],
+  azure: ['qialike-azure'],
+  china_gateways: ['qialike-china-gateways'],
+  foreign_gateways: ['qialike-foreign-gateways'],
+  theme: ['qialike-theme'],
   update: ['qialike-update'],
 }
 
@@ -107,7 +105,7 @@ export interface TuiConfig {
 
 /** Absolute path of the qialike config file. */
 export function configPath(): string {
-  return homeFilePath('qialike.json')
+  return dshHomePath('qialike.json')
 }
 
 /** Read the config file; `{}` when absent or unparsable (never throws). */
@@ -252,8 +250,8 @@ function legacySection(document: Record<string, unknown>, key: PluginSectionKey)
  * renamed document — i.e. silently dropped from the app's point of view.
  *
  * ORDERING: it runs before the plugin tree boots (and therefore before the
- * settings service's importer can rename the file), right after
- * `migrateLegacyHomeFiles()`. Whatever happens, the source file is left ALONE —
+ * settings service's importer can rename the file). Whatever happens, the source
+ * file is left ALONE —
  * renaming it is the harness's job and two writers would corrupt it.
  *
  * SAFETY: only ADDS keys, never overwrites one already present in `qialike.json`

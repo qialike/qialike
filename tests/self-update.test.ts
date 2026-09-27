@@ -95,7 +95,7 @@ describe('which install this is', () => {
   })
 
   test('the install dir is not derived from $DSH_HOME', () => {
-    // uninstall scans exactly $HOME/.dsh/bin, so a DSH_HOME override here would
+    // the install dir is fixed at $HOME/.dsh/bin, so a DSH_HOME override here would
     // place the binary out of its reach.
     expect(installDir('/home/someone')).toBe('/home/someone/.dsh/bin')
   })

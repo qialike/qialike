@@ -98,7 +98,8 @@ describe('the artifact keeps the contracts other code depends on', () => {
     .join('\n')
 
   test('installs to ~/.dsh/bin, which is where uninstall looks', () => {
-    // `uninstallSelf()` scans exactly $HOME/.local/bin and $HOME/.dsh/bin, so a
+    // `uninstallSelf()` keeps $HOME/.dsh/bin (the program lives there) and only
+    // sweeps the $HOME/.local/bin dev symlink, so a
     // DSH_HOME override here would put the binary out of its reach.
     expect(code.includes('INSTALL_DIR="$HOME/.dsh/bin"'), 'INSTALL_DIR must be exactly $HOME/.dsh/bin').toBe(true)
     expect(code.includes('DSH_HOME'), 'INSTALL_DIR must not follow $DSH_HOME').toBe(false)
@@ -117,7 +118,7 @@ describe('the artifact keeps the contracts other code depends on', () => {
 
   test('has no local-binary channel and no pre-rename migration left', () => {
     // Both were removed by decision: the installer is a downloader now, and the
-    // dsh-tui cleanup moved out of the install path.
+    // The pre-rename migration was removed; the installer must not carry it.
     expect(code.includes('--binary'), 'the local-binary channel was removed').toBe(false)
     expect(code.includes('dsh-tui'), 'the pre-rename migration was removed').toBe(false)
   })

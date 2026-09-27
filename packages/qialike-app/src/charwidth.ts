@@ -30,7 +30,6 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { logErrorFileOnly } from './log.ts'
-import { legacyAwarePath } from './legacy-names.ts'
 
 /** Code-point ranges worth measuring: everything the font may render either
  *  narrow or wide depending on coverage/emoji fallback. EAW-W/F glyphs and
@@ -91,7 +90,7 @@ let pollTimer: ReturnType<typeof setInterval> | undefined
 
 function cacheFile(): string {
   const dir = process.env.DSH_HOME || join(homedir(), '.dsh')
-  return legacyAwarePath(dir, 'qialike-charwidth.json')
+  return join(dir, 'qialike-charwidth.json')
 }
 
 function ensureMap(): Map<number, number> {

@@ -201,4 +201,4 @@ in through `ctx.get('tui')` (`panels.register` / `commands.register` / `notify`)
 ## Commit messages
 
 Conventional Commits: `type(scope): subject`, with `!` after the type or scope for a breaking change (e.g.
-`refactor!: rename dsh-tui to qialike`). The repository uses `fix`, `feat` and `chore` most often.
+`refactor!: adopt the @qialike npm scope`). The repository uses `fix`, `feat` and `chore` most often.
