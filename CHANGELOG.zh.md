@@ -9,18 +9,9 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 ## [0.8.1] - 2026-09-26
 
-### 新增
+### 变更
 
-- **一条不需要 `bash` 的 Windows 安装路径：**`npm i -g @qialike/cli`。Windows Terminal 跑不了
-  `curl … | bash` 安装器，于是由 npm —— 该平台唯一自带的包管理器 —— 带着 Windows 二进制（外加一个
-  小启动器）。主包为**每个架构**声明一个平台依赖（`@qialike/cli-win32-x64`、
-  `@qialike/cli-win32-arm64`），而它们各自声明 `os`/`cpu`，于是 npm 装上与机器匹配的那一份、
-  不需要人选。Linux 与 macOS 继续用 shell 安装器。**npm 上尚未发布任何包。**
-- **CI 侧接入 npm 的 trusted publishing（OIDC）。** `.github/workflows/publish-npm.yml` 用**本仓库
-  自己的 Release** 里的 Windows 资产发布（并按 `sha256sums.txt` 校验），**不需要任何长期令牌**；
-  `publish-npm.sh --oidc` 跳过凭据预检，并在 npm CLI **低于 11.5.1** 时直接拒绝（那个版本之前 npm
-  不认识 OIDC 环境，会静默退化成"没有凭据"）。trusted publisher 是**逐包**配置的，所以首次发布仍需
-  一次手工发布。
+- 版本号抬升到 0.8.1。TUI 与 harness 均无面向用户的变化。
 
 ## [0.8.0] - 2026-09-26
 

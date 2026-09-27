@@ -7,21 +7,9 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ## [0.8.1] - 2026-09-26
 
-### Added
+### Changed
 
-- **A Windows install path that needs no `bash`:** `npm i -g @qialike/cli`. Windows Terminal
-  cannot run the `curl … | bash` installer, so npm — the one package manager that platform ships
-  with — carries the Windows binaries behind a small launcher. The package declares one platform
-  dependency per architecture (`@qialike/cli-win32-x64`, `@qialike/cli-win32-arm64`) and each of
-  those declares `os`/`cpu`, so npm installs the payload that matches the machine and nobody picks
-  one by hand. Linux and macOS keep the shell installer. Nothing is published to npm yet.
-- **CI publishing through npm's trusted publishing (OIDC).**
-  `.github/workflows/publish-npm.yml` publishes the Windows assets from this repository's own
-  Release with no long-lived token, and `publish-npm.sh --oidc` skips the credential pre-flight
-  while refusing to run on an npm CLI older than 11.5.1 (the first version that recognises the OIDC
-  environment), because an older CLI would silently fall back to "no credentials". A trusted
-  publisher is configured **per package**, so the first release still needs a one-off manual
-  publish.
+- Version bump to 0.8.1. No user-visible changes to the TUI or the harness.
 
 ## [0.8.0] - 2026-09-26
 
