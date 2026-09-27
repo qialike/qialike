@@ -1,0 +1,105 @@
+name: npm publish
+
+# 用 Trusted Publishing（OIDC）把 Windows 二进制发到 npm —— 全程**没有任何长期令牌**。
+#
+# 为什么是 OIDC。注册表的规则是「发布要么有 2FA 挑战、要么有一枚 bypass-2FA 令牌」，而
+# bypass-2FA 令牌正在被退役（2026-08 起失去账号管理类动作，2027-01 前后失去直接发布）。
+# OIDC 让 CI 每次运行向 GitHub 换一张短期、带签名的身份令牌，注册表按**该包预登记的
+# trusted publisher 规则**（仓库 + workflow 文件名 + environment）放行。
+#
+# 前置（缺一不可，见 qialike-development.md §9.5.1）：
+#   ① 三个包**已经存在** —— trusted publisher 是**逐包**配置在包的设置页上，无法 bootstrap 首包；
+#   ② 每个包都登记了本仓库、本文件名（`publish-npm.yml`）与 environment `npm-publish`；
+#   ③ npm CLI ≥ 11.5.1（本工作流会先升级；`publish-npm.sh --oidc` 也会校验）。
+#
+# 产物来源是**本仓库自己的 Release 资产**（而不是在 CI 里重新编译）：资产先在 ⑧ 归档、
+# ⑪ 推送，再由本工作流按 sha256sums.txt 校验后发到 npm —— 保持 §8.3「发布必须来自已归档
+# 产物」的纪律。注意 ⑪ 推的远端标签是**裸版本号**（`0.8.1`），所以 gh 用的是它。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（不含 v），例如 0.8.2'
+        required: true
+      dry_run:
+        description: '只预演（不发布任何东西）'
+        type: boolean
+        default: true
+  release:
+    types: [published]
+
+permissions:
+  contents: read        # 下载本仓库的 Release 资产
+  id-token: write       # ★ OIDC：trusted publishing 与 provenance 都靠它
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest      # trusted publishing 只支持托管 runner（自托管暂不支持）
+    environment: npm-publish    # 必须与包上登记的 environment 一致；可加 required reviewers
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # publish-npm.sh 需要 tag 与 git describe
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'    # trusted publishing 要求 Node ≥ 22.14.0
+          registry-url: https://registry.npmjs.org   # ★ 让 npm 认得 registry 与 OIDC 凭据
+
+      - name: 升级 npm（OIDC 需要 ≥ 11.5.1）
+        run: |
+          set -euo pipefail
+          npm install -g npm@^11
+          npm --version
+
+      - name: 取全标签（远端是裸版本号，本地约定带 v）
+        run: git fetch --tags --force
+
+      - name: 解析版本
+        id: v
+        env:
+          RAW: ${{ inputs.version || github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          echo "version=${RAW#v}" >> "$GITHUB_OUTPUT"
+
+      - name: 取回本版本的 Windows 资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          v="${{ steps.v.outputs.version }}"
+          mkdir -p dist
+          gh release download "$v" --dir dist --pattern 'qialike-windows-*.zip'
+          gh release download "$v" --dir dist --pattern 'sha256sums.txt' || \
+            echo "::warning::该 Release 没有 sha256sums.txt，跳过清单校验"
+
+      - name: 校验 sha256（有清单就校验）
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          if [[ -f sha256sums.txt ]]; then
+            grep -E 'qialike-windows-(x64|arm64)\.zip$' sha256sums.txt | sha256sum -c -
+          fi
+
+      - name: 展开成发布脚本期望的 dist 布局
+        run: |
+          set -euo pipefail
+          for t in x64 arm64; do
+            unzip -o "dist/qialike-windows-$t.zip" -d "dist/windows-$t"
+            test -f "dist/windows-$t/qialike.exe"
+          done
+
+      - name: 发布（平台包 → 主包；幂等；OIDC，无长期令牌）
+        run: |
+          set -euo pipefail
+          args=(--yes --oidc --provenance --tag latest)
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+          ./scripts/release/publish-npm.sh "${args[@]}"

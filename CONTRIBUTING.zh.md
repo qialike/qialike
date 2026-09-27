@@ -129,10 +129,13 @@ dsh --profile tui --workspace ~/proj
 
 > **别把这条渠道与「二进制 npm 渠道」搞混。** 上面说的是把 **TUI bundle 当 dsh 插件**发布
 > （`@qialike/qialike-app`，消费方用 `dsh plugin add` 装）。另有一条**互不相干**的渠道：把
-> **Windows 二进制产物**发到 npm，让 Windows 用户（没有 bash，用不了 `curl | bash`）能
-> `npm i -g qialike`。那条渠道的包是 `qialike`（几 KB 的启动器）+ `qialike-win32-x64` /
-> `qialike-win32-arm64`（各含一个 `qialike.exe`），模板在 `packages/npm/`，发布脚本是
-> `scripts/release/publish-npm.sh`。**两者版本都跟 `package.json` 走，但发布互不依赖。**
+> **Windows 二进制**发到 npm，让 Windows 用户（没有 bash，用不了 `curl | bash`）能
+> `npm i -g @qialike/cli`。那条渠道的包是 `@qialike/cli`（几 KB 的启动器）+
+> `@qialike/cli-win32-x64` / `@qialike/cli-win32-arm64`；**`cpu` 字段就是让 npm 自动装上与机器
+> 匹配的那个架构**，不需要人选。模板在 `packages/npm/`，启动器是
+> `packages/npm/qialike-cli/bin/qialike.js`，发布脚本是 `scripts/release/publish-npm.sh` ——
+> 本机加 `--otp`，CI 里加 `--oidc`（trusted publishing，见 `.github/workflows/publish-npm.yml`）。
+> **两者版本都跟 `package.json` 走，但发布互不依赖。**
 
 ## 编写自己的插件
 

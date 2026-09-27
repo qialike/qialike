@@ -152,12 +152,15 @@ list):
 
 > **Do not confuse this with the binary npm channel.** The list above is about publishing the
 > **TUI bundle as a dsh plugin** (`@qialike/qialike-app`, consumed with `dsh plugin add`). A
-> separate, unrelated channel ships the **Windows binary** to npm so Windows users — who have no
-> `bash` and therefore cannot run the `curl | bash` installer — can `npm i -g qialike`. Its
-> packages are `qialike` (a few kB of launcher) plus `qialike-win32-x64` / `qialike-win32-arm64`
-> (one `qialike.exe` each); the templates live in `packages/npm/` and the publish script is
-> `scripts/release/publish-npm.sh`. Both channels follow the same `package.json` version, and
-> neither depends on the other to publish.
+> separate, unrelated channel ships the **Windows binaries** to npm so Windows users — who have no
+> `bash` and therefore cannot run the `curl | bash` installer — can `npm i -g @qialike/cli`. Its
+> packages are `@qialike/cli` (a few kB of launcher) plus `@qialike/cli-win32-x64` /
+> `@qialike/cli-win32-arm64`; the `cpu` field is what makes npm install the architecture that
+> matches the machine, so nobody chooses one by hand. The templates live in `packages/npm/`, the
+> launcher is `packages/npm/qialike-cli/bin/qialike.js`, and the publish script is
+> `scripts/release/publish-npm.sh` — run locally with `--otp`, or from CI with `--oidc` (trusted
+> publishing, see `.github/workflows/publish-npm.yml`). Both channels follow the same
+> `package.json` version, and neither depends on the other to publish.
 
 ## Writing your own plugin
 

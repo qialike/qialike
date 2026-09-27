@@ -1,8 +1,8 @@
 {
-  "name": "qialike-win32-arm64",
+  "name": "@qialike/cli-win32-arm64",
   "version": "0.0.0-template",
   "private": true,
-  "description": "qialike binary for Windows arm64 — installed automatically by the `qialike` package; do not install this directly.",
+  "description": "qialike binary for Windows arm64 — installed automatically by the `@qialike/cli` package; do not install this directly.",
   "license": "MIT",
   "repository": {
     "type": "git",
