@@ -31,7 +31,7 @@ an interrupted install all leave the launcher without a binary. It then prints t
 install the package for your architecture, for example:
 
 ```sh
-npm i -g @qialike/cli-win32-arm64@0.8.1
+npm i -g @qialike/cli-win32-arm64@0.8.2
 ```
 
 ## Alternative installers
