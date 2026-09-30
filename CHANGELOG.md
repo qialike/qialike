@@ -9,24 +9,14 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Changed
 
-- **Rebuilt on DeepSeek Harness `0.2.0-rc.2`** (up from `0.1.7-rc.2`; 448 commits, 1638 changed
-  files). No patch anchor had to move, no source file changed, and the build passed on the first
-  attempt — the same shape as the `0.1.7-rc.2` upgrade. The one build-time payoff worth recording:
-  the Windows ACL bundle's chunk name did change (`types-DxezulnA.js` → `types-Cl_DXjhk.js`), and the
-  `delete-constraint` patch found it anyway, because it locates that chunk **by content** rather than
-  by the hash — the fix made during the `0.1.7-alpha.2` upgrade.
-- **The composition gained one row, and it is load-bearing: `otel` → `@deepseek-ai/dsh-otel`.** The
-  new package is the shared OTLP transport service, and `session-telemetry-otel` now declares
-  `inject = ['sessions', 'otel']`. Both rows stay **enabled**: disabling `otel` alone would leave that
-  inject permanently pending, and telemetry would stop working *silently* — no error, no warning, no
-  visible symptom. The row adds no network behaviour of its own (mounting creates no queue, identity
-  or connection) and no user-visible catalogue entry: `/models` is unchanged.
-- **The feedback-gated telemetry endpoint moved to `https://dsh-otel-collector.deepseeksvc.com/v1/logs`**
-  (was `harness-telemetry.deepseeksvc.com`), and the row gained a `maxRequestBytes` byte bound. Both
-  are upstream defaults that this profile does not override, so the READMEs now name the new endpoint.
-  Nothing is uploaded by default; only new explicit feedback releases a bounded session prefix, and
-  the TUI still does not wire up `/feedback`.
-- **Plugin specifiers: 124 → 125** (the single addition is `@deepseek-ai/dsh-otel`).
+- **Rebuilt on DeepSeek Harness `0.2.0-rc.2`** (up from `0.1.7-rc.2`). No patch anchor had to be
+  moved and no source file changed; the plugin-specifier manifest grew 124 → 125.
+- **The new `otel` row is load-bearing, so both telemetry rows stay enabled.**
+  `session-telemetry-otel` now injects `otel`, and disabling that row alone would stop telemetry
+  **silently** — no error, no warning, no visible symptom.
+- **Telemetry now defaults to `https://dsh-otel-collector.deepseeksvc.com/v1/logs`** (was
+  `harness-telemetry.deepseeksvc.com`), and the row gained a `maxRequestBytes` bound. Both READMEs
+  name the new endpoint.
 
 ## [0.8.3] - 2026-09-28
 
