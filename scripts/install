@@ -1,0 +1,1258 @@
+#!/usr/bin/env bash
+# GENERATED FILE — do not edit by hand.
+#
+# Assembled from `scripts/install.d/*.sh` by `scripts/build-install.sh`, in lexical
+# order. Edit the modules, then re-run the builder; `tests/install-bundle.test.ts`
+# fails when this file and a fresh assembly disagree.
+#
+# The modules are concatenated rather than sourced because the entry point is
+# `curl -fsSL https://qialike.com/install | bash`: a script arriving on stdin has no
+# siblings to source and no $BASH_SOURCE to resolve.
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 00-common.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared constants and output helpers.
+#
+# No side effects: this module only sets variables and defines functions, so a
+# test may source it (plus one other module) without running an install.
+
+APP=qialike
+BIN=qialike
+
+# Deliberately NOT derived from $DSH_HOME. `qialike uninstall`
+# (apps/tui-bin/src/bin.ts) keeps `<home>/bin` but drops the PATH line by matching
+# it byte-for-byte, so honouring a DSH_HOME override here would write a PATH line
+# the uninstaller cannot recognise.
+INSTALL_DIR="$HOME/.dsh/bin"
+
+# The marker comment written above PATH_LINE, and the line itself. Both are a
+# contract with `qialike uninstall`: it removes the line only on an exact match,
+# and then also removes a preceding `# qialike`. Single quotes on purpose — the
+# literal text `$HOME` is what the shell profile must contain, so it has to
+# survive being written.
+MARKER='# qialike'
+PATH_LINE='export PATH="$HOME/.dsh/bin:$PATH"'
+
+# Release plumbing. Assets live at `<base>/download/<tag>/<asset>`, and each source
+# is asked for its newest tag in whichever way that host answers:
+#
+#   - GitHub issues a 302 for `<base>/latest/download/<asset>`, and the tag is in
+#     the Location. No API, so nothing counts against the 60/hour unauthenticated
+#     API limit — which is why the redirect is read rather than the API.
+#   - gitcode answers that same path with an HTML page (verified: 200, text/html,
+#     no redirect), so its tag comes from the v5 releases API instead. That API
+#     answers unauthenticated; its ASSET downloads are what need care — only GET
+#     works there (HEAD is refused with 401), and only GET is ever used here.
+#
+# The two are NOT equivalent: GitHub is the primary and always carries the newest
+# release, the mirror lags. A fallback install can therefore land on an older tag
+# than GitHub would have given — which is exactly why the updater refuses to move
+# backwards (see `compareVersions` in packages/qialike-app/src/upgrade-policy.ts).
+#
+# A source is `<base>` or `<base>|<api>`, comma-separated. Which one is used is the
+# four-case policy in `qialike_decide_source` (30-version.sh): the mirror when only it
+# answers, the primary when only IT answers, the faster of the two by throughput when
+# both do, and a STOP with nothing written when neither does. The API is optional
+# because it is DERIVED for the hosts that need one (`qialike_api_for`), so the list
+# is normally just host names.
+# `packages/qialike-app/src/self-update.ts` carries the same list, and
+# `tests/self-update.test.ts` fails if the two ever drift apart.
+DEFAULT_SOURCES='https://github.com/qialike/qialike/releases,https://gitcode.com/qialike/qialike/releases'
+
+# Probe budget, in seconds. Short on purpose: the point is to notice a blackholed
+# GitHub and move on, rather than making the user wait out curl's own defaults.
+CONNECT_TIMEOUT=4
+PROBE_TIMEOUT=10
+
+# Give up on a body that has stalled. Below 1 KB/s for 30s is not a slow download,
+# it is a blocked one — and that is the shape a throttled GitHub takes: the connect
+# succeeds, so only a throughput guard can tell it apart from a working source.
+SPEED_LIMIT=1024
+SPEED_TIME=30
+
+# The sources to try, and the one currently in use. Declared here rather than only
+# inside parse_args so the arrays are never UNSET under `set -u` when a test sources
+# the bundle and calls a function directly.
+SOURCE_BASES=()
+SOURCE_APIS=()
+SOURCE_INDEX=0
+BASE_URL=''
+RESOLVED_TAG=''
+
+# What `qialike_probe_sources` found, filled in together and read by the decision
+# (`qialike_decide_source`) and the download (`qialike_fetch_archive`):
+#
+#   PROBE_INDEXES     sources that ANSWERED, in configured order
+#   PROBE_TAGS        tag each of those named, '' when it answered without one
+#   PROBE_UNREACHABLE sources that did not answer at all
+PROBE_INDEXES=()
+PROBE_TAGS=()
+PROBE_UNREACHABLE=()
+
+# The releases API for a host with no `latest` redirect, derived from the base
+# rather than hardcoded per repository: `<host>/<owner>/<repo>/releases` becomes
+# `<host>/api/v5/repos/<owner>/<repo>/releases/latest`. Only gitcode is known to
+# need one, so only gitcode is asked.
+qialike_api_for() {
+  local base=$1 path
+
+  case "$base" in
+    https://gitcode.com/*/releases)
+      path=${base#https://gitcode.com/}
+      path=${path%/releases}
+      printf 'https://gitcode.com/api/v5/repos/%s/releases/latest\n' "$path"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# The sources as one comma-separated line, for messages.
+#
+# `+`-guarded for the bash 3.2 reason spelled out in 30-version.sh: the case-4 message
+# reaches this with whatever the caller has, and under `set -u` an empty array would
+# abort the reporting of the very failure it is describing.
+qialike_source_list() {
+  local out='' base
+
+  for base in ${SOURCE_BASES[@]+"${SOURCE_BASES[@]}"}; do
+    out="${out:+$out, }$base"
+  done
+  printf '%s\n' "$out"
+}
+
+# The built-in hosts `--source` names. GitHub is the canonical host; gitcode is the
+# mirror a China-side user reaches without the CDN throttling that the reachability
+# probe cannot see (see MEASURE_* below).
+GITHUB_SOURCES='https://github.com/qialike/qialike/releases'
+GITCODE_SOURCES='https://gitcode.com/qialike/qialike/releases'
+
+# Throughput comparison between sources, used whenever there is more than one.
+#
+# Why measure at all: the probe above answers "is this host reachable", which is a
+# DIFFERENT question from "can it move 55 MB". GitHub answers the small redirect
+# request from `github.com` and then serves the body from
+# `release-assets.githubusercontent.com` (measured: the 302 that comes back names
+# that host), so a reachable GitHub whose asset CDN is throttled — the ordinary
+# case behind the national firewall — passes the probe and then crawls for tens of
+# minutes, with nothing in the output saying which host it chose. Sampling the real
+# asset is what tells the two apart.
+MEASURE=1
+# Sample size and budget per source. 256 KB is enough to separate "throttled" from
+# "fine" and small enough to be worth discarding.
+MEASURE_BYTES=262144
+MEASURE_TIMEOUT=8
+# Resolved by parse_args: 1 = compare sources, 0 = use the probe's order.
+SOURCE_MEASURE=1
+
+# The sources for a `--source` name, or nothing for an unknown one.
+qialike_named_sources() {
+  case "$1" in
+    github) printf '%s\n' "$GITHUB_SOURCES" ;;
+    gitcode) printf '%s\n' "$GITCODE_SOURCES" ;;
+    auto) printf '%s\n' "$DEFAULT_SOURCES" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The host of a release base, for messages:
+# `https://github.com/qialike/qialike/releases` -> `github.com`.
+qialike_host_of() {
+  printf '%s\n' "$1" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##' -e 's#/.*$##'
+}
+
+# The curl output path that discards a response body on THIS platform.
+#
+# Not `/dev/null` everywhere: Windows' curl does not map the POSIX spelling onto the
+# null device — it resolves the request and then exits 23 trying to create
+# `<drive>:\dev\null` — and this installer runs on Windows under Git Bash. The same
+# spelling is used in `nullDevice()` on the launcher side, for the same reason.
+qialike_null_device() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) printf 'NUL\n' ;;
+    *) printf '/dev/null\n' ;;
+  esac
+}
+
+say() { printf '%s: %s\n' "$APP" "$*"; }
+# Like `say`, but on stderr. Needed wherever a function's STDOUT is a protocol rather
+# than a message: `qialike_fetch_archive` echoes the archive path back to its caller
+# through stdout, so anything else written there becomes part of the path.
+note() { printf '%s: %s\n' "$APP" "$*" >&2; }
+warn() { printf '%s: warning — %s\n' "$APP" "$*" >&2; }
+die() {
+  printf '%s: %s\n' "$APP" "$*" >&2
+  exit 1
+}
+
+# Case 4 of the source policy — no configured source is reachable — exits with THIS
+# status rather than 1, so a caller can tell "the network is not there, nothing was
+# touched, the installed copy still works" apart from "the install failed". Only the
+# second is worth reporting to a user or retrying; the automatic updater maps this
+# one onto "keep what is installed" and stays quiet. `apps/tui-bin/src/upgrade-
+# command.ts` and `packages/qialike-app/src/self-update.ts` carry the same number.
+EXIT_NO_SOURCE=3
+
+# Stop an update because not one source answered.
+#
+# `die` would be the wrong shape: this is the policy's fourth case, not a
+# malfunction, and the message has to carry the only fact that matters to the user —
+# that nothing was downloaded and nothing was written over.
+qialike_stop_no_source() {
+  local keep='nothing was installed'
+  if [[ -f "$INSTALL_DIR/$BIN" ]]; then
+    keep='keeping the installed version'
+  fi
+  printf '%s: no release source is reachable (tried: %s) — %s\n' \
+    "$APP" "$(qialike_source_list)" "$keep" >&2
+  exit "$EXIT_NO_SOURCE"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10-args.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Option parsing.
+#
+# An UNKNOWN option is an error, not a warning (opencode's installer warns and
+# carries on). This script edits the user's shell profile, so a typo such as
+# `--no-modify-pth` would otherwise silently do the one thing the user asked it
+# not to do.
+#
+# Environment inputs (read here so `--version` and the upgrade path agree):
+#   QIALIKE_VERSION          version to install; the automatic updater passes it
+#   QIALIKE_SOURCE           `github`, `gitcode` or `auto` — the same as --source
+#   QIALIKE_INSTALL_BASE_URL one explicit releases directory — NO fallback
+#   QIALIKE_INSTALL_SOURCES  full source list, `<base>` or `<base>|<api>`, comma-
+#                            separated (tests, private multi-mirror setups)
+#   QIALIKE_INSTALL_MEASURE  `0` uses the probe's order instead of comparing speeds
+#   QIALIKE_INSTALL_TARGET   platform override — TEST ONLY, see 20-platform.sh
+#   QIALIKE_INSTALL_LIB_ONLY `1` sources the bundle without installing (tests)
+
+qialike_usage() {
+  cat <<'EOF'
+qialike installer
+
+Usage: install [options]
+
+Options:
+    -h, --help              display this help message
+    -v, --version <version> install a specific version (e.g. 0.6.0 or v0.6.0)
+        --no-modify-path    don't modify shell config files (.bashrc, .zshrc)
+        --source <name>     github | gitcode | auto (default auto = the policy above)
+        --base-url <url>    use exactly this releases directory, no fallback
+        --dry-run           print what would be done, then change nothing
+
+Two hosts carry the release: github.com/qialike/qialike (canonical) and
+gitcode.com/qialike/qialike (mirror). Both are checked for connectivity first, and
+which one is used follows from what answered:
+
+    github only        use github
+    gitcode only       use gitcode
+    both               sample the real download from each and use the FASTER one —
+                       reachability says nothing about a 55 MB body, and a GitHub
+                       whose asset CDN is throttled is reachable
+    neither            stop: nothing is downloaded, nothing is written, and an
+                       installed qialike keeps working (exit 3)
+
+    --source gitcode        skip the policy and use that host only
+    --source github         likewise, for the canonical host
+    QIALIKE_INSTALL_MEASURE=0   never compare, keep the policy's own order
+
+Examples:
+    curl -fsSL https://qialike.com/install | bash
+    curl -fsSL https://qialike.com/install | bash -s -- --source gitcode
+    curl -fsSL https://qialike.com/install | bash -s -- --version 0.6.0
+    bash scripts/install --dry-run
+EOF
+}
+
+# Split a source specification into two index-aligned arrays.
+#
+# Indexed arrays, not an associative one: macOS ships bash 3.2, which has none, and
+# `60-path.sh` already goes out of its way to stay compatible with it. An entry with
+# no `|` gets its API derived when the host is one that needs it, so
+# `--base-url https://gitcode.com/qialike/qialike/releases` resolves instead of
+# silently finding nothing.
+qialike_parse_sources() {
+  local spec=$1 entry base api
+  local IFS=','
+
+  SOURCE_BASES=()
+  SOURCE_APIS=()
+  for entry in $spec; do
+    # Spaces are stripped rather than trimmed: a URL never contains one, and this
+    # keeps a hand-written comma list readable without a helper.
+    entry=${entry// /}
+    if [[ -z "$entry" ]]; then
+      continue
+    fi
+
+    # The separator has to be tested for, not inferred: `${entry#*|}` returns the
+    # WHOLE string when there is no `|`, so a bare base would otherwise be taken as
+    # its own API URL and asked for JSON.
+    if [[ "$entry" == *"|"* ]]; then
+      base=${entry%%|*}
+      api=${entry#*|}
+    else
+      base=$entry
+      api=''
+    fi
+
+    # An empty API slot always TRIES to derive one, so writing `base|` means the same
+    # thing as plain `base`: the bare form is what a user types, and a host that needs
+    # an API would otherwise resolve nothing for no visible reason. A host with no
+    # derivable API derives nothing and is read through its redirect.
+    if [[ -z "$api" ]]; then
+      api=$(qialike_api_for "$base" || true)
+    fi
+
+    SOURCE_BASES+=("${base%/}")
+    SOURCE_APIS+=("$api")
+  done
+
+  if (( ${#SOURCE_BASES[@]} == 0 )); then
+    die "no release sources configured (check QIALIKE_INSTALL_SOURCES)"
+  fi
+}
+
+parse_args() {
+  REQUESTED_VERSION=${QIALIKE_VERSION:-}
+  NO_MODIFY_PATH=false
+  DRY_RUN=false
+
+  # An explicit override means exactly ONE source. A private mirror or a test
+  # fixture must not have the public fallbacks silently appended to it: a
+  # deliberately unreachable host would then be papered over by a working one, and
+  # the failure under test would never surface. Comparing speeds is only meaningful
+  # with something to compare, so any single-source form turns it off.
+  local spec=${DEFAULT_SOURCES}
+  SOURCE_MEASURE=$MEASURE
+  if [[ -n "${QIALIKE_INSTALL_SOURCES:-}" ]]; then
+    spec=$QIALIKE_INSTALL_SOURCES
+  elif [[ -n "${QIALIKE_INSTALL_BASE_URL:-}" ]]; then
+    spec=$QIALIKE_INSTALL_BASE_URL
+    SOURCE_MEASURE=0
+  fi
+  if [[ -n "${QIALIKE_SOURCE:-}" ]]; then
+    spec=$(qialike_named_sources "$QIALIKE_SOURCE") \
+      || die "unknown source '$QIALIKE_SOURCE' (expected github, gitcode or auto)"
+    if [[ "$QIALIKE_SOURCE" != auto ]]; then
+      SOURCE_MEASURE=0
+    fi
+  fi
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help)
+        qialike_usage
+        exit 0
+        ;;
+      -v|--version)
+        if [[ -z "${2:-}" ]]; then
+          die "--version requires a version argument"
+        fi
+        REQUESTED_VERSION=$2
+        shift 2
+        ;;
+      --no-modify-path)
+        NO_MODIFY_PATH=true
+        shift
+        ;;
+      --source)
+        if [[ -z "${2:-}" ]]; then
+          die "--source requires github, gitcode or auto"
+        fi
+        spec=$(qialike_named_sources "$2") \
+          || die "unknown source '$2' (expected github, gitcode or auto)"
+        if [[ "$2" != auto ]]; then
+          SOURCE_MEASURE=0
+        else
+          SOURCE_MEASURE=$MEASURE
+        fi
+        shift 2
+        ;;
+      --base-url)
+        if [[ -z "${2:-}" ]]; then
+          die "--base-url requires a URL argument"
+        fi
+        spec=$2
+        SOURCE_MEASURE=0
+        shift 2
+        ;;
+      --dry-run)
+        DRY_RUN=true
+        shift
+        ;;
+      *)
+        die "unknown option '$1' (try --help)"
+        ;;
+    esac
+  done
+
+  # The escape hatch, applied last because it is the most explicit thing a caller
+  # can say about the comparison.
+  case "${QIALIKE_INSTALL_MEASURE:-}" in
+    0) SOURCE_MEASURE=0 ;;
+    1) SOURCE_MEASURE=$MEASURE ;;
+  esac
+
+  # A trailing slash would produce `//download/...`; harmless for GitHub but not for
+  # every mirror, so it is stripped once, per source, as the list is parsed.
+  qialike_parse_sources "$spec"
+  SOURCE_INDEX=0
+  BASE_URL=${SOURCE_BASES[0]}
+  if (( ${#SOURCE_BASES[@]} < 2 )); then
+    SOURCE_MEASURE=0
+  fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 20-platform.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Platform detection and asset naming.
+#
+# Only linux-x64 is published today (verified 2026-09-20: every other asset name
+# 404s on the release), so every other platform is refused with a precise message
+# instead of downloading a 404 body and failing later inside `tar`. Refusing
+# BEFORE anything is written is the point: a half-installed platform is worse
+# than an honest error.
+
+# The platform this script would install for, as `<os>-<arch>`.
+qialike_detect_target() {
+  # Test-only override: the whole point is to exercise the refusal paths on a
+  # linux-x64 host, which is otherwise impossible.
+  if [[ -n "${QIALIKE_INSTALL_TARGET:-}" ]]; then
+    printf '%s\n' "$QIALIKE_INSTALL_TARGET"
+    return 0
+  fi
+
+  local os arch
+  case "$(uname -s)" in
+    Linux) os=linux ;;
+    Darwin) os=darwin ;;
+    MINGW*|MSYS*|CYGWIN*) os=windows ;;
+    *) die "unsupported operating system: $(uname -s)" ;;
+  esac
+
+  case "$(uname -m)" in
+    x86_64|amd64) arch=x64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) die "unsupported architecture: $(uname -m)" ;;
+  esac
+
+  printf '%s-%s\n' "$os" "$arch"
+}
+
+# The release asset for a target. Kept as a table (rather than a single string)
+# because the naming already differs per platform family — linux ships a
+# `.tar.gz`, the others a `.zip` — and `build.mjs --package` is the source of
+# that convention.
+qialike_asset_for() {
+  case "$1" in
+    linux-x64) printf '%s\n' 'qialike-linux-x64.tar.gz' ;;
+    linux-arm64) printf '%s\n' 'qialike-linux-arm64.tar.gz' ;;
+    darwin-x64|darwin-arm64) printf '%s\n' "qialike-$1.zip" ;;
+    windows-x64|windows-arm64) printf '%s\n' "qialike-$1.zip" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The executable's name INSIDE the archive: the archives carry the generic name
+# (`build.mjs`: "the archive contains just the generic-named binary"), and on
+# Windows that name carries the `.exe` suffix.
+qialike_inner_binary() {
+  case "$1" in
+    windows-*) printf '%s\n' 'qialike.exe' ;;
+    *) printf '%s\n' 'qialike' ;;
+  esac
+}
+
+# Refuse anything with no release asset.
+#
+# The accepted set IS the asset table, not a second list: the table mirrors
+# `build.mjs`'s ALL_TARGETS, and a separately maintained "published" list is
+# exactly the kind of copy that drifts out of step with the release. A target the
+# table knows but the release does not carry therefore fails one step later, at
+# the download, with an actionable message — and still before anything is written.
+qialike_require_supported() {
+  local target=$1
+
+  if qialike_asset_for "$target" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  die "unsupported platform '$target' (expected one of: linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64, windows-arm64)"
+}
+
+# The name the binary takes once INSTALLED.
+#
+# Windows ships `qialike.exe` inside its archive, so the file on disk has to keep
+# that suffix or the shell cannot run it. Every other platform ships the bare
+# `qialike`. Deriving it from the archive's own member name keeps the two from
+# disagreeing — there is one source for "what is this binary called".
+qialike_set_binary_name() {
+  BIN=$(qialike_inner_binary "$1")
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 30-version.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Version resolution, connectivity, and the four-case source decision.
+#
+# The decision has four cases, and they are checked in this order:
+#
+#   1. only the mirror answers            -> the mirror
+#   2. only the primary answers           -> the primary
+#   3. both answer                        -> sample both, keep the faster
+#   4. neither answers                    -> STOP: nothing is downloaded, nothing is
+#                                            written, an installed copy keeps working
+#
+# Reachability is asked FIRST, and throughput only in case 3. The two questions are
+# different on purpose: a host can answer "what is your newest release" and then crawl
+# on the 55 MB body (GitHub answers the small redirect from `github.com` and serves
+# the body from `release-assets.githubusercontent.com`), so case 3 has to measure —
+# while cases 1 and 2 must NOT measure, because sampling a host already known to be
+# dead only buys a timeout, and sampling the only live host cannot change the answer.
+#
+# GitHub answers with a redirect and is read WITHOUT the API: the unauthenticated
+# API allows only 60 requests/hour, while the redirect is unlimited. gitcode has no
+# such redirect (its `/latest/download/...` is an HTML page), so it is read through
+# its v5 releases API, which does answer unauthenticated. See `DEFAULT_SOURCES` in
+# 00-common.sh for both shapes.
+#
+# Note the two tag spellings in play. Local git tags are annotated and carry a `v`
+# (`v0.6.0`), but the RELEASE tag does not (`0.6.0`) — the download URL only works
+# with the bare form (verified on GitHub: `…/download/v0.5.4/…` 404s while
+# `…/download/0.5.4/…` redirects). So a user-supplied `v0.6.0` is normalised here,
+# and the version string that goes into the URL and the installer environment is
+# always the bare one.
+
+qialike_normalize_version() {
+  printf '%s\n' "${1#v}"
+}
+
+# Ask one source for its newest tag. Echoes the tag, or nothing when this source
+# cannot be reached or cannot answer. `$2` is its API URL, empty for a host that
+# needs none.
+qialike_source_tag() {
+  local base=$1 api=$2 asset=$3 url tag
+  local budget=(--connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT")
+
+  url=$(curl -fsS ${budget[@]+"${budget[@]}"} -o "$(qialike_null_device)" -w '%{redirect_url}' "$base/latest/download/$asset" 2>/dev/null || true)
+  if [[ -n "$url" ]]; then
+    tag=$(printf '%s\n' "$url" | sed -n 's#.*/download/\([^/]*\)/[^/]*$#\1#p')
+    if [[ -n "$tag" ]]; then
+      printf '%s\n' "$tag"
+      return 0
+    fi
+  fi
+
+  if [[ -n "$api" ]]; then
+    # `head -n1` and the anchored sed: the answer is one line of JSON, and the FIRST
+    # `tag_name` is the release's own. The asset entries carry `browser_download_url`
+    # and `name`, never a `tag_name`, so nothing later in the body can be mistaken
+    # for it.
+    tag=$(curl -fsS ${budget[@]+"${budget[@]}"} "$api" 2>/dev/null \
+      | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      | head -n 1 \
+      | sed 's/.*"\([^"]*\)"$/\1/' || true)
+    if [[ -n "$tag" ]]; then
+      printf '%s\n' "$tag"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Did this host answer AT ALL?
+#
+# Any status counts: the question is whether the host replied, not whether it liked
+# the path, so a 404 from a live host is reachable while a refused or blackholed
+# connection is not. `-f` is deliberately absent (it would turn a 404 into a failure)
+# and `%{http_code}` is read instead — curl prints `000` when no response arrived,
+# which is exactly the signal wanted.
+#
+# `-I` (HEAD), not a plain GET: the releases page is ~234 KB on GitHub (measured) and
+# nothing in it is wanted, only the answer. Measured on both hosts: HEAD answers `200`
+# with `size_download=0` in 0.23 s (GitHub) / 0.39 s (gitcode), so the cheap form is
+# also a supported one.
+qialike_source_reachable() {
+  local base=$1 code
+
+  code=$(curl -sS -I -o "$(qialike_null_device)" -w '%{http_code}' \
+    --connect-timeout "$CONNECT_TIMEOUT" --max-time "$PROBE_TIMEOUT" "$base" 2>/dev/null || true)
+  code=$(printf '%s' "$code" | tr -d '\r')
+  # Only a definite `000` — curl's code for "no response arrived" — counts as
+  # unreachable. An empty answer means the probe itself said nothing, and guessing
+  # "down" there would stop an update that might have worked; guessing "up" only costs
+  # a download attempt whose own error names the host.
+  [[ "$code" != 000 ]]
+}
+
+# Ask every configured source whether it is there, and what it would install.
+#
+# The tag read doubles as the connectivity test whenever it SUCCEEDS — one request
+# answers both questions — so `qialike_source_reachable` is asked only about a source
+# whose tag read failed, and only there do "down" and "up, but no such asset" need
+# telling apart. That distinction is what keeps case 4 (nothing reachable => stop)
+# from swallowing a real failure such as an unpublished platform or a pulled release,
+# which is a source that IS reachable and simply has nothing for this asset.
+#
+# A pinned version needs no tag at all, only the host, so it asks the cheap question
+# directly. The version was decided by the caller; what is being decided here is
+# where it comes from.
+qialike_probe_sources() {
+  local asset=$1 i tag
+
+  PROBE_INDEXES=()
+  PROBE_TAGS=()
+  PROBE_UNREACHABLE=()
+
+  for i in "${!SOURCE_BASES[@]}"; do
+    if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+      # A pinned version already answers "which release" — the only open question is
+      # WHERE it comes from, so the host is asked directly. The tag cannot stand in for
+      # that answer here: it is known before any host is contacted.
+      if ! qialike_source_reachable "${SOURCE_BASES[$i]}"; then
+        PROBE_UNREACHABLE+=("$i")
+        continue
+      fi
+      PROBE_INDEXES+=("$i")
+      PROBE_TAGS+=("$(qialike_normalize_version "$REQUESTED_VERSION")")
+      continue
+    fi
+
+    tag=$(qialike_source_tag "${SOURCE_BASES[$i]}" "${SOURCE_APIS[$i]}" "$asset" || true)
+    # A tag that came back is proof the host answered; only an empty one leaves the
+    # question open, and only then is the host asked the cheaper way.
+    if [[ -z "$tag" ]] && ! qialike_source_reachable "${SOURCE_BASES[$i]}"; then
+      PROBE_UNREACHABLE+=("$i")
+      continue
+    fi
+    PROBE_INDEXES+=("$i")
+    PROBE_TAGS+=("$tag")
+  done
+}
+
+# The four cases, applied. Sets `SOURCE_INDEX`/`BASE_URL`/`RESOLVED_TAG`, says which
+# case applied, and stops the run entirely in case 4.
+#
+# The TAG comes from the first REACHABLE source that named one, in configured order,
+# so a reachable GitHub still decides the version even when the mirror is faster: a
+# source that lags must not be able to move anyone backwards. `RESOLVED_TAG` is fixed
+# before any measurement, so case 3 can only reorder the DOWNLOAD.
+qialike_decide_source() {
+  local asset=$1 i first='' unreachable='' base
+
+  if ! command -v curl >/dev/null 2>&1; then
+    die "'curl' is required but not installed"
+  fi
+
+  qialike_probe_sources "$asset"
+
+  # Case 4 first: with nothing reachable there is nothing to compare, nothing to fall
+  # back to — and no reason to create a temp dir or touch a shell profile. Everything
+  # the installer would have done is skipped by construction, which is what makes
+  # "the installed version is untouched" true rather than merely likely.
+  if (( ${#PROBE_INDEXES[@]} == 0 )); then
+    qialike_stop_no_source
+  fi
+
+  for i in "${!PROBE_INDEXES[@]}"; do
+    if [[ -n "${PROBE_TAGS[$i]}" ]]; then
+      first=$i
+      break
+    fi
+  done
+  if [[ -z "$first" ]]; then
+    # Reachable, but not one of them publishes this asset: a real failure, not case 4.
+    # Reporting this as "no source is reachable" would send the user after a network
+    # problem that does not exist.
+    die "could not resolve the latest version from any source (tried: $(qialike_source_list)) — check your network, or none of them publishes $asset"
+  fi
+
+  SOURCE_INDEX=${PROBE_INDEXES[$first]}
+  BASE_URL=${SOURCE_BASES[$SOURCE_INDEX]}
+  RESOLVED_TAG=${PROBE_TAGS[$first]}
+
+  # `+`-guarded, and not for style: on bash < 4.4 — macOS `/bin/bash` is still 3.2.57 —
+  # an EMPTY array expanded as `"${arr[@]}"` counts as an unbound variable under
+  # `set -u`, and `set -euo pipefail` is line 11 of this script. This loop's array is
+  # empty exactly when EVERY source answered, so the abort landed on the HAPPY path of
+  # a real macOS install (`PROBE_UNREACHABLE[@]: unbound variable`). The PATH step
+  # guards the same hazard on `appended_rcs` (60-path.sh); this instance was missed.
+  # `${arr[@]:-}` is NOT a substitute: it yields one empty word, so the body would run
+  # once with an empty index.
+  for i in ${PROBE_UNREACHABLE[@]+"${PROBE_UNREACHABLE[@]}"}; do
+    base=${SOURCE_BASES[$i]}
+    unreachable="${unreachable:+$unreachable, }$(qialike_host_of "$base")"
+  done
+
+  if (( ${#PROBE_INDEXES[@]} == 1 )); then
+    if (( SOURCE_INDEX > 0 )); then
+      # Case 1. stderr, and a warning rather than a note: the user needs to know,
+      # because the mirror can lag behind GitHub and this install may land on an older
+      # tag.
+      warn "${SOURCE_BASES[0]} did not answer — using $BASE_URL, which can lag behind"
+    elif [[ -n "$unreachable" ]]; then
+      # Case 2. A note, not a warning: the canonical host answered, so this is the
+      # ordinary install — but naming the dead host keeps a silent half-outage from
+      # looking like everything is well. Nothing is sampled here: there is one
+      # candidate, so a comparison could not change anything.
+      say "source $(qialike_host_of "$BASE_URL") — $unreachable not reachable"
+    fi
+    return 0
+  fi
+
+  # Case 3. Both answered, so the body decides (`qialike_choose_source`).
+  qialike_choose_source "$RESOLVED_TAG" "$asset"
+}
+
+# The historical name for the decision; the two are one implementation, not two paths.
+qialike_resolve_into_globals() {
+  qialike_decide_source "$1"
+}
+
+# Echo just the tag. The source it came from is NOT visible to the caller here — a
+# command substitution is a subshell — so anything that needs to download from that
+# same source must use `qialike_resolve_into_globals` instead.
+#
+# A pinned version is pure arithmetic and stays OFFLINE: this form exists for callers
+# that only want the string, and reaching for the network to answer a question the
+# caller already answered would make it fail on a host with no route out.
+qialike_resolve_version() {
+  if [[ -n "${REQUESTED_VERSION:-}" ]]; then
+    qialike_normalize_version "$REQUESTED_VERSION"
+    return 0
+  fi
+  qialike_resolve_into_globals "$1"
+  printf '%s\n' "$RESOLVED_TAG"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 40-fetch.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Download and unpack.
+#
+# Progress: curl's own bar when stderr is a terminal, silent otherwise (a pipe
+# or a log would otherwise fill with carriage returns). NO_COLOR also selects the
+# quiet form — the bar is the only coloured thing this script would otherwise
+# print, and a caller that asked for no colour has no use for it.
+#
+# Two guards on the transfer, and both exist because of the mirror fallback:
+# `--connect-timeout` so a blackholed host is abandoned quickly rather than at
+# curl's default, and `--speed-limit/--speed-time` so a host that connects and then
+# stalls is abandoned too. That second shape is the one a throttled GitHub actually
+# takes, and without it the fallback would never trigger — the connect succeeds and
+# curl waits forever on a body that never arrives.
+#
+# Checksums: `sha256sums.txt` is REQUIRED, and it is fetched from the same source the
+# archive came from — a mirror that has the asset but not the manifest is a missing
+# manifest, not a reason to trust a different host's numbers. The bytes must match the
+# digest it lists; a MISMATCH is fatal on the spot, because bytes that contradict their
+# published digest are corruption or substitution and shopping for a second opinion is
+# the wrong response to that. A source that simply cannot produce a usable manifest is
+# different: the next source is tried first, since one host may carry a complete release
+# while another does not. Only when no reachable source can vouch for the bytes does the
+# install stop — unless `QIALIKE_ALLOW_UNVERIFIED=1` says to proceed anyway.
+#
+# Fallback: the source the decision chose is tried first, then the other REACHABLE
+# ones (case 3's order). A host can answer the small "what is newest" request and
+# still fail a 55 MB body, and that is exactly the case this second attempt exists
+# for. A source that failed the connectivity probe is NOT retried here: it was
+# already pronounced unreachable, and dialling it again would spend a connect timeout
+# to learn the same thing.
+
+# Comparing sources by throughput.
+#
+# This runs in case 3 only — both sources answered — because reachability answers "can
+# this host name the newest release", which is a different question from "can it move
+# 55 MB": GitHub answers the small redirect from `github.com` and serves the body from
+# `release-assets.githubusercontent.com`, so a GitHub whose CDN is throttled is
+# reachable and slow. Sampling the real asset is what tells those apart — which is why
+# the measurement decides rather than a guess at geography. Cases 1 and 2 skip it:
+# there is one candidate, so nothing could change.
+
+# Echo how fast one source delivers this asset, in bytes per second, or nothing when
+# it cannot serve it at all.
+qialike_measure_speed() {
+  # $1 = base, $2 = tag, $3 = asset
+  local base=$1 tag=$2 asset=$3 out speed
+
+  # The exit status is deliberately IGNORED: the source that needs measuring most is
+  # the one that will hit `--max-time`, and curl still prints `%{speed_download}`
+  # when it aborts (measured: a trickling source answers `200 131072 16380`, exit
+  # 28). Only "not a single byte" means "not a candidate" — a dead host, or a mirror
+  # that has not caught up to this tag and 404s.
+  out=$(curl -fsSL -r "0-$((MEASURE_BYTES - 1))" \
+    --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MEASURE_TIMEOUT" \
+    -o "$(qialike_null_device)" -w '%{speed_download}' \
+    "$base/download/$tag/$asset" 2>/dev/null || true)
+
+  speed=$(printf '%s' "$out" | tr -d '\r' | sed -n 's/^\([0-9][0-9]*\).*$/\1/p')
+  if [[ -z "$speed" ]] || (( speed <= 0 )); then
+    return 1
+  fi
+  printf '%s\n' "$speed"
+}
+
+# A rate a person can read.
+qialike_human_speed() {
+  local speed=$1
+
+  if (( speed >= 1048576 )); then
+    printf '%s MB/s' "$(( speed / 1048576 ))"
+  elif (( speed >= 1024 )); then
+    printf '%s KB/s' "$(( speed / 1024 ))"
+  else
+    printf '%s B/s' "$speed"
+  fi
+}
+
+# Point `SOURCE_INDEX`/`BASE_URL` at the fastest REACHABLE source that can actually
+# serve this asset, and say what each one measured.
+#
+# Only sources the connectivity probe reached are sampled (case 3 by definition: two
+# or more answered). Ties and unmeasurable sources keep the earlier index: the first
+# source that wins strictly is the one chosen, so an inconclusive comparison leaves
+# the decision's order exactly as it was. A source that 404s this tag is reported as
+# unavailable and can never be chosen — a mirror lagging behind the tag must not turn
+# into a failed download followed by a retry.
+qialike_choose_source() {
+  # $1 = tag, $2 = asset
+  local tag=$1 asset=$2 pos i base speed report='' best=-1 best_index=$SOURCE_INDEX
+
+  if (( SOURCE_MEASURE == 0 )) || (( ${#PROBE_INDEXES[@]} < 2 )); then
+    return 0
+  fi
+
+  for pos in "${!PROBE_INDEXES[@]}"; do
+    i=${PROBE_INDEXES[$pos]}
+    base=${SOURCE_BASES[$i]}
+    speed=$(qialike_measure_speed "$base" "$tag" "$asset" || true)
+    if [[ -z "$speed" ]]; then
+      report="${report:+$report, }$(qialike_host_of "$base") unavailable"
+      continue
+    fi
+    report="${report:+$report, }$(qialike_host_of "$base") $(qialike_human_speed "$speed")"
+    if (( speed > best )); then
+      best=$speed
+      best_index=$i
+    fi
+  done
+
+  if (( best < 0 )); then
+    # Nothing could be measured — every reachable source 404s this asset. Leave the
+    # choice to the download step, whose own error names the asset and the hosts.
+    return 0
+  fi
+
+  say "source speeds — $report"
+  SOURCE_INDEX=$best_index
+  BASE_URL=${SOURCE_BASES[$best_index]}
+  say "downloading from $(qialike_host_of "$BASE_URL")"
+}
+
+# One attempt against one source. 0 on success.
+qialike_try_download() {
+  # $1 = base, $2 = tag, $3 = asset, $4 = output path
+  local base=$1 tag=$2 asset=$3 out=$4 url
+  local guards=(--connect-timeout "$CONNECT_TIMEOUT" --speed-limit "$SPEED_LIMIT" --speed-time "$SPEED_TIME")
+
+  url="$base/download/$tag/$asset"
+  if [[ -t 2 && -z "${NO_COLOR:-}" ]]; then
+    curl -fL ${guards[@]+"${guards[@]}"} -# -o "$out" "$url"
+  else
+    curl -fsSL ${guards[@]+"${guards[@]}"} -o "$out" "$url"
+  fi
+}
+
+qialike_fetch_archive() {
+  # $1 = asset name, $2 = tag, $3 = destination directory. Echoes the archive path.
+  local asset=$1 tag=$2 dest=$3 attempt pos i base out tried=''
+  local order=() count start=0
+
+  if ! command -v curl >/dev/null 2>&1; then
+    die "'curl' is required but not installed"
+  fi
+
+  # The candidates are the sources that ANSWERED, in configured order, walked from the
+  # one the decision chose. Empty means nobody probed first (a direct call from a test,
+  # or a caller that only wants the download), in which case every configured source is
+  # still a candidate — the decision is an optimisation, not a prerequisite.
+  for i in "${!PROBE_INDEXES[@]}"; do
+    order+=("${PROBE_INDEXES[$i]}")
+  done
+  if (( ${#order[@]} == 0 )); then
+    for i in "${!SOURCE_BASES[@]}"; do
+      order+=("$i")
+    done
+  fi
+  count=${#order[@]}
+  for ((pos = 0; pos < count; pos += 1)); do
+    if (( order[pos] == SOURCE_INDEX )); then
+      start=$pos
+      break
+    fi
+  done
+  # The chosen source leads the list, so the `tried:` report below reads in the order
+  # the sources were actually tried.
+  local rotated=()
+  for ((pos = 0; pos < count; pos += 1)); do
+    rotated+=("${order[$(( (start + pos) % count ))]}")
+  done
+  for ((pos = 0; pos < count; pos += 1)); do
+    tried="${tried:+$tried, }${SOURCE_BASES[${rotated[$pos]}]}"
+  done
+
+  out="$dest/$asset"
+  local unverified=''
+  for ((attempt = 0; attempt < count; attempt += 1)); do
+    i=${rotated[$attempt]}
+    base=${SOURCE_BASES[$i]}
+
+    if ! qialike_try_download "$base" "$tag" "$asset" "$out"; then
+      rm -f "$out"
+      if (( attempt + 1 < count )); then
+        warn "download from $base failed — trying the next source"
+      fi
+      continue
+    fi
+
+    # A digest mismatch dies inside the check. Only "this source cannot vouch for the
+    # bytes" comes back as 1, and that is worth another host.
+    if qialike_verify_checksum "$base" "$tag" "$asset" "$out"; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+
+    unverified="$base"
+    if (( attempt + 1 < count )); then
+      warn "$base publishes no usable sha256sums.txt for $asset — trying the next source"
+      rm -f "$out"
+    fi
+  done
+
+  # Every reachable source served bytes it could not vouch for. The file is kept only
+  # when the LAST source delivered it, so the opt-out below never hands back a path
+  # that a later failed attempt already removed.
+  if [[ -n "$unverified" && -f "$out" ]]; then
+    if [[ "${QIALIKE_ALLOW_UNVERIFIED:-0}" != 1 ]]; then
+      rm -f "$out"
+      die "no reachable source publishes a usable sha256sums.txt for $asset (tag $tag) — refusing to install unverified bytes (tried: $tried)
+     the release is incomplete; set QIALIKE_ALLOW_UNVERIFIED=1 to install anyway"
+    fi
+    warn "installing $asset WITHOUT integrity verification (QIALIKE_ALLOW_UNVERIFIED=1)"
+    printf '%s\n' "$out"
+    return 0
+  fi
+
+  die "download failed: $asset (tag $tag) — no source could provide it (tried: $tried)"
+}
+
+# Verify `file` against the release's `sha256sums.txt`, fetched from the SAME source the
+# archive came from (see the module header for why that source and no other).
+#
+# Returns 0 when the bytes match the published digest. Returns 1 when THIS source cannot
+# vouch for them — no manifest, or the asset is not listed in it — so the caller can try
+# a source that can. A mismatch does not return at all: it dies.
+qialike_verify_checksum() {
+  local base=$1 tag=$2 asset=$3 file=$4 sums expected actual
+
+  sums=$(curl -fsSL "$base/download/$tag/sha256sums.txt" 2>/dev/null || true)
+  if [[ -z "$sums" ]]; then
+    return 1
+  fi
+
+  expected=$(printf '%s\n' "$sums" | awk -v a="$asset" '$2 == a || $2 == "*" a { print $1; exit }')
+  if [[ -z "$expected" ]]; then
+    return 1
+  fi
+
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$file" | cut -d' ' -f1)
+  else
+    actual=$(shasum -a 256 "$file" | cut -d' ' -f1)
+  fi
+
+  if [[ "$expected" != "$actual" ]]; then
+    die "SHA256 mismatch for $asset (expected $expected, got $actual) — refusing to install"
+  fi
+
+  note "verified $asset against $base/download/$tag/sha256sums.txt"
+  return 0
+}
+
+# Unpack the archive. Echoes the path of the binary inside it.
+#
+# Two formats, matching what `build.mjs --package` produces: `.tar.gz` on linux
+# and `.zip` elsewhere. The extractor is chosen from the file name rather than
+# from the target, so the two cannot disagree about which tool is needed; the
+# member that must come out is still resolved from the target.
+qialike_extract() {
+  # $1 = archive path, $2 = target, $3 = destination directory
+  local archive=$1 target=$2 dest=$3 inner
+
+  case "$archive" in
+    *.zip)
+      if ! command -v unzip >/dev/null 2>&1; then
+        die "'unzip' is required to extract $archive"
+      fi
+      if ! unzip -q -o "$archive" -d "$dest"; then
+        die "could not extract $archive"
+      fi
+      ;;
+    *.tar.gz)
+      if ! command -v tar >/dev/null 2>&1; then
+        die "'tar' is required to extract $archive"
+      fi
+      if ! tar -xzf "$archive" -C "$dest"; then
+        die "could not extract $archive"
+      fi
+      ;;
+    *)
+      die "don't know how to extract $archive"
+      ;;
+  esac
+
+  inner="$dest/$(qialike_inner_binary "$target")"
+  if [[ ! -f "$inner" ]]; then
+    die "$archive did not contain $(qialike_inner_binary "$target")"
+  fi
+
+  printf '%s\n' "$inner"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 50-place.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Place the binary at $INSTALL_DIR/$BIN.
+#
+# mv, never cp. `cp` onto a path that is currently executing fails with
+# ETXTBSY ("Text file busy"), which is exactly the automatic-upgrade case: the
+# running qialike is replacing itself. rename(2) swaps the directory entry
+# atomically and the running process keeps the old inode, so the upgrade works.
+# The previous installer used `cp` and therefore could not upgrade a running
+# binary at all; `tests/install-bundle.test.ts` pins this so it cannot come back.
+#
+# The copy-to-staging step is still a `cp` — but into a fresh name that nothing
+# is executing, which is safe, and it keeps a failed download from leaving a
+# truncated binary where a working one used to be.
+
+qialike_place() {
+  # $1 = path to the extracted binary. Echoes the installed path.
+  local src=$1 dest="$INSTALL_DIR/$BIN" staged
+
+  mkdir -p "$INSTALL_DIR" || die "could not create $INSTALL_DIR"
+
+  staged="$INSTALL_DIR/.$BIN.new.$$"
+  if ! cp "$src" "$staged"; then
+    rm -f "$staged"
+    die "could not stage the new binary at $staged"
+  fi
+  if ! chmod 755 "$staged"; then
+    rm -f "$staged"
+    die "could not make $staged executable"
+  fi
+  if ! mv -f "$staged" "$dest"; then
+    rm -f "$staged"
+    die "could not replace $dest"
+  fi
+
+  printf '%s\n' "$dest"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 60-path.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Put $INSTALL_DIR on PATH for future shells.
+#
+# Every UNCOMMENTED PATH export in one profile, as `lineno:line`. The `-n` is
+# kept so a warning can name the exact line the user has to edit, and the
+# `^[[:space:]]*export` anchor is what keeps `# export PATH=…` out.
+qialike_live_path_lines() {
+  grep -nE '^[[:space:]]*export[[:space:]]+PATH=' "$1" 2>/dev/null || true
+}
+
+qialike_ensure_path() {
+  if [[ ":$PATH:" == *":$INSTALL_DIR:"* ]]; then
+    say "$INSTALL_DIR is already on PATH"
+    return 0
+  fi
+
+  # Profiles this run actually wrote, so the closing hint names a file that
+  # exists: a fresh HOME has neither `.bashrc` nor `.zshrc`, and telling the user
+  # to `source ~/.bashrc` there is advice they cannot follow.
+  local appended_rcs=() rc entry configured
+
+  for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+    [[ -f "$rc" ]] || continue
+
+    # "Configured" means an UNCOMMENTED export already names ~/.dsh/bin. A plain
+    # `grep -F "$PATH_LINE"` also matched a commented-out copy of the very same
+    # text — the state a profile ends up in when the line was disabled by hand —
+    # so the installer called the line configured, appended nothing, and closed by
+    # telling the user to `source ~/.bashrc`: `qialike: command not found`
+    # survived the install that claimed to fix it.
+    #
+    # Matching on `.dsh/bin` rather than the whole line is deliberate too: it
+    # accepts equivalent spellings (an absolute path, different quoting), where
+    # opencode's exact-line `grep -Fxq` would append a duplicate.
+    configured=0
+    while IFS= read -r entry; do
+      [[ -n "$entry" ]] || continue
+      if [[ "${entry#*:}" == *'.dsh/bin'* ]]; then
+        configured=1
+      fi
+    done < <(qialike_live_path_lines "$rc")
+
+    if (( configured )); then
+      say "$rc already exports $INSTALL_DIR on PATH"
+      continue
+    fi
+
+    if [[ ! -w "$rc" ]]; then
+      warn "$rc is not writable — add this line to it yourself:"
+      printf '            %s\n' "$PATH_LINE" >&2
+      continue
+    fi
+
+    # The marker line and the exact PATH_LINE text are what `qialike uninstall`
+    # looks for when it takes the line back out.
+    printf '\n%s\n%s\n' "$MARKER" "$PATH_LINE" >> "$rc"
+    appended_rcs+=("$rc")
+    say "appended to $rc: $PATH_LINE"
+  done
+
+  say "$INSTALL_DIR is not on PATH in this shell; run one of the following now,"
+  say "or open a new terminal:"
+  # Guarded: on bash 3.2 (macOS `/bin/bash`) `"${arr[@]}"` on an EMPTY array
+  # trips `set -u` as an unbound variable, which would abort the install at its
+  # last step.
+  if (( ${#appended_rcs[@]} > 0 )); then
+    for rc in "${appended_rcs[@]}"; do
+      printf '            source %s\n' "$rc"
+    done
+  fi
+  printf '            %s\n' "$PATH_LINE"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 70-verify.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Confirm the installed binary runs and reports the version we asked for.
+#
+# opencode's installer only reads `--version` back; comparing it catches the
+# failure that is otherwise invisible until much later — a release whose asset
+# does not match its tag. A mismatch is reported but not fatal: the binary was
+# installed and works, and failing here would leave the user with a working
+# command and a non-zero exit code.
+#
+# `--version` prints `qialike <version>`, so the version is the last word.
+
+qialike_verify() {
+  local expected=$1 out actual
+
+  out=$("$INSTALL_DIR/$BIN" --version 2>/dev/null || true)
+  if [[ -z "$out" ]]; then
+    die "the installed binary did not run: $INSTALL_DIR/$BIN --version produced no output"
+  fi
+
+  actual=${out##* }
+  if [[ "$actual" != "$expected" ]]; then
+    warn "installed binary reports '$out' but $expected was expected — the release asset and its tag disagree"
+    return 0
+  fi
+
+  say "installed  $INSTALL_DIR/$BIN ($out)"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 80-main.sh
+# ─────────────────────────────────────────────────────────────────────────────
+# The install sequence.
+#
+# Guarded at the bottom so the assembled bundle can be sourced with
+# QIALIKE_INSTALL_LIB_ONLY=1 (tests do this); individual modules have no side
+# effects at all, so sourcing one of those needs no guard.
+
+QIALIKE_TMP=''
+
+qialike_cleanup() {
+  if [[ -n "$QIALIKE_TMP" ]]; then
+    rm -rf "$QIALIKE_TMP"
+    QIALIKE_TMP=''
+  fi
+}
+
+main() {
+  parse_args "$@"
+
+  local target asset tag archive inner i
+  target=$(qialike_detect_target)
+  qialike_require_supported "$target"
+  # Windows installs as `qialike.exe`; everything else as `qialike`. Set before
+  # any path is built from $BIN.
+  qialike_set_binary_name "$target"
+  asset=$(qialike_asset_for "$target")
+
+  if [[ "$DRY_RUN" == true ]]; then
+    say "dry run — nothing will be written"
+    say "          platform  $target"
+    say "          asset     $asset"
+    # The whole list, in the order it would be tried, without probing any of them:
+    # a dry run that hit the network could not be run offline, and the point here is
+    # to show the plan, not to test the links.
+    for (( i = 0; i < ${#SOURCE_BASES[@]}; i += 1 )); do
+      if (( i == 0 )); then
+        say "          releases  ${SOURCE_BASES[$i]}"
+      else
+        say "          fallback  ${SOURCE_BASES[$i]}"
+      fi
+    done
+    if (( SOURCE_MEASURE == 1 )); then
+      say "          policy    github.com, else gitcode.com, else the faster of the two (sampled, up to ${MEASURE_BYTES} B); neither reachable = stop, keep what is installed"
+    fi
+    say "          install   $INSTALL_DIR/$BIN"
+    if [[ "$NO_MODIFY_PATH" == true ]]; then
+      say "          PATH      left alone (--no-modify-path)"
+    else
+      say "          PATH      $PATH_LINE"
+    fi
+    return 0
+  fi
+
+  # NOT `tag=$(…)`: the decision records which source answered in globals, and a
+  # command substitution would throw that away (see 30-version.sh). It also applies
+  # the four-case source policy — including case 4, which exits here with nothing
+  # downloaded and nothing written — and, in case 3, samples the sources and moves
+  # the download to the faster one. The tag is fixed before that sampling, so the
+  # comparison can only reorder the download, never change the version installed.
+  qialike_decide_source "$asset"
+  tag=$RESOLVED_TAG
+
+  QIALIKE_TMP=$(mktemp -d "${TMPDIR:-/tmp}/qialike-install.XXXXXX") || die "could not create a temporary directory"
+  # `qialike_cleanup` reads a global rather than a local: the trap fires after
+  # main's frame is gone, where a `local` would be unbound under `set -u`.
+  trap qialike_cleanup EXIT INT TERM
+
+  say "installing qialike $tag for $target"
+  archive=$(qialike_fetch_archive "$asset" "$tag" "$QIALIKE_TMP")
+  inner=$(qialike_extract "$archive" "$target" "$QIALIKE_TMP")
+  qialike_place "$inner" >/dev/null
+
+  if [[ "$NO_MODIFY_PATH" == true ]]; then
+    say "PATH left alone (--no-modify-path)"
+  else
+    qialike_ensure_path
+  fi
+
+  qialike_verify "$tag"
+  say "installed. Run 'qialike' (or 'qialike uninstall')."
+}
+
+if [[ "${QIALIKE_INSTALL_LIB_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

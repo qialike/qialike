@@ -1,0 +1,17 @@
+# Opt-in TUI leaf composition. This is a PATCH OVERLAY over the dsh profile
+# (dsh-base bundle layer + the qialike-app bundle layer), applied as one more
+# layer at the same include level: `dsh --profile tui --patch ./cordis.yml`.
+# See packages/qialike-app/cordis.patch.yml for the shared TUI shape; this file
+# only pins deployment-specific values.
+
+# Pin the default model for the single interactive session (DeepSeek V4.1 Flash).
+- id: agent-default-model
+  config:
+    provider: deepseek-official
+    model: deepseek-flash
+
+# Pin the workspace for this deployment (overrides --workspace when unset).
+# Replace with an absolute path on your machine, e.g. /home/you/projects.
+- id: tui-runtime
+  config:
+    workspace: /path/to/workspace

@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2024"],
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "types": ["node", "react"]
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

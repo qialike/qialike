@@ -1,0 +1,482 @@
+/**
+ * `qialike upgrade` — the privileged half of automatic update.
+ *
+ * It lives in the launcher, not in a Cordis plugin, for the same reasons
+ * `uninstall` does: it writes outside the workspace (`~/.dsh/bin`, and the PATH
+ * line via the installer), it must work with no TUI at all, and `launcher-modes.ts`
+ * is the single source of truth for modes resolved before the app owns argv.
+ *
+ * Two callers:
+ *  - a person, running `qialike upgrade [version]` in a terminal;
+ *  - the TUI, which SPAWNS this mode rather than calling it. That is deliberate:
+ *    `upgrade()` shells out to the installer, which downloads tens of megabytes
+ *    and then replaces the running binary — on the TUI's event loop that would
+ *    freeze the interface for the whole download, so the work goes to a child
+ *    process and only the resulting notice comes back.
+ *
+ * `--auto` is the internal form the TUI spawns: it applies the `qialike-update`
+ * policy (announce a minor/major, install a patch silently where installing is
+ * possible at all, stay quiet when disabled or already current) and prints ONLY
+ * the lines a user should see. The explicit form is the user asking by name, so it
+ * does what it is told and reports failures with a non-zero exit.
+ *
+ * **What "a user should see" depends on the platform.** Where the updater can
+ * replace this copy, the notice names the command that does it. Where it cannot —
+ * Windows, where a running `.exe` cannot be overwritten and the installer's bash
+ * does not exist, or a hand-placed binary outside `~/.dsh/bin` — the notice has to
+ * carry the download links instead, or it is a dead end that tells the user to run
+ * something that will refuse. `updateNotice()` is that fork, kept pure so both
+ * shapes are pinned by tests without a network.
+ *
+ * @module @qialike/qialike/upgrade-command
+ */
+
+import { spawn } from 'node:child_process'
+import type { Context } from '@deepseek-ai/cordis'
+import {
+  buildMode,
+  compareVersions,
+  decideUpdate,
+  getReleaseType,
+  platformKind,
+  readEnvPolicy,
+  readUpdateSettings,
+  type InstallMethod,
+} from '@qialike/qialike-app/src/upgrade-policy.ts'
+import {
+  assetFor,
+  detectTarget,
+  downloadUrls,
+  installMethod,
+  latestVersion,
+  NPM_UPGRADE_COMMAND,
+  releaseSources,
+  type Runner,
+  upgrade,
+} from '@qialike/qialike-app/src/self-update.ts'
+import { parseUpdateReport } from '@qialike/qialike-app/src/update-hint.ts'
+
+/** What `qialike upgrade --help` explains. */
+export const UPGRADE_HELP = `qialike upgrade — replace the installed binary with a newer release
+
+usage: qialike upgrade [version] [options]
+
+    version            install exactly this version (v-prefix accepted)
+    --check            report the installed and newest versions, install nothing
+    --json             with --check or --auto: append ONE machine-readable report
+                       line (installed / newest / relation / canSelfInstall /
+                       downloads / decision), which is what the TUI renders as the
+                       update dialog and what its startup check branches on
+    --auto             apply the update policy and print only what a user should
+                       see (used by the automatic check; not for humans)
+    -h, --help         show this help
+
+On Windows the shell installer cannot run (it is bash) and a running .exe cannot
+be replaced, so those copies only CHECK: this command names how to get the release
+instead, with the download links for github.com (primary) and gitcode.com (mirror).
+A copy installed with npm DOES update there — npm is its own updater, so this runs
+'npm install -g @qialike/cli@<version>' and the new build takes effect next launch.
+`
+
+/** Everything the command needs from its environment, injected for testability. */
+export interface UpgradeIo {
+  /** The version this binary reports. */
+  installed: string
+  out: (line: string) => void
+  err: (line: string) => void
+  /** The Cordis context, when one exists — only `--auto` needs its settings. */
+  ctx?: Context
+  env?: NodeJS.ProcessEnv
+  /** The platform to decide for; defaults to the one this process runs on. */
+  platform?: NodeJS.Platform
+  /** The running executable, for the package-manager probe; defaults to this one. */
+  execPath?: string
+  /**
+   * The process runner the installer/npm route uses. Injected so tests never spawn a
+   * real `npm install -g` — which would rewrite this machine's global prefix.
+   */
+  run?: Runner
+}
+
+/**
+ * Whether `qialike upgrade` can replace this copy at all.
+ *
+ * Two independent reasons it cannot: the platform (Windows) and the install
+ * (a binary nobody's installer put in `~/.dsh/bin`). Both must be told to fetch the
+ * release by hand — and the difference matters, so the notice is built from this
+ * rather than from the decision kind alone.
+ */
+export function canSelfInstall(method: InstallMethod, platform: NodeJS.Platform = process.platform): boolean {
+  // npm owns this copy and needs no bash, so neither the platform nor the installer
+  // stands in the way — this is the layout Windows updates in place.
+  if (method === 'npm') return true
+  return method === 'curl' && platformKind(platform) !== 'windows'
+}
+
+/**
+ * What a person is told about one newer release.
+ *
+ * Two shapes for one reason: a copy the updater can replace is told to run the
+ * command, and one it cannot is told where to download the file. Returning lines
+ * (rather than printing) keeps this pure, so the text contract is testable without
+ * a launcher, a network or a platform.
+ */
+export function updateNotice(input: {
+  installed: string
+  version: string
+  canSelfInstall: boolean
+  urls: readonly string[]
+}): string[] {
+  const lead = `qialike ${input.version} is available (you have ${input.installed})`
+  if (input.canSelfInstall) return [`${lead} — run 'qialike upgrade'`]
+  return [`${lead} — download it and replace the file by hand:`, ...input.urls.map((url) => `  ${url}`)]
+}
+
+/**
+ * How one version relates to the installed one, as the JSON reports spell it.
+ *
+ * The launcher does this arithmetic (and refuses to call a lagging mirror's older
+ * tag an update), so a caller only ever renders the verdict.
+ */
+function relationOf(installed: string, version: string): 'up-to-date' | 'older' | 'patch' | 'minor' | 'major' {
+  const comparison = compareVersions(version, installed)
+  if (comparison === 0) return 'up-to-date'
+  if (comparison < 0) return 'older'
+  return getReleaseType(installed, version)
+}
+
+/** Parse the argument list into what the command acts on. */
+function parse(argv: readonly string[]): { help: boolean; check: boolean; auto: boolean; json: boolean; version?: string; error?: string } {
+  const flags = { help: false, check: false, auto: false, json: false, version: undefined as string | undefined, error: undefined as string | undefined }
+  for (const arg of argv) {
+    if (arg === '-h' || arg === '--help') flags.help = true
+    else if (arg === '--check') flags.check = true
+    else if (arg === '--auto') flags.auto = true
+    else if (arg === '--json') flags.json = true
+    else if (arg.startsWith('-')) return { ...flags, error: `unknown option '${arg}'` }
+    else if (flags.version === undefined) flags.version = arg
+    else return { ...flags, error: `unexpected extra argument '${arg}'` }
+  }
+  return flags
+}
+
+/**
+ * Run the command. Returns the process exit code.
+ *
+ * `--auto` NEVER fails the caller: the automatic check runs in the background of
+ * somebody's session, and a network blip must not surface as an error. It reports
+ * what happened on stdout so the spawning TUI can relay it, and exits 0 either
+ * way. The explicit form is the opposite — the user asked, so a refusal or a
+ * failed download exits non-zero.
+ */
+export function runUpgrade(argv: readonly string[], io: UpgradeIo): number {
+  const flags = parse(argv)
+
+  if (flags.error !== undefined) {
+    io.err(`qialike: ${flags.error} (try 'qialike upgrade --help')`)
+    return 1
+  }
+  if (flags.help) {
+    io.out(UPGRADE_HELP)
+    return 0
+  }
+  // `--json` exists for the two forms a caller renders or branches on: the read-only
+  // report and the policy run. Accepting it beside an install would make a mistyped
+  // invocation look like it worked.
+  if (flags.json && !flags.check && !flags.auto) {
+    io.err("qialike: --json requires --check or --auto (try 'qialike upgrade --help')")
+    return 1
+  }
+
+  const env = io.env ?? process.env
+  const platform = io.platform ?? process.platform
+  // `io.execPath` as well as the environment: the two signals the probe reads are
+  // "who spawned us" and "where we live", and a test can only vary the second.
+  const method = installMethod(io.execPath, undefined, io.env)
+  const policy = readEnvPolicy(env)
+
+  if (flags.auto) {
+    // The report a `--json` caller reads. `--auto` prints the human notice FIRST
+    // (that is what a person sees) and this line last, so one run can serve both.
+    const report = (
+      decision: 'skip' | 'up-to-date' | 'unknown' | 'notify' | 'install',
+      extra: { version?: string; reason?: string; ok?: boolean } = {},
+    ): void => {
+      if (!flags.json) return
+      io.out(JSON.stringify({
+        decision,
+        installed: io.installed,
+        newest: extra.version ?? null,
+        relation: extra.version === undefined ? null : relationOf(io.installed, extra.version),
+        canSelfInstall: canSelfInstall(method, platform),
+        downloads: downloadUrls(extra.version, { sources: releaseSources(env) }),
+        ...(extra.reason === undefined ? {} : { reason: extra.reason }),
+        ...(extra.ok === undefined ? {} : { ok: extra.ok }),
+      }))
+    }
+    // The policy's own gates first, so a disabled or dev build does nothing —
+    // not even a network request.
+    // No tree context needed: the switch lives in `qialike.json`, which this
+    // process reads directly (the `qialike upgrade` launcher runs without one).
+    const auto = readUpdateSettings()
+    if (policy.disabled || auto === false) { report('skip', { reason: 'disabled' }); return 0 }
+    if (buildMode() === 'dev') { report('skip', { reason: 'dev-build' }); return 0 }
+
+    // The version is resolved BEFORE the install-method gate, and for a Windows
+    // reason: the copies that most need this notice are the hand-placed ones the
+    // installer never managed, and gating first made the check skip them without
+    // ever asking the release host. Asking is harmless — `latestVersion` is a
+    // HEAD-like read that downloads nothing — and it is the only way a Windows
+    // user learns a newer release exists.
+    const latest = latestVersion({ sources: releaseSources(env) })
+    // No network, a rate-limited host or an unpublished platform all mean "we do
+    // not know of a newer version" — say nothing rather than interrupting. The report
+    // still says WHICH it was, so the source policy's fourth case (nobody answered, the
+    // installed version is kept) can be told apart from a platform with no release.
+    if (latest === undefined) {
+      const target = detectTarget()
+      report('unknown', {
+        reason: target === undefined || assetFor(target) === undefined ? 'unsupported-platform' : 'no-source',
+      })
+      return 0
+    }
+
+    const decision = decideUpdate({
+      installed: io.installed,
+      latest,
+      auto,
+      buildMode: buildMode(),
+      method,
+      platform: platformKind(platform),
+      disabled: policy.disabled,
+      alwaysNotify: policy.alwaysNotify,
+    })
+
+    if (decision.kind === 'skip') { report('skip', { reason: decision.reason }); return 0 }
+    if (decision.kind === 'up-to-date') { report('up-to-date'); return 0 }
+    if (decision.kind === 'notify') {
+      for (const line of updateNotice({
+        installed: io.installed,
+        version: decision.version,
+        // Says where to get it, rather than naming a command that would refuse:
+        // both the platform and the install location can make `qialike upgrade`
+        // impossible, and the notice is the only thing the user will see.
+        canSelfInstall: canSelfInstall(method, platform),
+        urls: downloadUrls(decision.version, { sources: releaseSources(env) }),
+      })) io.out(line)
+      report('notify', { version: decision.version })
+      return 0
+    }
+
+    const result = upgrade(decision.version, { env, platform, run: io.run, execPath: io.execPath })
+    if (result.ok) {
+      io.out(`updated to qialike ${result.version ?? decision.version} — restart to use it`)
+      report('install', { version: decision.version, ok: true })
+      return 0
+    }
+    if (result.unreachable) {
+      // Case 4 of the source policy: nobody answered, so nothing was downloaded and
+      // nothing was written. SILENT on purpose — this runs in the background of
+      // somebody's session, the installed version keeps working, and there is nothing
+      // for the user to do about a network that is not there. The report still carries
+      // the reason, so a caller that wants to know can.
+      report('install', { version: decision.version, ok: false, reason: 'no-source' })
+      return 0
+    }
+    io.out(`automatic update failed: ${result.error ?? 'unknown error'} — run 'qialike upgrade' to retry`)
+    report('install', { version: decision.version, ok: false })
+    return 0
+  }
+
+  // `--check` is READ-ONLY, so it answers regardless of how this copy was
+  // installed: "what is the newest release?" is a fair question from a checkout
+  // build too. The self-replacement gate below does not apply to it.
+  if (flags.check) {
+    const target = flags.version ?? latestVersion({ sources: releaseSources(env) })
+    // One JSON line, for a caller that RENDERS the answer (the TUI's /upgrade
+    // dialog). It is printed even when the probe failed — `newest: null` plus the
+    // releases pages — because "I could not check" and "you are up to date" are
+    // different things to show a user, and the exit code alone cannot say which.
+    if (flags.json) {
+      io.out(JSON.stringify({
+        decision: 'check',
+        installed: io.installed,
+        newest: target ?? null,
+        relation: target === undefined ? null : relationOf(io.installed, target),
+        canSelfInstall: canSelfInstall(method, platform),
+        downloads: downloadUrls(target, { sources: releaseSources(env) }),
+      }))
+      return target === undefined ? 1 : 0
+    }
+    if (target === undefined) {
+      // Case 4: nobody answered. Naming it is the honest answer to "is there a newer
+      // release?" — and the installed copy is untouched either way.
+      io.err('qialike: no release source is reachable — keeping the installed version')
+      io.err('         check a version you name instead:')
+      io.err('         qialike upgrade --check <version>')
+      return 1
+    }
+    // Three cases, not two. A source that lags reports a tag OLDER than what is
+    // installed, and calling that an "update available" would point the user at a
+    // downgrade; naming it plainly is what makes the mirror's lag visible.
+    const comparison = compareVersions(target, io.installed)
+    const relation = comparison === 0
+      ? 'up to date'
+      : comparison < 0
+        ? 'older than installed — the reachable release source has not caught up'
+        : `${getReleaseType(io.installed, target)} update available`
+    io.out(`installed  ${io.installed}`)
+    io.out(`newest     ${target}  (${relation})`)
+    // A report that ends at "update available" is a dead end for a copy that
+    // cannot install one — the platform may forbid it or nobody's installer may
+    // own this binary. Naming the way to get it keeps the read-only answer
+    // actionable, and for an npm copy that way is the install command rather than
+    // a `.zip` its layout has nowhere to put.
+    if (comparison > 0 && !canSelfInstall(method, platform)) {
+      const urls = downloadUrls(target, { sources: releaseSources(env) })
+      for (const [index, url] of urls.entries()) io.out(`${index === 0 ? 'download  ' : '          '} ${url}`)
+    }
+    // An npm copy CAN install, so the read-only answer names the command rather than a
+    // `.zip` its layout has nowhere to put. Printed as well as the notice the caller
+    // renders, because `--check` is often read on its own.
+    if (comparison > 0 && method === 'npm') io.out(`update    ${NPM_UPGRADE_COMMAND}`)
+    return 0
+  }
+
+  // Explicit install: the user asked by name, so the auto policy (including
+  // `auto: false`) does not apply. What still applies is whether this binary is one
+  // that CAN be replaced — and the platform alone does not answer that.
+  //
+  // On Windows the shell installer is out (it is bash, and a running `.exe` cannot be
+  // replaced), so the two other layouts are told apart: a hand-placed copy gets the
+  // download links, because that is genuinely the only way it moves forward, while an
+  // npm copy is updated by npm itself — no bash, no `.zip` to swap, and the route its
+  // users already installed through. Falling through for npm is the point.
+  if (platformKind(platform) === 'windows' && method !== 'npm') {
+    io.err('qialike: Windows has no automatic update — a running .exe cannot be replaced.')
+    io.err('         Download the release and replace the file by hand:')
+    const target = flags.version ?? latestVersion({ sources: releaseSources(env) })
+    for (const url of downloadUrls(target, { sources: releaseSources(env) })) io.err(`           ${url}`)
+    return 1
+  }
+
+  if (method === 'unknown') {
+    io.err('qialike: this qialike is not an installer-managed copy, so it cannot replace itself.')
+    io.err('         Reinstall it with:  curl -fsSL https://qialike.com/install | bash')
+    return 1
+  }
+
+  const target = flags.version ?? latestVersion({ sources: releaseSources(env) })
+  if (target === undefined) {
+    io.err('qialike: no release source is reachable — keeping the installed version')
+    io.err('         name a version to install it anyway:')
+    io.err('         qialike upgrade <version>')
+    return 1
+  }
+
+  if (target === io.installed) {
+    io.out(`qialike ${io.installed} is already the newest version`)
+    return 0
+  }
+
+  io.out(`upgrading qialike ${io.installed} -> ${target}`)
+  const result = upgrade(target, { env, platform, run: io.run, execPath: io.execPath })
+  if (!result.ok) {
+    if (result.unreachable) {
+      // The user asked by name, so this is not silent — but it is still not a failure
+      // of the install: nothing was touched, and the running version stays.
+      io.err(`qialike: no release source is reachable — keeping qialike ${io.installed}`)
+      return 1
+    }
+    io.err(`qialike: ${result.error ?? 'upgrade failed'}`)
+    return 1
+  }
+  io.out(`updated to qialike ${result.version ?? target} — restart to use it`)
+  return 0
+}
+
+/** How the automatic check is wired, injected so a test can drive it. */
+export interface AutoCheckOptions {
+  /** Spawned executable; defaults to this process's. */
+  execPath?: string
+  /** Relays one line of the child's notice to the user. */
+  notify: (message: string) => void
+  /**
+   * Called instead of `notify` when a newer release is waiting on a platform that
+   * cannot install it by itself — the TUI records it as its status-line hint.
+   * Optional: a caller that only has a status line keeps the child's notice.
+   */
+  onUpdate?: (offer: { installed: string; version: string; urls: readonly string[] }) => void
+  /** The platform the CHILD runs on; defaults to this process's. */
+  platform?: NodeJS.Platform
+  /** Delay before the check; opencode waits 1s so startup is never held back. */
+  delayMs?: number
+  env?: NodeJS.ProcessEnv
+}
+
+/**
+ * Schedule one automatic check, by SPAWNING `upgrade --auto --json`.
+ *
+ * A child process, not an in-process call: the check may download and install,
+ * and doing that here would block the TUI's event loop for the whole download.
+ * The child also inherits the launcher privilege boundary instead of reaching
+ * into `~/.dsh/bin` from inside the app tree.
+ *
+ * The child prints the human notice AND a machine-readable report line last, which
+ * is what lets this relay keep the two platforms apart:
+ *
+ *  - Windows cannot replace a running `.exe` (and has no bash for the installer), so
+ *    a newer release becomes the one-line HINT the TUI paints in its status line —
+ *    `onUpdate` — instead of a transcript notice the user has to read and act on;
+ *  - everywhere else the pre-existing behaviour is untouched: the child's own notice
+ *    lines are relayed verbatim (a patch has already been installed by the time they
+ *    are printed; a minor/major release is announced for the user to act on).
+ *
+ * That split is a requirement, not an optimisation: Linux/macOS have a complete,
+ * verified auto-update path, and this Windows-specific handling must not touch it.
+ *
+ * Failures are swallowed (`error` and a missing executable included): a
+ * background courtesy must never surface as a crash or a stray message. The
+ * timer is `unref`'d so a short-lived process is not held open by it.
+ */
+export function scheduleAutoCheck(options: AutoCheckOptions): void {
+  const env = options.env ?? process.env
+  const platform = options.platform ?? process.platform
+  // Checked here as well as in the child, so a disabled check costs nothing at all
+  // — no process, no network, nothing to observe. That is what makes the "no
+  // background work" promise hold for a test harness that sets the variable.
+  if (readEnvPolicy(env).disabled) return
+
+  const timer = setTimeout(() => {
+    const child = spawn(options.execPath ?? process.execPath, ['upgrade', '--auto', '--json'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env,
+    })
+
+    let buffered = ''
+    child.stdout?.on('data', (chunk: Buffer | string) => { buffered += String(chunk) })
+    // A spawn failure (execPath gone) is not worth a message.
+    child.on('error', () => { /* swallowed by design */ })
+    child.on('exit', () => {
+      const report = parseUpdateReport(buffered)
+      const lines = buffered.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+      // The report is the last line; everything before it is the human notice.
+      const notice = report === undefined ? lines : lines.slice(0, -1)
+
+      if (
+        options.onUpdate !== undefined
+        && platformKind(platform) === 'windows'
+        && report !== undefined
+        && report.decision === 'notify'
+        && report.newest !== null
+      ) {
+        options.onUpdate({ installed: report.installed, version: report.newest, urls: report.downloads })
+        return
+      }
+      for (const line of notice) options.notify(line)
+    })
+  }, options.delayMs ?? 1000)
+
+  // Node's Timeout has `unref`; the cast keeps this file usable in a test double.
+  ;(timer as { unref?: () => void }).unref?.()
+}

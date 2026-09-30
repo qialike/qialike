@@ -1,0 +1,191 @@
+/**
+ * The read-only sandbox's bash rule: the pure decision the tool pre-execute
+ * waterfall consults before a shell command runs.
+ *
+ * It lives in its own module instead of inline in the Ink plugin because it is
+ * a security boundary — the effective mode comes from the session's durable
+ * `sandbox/mode` event and the decision must run before every tool execution —
+ * and because a pure function is independently testable. The decision is local
+ * by construction: no round trip per execution, so a tool never waits on the
+ * render loop.
+ *
+ * @module qialike-app/bash-policy
+ */
+
+import type { PreToolDecision } from '@deepseek-ai/dsh-tools'
+
+/** Session file-permission mode, cycled by Tab in the composer (matches the web surface). */
+export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
+
+/**
+ * Whether a shell command would modify the filesystem (and is therefore denied
+ * under `read-only`). Deliberately heuristic and deliberately conservative:
+ * false positives cost a `sandbox_permissions` escalation prompt, false
+ * negatives cost the sandbox's promise.
+ * @param command - the command string about to run.
+ * @returns true when the command can write to disk.
+ */
+export function bashMutates(command: string): boolean {
+  const c = command.trim()
+  if (c === '') return false
+  if (/(^|\s)(rm|mv|cp|mkdir|rmdir|touch|truncate|install|dd|ln)\b/.test(c)) return true
+  if (/(^|\s)(echo|printf|tee|cat|sed|awk)\b[^|;]*[>»]/.test(c)) return true
+  if (/(^|\s)sed\b[^|;]*-i\b/.test(c)) return true
+  if (/(^|\s)(chmod|chown|chattr)\b/.test(c)) return true
+  if (/(^|\s)git\b.*\b(add|commit|checkout|reset|clean|restore)\b/.test(c)) return true
+  if (/(^|\s)(python3?|python|node|deno|bun|ruby|perl)\b.*(-c|-e|-w)\b/.test(c)) return true
+  if (/(^|\s)(python3?|python|node|deno|bun|ruby|perl)\b.*[>»]/.test(c)) return true
+  if (/[^|;]*(>|»|>>)[^|;]*/.test(c)) return true
+  return false
+}
+
+/** The denial marker, verbatim as the harness's own sandbox emits it
+ *  (`dsh-sandbox` `sandboxDenialMarker`) — a UI must not invent a second
+ *  dialect for the same refusal. */
+const DENIAL_MARKER = '[sandbox: file access denied under read-only mode]'
+
+/** The same-turn escalation hint the harness appends to a denial
+ *  (`dsh-sandbox` `escalationHintMarker`, subject `command`): our refusal must
+ *  carry it too, or the model never learns the sanctioned retry exists and the
+ *  approval path becomes unreachable. */
+const ESCALATION_HINT = '[sandbox: escalation available — retry this exact command once with sandbox_permissions (the narrowest wider mode that suffices) + justification; the approval prompt asks the user]'
+
+/**
+ * The command a tool execution is about to run.
+ *
+ * NOTE the field name: the harness's `tools/pre-execute` payload is a
+ * `ToolExecution`, whose parsed arguments live on **`arguments`**. Reading a
+ * (nonexistent) `args` silently yields `''` and makes every check fail OPEN —
+ * this fence shipped that way once and never denied anything.
+ * @param exec - the pending tool execution.
+ * @returns the command string (empty when this execution carries none).
+ */
+function commandOf(exec: { readonly arguments?: unknown }): string {
+  const args = exec.arguments
+  if (typeof args === 'string') return args
+  if (typeof args === 'object' && args !== null) {
+    const command = (args as Record<string, unknown>).command
+    return typeof command === 'string' ? command : ''
+  }
+  return ''
+}
+
+/**
+ * The session's DURABLE sandbox mode: its LAST `sandbox/mode` event.
+ *
+ * The durable mode is what the harness's own filesystem/bash backends enforce,
+ * so the chip the user sees must show THIS (not a fresh default) — otherwise the
+ * UI and the real boundary disagree after a resume. The caller scans the
+ * snapshot it already folded, so no extra read is needed.
+ * @param events - durable session events (oldest first).
+ * @returns the mode, or `undefined` when the session never recorded one.
+ */
+export function lastSandboxMode(events: readonly { type?: string; data?: unknown }[]): SandboxMode | undefined {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]!
+    if (event.type !== 'sandbox/mode') continue
+    const mode = (event.data as { mode?: unknown } | undefined)?.mode
+    if (mode === 'read-only' || mode === 'workspace-write' || mode === 'danger-full-access') return mode
+  }
+  return undefined
+}
+
+/**
+ * Whether a tool name designates a shell command execution. Shared by both
+ * shell fences so their notion of "a shell tool" cannot drift apart.
+ * @param name - the tool's registered name.
+ * @returns whether this tool runs a shell command.
+ */
+export function isShellTool(name: unknown): name is string {
+  return typeof name === 'string' && (name === 'bash' || name === 'pwsh' || name.includes('bash'))
+}
+
+/**
+ * Decide one tool execution under the `read-only` bash fence.
+ *
+ * `read-only` denies bash commands that would modify the filesystem; the fs
+ * toolbox is fenced by the (pure-JS) fs-sandbox row instead. The denial carries
+ * the `[sandbox: …]` marker AND the escalation hint the model surfaces for a
+ * `sandbox_permissions` escalation, which then routes to the approval answerer.
+ * @param exec - the tool execution under decision (`name` + `arguments`).
+ * @param permission - the effective sandbox mode from the session's durable
+ *   `sandbox/mode` event (the mode the composer chip shows).
+ * @returns the deny decision, or `undefined` to delegate down the chain.
+ */
+export function readOnlyBashDecision(
+  exec: { readonly name?: unknown; readonly arguments?: unknown },
+  permission: SandboxMode,
+): PreToolDecision | undefined {
+  if (permission !== 'read-only') return undefined
+  if (!isShellTool(exec.name)) return undefined
+  if (!bashMutates(commandOf(exec))) return undefined
+  return { kind: 'deny', reason: `${DENIAL_MARKER}\n${ESCALATION_HINT}` }
+}
+
+/**
+ * The reason an unconfined shell call must be approved. It states the missing
+ * boundary and the consequence in the user's own terms, because this prompt is
+ * the ONLY thing standing between the model and the user's full authority on
+ * such a host — it is not a routine confirmation.
+ * @param name - the tool's registered name.
+ * @returns the approval reason shown to the user.
+ */
+function unconfinedShellReason(name: string): string {
+  return `This host has no kernel sandbox for shell commands, so "${name}" runs with your full user authority — it can read, modify, or delete anything you can. Approve to run this command once.`
+}
+
+/**
+ * Decide one shell execution when the mounted executor applies NO kernel
+ * confinement — a host whose only executor reports no `sandboxMode`, such as
+ * Windows before the ACL restricted-token runner could be bundled (it mounted
+ * the unconfined `pwsh-local`).
+ *
+ * Without this fence such a host declares `workspace-write` in the model-visible
+ * policy context while the shell ignores it entirely: no denial is ever
+ * produced, so the harness's own escalation path never fires and the model gets
+ * unapproved, unbounded authority. Reporting the boundary honestly and failing
+ * closed is the documented stance (`SandboxUnavailableError`); where refusing
+ * outright would leave the platform unusable, an approval gate keeps the user in
+ * the loop without pretending the command is confined.
+ *
+ * It is deliberately derived from the capability fact (`ShellExecutor.sandboxMode`)
+ * rather than from `process.platform`: a host that later ships a confining
+ * executor stops asking with no change here.
+ *
+ * `danger-full-access` is exempt — the user has explicitly selected "no
+ * boundary", and a prompt there would contradict the mode the model was told.
+ * @param exec - the tool execution under decision (`name` + `arguments`).
+ * @param options - the effective mode and whether the mounted executor confines.
+ * @returns the ask decision, or `undefined` to delegate down the chain.
+ */
+export function unconfinedShellAskDecision(
+  exec: { readonly name?: unknown; readonly arguments?: unknown },
+  options: { readonly permission: SandboxMode; readonly shellConfines: boolean },
+): PreToolDecision | undefined {
+  if (options.shellConfines) return undefined
+  if (options.permission === 'danger-full-access') return undefined
+  if (!isShellTool(exec.name)) return undefined
+  return { kind: 'ask', reason: unconfinedShellReason(exec.name) }
+}
+
+/**
+ * The one-time notice the TUI shows when a confined shell reports PARTIAL
+ * enforcement: the boundary exists, but it does not cover every file effect —
+ * the Windows ACL rung constrains the shell's write-class effects (writing and
+ * deleting files) and deliberately leaves reads unconfined, which its own README
+ * documents as a partial boundary.
+ *
+ * The fact is read from the SETTLED RESULT (`result.sandbox.enforcement`), which
+ * is the only place the harness publishes it: an executor exposes `sandboxMode`
+ * (whether a boundary exists) but not how complete it is, so a UI that inferred
+ * this from `process.platform` would be inventing a claim no backend made.
+ * @param sandbox - the settled sandbox facts of one shell result, when present.
+ * @returns the notice to show once, or `undefined` when it is not partial.
+ */
+export function partialEnforcementNotice(
+  sandbox: { readonly mode?: unknown; readonly enforcement?: unknown } | undefined,
+): string | undefined {
+  if (sandbox?.enforcement !== 'partial') return undefined
+  const mode = typeof sandbox.mode === 'string' ? sandbox.mode : 'this mode'
+  return `sandbox: ${mode} — PARTIAL enforcement on this host: the shell is confined for write-class file effects (writing and deleting files), not for reads or every file effect.`
+}

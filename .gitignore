@@ -1,0 +1,46 @@
+node_modules/
+dist/
+packages/*/lib/
+apps/tui-bin/generated/
+apps/tui-bin/x/
+apps/tui-bin/.resolve/
+apps/tui-bin/stub-native/
+*.tsbuildinfo
+.env
+
+# Manually redirected build/install logs at the repo root.
+install.log
+build.log
+
+# Model-run test artifacts left at the repo root (not project docs).
+/formatting-demo.md
+/letter.md
+/maintainable-software-report.md
+/medium-doc.md
+/report.md
+/REPORT.md
+/software-testing-guide.md
+/testing-frameworks.md
+
+# Scratch left by the release harness (`../.scan/bt/drive-tag.sh` creates nested
+# git worktrees here). It contains its own `.git`, so an unignored `git add -A`
+# in the release scripts would try to commit a 2 MB foreign repository.
+/.scan/
+
+# Release archives. `scripts/release/*.sh` defaults its output to
+# `../releases-qialike/`, which is deliberately OUTSIDE the repository, so this
+# rule is insurance rather than the mechanism: it only bites if someone points
+# `BUILD_ARCHIVE_OUT` back inside the tree. The release scripts run `git add -A`,
+# so an archive landing here would otherwise be committed by accident.
+/releases-qialike/
+
+# Build-generated sources that are large or vary by build target. The release
+# scripts run `git add -A`, so an unignored artifact here would be committed by
+# accident and then drift from what the next build emits. Both are regenerated
+# by `apps/tui-bin/build.mjs`, which every build entry point runs.
+#
+# - ripgrep: ~7 MB of base64 per embedded platform binary, so the tree is
+#   unbuildable without a fetch/install anyway.
+# - windows-acl runner: ~90 KB, but regenerated from the farm on every build.
+packages/qialike-app/src/ripgrep-binary.generated.ts
+apps/tui-bin/src/windows-acl-runner.generated.ts
