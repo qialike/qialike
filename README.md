@@ -217,7 +217,7 @@ What follows are the data flows qialike cannot decide for you but that you shoul
   their behalf — check the provider you selected.
 - **The harness's feedback-gated telemetry**: the composed profile mounts `session-telemetry-otel`
   by default, in `FEEDBACK_ONLY` mode, against
-  `https://harness-telemetry.deepseeksvc.com/v1/logs`. Nothing is uploaded by default — only **new
+  `https://dsh-otel-collector.deepseeksvc.com/v1/logs`. Nothing is uploaded by default — only **new
   explicit feedback** releases a bounded session prefix up to that event (which may contain message
   text, tool arguments and results, and workspace paths); ordinary requests, lifecycle events and
   stored feedback trigger nothing. Release is **per provider**: even on a third-party provider, the

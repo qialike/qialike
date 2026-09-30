@@ -98,14 +98,13 @@ Apache-2.0 / BSD-3-Clause / ISC full texts are reproduced in the upstream packag
 
 | Package (as bundled) | Version | License | Bundled via | Purpose |
 |---|---|---|---|---|
-| [@opentelemetry/api](https://github.com/open-telemetry/opentelemetry-js) | 1.9.1 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP log telemetry API |
-| [@opentelemetry/api-logs](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OpenTelemetry logs bridge |
-| [@opentelemetry/core](https://github.com/open-telemetry/opentelemetry-js) | 2.9.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OpenTelemetry core internals |
-| [@opentelemetry/exporter-logs-otlp-http](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP/HTTP log exporter |
-| [@opentelemetry/otlp-exporter-base](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP transport base |
-| [@opentelemetry/resources](https://github.com/open-telemetry/opentelemetry-js) | 2.x | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OpenTelemetry resource attributes |
-| [@opentelemetry/sdk-logs](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | Logs SDK |
-| [@opentelemetry/otlp-transformer](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-session-telemetry-otel` | OTLP payload transformer |
+| [@opentelemetry/api](https://github.com/open-telemetry/opentelemetry-js) | 1.9.1 | Apache-2.0 | `@deepseek-ai/dsh-otel` | OTLP log telemetry API |
+| [@opentelemetry/api-logs](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-otel` | OpenTelemetry logs bridge |
+| [@opentelemetry/core](https://github.com/open-telemetry/opentelemetry-js) | 2.9.0 | Apache-2.0 | `@deepseek-ai/dsh-otel` | OpenTelemetry core internals |
+| [@opentelemetry/otlp-exporter-base](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-otel` | OTLP transport base |
+| [@opentelemetry/resources](https://github.com/open-telemetry/opentelemetry-js) | 2.9.0 | Apache-2.0 | `@deepseek-ai/dsh-otel` | OpenTelemetry resource attributes |
+| [@opentelemetry/sdk-logs](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-otel` | Logs SDK |
+| [@opentelemetry/otlp-transformer](https://github.com/open-telemetry/opentelemetry-js) | 0.220.0 | Apache-2.0 | `@deepseek-ai/dsh-otel` | OTLP payload transformer |
 | [diff](https://github.com/kpdecker/jsdiff) | 9.0.0 | BSD-3-Clause | `@deepseek-ai/dsh-tool-fs` | `structuredPatch` hunk splitting for the editor |
 | [yaml](https://github.com/eemeli/yaml) | 2.9.0 | ISC | `@deepseek-ai/dsh-credentials-local`, `@deepseek-ai/dsh-settings-file`, `@deepseek-ai/dsh-skill-filesystem` | comment-preserving YAML config round-trip |
 
@@ -116,6 +115,6 @@ but are not part of the shipped binary's runtime.
 
 Other transitive third-party dependencies of the above (e.g. `yoga-wasm-web`, `react-reconciler`,
 `ansi-escapes`, `cli-cursor`, and the DeepSeek Harness plugin dependencies such as `commander`,
-`picomatch`, `chokidar`) are distributed under their own licenses, which their package manifests
+`picomatch`, `chokidar`, `got`) are distributed under their own licenses, which their package manifests
 declare — the vast majority are MIT or another permissive license. No copyleft (GPL / AGPL / LGPL /
 MPL) or source-available network-restrictive license was found in the bundled tree.

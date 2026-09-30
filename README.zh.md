@@ -174,7 +174,7 @@ QIALIKE_COLOR=24bit qialike
   工具调用，以及**工具结果**（agent 读到的文件内容就在其中）。qialike 让你在 62 家厂商中任选，因此
   **适用哪一家的隐私与保留政策取决于你选了谁**；qialike 无法代其作出承诺，请按所选厂商查阅。
 - **harness 的反馈门控遥测**：组合 profile 默认挂载 `session-telemetry-otel`，模式为 `FEEDBACK_ONLY`，
-  端点为 `https://harness-telemetry.deepseeksvc.com/v1/logs`。默认**不上传任何东西**——只有
+  端点为 `https://dsh-otel-collector.deepseeksvc.com/v1/logs`。默认**不上传任何东西**——只有
   **新的显式反馈**才会释放一段截止该事件的有界会话前缀（可能包含消息文本、工具参数与结果、workspace 路径）；
   普通请求、生命周期事件与已存反馈都不触发。释放是**按提供方**进行的：即便你用第三方厂商，反馈仍发往上述
   DeepSeek 端点。关闭方式：`DSH_TELEMETRY_MODE=DISABLED`，或把 `DSH_TELEMETRY_DISABLED` 设为任意非空值（含

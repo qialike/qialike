@@ -7,6 +7,26 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.9.0] - 2026-10-01
+
+### 变更
+
+- **重建于 DeepSeek Harness `0.2.0-rc.2`**（原 `0.1.7-rc.2`；跨 448 个提交、1638 个文件变更）。
+  无需移动任何补丁锚点、无需改动任何源码，构建**首次即通过** —— 与 `0.1.7-rc.2` 那次形态相同。
+  有一处构建期收益值得记下：Windows ACL 的分包名这次**确实变了**
+  （`types-DxezulnA.js` → `types-Cl_DXjhk.js`），而 `delete-constraint` 补丁仍然找到了它 ——
+  因为它是**按内容**定位那个分包，而不是写死哈希；这个改造正是 `0.1.7-alpha.2` 升级时做的。
+- **组合里多了一行，而且是承重的：`otel` → `@deepseek-ai/dsh-otel`。** 新包是共享的 OTLP 传输服务，
+  而 `session-telemetry-otel` 现在声明 `inject = ['sessions', 'otel']`。两行都**保持启用**：
+  单独禁用 `otel` 会让这个 inject 永远 pending，遥测**静默失效** —— 不报错、不告警、界面上也看不出。
+  该行本身不引入任何网络行为（挂载时不建队列、不建身份、不建连接），也不会让任何用户可见列表多出条目：
+  `/models` 与升级前逐项相同。
+- **反馈门控遥测的端点迁移到 `https://dsh-otel-collector.deepseeksvc.com/v1/logs`**
+  （原 `harness-telemetry.deepseeksvc.com`），该行另新增 `maxRequestBytes` 字节上限。两者都是上游默认值、
+  本 profile 未覆盖，因此两份 README 已改为新端点。默认仍不上传任何东西——只有新的显式反馈才会释放
+  一段有界会话前缀，且 TUI 仍未接入 `/feedback`。
+- **插件说明符：124 → 125**（唯一新增项是 `@deepseek-ai/dsh-otel`）。
+
 ## [0.8.3] - 2026-09-28
 
 ### 变更
