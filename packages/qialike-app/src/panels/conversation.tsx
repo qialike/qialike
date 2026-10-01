@@ -2055,6 +2055,28 @@ function anchorSurfaceRegion(): SurfaceRegion | null {
   return surfaceRegion(s.aRow, s.aCol, mainSurfaceGeometry())
 }
 
+/**
+ * Bring the command palette's FILTER in line with the draft after an edit.
+ *
+ * The filter is what `filteredCommands` narrows the list with, and it is a
+ * separate piece of state from `store.input`, so every path that edits the draft
+ * has to update both — and the paste path did not. Measured: pasting `/model` left
+ * the palette showing all 15 commands while typing the same characters narrows it
+ * to 1, because typing goes through this and pasting did not. A stale palette is
+ * not cosmetic: it is the box the palette paints, and the caret is parked on the
+ * palette's own rows while it covers the input row (see `installFrameSuffix`), so
+ * the hardware cursor sat on a palette row instead of the draft — reported as "the
+ * cursor blinks outside the input box".
+ *
+ * One function, called from every edit path, so "a path forgot to sync" cannot
+ * come back one path at a time.
+ */
+function syncCommandFilter(): void {
+  const input = store.input
+  if (input.startsWith('/')) store.setCommandFilter(input.slice(1))
+  else if (store.commandFilter !== '') store.setCommandFilter('')
+}
+
 function conversationKey(k: RawKey, tui: TuiService): void {
   const input = store.input
   const char = k.char ?? ''
@@ -2068,6 +2090,7 @@ function conversationKey(k: RawKey, tui: TuiService): void {
       void tui.imageAttach!.attachLocalImage(path)
     } else {
       store.insertAtCursor(k.paste)
+      syncCommandFilter()
     }
     return
   }
@@ -2369,19 +2392,19 @@ function conversationKey(k: RawKey, tui: TuiService): void {
   if (k.backspace) {
     resetHistoryBrowse()
     store.backspaceAtCursor()
-    if (store.commandFilter.startsWith('')) store.setCommandFilter(store.input)
+    syncCommandFilter()
     return
   }
   if (k.delete) {
     resetHistoryBrowse()
     store.deleteForward()
-    if (store.commandFilter.startsWith('')) store.setCommandFilter(store.input)
+    syncCommandFilter()
     return
   }
   if (char) {
     resetHistoryBrowse()
     store.insertAtCursor(char)
-    if (store.input.startsWith('/')) store.setCommandFilter(store.input.slice(1))
+    syncCommandFilter()
   }
 }
 

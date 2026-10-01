@@ -98,3 +98,67 @@ describe('terminal-too-small input gate', () => {
     expect(PANEL, 'docked paint').toContain('{tooSmallNoticeLines(DOCKED_MIN_ROWS).map(')
   })
 })
+
+/**
+ * Source guards for the command palette's FILTER/draft sync.
+ *
+ * The bug this locks down (reported as "paste, then the cursor blinks outside the
+ * input box"): `store.commandFilter` is separate state from `store.input`, and only
+ * the TYPED-edit paths kept it in step. The paste path inserted the text and left
+ * the filter alone, so pasting `/model` painted the full 15-command list while
+ * typing the same six characters narrowed it to one, and because the caret is
+ * parked on the palette's own rows while that box covers the input row
+ * (`installFrameSuffix`), the hardware cursor sat on a command entry instead of the
+ * draft. Measured on the packaged binary, same probe: paste left 15 entries with the
+ * composer text hidden behind them and the cursor on `/exit`; typing left 1 entry
+ * with the cursor on the draft. After the fix both leave 1 entry and the cursor on
+ * the draft row.
+ *
+ * The guard is about structure, not strings: EVERY path that edits the draft must
+ * call the one helper, so "a path forgot to sync" cannot return one path at a time.
+ * That is exactly how it arrived — paste was added later than typing.
+ */
+describe('the command palette filter follows every draft edit', () => {
+  /** The body of `conversationKey`, the composer's key/paste handler. */
+  const handler = (): string => {
+    const start = PANEL.indexOf('function conversationKey(')
+    expect(start, 'conversationKey exists').toBeGreaterThan(-1)
+    const end = PANEL.indexOf('\n/** The main conversation surface', start)
+    return PANEL.slice(start, end === -1 ? undefined : end)
+  }
+
+  test('one helper owns the sync, and it handles both directions', () => {
+    const start = PANEL.indexOf('function syncCommandFilter(): void {')
+    expect(start, 'the shared helper exists').toBeGreaterThan(-1)
+    const body = PANEL.slice(start, PANEL.indexOf('\n}', start))
+    // Entering the palette: the filter is the draft minus the leading slash.
+    expect(body).toContain("input.startsWith('/')")
+    expect(body).toContain('input.slice(1)')
+    // Leaving it: a draft that is no longer a command must CLEAR the filter, or a
+    // stale non-empty filter narrows the list the next time the user types '/'.
+    expect(body, 'must clear when the draft stops being a command').toContain("setCommandFilter('')")
+  })
+
+  test('the paste path syncs too (this is the regression)', () => {
+    const body = handler()
+    const paste = body.indexOf('if (k.paste !== undefined) {')
+    expect(paste, 'the paste branch exists').toBeGreaterThan(-1)
+    const branch = body.slice(paste, body.indexOf('\n  }', paste))
+    expect(branch, 'the paste branch inserts the text').toContain('insertAtCursor(k.paste)')
+    expect(branch, 'and must bring the filter with it').toContain('syncCommandFilter()')
+  })
+
+  test('no edit path writes the filter by hand any more', () => {
+    const body = handler()
+    // Backspace, delete and typing each used to spell the sync out inline; a new
+    // path copying that spelling is how the paste route was missed.
+    expect(body).not.toContain('setCommandFilter(store.input)')
+    expect(body).not.toContain('setCommandFilter(store.input.slice(1))')
+    for (const edit of ['backspaceAtCursor()', 'deleteForward()', 'insertAtCursor(char)']) {
+      const at = body.indexOf(edit)
+      expect(at, `${edit} is still an edit path`).toBeGreaterThan(-1)
+      const after = body.slice(at, at + 200)
+      expect(after, `${edit} must sync the filter`).toContain('syncCommandFilter()')
+    }
+  })
+})
