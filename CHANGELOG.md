@@ -10,7 +10,8 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 ### Changed
 
 - **Release pages now say what changed.** The notes on GitHub and GitCode are generated from this file, and a tag's own annotation carries the same text — so `git show <tag>` reads as a changelog entry rather than a bare version number.
-- Version bump to 0.9.1. No user-visible changes to the TUI or the harness.
+- **The shell works on Windows outside the build tree.** The embedded `koffi` FFI binding was resolved at runtime against the process's working directory, so a released binary refused every confined command unless a `node_modules/koffi` happened to sit beside it; it is now compiled in.
+- Version bump to 0.9.1.
 
 ## [0.9.0] - 2026-10-01
 
