@@ -17,6 +17,7 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 - **The telemetry off switch works.** `DSH_TELEMETRY_DISABLED` reached the profile context and stopped there — nothing on the boot path read it — so both READMEs promised an opt-out that did nothing; the launcher now applies the harness's own rule to the stack it builds.
 - **`pnpm typecheck` no longer fails on the known baseline.** It exited non-zero on the three `wrap-ansi` declaration errors, and CI — running a bare `tsc` without that rule — additionally reported `Cannot find module '@deepseek-ai/cordis'` in files that were fine, because the harness checkout was not where `tsconfig.typecheck.json` resolves it; one policy now serves CI and the release gate, and a missing prerequisite says which it is.
+- **A paste can no longer kill the keyboard or move the cursor out of the input box.** A paste whose bracketed-paste terminator never arrived left the decoder waiting for it forever and swallowing every later key — Ctrl+u and Ctrl+C included — and a pasted command left the suggestion palette unfiltered and painted over the input row, which is where the caret then sat; both are fixed, with the recovery bounded by size and silence.
 
 ## [0.9.0] - 2026-10-01
 
