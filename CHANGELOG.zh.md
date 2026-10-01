@@ -15,6 +15,11 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 - **Windows 上不再依赖构建目录即可使用 Shell。** 内嵌的 `koffi` FFI 绑定此前在运行时按进程的工作目录解析，因此发布版只要旁边没有 `node_modules/koffi` 就会拒绝每一条受限命令；现已改为编译期内嵌。
 - 版本号抬升到 0.9.1。
 
+### 修复
+
+- **遥测的关闭开关现在真的生效。** `DSH_TELEMETRY_DISABLED` 此前只传到 profile context 就停了 —— 启动路径上没有任何读取点 —— 于是两份 README 承诺了一个不起作用的退出方式；现在启动器把 harness 自己的规则应用到它构建的那份补丁栈上。
+- **`pnpm typecheck` 不再因已知基线而失败。** 它此前会因那 3 处 `wrap-ansi` 声明错误而非零退出，而 CI 跑的是不带该规则的裸 `tsc`，还会在本来正常的文件里报 `Cannot find module '@deepseek-ai/cordis'`（harness 的检出位置不是 `tsconfig.typecheck.json` 解析的位置）；现在两者共用同一份策略，前置缺失时会指出是哪一条。
+
 ## [0.9.0] - 2026-10-01
 
 ### 变更

@@ -13,6 +13,11 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 - **The shell works on Windows outside the build tree.** The embedded `koffi` FFI binding was resolved at runtime against the process's working directory, so a released binary refused every confined command unless a `node_modules/koffi` happened to sit beside it; it is now compiled in.
 - Version bump to 0.9.1.
 
+### Fixed
+
+- **The telemetry off switch works.** `DSH_TELEMETRY_DISABLED` reached the profile context and stopped there — nothing on the boot path read it — so both READMEs promised an opt-out that did nothing; the launcher now applies the harness's own rule to the stack it builds.
+- **`pnpm typecheck` no longer fails on the known baseline.** It exited non-zero on the three `wrap-ansi` declaration errors, and CI — running a bare `tsc` without that rule — additionally reported `Cannot find module '@deepseek-ai/cordis'` in files that were fine, because the harness checkout was not where `tsconfig.typecheck.json` resolves it; one policy now serves CI and the release gate, and a missing prerequisite says which it is.
+
 ## [0.9.0] - 2026-10-01
 
 ### Changed
