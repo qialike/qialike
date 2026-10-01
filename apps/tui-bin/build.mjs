@@ -769,6 +769,13 @@ function createResolveFarm() {
   // MUST be patched BEFORE the runner below is bundled — that bundle inlines this
   // package into the runner the binary executes.
   patchDeleteConstraint({ root: join(ROOT, 'apps/tui-bin/x', ACL_PACKAGE_DIR), log: console.log })
+  // Every confined shell call needs koffi, and `dsh-lazy-require` would resolve
+  // it against the process's cwd at runtime (see the function). This MUST run
+  // BEFORE the runner re-bundle below: the runner is a SECOND ENTRY that carries
+  // its own copy of the loader, so patching afterwards leaves it resolving koffi
+  // against the build machine's farm path — which exists while the build tree
+  // does and is gone on every user machine.
+  patchKoffiLazyResolution()
   // The Windows ACL runner is a SECOND ENTRY the harness resolves by specifier
   // at call time; a single file cannot answer that (see the function).
   buildAclRunnerBundle()
@@ -1115,6 +1122,92 @@ function patchWindowsAclRunnerEntry() {
     + ' from "@qialike/qialike-app/src/windows-acl-mode.ts";\n'
   writeFileSync(file, text.replace(firstImport, firstImport + flagImport).replace(anchor, injected + anchor))
   console.log('qialike: patched the windows-acl runner entry in the bundled sandbox-local')
+}
+
+/** Idempotency marker of {@link patchKoffiLazyResolution} in the patched source. */
+const KOFFI_PATCH_MARKER = 'QIALIKE_KOFFI_MODULE'
+
+/**
+ * The text half of {@link patchKoffiLazyResolution}: pure, so its test can pin
+ * the rewrite, the idempotency marker and the failure mode without a farm.
+ * @param text - the vendored `dsh-lazy-require/lib/index.js` source.
+ * @returns the patched source, or `undefined` when it carries the marker already.
+ * @throws when this patch's anchors are gone — a harness revision moved the
+ *   loader, and silently shipping an unresolved `koffi` breaks every Windows
+ *   shell call at runtime.
+ */
+export function patchKoffiLazyRequireSource(text) {
+  if (text.includes(KOFFI_PATCH_MARKER)) return undefined
+  const importAnchor = 'import { createRequire } from "node:module";\n'
+  const bodyAnchor = 'function createLazyRequire(specifier, parentURL) {\n'
+  if (!text.includes(importAnchor) || !text.includes(bodyAnchor)) {
+    throw new Error(
+      'qialike: the vendored dsh-lazy-require no longer matches the loader this build patches; '
+      + 're-check apps/tui-bin/build.mjs against the harness version',
+    )
+  }
+  const shimImport = 'import { KOFFI_MODULE as QIALIKE_KOFFI_MODULE }'
+    + ' from "@qialike/qialike-app/src/koffi-shim.ts";\n'
+  const redirect = [
+    '\t// qialike patch (see build.mjs): a single file cannot answer this',
+    '\t// specifier — the runtime require would ask the filesystem at the',
+    '\t// process\'s cwd, which is what broke every Windows shell call.',
+    '\tif (specifier === "koffi") return () => QIALIKE_KOFFI_MODULE;',
+    '',
+  ].join('\n')
+  return text
+    .replace(importAnchor, importAnchor + shimImport)
+    .replace(bodyAnchor, bodyAnchor + redirect)
+}
+
+/**
+ * Make `koffi` a BUILD-TIME dependency of the artifact instead of a runtime one.
+ *
+ * `@deepseek-ai/dsh-lazy-require` loads a dependency the harness way:
+ * `createRequire(parentURL)(specifier)`, resolved on first use. In a
+ * `bun build --compile` single file that call leaves the bundle for the real
+ * filesystem, and Bun anchors the walk at the process's CURRENT WORKING
+ * DIRECTORY — not at the executable. Measured with an equivalent probe (bun
+ * 1.4.2): an artifact started from a directory containing `node_modules/koffi`
+ * resolves; the same artifact started anywhere else throws `Cannot find module
+ * 'koffi'`; MOVING the binary changes nothing, while the in-tree one fails as
+ * soon as the cwd has no shim.
+ *
+ * Windows pays on the FIRST confined shell call, because the ACL rung mints its
+ * restricted token through koffi: the runner never starts, the tool layer
+ * reports the sandbox unavailable (fail-closed outside `danger-full-access`),
+ * and every command is refused. So the artifact only worked when it happened to
+ * be launched from a tree carrying the shim — a build output, never a release
+ * (`dist/qialike-<target>.zip` is written with `zip -j`, i.e. the bare exe).
+ *
+ * The fix keeps the harness's lazy semantics and redirects only the one
+ * specifier that a single file cannot resolve at runtime: the shim the bundle
+ * already carries is imported statically and handed back. Every other specifier
+ * still goes through `createRequire` untouched.
+ *
+ * The patch runs BEFORE {@link buildAclRunnerBundle} on purpose, and the order is
+ * load-bearing. The runner is a SECOND ENTRY that gets its OWN copy of this
+ * loader, so a patch applied afterwards never reaches it: the runner bundle kept
+ * `createRequire("koffi", <farm path>)` with the BUILD MACHINE's absolute path
+ * baked in, which resolved only while that tree existed. Measured on a probe of
+ * the same shape (bun 1.4.2, materialized `.cjs` required from a compiled
+ * single file): resolved while the baked tree was present, and
+ * `Cannot find module` once it was gone — i.e. it worked on the build machine
+ * and on no user machine. Patching first makes the runner inline the shim too.
+ */
+function patchKoffiLazyResolution() {
+  const file = join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-lazy-require/lib/index.js')
+  if (!existsSync(file)) {
+    console.log('qialike: dsh-lazy-require not in the farm; leaving the koffi resolution unpatched')
+    return
+  }
+  const patched = patchKoffiLazyRequireSource(readFileSync(file, 'utf8'))
+  if (patched === undefined) {
+    console.log('qialike: koffi resolution already patched')
+    return
+  }
+  writeFileSync(file, patched)
+  console.log('qialike: patched the koffi resolution in the bundled dsh-lazy-require')
 }
 
 /**

@@ -225,6 +225,103 @@ describe('the koffi the harness resolves is the bundled shim', () => {
     const api = (await import('koffi')).default as { sizeof: (type: string) => number }
     expect(() => api.sizeof('qialike_unknown_type')).toThrow(/koffi shim/)
   })
+
+  test('the build rewrites the harness loader to take the inlined shim', async () => {
+    // The artifact used to resolve `koffi` with the harness's runtime
+    // `createRequire(parentURL)`, which a single file answers by asking the real
+    // filesystem at the process's CWD: measured, the binary's shell worked only
+    // when launched from a directory carrying `node_modules/koffi` and failed
+    // with `Cannot find module 'koffi'` from every other one.
+    const { patchKoffiLazyRequireSource } = await import('../apps/tui-bin/build.mjs')
+    // This reads the very file the build patches, so in a BUILT tree it already
+    // carries both injections and `patchKoffiLazyRequireSource` returns
+    // `undefined` by design — its idempotency marker at work. That is the normal
+    // case here, not an edge one: `test-required.sh` refuses to run the suite
+    // without a fresh binary. So strip the injections back out and exercise the
+    // rewrite on a pristine input whatever state the farm is in.
+    const farm = readFileSync(
+      new URL('../apps/tui-bin/x/-deepseek-ai-dsh-lazy-require/lib/index.js', import.meta.url),
+      'utf8',
+    ).replaceAll('\r\n', '\n')
+    // …and the wiring itself: the tree the binary was built from must be the
+    // patched one, or the artifact under test does not carry the fix.
+    expect(farm).toContain('QIALIKE_KOFFI_MODULE')
+    const pristine = farm
+      .replace('import { KOFFI_MODULE as QIALIKE_KOFFI_MODULE } from "@qialike/qialike-app/src/koffi-shim.ts";\n', '')
+      .replace(
+        '\t// qialike patch (see build.mjs): a single file cannot answer this\n'
+        + '\t// specifier — the runtime require would ask the filesystem at the\n'
+        + "\t// process's cwd, which is what broke every Windows shell call.\n"
+        + '\tif (specifier === "koffi") return () => QIALIKE_KOFFI_MODULE;\n',
+        '',
+      )
+    // If either strip misses (the injected literals drifted), the marker is still
+    // there and this fails loudly instead of asserting on a patched input.
+    expect(pristine).not.toContain('QIALIKE_KOFFI_MODULE')
+    expect(pristine).toContain('import { createRequire } from "node:module";')
+    expect(pristine).toContain('function createLazyRequire(specifier, parentURL) {')
+
+    const patched = patchKoffiLazyRequireSource(pristine)
+    expect(patched).toBeDefined()
+    expect(patched).toContain('@qialike/qialike-app/src/koffi-shim.ts')
+    expect(patched).toContain('if (specifier === "koffi") return () => QIALIKE_KOFFI_MODULE;')
+    // Every other specifier keeps the harness's own caller-relative resolution.
+    expect(patched).toContain('const require = createRequire(parentURL);')
+    expect(patched).toContain('value = require(specifier);')
+    // Idempotent, and wired into the build.
+    expect(patchKoffiLazyRequireSource(patched ?? '')).toBeUndefined()
+    const build = readFileSync(new URL('../apps/tui-bin/build.mjs', import.meta.url), 'utf8')
+    expect(build).toContain('patchKoffiLazyResolution()')
+    // A loader whose anchors moved must fail the build, never ship unresolved.
+    expect(() => patchKoffiLazyRequireSource('export const loader = () => {}\n')).toThrow(/dsh-lazy-require/)
+  })
+
+  test('the kernel patch runs before the runner re-bundle that needs it', () => {
+    // The ordering is load-bearing, and getting it wrong is invisible where it is
+    // usually checked: the runner is a SECOND ENTRY with its own copy of the
+    // loader, so patching after `buildAclRunnerBundle` leaves it resolving koffi
+    // against the build machine's farm path. That resolves on the machine that
+    // built the artifact and nowhere else — measured, `Cannot find module` once
+    // the baked tree is gone — so it passes on a developer box and fails for
+    // every user. Pin the order rather than a comment about the order.
+    const build = readFileSync(new URL('../apps/tui-bin/build.mjs', import.meta.url), 'utf8')
+    const patch = build.indexOf('\n  patchKoffiLazyResolution()\n')
+    const runner = build.indexOf('\n  buildAclRunnerBundle()\n')
+    expect(patch).toBeGreaterThan(-1)
+    expect(runner).toBeGreaterThan(-1)
+    expect(patch).toBeLessThan(runner)
+  })
+
+  test('the runner bundle the build emits resolves koffi without the filesystem', () => {
+    // The end-to-end consequence of the order above, read off the real bundle. The
+    // call sites still pass the build machine's absolute farm path as `parentURL`
+    // — harmless dead data now, because the patched loader returns before it ever
+    // builds a `createRequire` — so the property to pin is the ORDER inside the
+    // function, not the absence of the string.
+    const bundle = readFileSync(
+      new URL('../apps/tui-bin/stub-native/windows-acl-runner.bundle.cjs', import.meta.url),
+      'utf8',
+    )
+    // The shim itself, inlined — its own error text is the discriminator.
+    expect(bundle).toContain('koffi shim')
+    expect(bundle).toContain('var KOFFI_MODULE =')
+    const body = bundle.slice(bundle.indexOf('function createLazyRequire('))
+    const shortCircuit = body.indexOf('if (specifier === "koffi")')
+    const filesystem = body.indexOf('createRequire(parentURL)')
+    expect(shortCircuit).toBeGreaterThan(-1)
+    expect(filesystem).toBeGreaterThan(-1)
+    // Koffi must be answered before the loader ever consults the filesystem.
+    expect(shortCircuit).toBeLessThan(filesystem)
+  })
+
+  test('the module the build points at is that same shim', async () => {
+    // The patch is only sound if `KOFFI_MODULE` really is the shim the bundle
+    // inlines — the preload installs the build's own stub at `node_modules/koffi`.
+    const shim = (await import('../packages/qialike-app/src/koffi-shim.ts'))
+      .KOFFI_MODULE as { sizeof: (type: string) => number; pointer: unknown }
+    expect(typeof shim.pointer).toBe('function')
+    expect(() => shim.sizeof('qialike_unknown_type')).toThrow(/koffi shim/)
+  })
 })
 
 /**
