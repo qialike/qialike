@@ -107,10 +107,17 @@ MIN_EXE_BYTES=$((40 * 1024 * 1024))
 
 # 发布后确认（post-publish verification）的探测参数：注册表写入到读路径可见之间有传播延迟
 # （实测秒级），所以「npm 说成功」之后还要轮询到注册表真的能解析该版本为止。
-# 默认最多等 10 × 3 s = 30 s。测试用这两个变量把等待压到接近零（与 QIALIKE_DIST 同类：
+#
+# 默认 20 × 6 s = **120 s**（2026-10-02 由 10 × 3 s 放宽）。旧默认 30 s **实测不够**：
+# 0.9.1 的 run #5 里 x64 平台包确实上传成功（provenance 的 invocationId 指向该 run），
+# 但注册表把 `time` 记在该 job 结束**之后 67 s**（packument 17:34:01.965Z / tarball
+# Last-Modified 17:34:04，而 job 17:32:54Z 已结束）⇒ 30 s 窗口内看不到它，脚本按设计
+# 「确认不到就不发下一个包」中止，结果**只有 x64 上线、arm64 与主包没发出去**。
+# 放宽窗口是唯一改动；「先确认再发下一个」这道顺序保证**不削弱**（那正是防止主包先于
+# 平台包上线的原因）。测试用这两个变量把等待压到接近零（与 QIALIKE_DIST 同类：
 # 只影响预演/测试，正式发布用默认值）。
-CONFIRM_ATTEMPTS="${QIALIKE_PUBLISH_CONFIRM_ATTEMPTS:-10}"
-CONFIRM_INTERVAL="${QIALIKE_PUBLISH_CONFIRM_INTERVAL:-3}"
+CONFIRM_ATTEMPTS="${QIALIKE_PUBLISH_CONFIRM_ATTEMPTS:-20}"
+CONFIRM_INTERVAL="${QIALIKE_PUBLISH_CONFIRM_INTERVAL:-6}"
 
 VERSION=''
 DIST_TAG='latest'

@@ -172,5 +172,23 @@ jobs:
       - name: Composition smoke test
         run: pnpm test
 
+      # Where the binary actually is. `pnpm run build` is `build.mjs` with NO
+      # arguments, and its default target set is ALL six — which writes
+      # `dist/<os>-<arch>/qialike[.exe]` and **never** creates `dist/qialike` (that
+      # path only exists for a `--single` build). A hardcoded `./dist/qialike` was
+      # therefore wrong for every build this job performs.
+      #
+      # It went unnoticed because this job never got this far: the typecheck and the
+      # hygiene job failed first (both fixed), so this step had never run. `tests/smoke.mjs`
+      # hit the same trap earlier and documents it — "a hardcoded `dist/qialike` (what
+      # this file used to do) failed every release build with 'missing …/dist/qialike'
+      # while the binary was sitting right next to it". So the host target is computed
+      # here the same way, instead of a third copy of the rule.
       - name: Binary self-report
-        run: ./dist/qialike --version
+        run: |
+          set -euo pipefail
+          case "$(uname -s)" in Linux) os=linux ;; Darwin) os=darwin ;; *) os=windows ;; esac
+          case "$(uname -m)" in x86_64 | amd64) arch=x64 ;; aarch64 | arm64) arch=arm64 ;; *) arch="$(uname -m)" ;; esac
+          bin="dist/${os}-${arch}/qialike"
+          [[ -x "$bin" ]] || { echo "::error::no binary at $bin"; ls -1 dist; exit 1; }
+          "$bin" --version

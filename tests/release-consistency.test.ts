@@ -174,3 +174,65 @@ describe('the typecheck layout is one fact', () => {
     expect(farm).toBeLessThan(check)
   })
 })
+
+describe('the npm publish workflow is wired to actually finish', () => {
+  // WHY THIS EXISTS. Three separate assumptions in these two workflows were wrong or
+  // too tight, and each one was invisible until the ones before it stopped failing:
+  //   · `publish-npm.yml` used the script's default post-publish window (10 × 3 s =
+  //     30 s). Measured on run #5: the x64 platform package really was uploaded — its
+  //     provenance names that run — but the registry only recorded it 67 s AFTER the
+  //     job had ended, so the window never saw it and the script stopped by design,
+  //     leaving one package published and two missing;
+  //   · `ci.yml`'s last step ran `./dist/qialike`, a path the default build NEVER
+  //     creates (BUILD_TARGETS=ALL writes `dist/<os>-<arch>/qialike`). It had never
+  //     been reached because two earlier steps failed first;
+  //   · so the artifacts these two files produce have to be checked for the wiring,
+  //     not only the shell logic they call.
+  const CI = read('.github/workflows/ci.yml')
+  const PUB = read('.github/workflows/publish-npm.yml')
+  const SCRIPT = read('scripts/release/publish-npm.sh')
+
+  test('the publish job widens the registry confirmation window', () => {
+    // The registry was slower than the script's default by more than 2x. Keep the
+    // window generous in the workflow, and keep the order guarantee intact.
+    const attempts = /QIALIKE_PUBLISH_CONFIRM_ATTEMPTS:\s*'?(\d+)/.exec(PUB)
+    const interval = /QIALIKE_PUBLISH_CONFIRM_INTERVAL:\s*'?(\d+)/.exec(PUB)
+    expect(attempts, 'the workflow sets an attempt count').not.toBeNull()
+    expect(interval, 'the workflow sets an interval').not.toBeNull()
+    const window = Number(attempts![1]) * Number(interval![1])
+    // 67 s was the measured commit delay; require comfortable headroom over it.
+    expect(window, `window ${window}s must clear the measured 67s delay`).toBeGreaterThanOrEqual(120)
+    // …and the script's own default must not be the tight 30 s again.
+    const dAttempts = /CONFIRM_ATTEMPTS="\$\{QIALIKE_PUBLISH_CONFIRM_ATTEMPTS:-(\d+)\}"/.exec(SCRIPT)
+    const dInterval = /CONFIRM_INTERVAL="\$\{QIALIKE_PUBLISH_CONFIRM_INTERVAL:-(\d+)\}"/.exec(SCRIPT)
+    expect(dAttempts, 'the script default is parseable').not.toBeNull()
+    expect(dInterval, 'the script default is parseable').not.toBeNull()
+    expect(Number(dAttempts![1]) * Number(dInterval![1]),
+      'the script default window must also clear the measured delay').toBeGreaterThanOrEqual(120)
+  })
+
+  test('the confirmation gate still stops before the next package', () => {
+    // Widening a timeout must not have turned the gate into a warning: the whole
+    // point of confirming is that the MAIN package (whose optionalDependencies name
+    // the platform packages) never goes out before they are resolvable.
+    expect(SCRIPT).toContain('confirm_published "$pkg" || {')
+    expect(SCRIPT).toMatch(/die "停在 \$pkg（发布确认未通过，未推送后续包）"/)
+  })
+
+  test('the self-report step does not assume a path the build never creates', () => {
+    const step = CI.slice(CI.indexOf('Binary self-report'))
+    expect(step, 'the step exists').not.toBe('')
+    // `dist/qialike` only exists for a `--single` build; the default is ALL.
+    expect(step, 'must not hardcode dist/qialike').not.toMatch(/\.\/dist\/qialike --version/)
+    expect(step, 'resolves the host target like smoke.mjs does').toContain('uname -s')
+    expect(step, 'names the per-target directory').toContain('dist/${os}-${arch}/qialike')
+  })
+
+  test('the default build really does not produce dist/qialike', () => {
+    // The premise of the guard above, pinned to the source rather than to a comment:
+    // with no `--single`, buildTargets() returns every target.
+    const BUILD = read('apps/tui-bin/build.mjs')
+    expect(BUILD).toMatch(/args\.includes\('--single'\) \? \[null\] : \[\.\.\.ALL_TARGETS\]/)
+    expect(read('package.json')).toContain('"build": "node apps/tui-bin/build.mjs"')
+  })
+})
