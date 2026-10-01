@@ -19,6 +19,12 @@
 #   ./scripts/release/push-qialike-release.sh --notes-only      # 只把 CHANGELOG 同步到两个源的
 #                                                              # Release 正文（不推标签、不碰资产）
 #
+# **默认运行一次完成两半**（这就是第 11 项）：
+#   ① 7 个文件 —— 6 个平台二进制 + `sha256sums.txt`（清单 `dist/sha256sums.txt` 决定上传什么）；
+#   ② 两个源的 **Release 正文** —— CHANGELOG 该版本那一节。
+# 两半都成功才算这一项完成：正文失败时资产仍会照传（不白费 100+ MB），最后统一报失败并
+# 给出手工补正文的路子。`--notes-only` 只做 ②（用于给已发布的版本补写正文，不推标签、不碰资产）。
+#
 # Release 正文 = `CHANGELOG.md` / `CHANGELOG.zh.md` 里该版本那一节（英文在上、中文在下，
 # 由 `changelog-section.sh` 抽取）。GitHub / GitCode 上「点标签看到的东西」就是这个正文；
 # 标签自身的附注也由 `tag-qialike.sh` 写成同一份内容（`git show <tag>` 能看到）。
@@ -178,6 +184,10 @@ echo "  source   = $SOURCE"
 # `qialike <版本>` ⇒ 远端**从来没有修改点**。这里改成从 CHANGELOG 抽（英文在上、
 # 中文在下），与仓库里的更新日志同源。抽不到就退回旧的一行式 —— 发布不该因为
 # 更新日志缺一节而失败。
+# 正文同步的失败要**攒起来**、在最后统一判定：两个源的正文与 7 个资产是「同一次推送
+# 应当完成的两半」，所以正文失败必须让本次运行失败 —— 但**不能**因此把已经传上去的
+# 100+ MB 资产丢掉重来。顺序因此是：资产照传 → 最后按 NOTES_FAILED 决定退出码。
+NOTES_FAILED=()
 NOTES="$("$HERE/changelog-section.sh" "$VERSION" 2>/dev/null || true)"
 if [[ -n "$NOTES" ]]; then
   echo "  Release 正文 = CHANGELOG 的 $VERSION 节（$(printf '%s\n' "$NOTES" | wc -l | tr -d ' ') 行）"
@@ -513,7 +523,9 @@ gc_sync_notes() {
     return 0
   fi
   warn "gitcode 拒绝更新 release $TAG 的正文"
-  warn "  兜底：在 https://gitcode.com/$GITCODE_REPO/releases 里手工编辑 $TAG 的说明"
+  warn "  兜底：在 https://gitcode.com/$GITCODE_REPO/releases 里手工编辑 $TAG 的说明，内容取："
+  warn "        scripts/release/changelog-section.sh $TAG"
+  NOTES_FAILED+=(gitcode)
   return 1
 }
 
@@ -635,7 +647,7 @@ if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
             -H 'Content-Type: application/json' \
             -d "$(jq -nc --arg b "$NOTES" '{body:$b}')" >/dev/null \
             && ok "release $TAG 正文已同步为 CHANGELOG 该节" \
-            || warn "release $TAG 正文同步失败（资产与标签不受影响）"
+            || { warn "release $TAG 正文同步失败（资产仍会继续上传）"; NOTES_FAILED+=(GitHub); }
         fi
         ;;
       404)
@@ -698,9 +710,22 @@ if [[ "$SOURCE" == gitcode || "$SOURCE" == both ]]; then
   fi
 fi
 
+# ★ 判定：资产与正文是**同一次推送的两半**，两半都成了才算这一项完成。
+#   放在这里（而不是正文同步那一刻）是有意的：此刻 7 个资产已经在远端了，
+#   因正文失败而中止只会让这 100+ MB 白传一遍，并不能让正文变得可写。
+#   所以顺序是「先做完能做的，再如实报告剩下什么没做到」。
+if [[ ${#NOTES_FAILED[@]} -gt 0 ]]; then
+  bold "推送完成，但 Release 正文未同步"
+  warn "以下源的 Release 正文仍是旧内容：${NOTES_FAILED[*]}"
+  warn "  资产（7 个文件）已上传并已核对摘要 —— 这一半是成功的。"
+  warn "  正文可手工补：取 scripts/release/changelog-section.sh $TAG 的输出，粘到该源的 release 编辑页。"
+  die "Release 正文未同步：${NOTES_FAILED[*]}（资产已上传，重跑本脚本只会重试正文与覆盖同名资产）"
+fi
+
 bold "推送完成"
 cat <<EOF
   版本 $TAG 的 ${#UPLOAD_LIST[@]} 个文件已推到：$SOURCE
+  Release 正文已同步为 CHANGELOG 的 $VERSION 节（两个源）。
   两个源的 sha256sums.txt 都已与本地逐字节核对。
 
   下一步（人工，脚本盖不到的）：
