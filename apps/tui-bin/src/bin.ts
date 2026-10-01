@@ -36,7 +36,13 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
 import type { PatchOptions } from '@deepseek-ai/cordis-plugin-include'
 import Group from '@deepseek-ai/cordis-plugin-group'
-import { auditStartupEntries, installFailLoud, loadLayeredEnv, loadOptionalPatches } from '@deepseek-ai/dsh-app-boot'
+import {
+  auditStartupEntries,
+  installFailLoud,
+  loadLayeredEnv,
+  loadOptionalPatches,
+  resolveTelemetryPatch,
+} from '@deepseek-ai/dsh-app-boot'
 import { DSH_HOME_DIR_NAME, dshHomePath } from '@deepseek-ai/dsh-home-paths'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { PROFILE_ROOT, BASE_PATCH, TUI_PATCH, HARNESS_VERSION } from '../generated/config-embed.js'
@@ -49,6 +55,21 @@ import { classifyProjectLayer } from './project-overlay.ts'
 import type { ProjectRowProblem } from './project-overlay.ts'
 
 const NAME = 'qialike'
+
+/**
+ * The otel row `DSH_TELEMETRY_DISABLED` switches off, spelled as the harness
+ * spells it (`TELEMETRY_ROW_ID` in `dsh-app-boot`, which is not exported).
+ *
+ * Only the ID is local: the decision itself is delegated to the harness's own
+ * exported `resolveTelemetryPatch`, so a change to the rule or to the row it
+ * names arrives with the harness.
+ *
+ * NOT YET TESTED. The two things a test has to pin are that the harness's helper
+ * still targets this ID, and that the row is really composed in the stack built
+ * below — measured today the variable was inert, so a future edit that drops the
+ * append would silently restore that bug with nothing to catch it.
+ */
+const TELEMETRY_ROW_ID = 'session-telemetry-otel'
 
 /** The one entry under the harness home that `uninstall` keeps: `bin`, the
  *  install directory holding the program itself. */
@@ -1617,6 +1638,30 @@ async function main(): Promise<void> {
   }
   const patches = [...structuredClone(base), ...structuredClone(tui),
     ...structuredClone(user), ...structuredClone(project)]
+
+  // Telemetry opt-out, and this stack is the only place it can take effect. The
+  // harness's own BASE_PATCH says where the switch belongs: "A non-empty
+  // DSH_TELEMETRY_DISABLED — any value, including '0'/'false' — opts the process
+  // out (the launchers patch the row disabled; config cannot disable a row)".
+  // `resolveTelemetryPatch` is that launcher-facing helper.
+  //
+  // Passing `profileContext.telemetryDisabledEnv` below is NOT enough, and that
+  // was the bug: that field is read only by `readProfilePatches`, which
+  // plugin-manager (`listPlugins`/`removeBundle`), config-editor and hmr call for
+  // their own bookkeeping — never to compose the boot stack. Measured before this
+  // fix: `--dump-config` was byte-identical with and without the variable, while
+  // the row itself stayed enabled (the base layer does mark its three disabled
+  // rows, so the marker is observable) — i.e. the variable was inert here and the
+  // README's promise was false.
+  //
+  // Appended LAST on purpose, matching `readProfilePatches`: an environment
+  // variable the user set is a deliberate opt-out, so it outranks an overlay row
+  // that would re-enable the otel row by id.
+  const telemetryPatch = resolveTelemetryPatch(
+    process.env.DSH_TELEMETRY_DISABLED,
+    patches.some(row => row.id === TELEMETRY_ROW_ID),
+  )
+  if (telemetryPatch !== undefined) patches.push(telemetryPatch)
 
   assertReferencedPluginsTrusted([user, project], readTrustLedger())
   setTrustLedger(readTrustLedger())
