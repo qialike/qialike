@@ -78,6 +78,10 @@ case "$last" in
   */user)                     status="\${FIX_USER_STATUS:-200}"; body='{"login":"fixture"}' ;;
   */releases/tags/*)          status="\${FIX_RELEASE_STATUS:-200}"; body="\${FIX_RELEASE_BODY:-}"; [ -n "$body" ] || body='{"id":42}' ;;
   */releases)                 status=201; body='{"id":42}' ;;
+  # GET /releases/<id> — the draft probe that decides whether to emit the single
+  # published event. null is valid JSON, so an unset fixture leaves the release
+  # looking already-published (the idempotent re-run path).
+  */releases/42)              status=200; body="\${FIX_DRAFT_BODY:-null}" ;;
   */releases/*/assets*)       status=200; body='[]' ;;
   */releases/assets/*)        status=204; body='' ;;
   */releases/download/*)      status="\${FIX_MANIFEST_STATUS:-200}"; body="$(cat "$FIX_MANIFEST")" ;;
@@ -162,6 +166,60 @@ function run(extraEnv: Record<string, string>) {
 }
 
 const uploadCount = (calls: string) => calls.split('\n').filter((l) => l.includes('uploads.github.com')).length
+
+/** Index of the first logged line matching `re`, or -1. Used to assert ORDER. */
+const lineAt = (calls: string, re: RegExp) => calls.split('\n').findIndex((l) => re.test(l))
+/** Index of the LAST logged upload, or -1. */
+const lastUploadAt = (calls: string) =>
+  calls.split('\n').reduce((acc, l, i) => (l.includes('uploads.github.com') ? i : acc), -1)
+
+describe('the release is published only after every asset is uploaded', () => {
+  // WHY THIS EXISTS. A release created with `draft:false` makes GitHub emit
+  // `release: published` in the same second the POST returns — before the assets
+  // exist. `publish-npm.yml` triggers on that event and downloads the Windows zips,
+  // so 0.8.3 measured published_at 14:58:43Z against assets finishing at
+  // 14:59:26Z/14:59:38Z: the workflow's asset step could only 404. Creating the
+  // release as a draft and publishing it last is what removes the window, and it is
+  // an ORDER property — invisible in the two calls read separately.
+
+  test.skipIf(!canRun)('a created release is a draft, then PATCHed after the uploads', () => {
+    // FIX_DRAFT_BODY models the state the fixture's POST just left behind: the shim is
+    // stateless across curl invocations, so the follow-up GET has to be told that the
+    // release it created IS a draft (otherwise it answers `null` and the script
+    // correctly concludes there is nothing to publish).
+    const r = run({ FIX_RELEASE_STATUS: '404', FIX_DRAFT_BODY: '{"draft":true}' })
+
+    expect(r.status).toBe(0)
+    expect(r.out).toContain('已创建（draft')
+    // The creation itself must NOT publish, or the event fires before the assets.
+    expect(r.calls).toMatch(/-X POST[^\n]*"draft":true/)
+    // …and the publish happens, by PATCH, strictly after the last upload.
+    const patchAt = lineAt(r.calls, /-X PATCH/)
+    expect(patchAt).toBeGreaterThan(-1)
+    expect(r.calls).toMatch(/-X PATCH[^\n]*\{"draft":false\}/)
+    expect(patchAt).toBeGreaterThan(lastUploadAt(r.calls))
+    expect(uploadCount(r.calls)).toBe(7)
+    expect(r.out).toContain('已发布（资产齐备后才发出 published 事件）')
+  })
+
+  test.skipIf(!canRun)('a draft left behind by an earlier run is published by this one', () => {
+    // Re-running after a failure lands on the 200 branch with a draft on the remote;
+    // it must still end published, or the release stays invisible forever.
+    const r = run({ FIX_RELEASE_STATUS: '200', FIX_DRAFT_BODY: '{"draft":true}' })
+
+    expect(r.status).toBe(0)
+    expect(r.out).toContain('已存在')
+    expect(lineAt(r.calls, /-X PATCH/)).toBeGreaterThan(lastUploadAt(r.calls))
+  })
+
+  test.skipIf(!canRun)('an already-published release is left alone, so no second event fires', () => {
+    const r = run({ FIX_RELEASE_STATUS: '200', FIX_DRAFT_BODY: '{"draft":false}' })
+
+    expect(r.status).toBe(0)
+    expect(r.calls).not.toMatch(/-X PATCH/)
+    expect(r.out).toContain('已是发布状态（未改动，不重发事件）')
+  })
+})
 
 describe('the GitHub release branch judges by status code, not by a non-empty body', () => {
   test.skipIf(!canRun)('a 404 goes to CREATE instead of being read as "已存在"', () => {

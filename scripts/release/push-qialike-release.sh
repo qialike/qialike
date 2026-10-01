@@ -511,12 +511,20 @@ if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
       404)
         PRE='false'
         [[ "$TAG" == *-* ]] && PRE='true'
+        # ★ 先建成 **draft**（不是直接发布）。原因是发布顺序决定的一条竞态：
+        #   `release: published` 事件是 `.github/workflows/publish-npm.yml`（OIDC 发 npm）的
+        #   触发器之一，而 GitHub 在 POST 返回的**同一秒**就发出该事件 —— 此刻六个资产还没传。
+        #   0.8.3 实测：published_at 14:58:43Z，工作流 14:58:45Z 起跑，而 Windows 两个包
+        #   14:59:26Z / 14:59:38Z 才传完 ⇒ 工作流第 7 步「取回本版本的 Windows 资产」必然 404，
+        #   失败发生在发布步骤之前（所以那次没有留下半截 npm 状态，纯属运气）。
+        #   draft 期间 GitHub 不发 published 事件，所以「资产齐备」一定先于「事件发出」——
+        #   发布动作被显式挪到第 527-531 行的上传循环之后。
         REL="$(gh_api POST "/repos/$GITHUB_REPO/releases" \
           -H 'Content-Type: application/json' \
           -d "$(jq -nc --arg t "$TAG" --arg n "$TAG" --arg b "qialike $TAG" --argjson pre "$PRE" \
-                '{tag_name:$t, name:$n, body:$b, draft:false, prerelease:$pre}')")" \
+                '{tag_name:$t, name:$n, body:$b, draft:true, prerelease:$pre}')")" \
           || die "GitHub 创建 release $TAG 失败（tag 是否已推送？）"
-        ok "release $TAG 已创建"
+        ok "release $TAG 已创建（draft —— 资产传完才发布）"
         ;;
       401) die "GitHub 令牌无效（401 Bad credentials）—— 换一个 GITHUB_TOKEN 后重跑" ;;
       403) die "GitHub 令牌无权写 $GITHUB_REPO（403）—— 需要 Contents: Read and write" ;;
@@ -528,6 +536,19 @@ if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
       gh_upload "$ID" "$DIST/$f" "$f"
       ok "上传 $f"
     done
+    # ★ 资产齐备之后才把 draft 转正式 —— 这一步是**唯一**发出 `release: published` 的地方。
+    #   幂等：已经是正式状态的 release（重跑本脚本）不再 PATCH，免得无谓地再触发一次工作流。
+    #   若这里失败，资产已经全在 draft 上，重跑本脚本会跳过上传（同名资产先删后传）并再试一次
+    #   —— 不会留下「半截发布」。
+    if [[ "$(gh_api GET "/repos/$GITHUB_REPO/releases/$ID" | jq -r '.draft')" == 'true' ]]; then
+      gh_api PATCH "/repos/$GITHUB_REPO/releases/$ID" \
+        -H 'Content-Type: application/json' \
+        -d '{"draft":false}' >/dev/null \
+        || die "GitHub release $TAG 从 draft 转正式失败（资产已上传，重跑本脚本会再试）"
+      ok "release $TAG 已发布（资产齐备后才发出 published 事件）"
+    else
+      ok "release $TAG 已是发布状态（未改动，不重发事件）"
+    fi
     verify_manifest "$GITHUB_DL" "GitHub"
   fi
 fi

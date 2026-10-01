@@ -46,15 +46,21 @@
 #   ./publish-npm.sh --allow-untagged    # 允许 tag v<版本> 不存在（本地预演）
 #   ./publish-npm.sh --allow-dirty       # 允许工作区不干净（本地预演）
 #   ./publish-npm.sh --keep-staging      # 保留暂存目录以便人工检查
+#   ./publish-npm.sh --dispatch          # ★ 本机触发 CI 里的 OIDC 发布并跟踪它（推荐）
 #   ./publish-npm.sh -h
 #
-# 凭据两条路：**首选 OIDC**（`--oidc`，或 CI 里自动识别 `ACTIONS_ID_TOKEN_REQUEST_URL`；
-# 不需要任何长期令牌），其次才是长期令牌 ——
-# 环境变量：NODE_AUTH_TOKEN / NPM_TOKEN —— 发布凭据（CI 用）。**npm 本身不读它们**；
-#   本脚本把它们接成 `npm_config_//<registry>/:_authToken` 传给 npm 子进程（不写盘、
-#   不进 argv）。手跑 npm publish 时请自行在 ~/.npmrc 写
-#   `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`。NPM_REGISTRY 可换注册表。
-#   **不要**把 token 写进仓库；本脚本只读环境。
+# 三条发布路径（**OIDC 与长期令牌互斥，且只有前两条能真正上传**）：
+#   ① `--dispatch`（推荐）：**本机只触发与跟踪**，真正 publish 的是 GitHub Actions。
+#      trusted publishing 的凭据是 CI 每次运行现换的短期 OIDC 令牌，**本机签不出来** ——
+#      所以 OIDC 发布只能发生在 CI 里，这条路把「在本机按一次」与「发布在 CI 里」接起来。
+#      需要：gh CLI 已认证、默认分支上有 publish-npm.yml、该版本的 Release 资产齐备。
+#   ② `--oidc`（**在 CI 内部**由工作流调用；本机手跑无意义）：直接走 OIDC 发布。
+#      或 CI 里自动识别 `ACTIONS_ID_TOKEN_REQUEST_URL`（不需要任何长期令牌）。
+#   ③ 长期令牌（回退路径）：环境变量 NODE_AUTH_TOKEN / NPM_TOKEN。**npm 本身不读它们**；
+#      本脚本把它们接成 `npm_config_//<registry>/:_authToken` 传给 npm 子进程（不写盘、
+#      不进 argv）。手跑 npm publish 时请自行在 ~/.npmrc 写
+#      `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}`。NPM_REGISTRY 可换注册表。
+#      **不要**把 token 写进仓库；本脚本只读环境。
 #
 # 退出码：0 = 全部发布成功（或 --dry-run 通过）；1 = 任一环节失败（并指明
 #   停在哪一步、哪些包已发布 —— npm 不可撤销，必须说清）。
@@ -103,6 +109,7 @@ VERSION=''
 DIST_TAG='latest'
 OTP=''
 OIDC=0
+DISPATCH=0
 PROVENANCE=0
 DRY_RUN=0
 ASSUME_YES=0
@@ -128,6 +135,7 @@ while [[ $# -gt 0 ]]; do
     --tag) DIST_TAG="${2:-}"; shift ;;
     --otp) OTP="${2:-}"; shift ;;
     --oidc) OIDC=1 ;;
+    --dispatch) DISPATCH=1 ;;
     --provenance) PROVENANCE=1 ;;
     --allow-untagged) ALLOW_UNTAGGED=1 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
@@ -233,6 +241,116 @@ MAIN_README="$NPM_DIR/$(tdir "$MAIN")/README.md"
 grep -qF "@$PLACEHOLDER" "$MAIN_README" \
   || die "$MAIN_README 里没有 @$PLACEHOLDER 占位符 —— 重装示例必须以占位符形式存在，版本由本脚本注入"
 ok "三份模板就位（版本占位符 $PLACEHOLDER；private=true 误发护栏在位；README 无写死版本）"
+
+# ---- 2b. --dispatch：本机触发 CI 里的 OIDC 发布 ------------------------------
+# 为什么需要它：trusted publishing 的凭据是 GitHub Actions 每次运行**现换的短期 OIDC
+# 令牌**，本机签不出来 —— 所以 OIDC 发布只能发生在 CI 里。这条路把「在本机按一次」与
+# 「发布发生在 CI 里」接起来：本机只负责触发与跟踪，真正 publish 的是工作流。
+# 它照样复用上面第 2 步的版本一致性 / 工作区 / 标签校验，但**不需要本机 dist**：
+# 工作流下载的是已归档的 Release 资产（§8.3「发布必须来自已归档产物」）。
+if [[ "$DISPATCH" == 1 ]]; then
+  bold '本机触发 CI（OIDC 发布）'
+  [[ "$OIDC" == 0 ]] || die "--dispatch 与 --oidc 互斥：--oidc 是「在 CI 内部」用的，--dispatch 是「从本机触发 CI」"
+  [[ -z "$OTP" ]] || die "--dispatch 与 --otp 互斥：OIDC 发布不需要一次性码 —— 那正是它要取代的东西"
+  command -v gh >/dev/null 2>&1 \
+    || die "找不到 gh CLI —— 本机触发 CI 需要它（https://cli.github.com）；或改走长期令牌路径"
+
+  SLUG="${GITHUB_REPO:-}"
+  if [[ -z "$SLUG" ]]; then
+    # 先剥 `.git` 再取 owner/repo：**POSIX ERE 没有惰性量词**（`+?` 不是"尽量少匹配"），
+    # 把 `(\.git)?` 写进同一条正则会让 `[^/]+` 贪婪吃掉 `.git`，于是 slug 变成
+    # `qialike/qialike.git` —— 实测踩到过，gh api 会回 404 并伪装成"工作流不存在"。
+    SLUG="$(git -C "$REPO" remote get-url origin 2>/dev/null \
+      | sed -E 's#\.git$##; s#^.*[:/]([^/]+/[^/]+)$#\1#')" || SLUG=''
+  fi
+  [[ -n "$SLUG" ]] || die "无法确定 GitHub 仓库 —— 请 export GITHUB_REPO=owner/repo"
+  WF='publish-npm.yml'
+
+  # gh 的凭据：它自己认 GH_TOKEN / GITHUB_TOKEN；两者都没有时才看它的登录态。
+  if [[ -z "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]] && ! gh auth status >/dev/null 2>&1; then
+    die "gh 未认证 —— export GH_TOKEN=<带 workflow 权限的令牌>，或先跑 gh auth login"
+  fi
+  ok "gh 可用，仓库 $SLUG，工作流 $WF"
+
+  # ① 工作流必须在**默认分支**上：workflow_dispatch 只认默认分支里的工作流文件。
+  #    这里按状态码分类，而不是把任何失败都归成"工作流不存在" —— 实测一枚无效令牌会让
+  #    gh api 回 401，而笼统报"默认分支上没有该工作流"会把人送去推 main（白费一趟）。
+  wf_err="$(gh api "repos/$SLUG/contents/.github/workflows/$WF" 2>&1 >/dev/null)" || {
+    # 先**去掉全部空白**再匹配：gh 的报错体是美化过的 JSON（`"status": "401"`），
+    # 但那是它的展示选择、不是契约 —— 紧凑形式（`"status":"401"`）同样合法，而
+    # `case` 只能做通配匹配。归一化之后两种形态命中同一条分支（这条被
+    # tests/publish-npm-dispatch.test.ts 抓到过：只写带空格的模式时 404 会掉进兜底分支）。
+    flat="${wf_err//[[:space:]]/}"
+    case "$flat" in
+      *'"status":"401"'* | *Badcredentials*)
+        die "GitHub 令牌无效（401）—— 换一个令牌后重跑" ;;
+      *'"status":"403"'*)
+        die "令牌无权读 $SLUG（403）—— 需要该仓库的读权限（classic 令牌的 repo scope）" ;;
+      *'"status":"404"'*)
+        die "默认分支上没有 .github/workflows/$WF —— workflow_dispatch 只认默认分支上的工作流（需要先推 main）" ;;
+      *)
+        die "查询工作流失败：$(printf '%s' "$wf_err" | head -1)" ;;
+    esac
+  }
+  ok "工作流在默认分支上（workflow_dispatch 可达）"
+
+  # ② Release 与资产：工作流下载它们发布，不在 CI 里重新编译。
+  assets="$(gh release view "$VERSION" --repo "$SLUG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+  [[ -n "$assets" ]] || die "GitHub Release $VERSION 不存在或取不到 —— 先做 ⑪ 推送（release-menu.sh 11）"
+  for a in qialike-windows-x64.zip qialike-windows-arm64.zip sha256sums.txt; do
+    grep -qx "$a" <<<"$assets" || die "Release $VERSION 缺少资产 $a —— 工作流靠它发布，先补 ⑪"
+  done
+  ok "Release $VERSION 的 Windows 两个 zip 与 sha256sums.txt 齐备"
+
+  DRY_INPUT='false'
+  [[ "$DRY_RUN" == 1 ]] && DRY_INPUT='true'
+  if [[ "$ASSUME_YES" == 0 ]]; then
+    printf '\n  将通过 GitHub Actions 触发 %s 的 npm 发布（dry_run=%s）：\n' "$VERSION" "$DRY_INPUT"
+    printf '      三个包（两个平台包 → 主包）会**不可撤销地**发布（72 小时后禁止删除）。\n'
+    printf '  继续？[y/N] '
+    read -r reply || reply=''
+    case "$reply" in
+      y | Y | yes | YES) ;;
+      *) die '已取消（没有触发任何东西）' ;;
+    esac
+  fi
+
+  # 记下触发前已有的运行 id：GitHub 接受 dispatch 后**不返回 run id**，而列表有注册延迟，
+  # 所以「最新一次」可能仍是上一次的。用差集挑出本次那次，比赌"最新"稳。
+  before="$(gh run list --repo "$SLUG" --workflow "$WF" --event workflow_dispatch --limit 30 \
+              --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+  gh workflow run "$WF" --repo "$SLUG" -f "version=$VERSION" -f "dry_run=$DRY_INPUT" \
+    || die "gh workflow run 失败 —— 令牌是否带 workflow 权限？"
+  ok "已触发 workflow_dispatch（version=$VERSION, dry_run=$DRY_INPUT）"
+
+  run_id=''
+  for _ in $(seq 1 30); do
+    now="$(gh run list --repo "$SLUG" --workflow "$WF" --event workflow_dispatch --limit 30 \
+             --json databaseId --jq '.[].databaseId' 2>/dev/null || true)"
+    run_id="$(comm -13 <(printf '%s\n' "$before" | sort -u) <(printf '%s\n' "$now" | sort -u) | head -1)"
+    [[ -n "$run_id" ]] && break
+    sleep 2
+  done
+  [[ -n "$run_id" ]] || die "触发了，但没认出本次运行 —— 打开 https://github.com/$SLUG/actions/workflows/$WF 查看"
+  say "本次运行 = https://github.com/$SLUG/actions/runs/$run_id"
+
+  # `environment: npm-publish` 若配了 required reviewers，运行会停在 waiting 等人工批准，
+  # 而 `gh run watch` 会一直等 —— 所以先说清楚再等，别让人以为卡死了。
+  warn "若该 run 停在 waiting：那是 npm-publish 环境配了 required reviewers，去上面的链接批准即可"
+  gh run watch "$run_id" --repo "$SLUG" --exit-status \
+    || die "CI 运行失败 —— 见 https://github.com/$SLUG/actions/runs/$run_id"
+  ok "CI 运行成功"
+
+  bold '完成（发布已在 CI 里发生）'
+  cat <<EOF
+
+  核验（注册表元数据，不需要目标机器）：
+      npm view $MAIN version dist-tags optionalDependencies
+      npm view ${PLATFORM_PKGS[0]} version os cpu
+      npm view ${PLATFORM_PKGS[1]} version os cpu
+EOF
+  exit 0
+fi
 
 # ---- 3. 前置：二进制齐备且看着对 --------------------------------------------
 bold '二进制产物'
