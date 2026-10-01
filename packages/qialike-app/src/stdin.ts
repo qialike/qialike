@@ -83,6 +83,45 @@ const PASTE_START = [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e]
 const PASTE_END = [0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e]
 
 /**
+ * Upper bound on an open paste region, in bytes.
+ *
+ * A paste region must never be able to grow without bound: the terminator is the
+ * LAST thing in the payload, so anything that truncates the paste removes exactly
+ * the bytes that would close it (measured: with the app blocked in CPR
+ * calibration, the pty accepted only ~25 KB — a 4 MB paste landed 0.6% of its
+ * bytes). Before this bound existed, a paste whose terminator never arrived put
+ * the decoder into paste mode FOREVER: the pasted text was dropped and every
+ * later byte — typed characters, Ctrl+u, Ctrl+C — was swallowed, which presents
+ * as "the keyboard died". 1 MiB is far beyond a usable draft and keeps the
+ * recovery bounded.
+ */
+const PASTE_MAX_BYTES = 1 << 20
+export { PASTE_MAX_BYTES }
+
+/**
+ * Silence (ms) that ends an open paste region, used by the caller's timer next to
+ * its lone-`ESC` one.
+ *
+ * Generous on purpose: a legitimately slow paste must not be cut short, while a
+ * lost terminator must not leave the keyboard dead. 250 ms is far longer than any
+ * inter-chunk gap of a paste a terminal is actually delivering, and short enough
+ * that a user who pastes and then types does not notice.
+ */
+export const PASTE_STALL_MS = 250
+
+/**
+ * Silence (ms) that ends the {@link StdinDecoder.pasteDiscard} phase.
+ *
+ * Short, because the two phases answer different questions. The first window asks
+ * "did the terminator get lost?" and must be long enough not to cut a slow paste.
+ * The second asks "is more of that same paste still coming?" — and a paste resumes
+ * within microseconds, so a short window keeps a surplus out of the keyboard
+ * without making the user wait, and a keystroke a few hundred ms later is never
+ * swallowed.
+ */
+export const PASTE_DISCARD_STALL_MS = 50
+
+/**
  * A stateful raw-stdin decoder. Feed it chunks with {@link push}; complete
  * sequences become events, incomplete ones stay buffered for the next chunk,
  * and unknown sequences are swallowed.
@@ -91,6 +130,18 @@ export class StdinDecoder {
   private buf: number[] = []
   /** Accumulated bracketed-paste bytes while a `ESC[200~ … ESC[201~` region is open. */
   private paste: number[] | null = null
+  /**
+   * Second phase of an abandoned paste: the region is still open, but its content
+   * has already been handed to the app once (cap or stall), so what keeps arriving
+   * is the SURPLUS of an oversized/paused paste and is DROPPED rather than decoded.
+   *
+   * The direction matters. These bytes came from the paste, and a paste is text:
+   * decoding them as keystrokes would give a `\r` in someone's clipboard the power
+   * to submit a turn, and a control byte the power to run a command — the
+   * fail-open direction. Dropping is bounded (the surplus of a paste the app
+   * already received up to the cap) and cannot act on the user's behalf.
+   */
+  private pasteDiscard = false
   /** A right-button press was decoded and its (indistinguishable) release is
    *  still expected: tag that release as `mouseRightRelease` so popups swallow
    *  it instead of treating it as a left-click confirm. Cleared by any other
@@ -116,6 +167,88 @@ export class StdinDecoder {
     return [{ escape: true }]
   }
 
+  /** True while a `ESC[200~ … ESC[201~` region is open — the caller arms its
+   *  stall timer on this, exactly as it does for a lone `ESC`. */
+  get pastePending(): boolean {
+    return this.paste !== null
+  }
+
+  /**
+   * How long the caller should wait before calling {@link flushPaste}: the phase's
+   * own window, or 0 when no region is open. The caller stays dumb about the policy
+   * and this module keeps it in one place (see the two constants).
+   */
+  get pasteRecoveryDelayMs(): number {
+    if (this.paste === null) return 0
+    return this.pasteDiscard ? PASTE_DISCARD_STALL_MS : PASTE_STALL_MS
+  }
+
+  /**
+   * Recover from a paste region that never closed (the caller's stall timer, or a
+   * region that outgrew {@link PASTE_MAX_BYTES}).
+   *
+   * Called with content still accumulating it HANDS THE APP what arrived and moves
+   * the region to {@link pasteDiscard}; called again with nothing new it leaves the
+   * region entirely, so a terminator that never comes costs one stall, not the
+   * keyboard. A terminator that arrives late still closes the region normally.
+   * @returns events to dispatch — the recovered paste text, or nothing.
+   */
+  flushPaste(): RawKey[] {
+    const out: RawKey[] = []
+    this.flushPasteInto(out)
+    return out
+  }
+
+  private flushPasteInto(out: RawKey[]): void {
+    if (this.paste === null) return
+    if (this.pasteDiscard) {
+      // Nothing has arrived since the first flush, so the terminator is not coming:
+      // close the region and let the keyboard work again. A partial terminator left
+      // in `buf` would otherwise be re-read as an escape sequence (and a lone `ESC`
+      // would surface as an Esc keypress the user never made).
+      if (this.buf.length > 0 && this.buf.length < PASTE_END.length
+        && this.buf.every((v, i) => v === PASTE_END[i])) this.buf.length = 0
+      this.paste = null
+      this.pasteDiscard = false
+      return
+    }
+    const had = this.paste.length > 0
+    this.pasteDiscard = true
+    if (had) this.emitPaste(out)
+  }
+
+  /**
+   * The single point where buffered paste bytes become a value the app can use.
+   * Both exits (the terminator and {@link flushPasteInto}) go through here so the
+   * normalization below cannot be bypassed by one of them.
+   */
+  private emitPaste(out: RawKey[]): void {
+    const text = Buffer.from(this.paste ?? []).toString('utf8')
+    this.paste = []
+    // A paste is UNTRUSTED TEXT, and both normalizations belong HERE, at the
+    // single point where raw paste bytes become a value the app can use, so no
+    // consumer has to remember them:
+    //
+    //  · line endings: a paste is TEXT, so a CR is content, never a keystroke. A
+    //    CRLF clipboard (Windows apps, browsers, chat UIs) otherwise reached the
+    //    draft verbatim, and a row of text ending in CR is WIPED when it is
+    //    written to the terminal (the CR returns the cursor to column 0 and the
+    //    row's own padding then overwrites it) — measured: pasting two CRLF lines
+    //    left an empty first row and only the second line visible, which reads as
+    //    "the sidebar footer ran into the input box".
+    //  · control bytes: copied terminal/build output is full of ANSI
+    //    (`\x1b[31m`, `\x1b[2J`, `\x1b[K`, OSC titles) and copied web text can
+    //    carry OSC 52. Ink re-emits a control byte it does not recognise VERBATIM
+    //    into the frame — measured on the real binary: a draft holding `X\x1b[2JY`
+    //    put `\x1b[2J` into the composer row's own write (a screen erase, replayed
+    //    on every repaint), `\x1b[31m` reached the terminal as live styling and OSC
+    //    52 as a clipboard write. The DIALOG paste path already sanitizes
+    //    (clipboard.ts); doing it here covers the composer and every other consumer
+    //    of `k.paste` at once. Typed input cannot carry these bytes — the decoder
+    //    discards unrecognized sequences.
+    out.push({ paste: sanitizeTerminalText(text.replace(/\r\n?/g, '\n')) })
+  }
+
   private parse(): RawKey[] {
     const out: RawKey[] = []
     while (this.buf.length > 0) {
@@ -124,34 +257,22 @@ export class StdinDecoder {
         const term = PASTE_END
         if (this.buf.length >= term.length && this.buf.slice(0, term.length).every((v, i) => v === term[i])) {
           this.buf.splice(0, term.length)
-          const text = Buffer.from(this.paste).toString('utf8')
+          const surplus = this.pasteDiscard
+          // A region that already flushed its content (cap/stall) must NOT emit the
+          // surplus: the app has had everything up to the bound, and emitting again
+          // would double-insert the tail. Emit BEFORE clearing — `emitPaste` reads
+          // the buffer it then resets.
+          if (!surplus) this.emitPaste(out)
           this.paste = null
-          // A paste is UNTRUSTED TEXT, and both normalizations belong HERE, at the
-          // single point where raw paste bytes become a value the app can use, so
-          // no consumer has to remember them:
-          //
-          //  · line endings: a paste is TEXT, so a CR is content, never a
-          //    keystroke. A CRLF clipboard (Windows apps, browsers, chat UIs)
-          //    otherwise reached the draft verbatim, and a row of text ending in CR
-          //    is WIPED when it is written to the terminal (the CR returns the
-          //    cursor to column 0 and the row's own padding then overwrites it) —
-          //    measured: pasting two CRLF lines left an empty first row and only the
-          //    second line visible, which reads as "the sidebar footer ran into the
-          //    input box".
-          //  · control bytes: copied terminal/build output is full of ANSI
-          //    (`\x1b[31m`, `\x1b[2J`, `\x1b[K`, OSC titles) and copied web text can
-          //    carry OSC 52. Ink re-emits a control byte it does not recognise
-          //    VERBATIM into the frame — measured on the real binary: a draft holding
-          //    `X\x1b[2JY` put `\x1b[2J` into the composer row's own write (a screen
-          //    erase, replayed on every repaint), `\x1b[31m` reached the terminal as
-          //    live styling and OSC 52 as a clipboard write. The DIALOG paste path
-          //    already sanitizes (clipboard.ts); doing it here covers the composer
-          //    and every other consumer of `k.paste` at once. Typed input cannot
-          //    carry these bytes — the decoder discards unrecognized sequences.
-          out.push({ paste: sanitizeTerminalText(text.replace(/\r\n?/g, '\n')) })
+          this.pasteDiscard = false
           continue
         }
+        // Surplus of an oversized/paused paste: consume and drop (see pasteDiscard).
+        if (this.pasteDiscard) { this.buf.shift(); continue }
         this.paste.push(this.buf.shift()!)
+        // Hand over at the bound rather than growing without one; the region stays
+        // open so a late terminator still closes it cleanly.
+        if (this.paste.length >= PASTE_MAX_BYTES) this.flushPasteInto(out)
         continue
       }
       const b = this.buf[0]!

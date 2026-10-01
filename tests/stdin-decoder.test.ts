@@ -13,7 +13,12 @@
 
 import { describe, expect, test } from 'bun:test'
 import { sanitizeTerminalText } from '../packages/qialike-app/src/terminal-safe.ts'
-import { StdinDecoder } from '../packages/qialike-app/src/stdin.ts'
+import {
+  StdinDecoder,
+  PASTE_DISCARD_STALL_MS,
+  PASTE_MAX_BYTES,
+  PASTE_STALL_MS,
+} from '../packages/qialike-app/src/stdin.ts'
 
 const esc = (hex: string): Uint8Array => Buffer.from(hex.split(' ').map((h) => Number.parseInt(h, 16)))
 
@@ -271,4 +276,92 @@ test('bracketed paste splits cleanly around surrounding text', () => {
   const d = new StdinDecoder()
   expect(d.push(Buffer.from('a\x1b[200~/x/y.png\x1b[201~b')))
     .toEqual([{ char: 'a' }, { paste: '/x/y.png' }, { char: 'b' }])
+})
+
+// ---------------------------------------------------------------------------
+// Recovery from a paste region that never closes.
+//
+// WHY THESE EXIST. The `ESC[201~` terminator is the LAST bytes of a paste, so
+// whatever truncates a paste removes exactly what would close the region — and a
+// region that stays open swallows every later byte. Measured on the packaged
+// binary, both halves: (a) with the app blocked in CPR calibration the pty
+// accepted only ~25 KB, so a 4 MB paste landed 0.6% of its bytes and its
+// terminator was never accepted; (b) once the terminator was missing, typed
+// characters, Ctrl+u and Ctrl+C all vanished — the reported "paste, then the
+// cursor blinks outside the input box and Ctrl+u / Ctrl+C stop working". Before
+// this recovery the only exit was a terminator that had already been lost, so the
+// keyboard never came back.
+// ---------------------------------------------------------------------------
+
+describe('an abandoned bracketed paste cannot swallow the keyboard', () => {
+  test('the stall hands the text over, then typing works again', () => {
+    const d = new StdinDecoder()
+    d.push(Buffer.from('\x1b[200~pasted text'))     // …and no terminator, ever
+    expect(d.pastePending).toBe(true)
+
+    // First silent window: the content the user pasted is recovered, not dropped.
+    expect(d.flushPaste()).toEqual([{ paste: 'pasted text' }])
+
+    // Second (short) window with nothing new: the region closes for good.
+    expect(d.pastePending).toBe(true)
+    expect(d.flushPaste()).toEqual([])
+    expect(d.pastePending).toBe(false)
+
+    // The point of the whole thing: the keyboard is alive again — including the
+    // two keys the report named. Before the fix these produced NOTHING.
+    expect(d.push(Buffer.from([0x15]))).toEqual([{ char: 'u', ctrl: true }])
+    expect(d.push(Buffer.from([0x03]))).toEqual([{ char: 'c', ctrl: true }])
+    expect(d.push(Buffer.from('ok'))).toEqual([{ char: 'o' }, { char: 'k' }])
+  })
+
+  test('a late terminator still closes the region without double-inserting', () => {
+    const d = new StdinDecoder()
+    d.push(Buffer.from('\x1b[200~first'))
+    expect(d.flushPaste()).toEqual([{ paste: 'first' }])   // surplus phase now
+
+    // The rest of that paste finally arrives, terminator and all.
+    expect(d.push(Buffer.from('second\x1b[201~'))).toEqual([])
+    expect(d.pastePending).toBe(false)
+    // …and the surplus was dropped, not appended: the app already has 'first'.
+    expect(d.push(Buffer.from('x'))).toEqual([{ char: 'x' }])
+  })
+
+  test('the recovery window is short in the surplus phase, long before it', () => {
+    const d = new StdinDecoder()
+    expect(d.pasteRecoveryDelayMs).toBe(0)          // no region: no timer at all
+    d.push(Buffer.from('\x1b[200~a'))
+    expect(d.pasteRecoveryDelayMs).toBe(PASTE_STALL_MS)
+    d.flushPaste()
+    expect(d.pasteRecoveryDelayMs).toBe(PASTE_DISCARD_STALL_MS)
+    expect(d.pasteRecoveryDelayMs).toBeLessThan(PASTE_STALL_MS)
+  })
+
+  test('the size bound hands over at most one paste worth, then drops the surplus', () => {
+    const d = new StdinDecoder()
+    d.push(Buffer.from('\x1b[200~'))
+    // One byte past the bound, in chunks, with no terminator anywhere.
+    const big = Buffer.alloc(PASTE_MAX_BYTES, 0x61)   // 'a'
+    const out = d.push(big)
+    expect(out.length).toBe(1)
+    expect((out[0]!.paste ?? '').length).toBe(PASTE_MAX_BYTES)
+    expect(d.pastePending).toBe(true)                 // still open, for the surplus
+    // Whatever else arrives before the terminator is dropped, never decoded — note
+    // the CR and the two ctrl bytes in there: decoded as keys they would have
+    // submitted a turn and triggered two control actions.
+    expect(d.push(Buffer.from('\rrm -rf /#\x15\x03'))).toEqual([])
+    expect(d.pastePending).toBe(true)                 // still open: no terminator seen
+    expect(d.flushPaste()).toEqual([])                // silence closes it, no new text
+    expect(d.pastePending).toBe(false)
+    expect(d.push(Buffer.from('k'))).toEqual([{ char: 'k' }])
+  })
+
+  test('a terminator that does arrive is still the single emit point', () => {
+    const d = new StdinDecoder()
+    d.push(Buffer.from('\x1b[200~one\r\ntwo\x1b[201~'))
+    // Unchanged behavior: sanitized, CRLF normalized, emitted exactly once.
+    expect(d.flushPaste()).toEqual([])                // nothing left to recover
+    expect(d.pastePending).toBe(false)
+    const e = new StdinDecoder()
+    expect(e.push(Buffer.from('\x1b[200~one\r\ntwo\x1b[201~'))).toEqual([{ paste: 'one\ntwo' }])
+  })
 })

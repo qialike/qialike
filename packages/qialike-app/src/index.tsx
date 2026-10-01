@@ -4197,10 +4197,36 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // `handleKey` (panels + conversation composer).
   const decoder = new StdinDecoder()
   let escTimer: ReturnType<typeof setTimeout> | undefined
+  let pasteTimer: ReturnType<typeof setTimeout> | undefined
+  const dispatch = (keys: readonly RawKey[]): void => {
+    for (const key of keys) handleKey(key)
+  }
+  /**
+   * Arm the paste-stall timer while a `ESC[200~ … ESC[201~` region is open.
+   *
+   * The terminator is the LAST bytes of a paste, so anything that truncates one
+   * removes exactly what would close the region — and a region that never closes
+   * swallows every later byte, typed keys and Ctrl+u/Ctrl+C included (measured:
+   * the pty takes only ~25 KB while the app is blocked in CPR calibration, so a
+   * 4 MB paste lands 0.6%). This timer is what makes a lost terminator cost a
+   * fraction of a second instead of the keyboard. Re-armed on every chunk, so a
+   * paste that is merely slow is never cut short; the window itself comes from the
+   * decoder, which owns the policy (`pasteRecoveryDelayMs`).
+   */
+  const armPasteTimer = (): void => {
+    if (pasteTimer !== undefined) { clearTimeout(pasteTimer); pasteTimer = undefined }
+    const delay = decoder.pasteRecoveryDelayMs
+    if (delay === 0) return
+    pasteTimer = setTimeout(() => {
+      dispatch(decoder.flushPaste())
+      armPasteTimer()          // phase two: a short window, then the region closes
+    }, delay)
+  }
   const onStdin = (chunk: Buffer | string): void => {
     if (escTimer !== undefined) { clearTimeout(escTimer); escTimer = undefined }
     const keys = decoder.push(chunk)
     for (const key of keys) handleKey(key)
+    armPasteTimer()
     // A lone ESC could be a pending escape sequence prefix or the Esc key
     // itself; if nothing followed it shortly, treat it as Esc.
     if (decoder.pendingEscape) {
