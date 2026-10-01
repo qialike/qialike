@@ -28,7 +28,9 @@
 # 环境变量：
 #   QIALIKE_BIN                 被测二进制（等价 --bin）
 #   TSC_BIN                     指定 tsc（默认 ./node_modules/.bin/tsc；本机 pnpm 有故障，
-#                               故不经 `pnpm run typecheck`）
+#                               故不经 `pnpm run typecheck`）。① 现已**委托**给
+#                               `scripts/release/typecheck.sh` —— CI 的 Typecheck 步也调它，
+#                               所以"什么算通过"只有一份实现（见该脚本头部的前置说明）。
 #
 # 退出码：0 = 全部通过；1 = 任一环节失败（并指明是哪一环）。
 # =============================================================================
@@ -118,20 +120,12 @@ else
   die "dist 比源码旧 —— 先重建：./scripts/release/build-qialike.sh"
 fi
 
-# ── ① tsc（只允许既存的 3 处 wrap-ansi TS7016） ──────────────────────────────
+# ── ① tsc（策略在 scripts/release/typecheck.sh —— 与 CI 同一份） ─────────────
+# 判定原先只写在**这里**，而 CI 跑裸 `tsc` ⇒ CI 永远红、本门却是绿的：同一条门两套
+# 口径。现在两处都调那个脚本，"除已知的 wrap-ansi 之外零错误"只有一份实现。
 bold "① tsc（类型检查）"
-TSC="${TSC_BIN:-$REPO/node_modules/.bin/tsc}"
-[[ -x "$TSC" ]] || die "找不到 tsc：$TSC（依赖未装？可用 TSC_BIN= 指定）"
-TSC_OUT="$(cd "$REPO" && "$TSC" -p tsconfig.typecheck.json 2>&1 || true)"
-TSC_ALL="$(printf '%s\n' "$TSC_OUT" | grep -cE 'error TS[0-9]+' || true)"
-TSC_KNOWN="$(printf '%s\n' "$TSC_OUT" | grep -cE "error TS7016: Could not find a declaration file for module 'wrap-ansi'" || true)"
-TSC_NEW=$((TSC_ALL - TSC_KNOWN))
-if [[ "$TSC_NEW" -gt 0 ]]; then
-  printf '%s\n' "$TSC_OUT" | grep -E 'error TS[0-9]+' | sed 's/^/    /'
-  bad "类型检查新增 $TSC_NEW 处错误（总 $TSC_ALL，既有 wrap-ansi $TSC_KNOWN）"
+if ! bash "$REPO/scripts/release/typecheck.sh"; then
   FAILED+=("① tsc")
-else
-  ok "只剩既有 $TSC_KNOWN 处 wrap-ansi TS7016（总错误 $TSC_ALL）"
 fi
 
 # ── ② bun test（仓库内全量单测；与门同一条命令，必须 0 fail） ─────────────────

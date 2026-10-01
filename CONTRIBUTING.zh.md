@@ -54,10 +54,17 @@ pnpm build        # 产出 dist/qialike（单文件可执行）
 | --- | --- |
 | `pnpm test` | 冒烟：在打包后的二进制里启动真实的 `dsh-base` + `qialike-app` 组合树并解析 TUI 命令面，**无需 API key**；需先 `pnpm build` |
 | `pnpm test:unit` | 单元测试（`bun test tests/`）；需先 `pnpm build`（见上） |
-| `pnpm typecheck` | 类型检查 |
+| `pnpm typecheck` | 类型检查（`scripts/release/typecheck.sh` —— 与 CI、发布门同一份策略） |
 
-交互式 token 流式输出需要 TTY 与提供商 key，因此冒烟测试止于 `--help`。`pnpm typecheck` 会报 **3 处既有的**
-`wrap-ansi` TS7016（缺类型声明）；非零退出是基线，只看新增错误。
+交互式 token 流式输出需要 TTY 与提供商 key，因此冒烟测试止于 `--help`。`pnpm typecheck` **容忍**那
+**3 处既有的** `wrap-ansi` TS7016（该依赖不随包发声明文件），只在出现**新增**错误时非零退出 —— 于是你不必
+先记住基线，而 CI 也不可能与发布门在「什么算通过」上产生分歧。
+
+类型检查与单元测试都要读**解析农场**（`node_modules/@deepseek-ai/*` → `apps/tui-bin/x/`，已 gitignore）
+以及镜像进来的 `node_modules/wrap-ansi`，所以全新克隆必须先构建一次。类型检查还会经
+`tsconfig.typecheck.json` 的 `paths` 解析 `@deepseek-ai/*`，那些路径把 harness 钉在**同级**
+（`../deepseek-harness`）—— 它必须在那里，而不是你克隆到的任意位置。前置缺失时命令会指出是哪一条并打印修法：
+`node apps/tui-bin/build.mjs --generate-only`（秒级、不编译、不碰 `dist/`）。
 
 **CI 只覆盖上面这些命令，仅此而已。** 官方构建所用的发布门还会跑一套真机 pty 套件（52 个场景，每个约 17 分钟，
 在真实终端里驱动打包后的二进制、配一份预置 `$HOME`）以及一次文档审计。**该套件当前不在本仓库内**——它位于维护者

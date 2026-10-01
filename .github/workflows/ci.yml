@@ -54,11 +54,12 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: '1.4.2'
-      # `rename-hygiene` is the important one: it walks every shipped path and
-      # every allowlisted file, so a stray legacy specifier, path or product name
-      # fails here instead of shipping.
-      - name: Product-identity and rename guards
-        run: bun test tests/rename-hygiene.test.ts
+      # NOTE: there is deliberately no separate "product identity" step here any more.
+      # It used to run `tests/rename-hygiene.test.ts`, which `ffba71f` deleted together
+      # with the `dsh-tui` compatibility layer it guarded — leaving this job invoking a
+      # file that no longer exists, so `bun test <missing path>` exited 1 and the job was
+      # red for reasons unrelated to the code under test. The little that is still
+      # worth asserting about the old spelling lives in `tests/install-script.test.ts`.
 
       # `release-consistency` compares `HARNESS_REF` above with the range the
       # build enforces, and the three package.json versions with each other. Run
@@ -72,6 +73,17 @@ jobs:
     runs-on: ubuntu-24.04
     # Kept out of `hygiene` because it clones and builds the whole harness.
     timeout-minutes: 60
+    # The harness lives at a SIBLING of the checkout, and that layout is load-bearing
+    # rather than incidental: `tsconfig.typecheck.json`'s 22 `paths` entries resolve
+    # `@deepseek-ai/*` to `<repo>/../deepseek-harness/**/lib/types/*.d.ts`, and
+    # `apps/tui-bin/build.mjs` defaults `DSH_HARNESS` to the same place. Cloning it
+    # anywhere else (this used to be `$RUNNER_TEMP`) leaves every one of those paths
+    # dangling, and the typecheck then reports `Cannot find module '@deepseek-ai/cordis'`
+    # in files that are perfectly fine — which is exactly what a green gate must not do.
+    # Being a sibling also keeps it OUTSIDE the qialike tree, which several tests that
+    # walk the repository depend on.
+    env:
+      DSH_HARNESS: ${{ github.workspace }}/../deepseek-harness
     steps:
       - name: Checkout qialike
         uses: actions/checkout@v4
@@ -106,20 +118,23 @@ jobs:
         run: corepack prepare pnpm@11.7.0 --activate
 
       # --- the harness checkout ------------------------------------------------
-      # Outside the qialike tree on purpose: several tests (rename-hygiene among
-      # them) walk the repository, and a second monorepo inside it would be both
-      # slow and a false-positive source.
+      # Cloned to the sibling path the job env names, because `tsconfig.typecheck.json`
+      # resolves through it (see the comment on that env). It is outside the qialike
+      # tree on purpose: several tests walk the repository, and a second monorepo
+      # inside it would be both slow and a false-positive source.
       - name: Checkout deepseek-harness at the pinned release
         run: |
           git clone --filter=blob:none --depth 1 --branch "$HARNESS_REF" \
             https://github.com/deepseek-ai/deepseek-harness.git \
-            "$RUNNER_TEMP/deepseek-harness"
+            "$DSH_HARNESS"
 
       - name: Build deepseek-harness
-        working-directory: ${{ runner.temp }}/deepseek-harness
-        # `--frozen-lockfile` because an upstream lockfile drift is a fact we want
-        # to see, not something to resolve silently inside CI.
+        # `cd` rather than `working-directory:` because that field cannot read `env`,
+        # and the sibling path should be written in exactly one place (the job env).
         run: |
+          cd "$DSH_HARNESS"
+          # `--frozen-lockfile` because an upstream lockfile drift is a fact we want
+          # to see, not something to resolve silently inside CI.
           pnpm install --frozen-lockfile
           pnpm run build
 
@@ -127,15 +142,26 @@ jobs:
       - name: Install qialike
         run: pnpm install --frozen-lockfile
 
-      - name: Typecheck
-        run: pnpm run typecheck
+      # The typecheck reads TWO build artifacts, and this step is the cheap way to
+      # create both (seconds, no compile: `--generate-only` leaves `dist/` and the
+      # sidebar build channel alone):
+      #   · the resolution farm `node_modules/@deepseek-ai/*` → `apps/tui-bin/x/`
+      #     (gitignored, so a fresh checkout has none of it);
+      #   · `node_modules/wrap-ansi`, which `build.mjs` mirrors in from the harness
+      #     store and which `package.json` never declares — without it the three
+      #     known declarations errors change shape and read as code failures.
+      # The policy lives in `scripts/release/typecheck.sh`, shared with the release
+      # gate, so "what counts as passing" is written once.
+      - name: Create the resolve farm
+        run: node apps/tui-bin/build.mjs --generate-only
 
-      # The build also creates the resolution farm the unit suite imports through
+      - name: Typecheck
+        run: bash scripts/release/typecheck.sh
+
+      # The full build also creates the resolution farm the unit suite imports through
       # (`node_modules/@deepseek-ai/*`), so it has to precede the tests — not just
       # the smoke test.
       - name: Build the single-file binary
-        env:
-          DSH_HARNESS: ${{ runner.temp }}/deepseek-harness
         run: pnpm run build
 
       - name: Unit suite

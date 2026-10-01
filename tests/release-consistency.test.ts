@@ -123,3 +123,54 @@ describe('the release asset list is one list', () => {
     expect(packaged).toEqual(compiled)
   })
 })
+
+describe('the typecheck layout is one fact', () => {
+  // WHY THIS EXISTS. `tsconfig.typecheck.json` resolves `@deepseek-ai/*` through 22
+  // `paths` entries that hard-code `<repo>/../deepseek-harness`, and CI has to clone a
+  // harness to typecheck at all. It used to clone into `$RUNNER_TEMP`: every one of
+  // those paths then dangled, TypeScript fell back to node_modules, and the job
+  // reported `Cannot find module '@deepseek-ai/cordis'` in files that were fine — a red
+  // gate accusing the code of a mistake made by the workflow. So the clone destination
+  // is not free to move. Neither is the step order: the typecheck also reads
+  // `node_modules/wrap-ansi`, which only the build mirrors in, and without it the three
+  // known declarations errors change shape and read as code failures too.
+  const TSCONFIG = JSON.parse(read('tsconfig.typecheck.json')) as {
+    compilerOptions: { paths: Record<string, string[]> }
+  }
+
+  test('every mapped specifier resolves under ../deepseek-harness', () => {
+    const entries = Object.entries(TSCONFIG.compilerOptions.paths)
+    expect(entries.length).toBeGreaterThan(0)
+    for (const [specifier, targets] of entries) {
+      for (const target of targets) {
+        // Not "a harness somewhere": the config has no way to ask where it is, so the
+        // only thing that can keep CI and a developer resolving the SAME files is that
+        // both put it here.
+        expect(target, `${specifier} must resolve under the sibling harness`).toMatch(/^\.\.\/deepseek-harness\//)
+      }
+    }
+  })
+
+  test('CI checks the harness out where those paths expect it', () => {
+    expect(CI).toMatch(/DSH_HARNESS:\s*\$\{\{\s*github\.workspace\s*\}\}\/\.\.\/deepseek-harness/)
+    expect(CI).not.toContain('RUNNER_TEMP/deepseek-harness')
+  })
+
+  test('CI runs the shared typecheck policy, not a bare tsc', () => {
+    // The policy — allow the known `wrap-ansi` declarations gap, fail on anything else —
+    // has to be the same one the release gate applies. A bare `tsc` exits 1 on those
+    // three, which is how this job stayed red while the gate passed.
+    expect(CI).toContain('bash scripts/release/typecheck.sh')
+    expect(CI).not.toContain('run: pnpm run typecheck')
+    expect(read('scripts/release/test-required.sh')).toContain('bash "$REPO/scripts/release/typecheck.sh"')
+    expect(read('scripts/release/typecheck.sh')).toContain('wrap-ansi')
+  })
+
+  test('the farm is created before the typecheck that reads it', () => {
+    const farm = CI.indexOf('--generate-only')
+    const check = CI.indexOf('bash scripts/release/typecheck.sh')
+    expect(farm, 'CI should create the resolve farm').toBeGreaterThan(-1)
+    expect(check, 'CI should run the shared typecheck policy').toBeGreaterThan(-1)
+    expect(farm).toBeLessThan(check)
+  })
+})

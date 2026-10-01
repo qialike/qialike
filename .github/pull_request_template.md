@@ -28,7 +28,7 @@
 
 - [ ] One logical change; the title follows Conventional Commits (`fix(scope): …`).
 - [ ] A test covers the change, and it fails without the fix (or I explain why a test is not possible).
-- [ ] `pnpm typecheck` reports no new errors (3 pre-existing `wrap-ansi` TS7016 are the baseline).
+- [ ] `pnpm typecheck` passes (it tolerates the 3 pre-existing `wrap-ansi` TS7016 and fails only on new errors).
 - [ ] User-visible changes are reflected in `README.md` / `README.zh.md`.
 - [ ] User-visible changes are reflected in `CHANGELOG.md` / `CHANGELOG.zh.md`.
 - [ ] This is **not** a security fix (those are reported privately, per SECURITY.md).

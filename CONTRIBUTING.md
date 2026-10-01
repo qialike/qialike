@@ -57,11 +57,19 @@ tests that import a harness package fail to resolve — not because your change 
 | --- | --- |
 | `pnpm test` | Smoke: boots the real `dsh-base` + `qialike-app` composition tree inside the packaged binary and parses the TUI command surface — **no API key needed**; needs `pnpm build` first |
 | `pnpm test:unit` | Unit tests (`bun test tests/`); needs `pnpm build` first (see above) |
-| `pnpm typecheck` | Type check |
+| `pnpm typecheck` | Type check (`scripts/release/typecheck.sh` — the same policy CI and the release gate apply) |
 
 Interactive token streaming needs a TTY and a provider key, so the smoke test stops at `--help`.
-`pnpm typecheck` reports **3 pre-existing** `wrap-ansi` TS7016 errors (missing type declarations); a
-non-zero exit is the baseline — only new errors matter.
+`pnpm typecheck` **tolerates** the 3 pre-existing `wrap-ansi` TS7016 errors (that dependency ships no
+declarations) and exits non-zero only on **new** errors — so you do not have to know the baseline, and
+CI cannot drift from the release gate about what "passing" means.
+
+The typecheck and the unit suite both read the **resolution farm** (`node_modules/@deepseek-ai/*` →
+`apps/tui-bin/x/`, which is gitignored) and the mirrored `node_modules/wrap-ansi`, so a fresh checkout
+must build once first. The typecheck also resolves `@deepseek-ai/*` through `tsconfig.typecheck.json`'s
+`paths`, which point at the harness checkout as a **sibling** (`../deepseek-harness`) — it has to be
+there, not wherever you cloned it. When a prerequisite is missing the command says which and prints the
+fix: `node apps/tui-bin/build.mjs --generate-only` (seconds, no compile, `dist/` untouched).
 
 **CI covers the commands above and nothing more.** The release gate used for official builds also
 runs a real-machine pty suite (52 scenarios, ~17 minutes each, driving the packaged binary in a real
