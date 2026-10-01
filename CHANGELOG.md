@@ -5,6 +5,13 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.9.1] - 2026-10-01
+
+### Changed
+
+- **Release pages now say what changed.** The notes on GitHub and GitCode are generated from this file, and a tag's own annotation carries the same text — so `git show <tag>` reads as a changelog entry rather than a bare version number.
+- Version bump to 0.9.1. No user-visible changes to the TUI or the harness.
+
 ## [0.9.0] - 2026-10-01
 
 ### Changed
