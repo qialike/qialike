@@ -84,7 +84,23 @@ case "$1" in
       *)       printf '%s\\n' "\${2##*@}" ;;
     esac ;;
   pack)      printf 'npm notice filename: fixture.tgz\\nnpm notice package size: 1 B\\n' ;;
-  publish)   printf 'published (stub)\\n'
+  publish)
+             if [[ "\${SHIM_PUBLISH_E404:-0}" == 1 ]]; then
+               # The exact shape the registry returned on 2026-10-01: provenance signed
+               # (so the OIDC token WAS obtained) and then a masked 404 on the PUT.
+               printf 'npm notice publish Signed provenance statement with source and build information from GitHub Actions\\n'
+               printf 'npm notice publish Provenance statement published to transparency log: https://search.sigstore.dev/?logIndex=1\\n'
+               printf 'npm error code E404\\n'
+               printf 'npm error 404 Not Found - PUT https://registry.npmjs.org/%%40qialike%%2fcli-win32-x64 - Not found\\n'
+               exit 1
+             fi
+             if [[ "\${SHIM_PUBLISH_ENEEDAUTH:-0}" == 1 ]]; then
+               printf 'npm error code ENEEDAUTH\\n'
+               printf 'npm error This command requires you to be logged in to https://registry.npmjs.org/\\n'
+               exit 1
+               exit 1
+             fi
+             printf 'published (stub)\\n'
              if [[ "\${SHIM_SUPPRESS_PUBLISH_RECORD:-0}" != 1 ]]; then
                node -p "require('./package.json').name" >> "$SHIM_PUBLISHED" 2>/dev/null || true
              fi
@@ -229,9 +245,9 @@ describe('a publish that the registry never acknowledges stops the run', () => {
     // This is the whole point of the gate: the platform packages must be resolvable
     // before the main package (whose optionalDependencies name them) goes out.
     expect(calls.match(/npm publish/g)?.length).toBe(1)
-    expect(calls).toContain('@qialike/cli-win32-x64@0.9.0')
+    expect(calls).toContain(`@qialike/cli-win32-x64@${VERSION}`)
     // It never even staged a publish for the second platform package.
-    expect(calls).not.toContain('@qialike/cli-win32-arm64@0.9.0')
+    expect(calls).not.toContain(`@qialike/cli-win32-arm64@${VERSION}`)
   })
 
   test('a confirmed publish records the registry fingerprint it read back', () => {
@@ -241,6 +257,39 @@ describe('a publish that the registry never acknowledges stops the run', () => {
     expect(stdout).toContain('注册表已确认')
     expect(stdout).toContain('fixture-sha1')
     expect(calls_publish_count(stdout)).toBe(3)
+  })
+})
+
+describe('a failed OIDC publish is diagnosed by the log, not by wishful reading', () => {
+  // WHY THIS EXISTS — and what it corrected. The first version of this diagnostic keyed on
+  // the provenance signature: "provenance was signed, therefore npm's OIDC auth worked, so
+  // the registry must have refused the PUT". Reading npm's source shows that reasoning is
+  // wrong: sigstore fetches its OWN id token from GitHub (Actions id-token endpoint) to
+  // sign provenance, while npm separately exchanges an id token at
+  // `/-/npm/v1/oidc/token/exchange/package/<pkg>` for a publish token — and that exchange
+  // fails *silently* (verbose-only log). So a provenance line proves only that
+  // `id-token: write` works. These tests pin the corrected diagnosis.
+
+  test('a masked 404 states both causes and how to tell them apart, without blaming provenance', () => {
+    const { status, stderr } = run(['--oidc'], { SHIM_PUBLISH_E404: '1' })
+
+    expect(status).toBe(1)
+    // It must not repeat the retired claim…
+    expect(stderr).not.toContain('OIDC 路径被拒')
+    // …it must name both causes and the only reliable discriminator…
+    expect(stderr).toContain('换令牌')
+    expect(stderr).toContain('NPM_CONFIG_LOGLEVEL')
+    // …and warn that a stray token turns the loud failure into this silent one.
+    expect(stderr).toContain('NODE_AUTH_TOKEN')
+  })
+
+  test('a clean ENEEDAUTH is reported as the OIDC exchange failing, naming trusted publisher', () => {
+    const { status, stderr } = run(['--oidc'], { SHIM_PUBLISH_ENEEDAUTH: '1' })
+
+    expect(status).toBe(1)
+    expect(stderr).toContain('OIDC 换令牌失败')
+    expect(stderr).toContain('trusted publisher')
+    expect(stderr).toContain('npm-publish')
   })
 })
 

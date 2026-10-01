@@ -559,7 +559,11 @@ if [[ "$OIDC" == 1 ]]; then
     warn "指定了 --oidc，但环境里没有 ACTIONS_ID_TOKEN_REQUEST_URL —— 本机通常不该走这条路；"
     warn "  npm 会在 publish 时以 ENEEDAUTH 失败。"
   fi
-  [[ -n "$TOKEN" ]] && warn "同时检出 token 环境变量：npm CLI 会**优先**用 OIDC，令牌只作回退"
+  [[ -n "$TOKEN" ]] && {
+    warn "同时检出 token 环境变量（值不回显）—— 存在它就无法从**外部**断定本次用的是哪条凭据："
+    warn "  OIDC 仍会被用来签 provenance，而真正那次 PUT 可能走令牌。"
+    warn "  失败时看日志里有没有 'Signed provenance statement' 来分辨（有 ⇒ OIDC 路已生效，问题在注册表的授权）。"
+  }
 else
 # ---- 令牌路径的预检（OIDC 下整段跳过） ----
 if [[ -n "$TOKEN" ]]; then
@@ -651,12 +655,36 @@ publish_one() { # $1 = 包名
       warn "  已发布的包会被自动跳过，所以「一包一码、失败就重跑」是可行节奏。"
       warn "  另一条路：用 Classic token 里的 **Automation** 类型（既能创建包、又能绕 2FA）。"
     fi
-    if grep -qE 'E404' "$log" && grep -qE 'PUT https://[^ ]+/' "$log"; then
-      warn "注册表对 **PUT 一个新包** 回了 404 —— 这通常不是"包名有问题"，而是"这个令牌不能创建包""
-      warn "  （npm 把这类授权失败**伪装成 404**，所以看不到 403）。"
-      warn "  Granular Access Token 的 \"all packages\"＝**所有已存在的包**；三个包都还不存在时它一个都不覆盖。"
-      warn "  修法：先用能创建包的凭据做**一次 bootstrap**（\`npm login\` 的会话令牌最省事；"
-      warn "        或 npm 网页上 Classic token 里的 Automation 类型），三个包存在后 GAT 即可发后续版本。"
+    # ★ 这段诊断在 2026-10-01 出过一次错，教训写在这里：**别看 provenance 签名去推断
+    #   npm 的 OIDC 认证是否成功。** npm 源码（`lib/utils/oidc.js` / `commands/publish.js`
+    #   与 `@sigstore/sign` 的 ci.js）显示这是两条**独立**路径：
+    #     · provenance 由 sigstore **自己**向 GitHub 取 id token 来签（它直接打
+    #       `ACTIONS_ID_TOKEN_REQUEST_URL`）⇒ 签名成功只证明 `id-token: write` 好用；
+    #     · npm 另发一次 `POST /-/npm/v1/oidc/token/exchange/package/<pkg>` 去换发布令牌，
+    #       而它**任何失败都静默返回**（只在 verbose 级别记一行）。
+    #   所以一条 404 有两种成因，日志本身分不出来；而 CI 里若另有一个 token，它会**掩盖**
+    #   本该响亮的 ENEEDAUTH，把「OIDC 没换成令牌」变成这条静默 404。
+    if grep -qE 'ENEEDAUTH|requires you to be logged in' "$log"; then
+      warn "**OIDC 换令牌失败，且没有回退凭据** —— 这是最干净的信号：npm 没能把 GitHub 的 id token"
+      warn "  换成发布令牌，于是连一次 PUT 都没发出去。绝大多数情况是**该包的 trusted publisher"
+      warn "  没登记或字段不匹配**（注册表只在 verbose 日志里说明原因）。"
+      warn "  逐项核对（npm 网页 → 该包 → Settings → Trusted Publisher）："
+      warn "    ① 仓库       = qialike/qialike"
+      warn "    ② 工作流文件 = publish-npm.yml（**只写文件名**，不带 .github/workflows/ 前缀）"
+      warn "    ③ environment = npm-publish（工作流声明了它；登记时**留空即不匹配**）"
+      warn "  正查：npm trust list <包名>（需一枚能读该包的令牌）"
+    elif grep -qE 'E404' "$log" && grep -qE 'PUT https://[^ ]+/' "$log"; then
+      warn "注册表对 **PUT** 回了 404 —— npm 把授权失败**伪装成 404**（所以看不到 403）。"
+      warn "  两种成因，日志分不出来："
+      warn "    (a) OIDC 换令牌**成功**，但注册表按 trusted publisher 规则拒绝了这次 PUT；"
+      warn "    (b) OIDC 换令牌**失败**（静默），回退到环境或 .npmrc 里的另一个凭据，而它不能发布。"
+      warn "  分辨办法（唯一可靠）：把 npm 的 verbose 日志打出来 —— 在失败那一步加"
+      warn "      env: { NPM_CONFIG_LOGLEVEL: verbose }"
+      warn "    然后找 'oidc Failed token exchange request with body message: …'：有 ⇒ 是 (b)。"
+      warn "  ⚠️ CI 环境里若存在 NODE_AUTH_TOKEN，它会把本该响亮的 ENEEDAUTH 变成这条静默 404"
+      warn "     —— 排查期间建议先移除它，让失败自己说话。"
+      warn "  trusted publisher 逐项核对（npm 网页 → 该包 → Settings → Trusted Publisher）："
+      warn "    ① 仓库 = qialike/qialike  ② 工作流文件 = publish-npm.yml（只写文件名）  ③ environment = npm-publish"
     fi
     rm -f "$log"
     if [[ ${#DONE[@]} -gt 0 ]]; then

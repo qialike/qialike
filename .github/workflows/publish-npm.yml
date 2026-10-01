@@ -96,8 +96,32 @@ jobs:
           done
 
       - name: 发布（平台包 → 主包；幂等；OIDC，无长期令牌）
+        # ★ 把 NODE_AUTH_TOKEN 显式置**空** —— 这是「移除那个多余 token」的落点。
+        #
+        # 那个 token 不是密钥，是来源固定的一枚**占位符**：actions/setup-node@v4 在
+        # registry-url 模式下会无条件执行
+        #     core.exportVariable('NODE_AUTH_TOKEN', process.env.NODE_AUTH_TOKEN || 'XXXXX-XXXXX-XXXXX-XXXXX')
+        # 并让它存活到后续**所有**步骤（源码：actions/setup-node v4.4.0 `src/authutil.ts`）。
+        # 它同时把 `//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}` 写进 .npmrc。
+        #
+        # 为什么必须去掉：npm 拿到非空 token 就认为「已有凭据」，于是 `npm publish` 里那道
+        #     const noCreds = !(creds.token || creds.username || …)   →  if (noCreds) throw ENEEDAUTH
+        # **永不触发**。OIDC 换令牌一旦失败，npm 会拿这枚假 token 去 PUT，而注册表把授权失败
+        # **伪装成 404** —— 2026-10-01 那次排查因此绕了两轮：日志里明明有 provenance 签名，
+        # 而那是 **sigstore 自己**另外取 id token 签的，与 npm 换发布令牌是两条独立路径，
+        # 签名成功**不能**证明 OIDC 认证成功。
+        #
+        # 为什么是「置空」而不是「删除」：npm 的 envReplace（@npmcli/config/lib/env-replace.js）
+        # 在变量**未定义**时会把 `${NODE_AUTH_TOKEN}` 这个**字面量**留在配置里，那同样是真值、
+        # 一样掩盖失败。只有「已定义且为空」才会被 getCredentialsByURI 的 `if (tokenReg)`
+        # 判为无凭据 ⇒ OIDC 失败时响亮地抛 ENEEDAUTH，指向 trusted publisher 而不是假 404。
+        # OIDC 成功时不受影响：npm 的 oidc() 会先把真令牌写进 opts/config，凭据检查才通过。
+        env:
+          NODE_AUTH_TOKEN: ''
         run: |
           set -euo pipefail
+          # 再显式置空一次：不依赖 runner 对 GITHUB_ENV 与步骤级 env 的合并顺序。
+          export NODE_AUTH_TOKEN=
           args=(--yes --oidc --provenance --tag latest)
           if [[ "${{ inputs.dry_run }}" == "true" ]]; then
             args+=(--dry-run)
