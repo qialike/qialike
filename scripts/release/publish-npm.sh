@@ -105,6 +105,13 @@ for spec in "${TARGETS[@]}"; do PLATFORM_PKGS+=("${spec%%|*}"); done
 # 构建被截断或拷错了文件，宁可在这里挡住，也不要把半个二进制发上注册表。
 MIN_EXE_BYTES=$((40 * 1024 * 1024))
 
+# 发布后确认（post-publish verification）的探测参数：注册表写入到读路径可见之间有传播延迟
+# （实测秒级），所以「npm 说成功」之后还要轮询到注册表真的能解析该版本为止。
+# 默认最多等 10 × 3 s = 30 s。测试用这两个变量把等待压到接近零（与 QIALIKE_DIST 同类：
+# 只影响预演/测试，正式发布用默认值）。
+CONFIRM_ATTEMPTS="${QIALIKE_PUBLISH_CONFIRM_ATTEMPTS:-10}"
+CONFIRM_INTERVAL="${QIALIKE_PUBLISH_CONFIRM_INTERVAL:-3}"
+
 VERSION=''
 DIST_TAG='latest'
 OTP=''
@@ -124,6 +131,35 @@ ok() { printf '  [ok]   %s\n' "$*"; }
 warn() { printf '  [warn] %s\n' "$*" >&2; }
 bad() { printf '  [FAIL] %s\n' "$*" >&2; }
 die() { printf '\n发布未完成：%s\n' "$*" >&2; exit 1; }
+
+# ★ 发布确认：**上一个包真的落地了，才允许推下一个。**
+#
+# 为什么不能只信 `npm publish` 的退出码：退出码只说明「这次上传动作没报错」，它不证明
+# 注册表已经能解析该版本 —— 写入与读路径的可见性之间有传播延迟（秒级）。而本渠道的语义
+# 恰恰要求「平台包先真的可解析，主包才能发」：主包的 optionalDependencies **精确**指向
+# 两个平台包，若平台包只是"npm 说成功了"却没落地，用户 `npm i -g @qialike/cli` 会解析到
+# 一个不存在的载荷（npm 对解析不到的 optional 依赖**静默跳过**），安装"成功"但跑不起来。
+#
+# 所以每个包发布后都轮询注册表，直到 `npm view <pkg>@<version> version` 回出本次版本；
+# 拿到之后再记录注册表自己的指纹（dist.shasum / dist.integrity）—— 那是「发上去的就是
+# 我们打的那个包」事后唯一可核对的证据。确认不了就**停在原地**（die），绝不推进到下一个。
+#
+# 定义位置在**所有调用点之前**：dispatch 路径（第 2b 步）与本地发布路径（第 7 步）都用它，
+# 而 bash 的函数是在脚本自上而下执行到定义处才存在的 —— 放在第 7 步旁边会让 dispatch 那侧
+# 拿到 `command not found`。
+confirm_published() { # $1 = 包名；0 = 已在注册表确认可见
+  local pkg="$1" got meta attempt
+  for ((attempt = 1; attempt <= CONFIRM_ATTEMPTS; attempt++)); do
+    if got="$(npm view "$pkg@$VERSION" version 2>/dev/null)" && [[ "$got" == "$VERSION" ]]; then
+      meta="$(npm view "$pkg@$VERSION" dist.shasum dist.integrity 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')"
+      ok "  ↳ 注册表已确认 $pkg@$VERSION（第 $attempt 次探测）"
+      [[ -n "$meta" ]] && say "    注册表指纹：$meta"
+      return 0
+    fi
+    sleep "$CONFIRM_INTERVAL"
+  done
+  return 1
+}
 
 usage() { sed -n '2,/^set -euo pipefail$/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0,1\}//'; }
 
@@ -340,6 +376,22 @@ if [[ "$DISPATCH" == 1 ]]; then
   gh run watch "$run_id" --repo "$SLUG" --exit-status \
     || die "CI 运行失败 —— 见 https://github.com/$SLUG/actions/runs/$run_id"
   ok "CI 运行成功"
+
+  # ★ 逐包确认落地。CI 里是工作流在逐包发布（它自己也在发布后确认），而本机这一侧能做的
+  #   是把**最终三包是否真的可解析**再核一遍 —— 「CI 绿了」与「注册表能看到」不是同一件事，
+  #   而后者才是用户 `npm i -g` 时真正依赖的。任何一个没落地就报失败，别让它看起来像成功。
+  bold '确认发布落地（三个包逐一核对注册表）'
+  CONFIRM_FAILED=()
+  for pkg in "${PLATFORM_PKGS[@]}" "$MAIN"; do
+    if confirm_published "$pkg"; then :; else
+      bad "$pkg@$VERSION 在注册表看不到"
+      CONFIRM_FAILED+=("$pkg")
+    fi
+  done
+  if [[ ${#CONFIRM_FAILED[@]} -gt 0 ]]; then
+    die "CI 报告成功，但注册表看不到：${CONFIRM_FAILED[*]} —— 见 https://github.com/$SLUG/actions/runs/$run_id"
+  fi
+  ok "三个包均已在注册表确认"
 
   bold '完成（发布已在 CI 里发生）'
   cat <<EOF
@@ -572,8 +624,17 @@ publish_one() { # $1 = 包名
   say "发布 $pkg@$VERSION …"
   if ( cd "$STAGING/$(tdir "$pkg")" && npm_auth publish "${PUBLISH_ARGS[@]}" ) 2>&1 | tee "$log"; then
     rm -f "$log"
+    ok "$pkg 已上传"
+    # ★ 确认落地 —— 这一步失败就**不发下一个包**（见 confirm_published 的注释）。
+    confirm_published "$pkg" || {
+      bad "$pkg 上传未报错，但注册表在 ${CONFIRM_ATTEMPTS} 次探测（约 $((CONFIRM_ATTEMPTS * CONFIRM_INTERVAL)) s）内仍看不到 $VERSION"
+      warn "  可能原因：注册表传播比窗口慢，或这次上传实际没有生效。"
+      warn "  处置：**先别继续**，用 npm view $pkg@$VERSION version 手工确认；"
+      warn "        若已可见，重跑本脚本会自动跳过它（幂等）并继续下一个包。"
+      [[ ${#DONE[@]} -gt 0 ]] && warn "  已确认发布的包：${DONE[*]}"
+      die "停在 $pkg（发布确认未通过，未推送后续包）"
+    }
     DONE+=("$pkg")
-    ok "$pkg 已发布"
   else
     printf '\n' >&2
     bad "$pkg 发布失败"
@@ -585,7 +646,7 @@ publish_one() { # $1 = 包名
     if grep -qE 'Two-factor authentication or granular access token' "$log"; then
       warn "注册表要求 **2FA 挑战**：当前凭据不能绕 2FA，必须显式给一次性码"
       warn "  npm **不会**为这类 403 自动提示 OTP（它只在 EOTP 上提示），所以请重跑并加 --otp："
-      warn "      ./release-menu.sh 12 --allow-dirty --otp <6 位码>"
+      warn "      ./release-menu.sh 13 --allow-dirty --otp <6 位码>"
       warn "  码的有效期很短（约 30 秒），三个包可能要**各用一次**；"
       warn "  已发布的包会被自动跳过，所以「一包一码、失败就重跑」是可行节奏。"
       warn "  另一条路：用 Classic token 里的 **Automation** 类型（既能创建包、又能绕 2FA）。"

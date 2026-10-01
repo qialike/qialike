@@ -40,6 +40,8 @@ set -euo pipefail
 
 # 仓库根 = 本脚本所在目录（<repo>/scripts/release/）上溯两级；与调用时的 cwd 无关。
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# 本目录（scripts/release/）—— 用来调用同目录的 changelog-section.sh。
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 MODE=auto
 YES=0
@@ -240,7 +242,28 @@ else
       || die "aborted (tag $TAG unchanged)"
     mutate tag -d "$TAG"
   fi
-  mutate tag -a "$TAG" -m "qialike $VERSION"
+  # 附注 = `qialike <版本>` 首行 + CHANGELOG 该节（英文在上、中文在下）。
+  #
+  # 首行**必须**保留原样：verify_tag 断言附注里含 "qialike <版本>"（三查一致的第 ① 项），
+  # 而那一行正是本文件曾经的唯一内容。现在把它当标题、正文接更新日志 —— 于是
+  # `git show <tag>` / `git tag -n` 能看到本版改了什么。远端标签页在有 Release 时不显示
+  # 附注，所以同一份内容也写进 Release 正文（见 push-qialike-release.sh）。
+  # 抽不到就退回旧的一行式：**打标签不应因为更新日志缺一节而失败**。
+  annot="$(mktemp)"
+  {
+    printf 'qialike %s\n' "$VERSION"
+    if section="$("$HERE/changelog-section.sh" "$VERSION" 2>/dev/null)"; then
+      printf '\n%s\n' "$section"
+    else
+      say "CHANGELOG 里没有 $VERSION 这一节 —— 标签附注只写首行（不阻断打标签）"
+    fi
+  } >"$annot"
+  # ★ `--cleanup=verbatim` 是必需的，不是风格选择：`git tag -F` 默认走 `--cleanup=strip`，
+  #   而它会**删掉所有以 `#` 开头的行**（git 把那些当成提交信息里的注释）。CHANGELOG 的小节
+  #   标题正是 `### Changed` / `### 变更` —— 实测被整行吃掉，附注里只剩 bullet，读者不知道
+  #   那些条目属于「变更」「修复」还是「新增」。verbatim 原样保留。
+  mutate tag -a --cleanup=verbatim "$TAG" -F "$annot"
+  [[ "$DRY" == 1 ]] || rm -f "$annot"
 fi
 
 if [[ "$DRY" == 1 ]]; then

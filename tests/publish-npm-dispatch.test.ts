@@ -40,12 +40,34 @@ let work = ''
 let stubBin = ''
 let callLog = ''
 let runCounter = ''
+let npmLog = ''
 
 /** The version the script resolves by default: the repo's own `package.json`. */
 const VERSION = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version
 
 /** The slug the fixture answers as; `GITHUB_REPO` pins it so the test is origin-independent. */
 const SLUG = 'qialike/qialike'
+
+/**
+ * Stub `npm`: the dispatch path confirms all three packages against the registry
+ * once CI reports success, and that confirmation must not reach the real registry.
+ * `SHIM_NPM_MISSING` withholds one package, which is how the "CI green but the
+ * package never landed" case is reached.
+ */
+function writeNpmStub(): void {
+  const shim = `#!/usr/bin/env bash
+printf 'npm %s\n' "$*" >> "$SHIM_NPM_LOG"
+case "$1" in
+  view)
+    want="\${2%@*}"
+    [[ "$want" == "$SHIM_NPM_MISSING" ]] && exit 1
+    printf '%s\n' "\${2##*@}" ;;
+  *) : ;;
+esac
+`
+  writeFileSync(join(stubBin, 'npm'), shim)
+  chmodSync(join(stubBin, 'npm'), 0o755)
+}
 
 /**
  * Stub `gh`: logs every call and answers from environment switches.
@@ -99,6 +121,9 @@ beforeAll(() => {
   runCounter = join(work, 'runcounter')
   mkdirSync(stubBin)
   writeFileSync(callLog, '')
+  npmLog = join(work, 'npm.log')
+  writeFileSync(npmLog, '')
+  writeNpmStub()
   writeGhStub()
 })
 
@@ -114,6 +139,7 @@ afterAll(() => {
  */
 function run(extra: string[], env: Record<string, string> = {}) {
   writeFileSync(callLog, '')
+  writeFileSync(npmLog, '')
   writeFileSync(runCounter, '0')
   const result = spawnSync(
     'bash',
@@ -126,6 +152,9 @@ function run(extra: string[], env: Record<string, string> = {}) {
         PATH: `${stubBin}:${process.env.PATH ?? ''}`,
         SHIM_LOG: callLog,
         SHIM_RUNCOUNTER: runCounter,
+        SHIM_NPM_LOG: npmLog,
+        QIALIKE_PUBLISH_CONFIRM_ATTEMPTS: '2',
+        QIALIKE_PUBLISH_CONFIRM_INTERVAL: '0',
         // A token is present so the stub's `auth status` is not consulted; the API
         // calls themselves are what the assertions read.
         GH_TOKEN: 'fixture-token',
@@ -139,6 +168,7 @@ function run(extra: string[], env: Record<string, string> = {}) {
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
     calls: readFileSync(callLog, 'utf8'),
+    npmCalls: readFileSync(npmLog, 'utf8'),
   }
 }
 
@@ -206,6 +236,31 @@ describe('--dispatch refuses to trigger a publish CI cannot complete', () => {
     const { status, stderr } = run([], { SHIM_WATCH_RC: '1' })
     expect(status).toBe(1)
     expect(stderr).toContain('CI 运行失败')
+  })
+})
+
+describe('a CI run that reports success is still confirmed against the registry', () => {
+  // WHY THIS EXISTS. "The workflow exited 0" and "the packages are installable" are not
+  // the same claim, and only the second one is what `npm i -g @qialike/cli` depends on:
+  // the main package's optionalDependencies point straight at the two platform packages,
+  // and npm silently skips an optional dependency it cannot resolve — so a platform
+  // package that never landed yields an install that "succeeds" and then cannot run.
+  test('every package is queried in the registry, and CI green alone is not the verdict', () => {
+    const { status, npmCalls } = run([])
+
+    expect(status).toBe(0)
+    // One `view` per package, naming the exact version — that is the confirmation.
+    for (const pkg of ['@qialike/cli-win32-x64', '@qialike/cli-win32-arm64', '@qialike/cli']) {
+      expect(npmCalls).toContain(`view ${pkg}@${VERSION} version`)
+    }
+  })
+
+  test('a package the registry never shows fails the command, not just warns', () => {
+    const r = run([], { SHIM_NPM_MISSING: '@qialike/cli-win32-x64' })
+
+    expect(r.status).toBe(1)
+    expect(r.stderr).toContain('注册表看不到')
+    expect(r.stderr).toContain('@qialike/cli-win32-x64')
   })
 })
 

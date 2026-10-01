@@ -16,6 +16,13 @@
 #   ./scripts/release/push-qialike-release.sh --dry-run    # 只打印计划：不联网、不需要凭据
 #   ./scripts/release/push-qialike-release.sh --source github   # 只推一个源（github|gitcode|both，默认 both）
 #   ./scripts/release/push-qialike-release.sh --verify-only     # 不上传，只核对两个源上的清单
+#   ./scripts/release/push-qialike-release.sh --notes-only      # 只把 CHANGELOG 同步到两个源的
+#                                                              # Release 正文（不推标签、不碰资产）
+#
+# Release 正文 = `CHANGELOG.md` / `CHANGELOG.zh.md` 里该版本那一节（英文在上、中文在下，
+# 由 `changelog-section.sh` 抽取）。GitHub / GitCode 上「点标签看到的东西」就是这个正文；
+# 标签自身的附注也由 `tag-qialike.sh` 写成同一份内容（`git show <tag>` 能看到）。
+# 抽不到该节时退回旧的一行式 `qialike <版本>` —— 发布不因更新日志缺一节而失败。
 #
 # 典型用法（发布时照抄）：
 #
@@ -117,11 +124,13 @@ VERSION=''
 SOURCE='both'
 DRY=0
 VERIFY_ONLY=0
+NOTES_ONLY=0
 ALLOW_MISSING_TAG=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run)           DRY=1 ;;
     --verify-only)       VERIFY_ONLY=1 ;;
+    --notes-only)        NOTES_ONLY=1 ;;
     --allow-missing-tag) ALLOW_MISSING_TAG=1 ;;
     --source)            SOURCE="${2:-}"; shift ;;
     --source=*)          SOURCE="${1#--source=}" ;;
@@ -162,8 +171,27 @@ echo "  本地 tag = $LOCAL_TAG（带 v，annotated）  →  远端 tag = $TAG�
 echo "  source   = $SOURCE"
 [[ "$DRY" == 1 ]] && echo "  模式     = dry-run（不联网、不写入）"
 [[ "$VERIFY_ONLY" == 1 ]] && echo "  模式     = verify-only（不上传）"
+[[ "$NOTES_ONLY" == 1 ]] && echo "  模式     = notes-only（只更新两个源的 Release 正文，不推标签、不动资产）"
+
+# ── Release 正文 = CHANGELOG 该节 ────────────────────────────────────────────
+# GitHub / GitCode 上「点标签看到的东西」就是这个正文，而它过去被写死成一行
+# `qialike <版本>` ⇒ 远端**从来没有修改点**。这里改成从 CHANGELOG 抽（英文在上、
+# 中文在下），与仓库里的更新日志同源。抽不到就退回旧的一行式 —— 发布不该因为
+# 更新日志缺一节而失败。
+NOTES="$("$HERE/changelog-section.sh" "$VERSION" 2>/dev/null || true)"
+if [[ -n "$NOTES" ]]; then
+  echo "  Release 正文 = CHANGELOG 的 $VERSION 节（$(printf '%s\n' "$NOTES" | wc -l | tr -d ' ') 行）"
+else
+  NOTES="qialike $TAG"
+  warn "CHANGELOG 里没有 $VERSION 这一节 —— Release 正文退回一行式 'qialike $TAG'"
+fi
 
 # ── 1. 清单自校验：上传什么，由清单决定 ──────────────────────────────────────
+# --notes-only 只写 release 正文，不碰资产 —— 所以它不需要 dist/，也就不能被这道
+# 校验拦住（在一个没有构建产物的树里补写正文是完全合理的：正文来自 CHANGELOG）。
+if [[ "$NOTES_ONLY" == 1 ]]; then
+  echo "  （--notes-only：跳过清单自校验与全部上传，只更新两个源的 Release 正文）"
+else
 bold "清单自校验"
 MANIFEST="$DIST/sha256sums.txt"
 [[ -f "$MANIFEST" ]] || die "没有 $MANIFEST —— 先跑 scripts/release/build-qialike.sh（步骤 7.1 生成它）"
@@ -189,6 +217,7 @@ ok "清单与 6 个产物的摘要逐一相符"
 
 UPLOAD_LIST=("${ASSETS[@]}" sha256sums.txt)
 echo "  将上传 $(( ${#ASSETS[@]} + 1 )) 个文件（6 资产 + sha256sums.txt）"
+fi
 
 # ── 标签同步：远端 tag 必须与本地一致 ────────────────────────────────────────
 # 为什么必须做在"创建 release"之前：两个源的 release API 在 tag 不存在时**不会报错** ——
@@ -346,7 +375,7 @@ GC_TOKEN="${GITCODE_TOKEN:-${GITCODE_ACCESS_TOKEN:-}}"
 
 if [[ "$ALLOW_MISSING_TAG" == 1 ]]; then
   warn "--allow-missing-tag：跳过标签同步，交给源的 release API 自建 tag（可能指向错误的提交）"
-elif [[ "$DRY" == 0 && "$VERIFY_ONLY" == 0 ]]; then
+elif [[ "$DRY" == 0 && "$VERIFY_ONLY" == 0 && "$NOTES_ONLY" == 0 ]]; then
   # 凭据先查，**在碰任何远端之前**。token 只用于后面的 API 上传，标签同步（git 推送）不需要
   # 它 —— 但如果把它放到标签同步之后，缺令牌的一次运行会**先把标签推到远端**、再在"该上传了"
   # 处停下，留下"tag 已推、release 没建"的半截状态。这跟下面那条"先检查全部 remote 再动手"
@@ -398,6 +427,12 @@ elif [[ "$DRY" == 0 && "$VERIFY_ONLY" == 0 ]]; then
 fi
 
 if [[ "$DRY" == 1 ]]; then
+  if [[ "$NOTES_ONLY" == 1 ]]; then
+    bold "dry-run 结束（没有联网、没有写入）"
+    echo "  notes-only：将对 $SOURCE 的 release $TAG 执行 PATCH body"
+    echo "  （正文 = CHANGELOG 的 $VERSION 节，$(printf '%s\n' "$NOTES" | wc -l | tr -d ' ') 行；不推标签、不碰资产）"
+    exit 0
+  fi
   bold "dry-run 结束（没有联网、没有写入）"
   printf '  上传清单：\n'
   for f in "${UPLOAD_LIST[@]}"; do printf '    %s\n' "$f"; done
@@ -442,16 +477,57 @@ gc_api() {  # $1=method $2=path [curl args...]
     "$@" "$GITCODE_API$path${sep}access_token=$GC_TOKEN"
 }
 
+# 把 CHANGELOG 写进 gitcode 已有 release 的正文。
+#
+# ⚠️ 三个 GitCode 特有的坑，都是 2026-10-01 实测出来的（第一次跑就撞上第 1 个）：
+#   ① **release 对象没有 `id` 字段**。它的键只有 tag_name / target_commitish / prerelease /
+#      name / body / author / created_at / assets / release_status —— 定位资源用的是 **tag**，
+#      不是 id（上传接口 `…/releases/<tag>/upload_url` 同理）。所以「先查 id 再 PATCH」这条
+#      GitHub 思路在 GitCode 上必然失败，且失败信息只会说"取不到 id"。
+#   ② **不是部分更新**：只发 `{"body":…}` 会得到
+#      `PARAMETER_ERROR: must not be blank`；必须带上 `tag_name` 与 `name`。
+#   ③ 字段要**原样保留**：`release_status`（latest / pre）与 `prerelease` 若不带回，
+#      就可能把预发布标记冲掉。所以先 GET 当前值，再原样写回。
+# 幂等：正文已一致就跳过，免得每次推送都白写一次。
+gc_sync_notes() {
+  local cur payload
+  cur="$(gc_api GET "/repos/$GITCODE_REPO/releases/tags/$TAG" 2>/dev/null || true)"
+  [[ -n "$cur" ]] || { warn "gitcode：取不到 release $TAG —— 跳过正文同步（先做 ⑪ 推送）"; return 1; }
+  if [[ "$(jq -r '.body // ""' <<<"$cur")" == "$NOTES" ]]; then
+    ok "gitcode release $TAG 正文已是最新（未改动）"
+    return 0
+  fi
+  payload="$(jq -nc --arg t "$TAG" --arg n "$(jq -r '.name // ""' <<<"$cur")" --arg b "$NOTES" \
+                  --arg s "$(jq -r '.release_status // "latest"' <<<"$cur")" \
+                  --argjson pre "$(jq -r '.prerelease // false' <<<"$cur")" \
+    '{tag_name:$t, name:$n, body:$b, release_status:$s, prerelease:$pre}')"
+  # 空 name 会被 GitCode 判为 blank，退回用 tag 当 name（与创建路径一致）。
+  [[ "$(jq -r '.name' <<<"$payload")" == "" ]] && payload="$(jq -c '.name = .tag_name' <<<"$payload")"
+  # 同时给 `private-token` 头与 gc_api 自带的 `?access_token=`：匿名探测时这个接口报的是
+  # `Invalid header parameter: private-token, required`，而本仓库既有的创建/上传调用走的是
+  # query 参数（那条路实测可用）。两条都发，任一条被接受都成功，且多一个头无害。
+  if gc_api PATCH "/repos/$GITCODE_REPO/releases/$TAG" \
+       -H 'Content-Type: application/json' -H "private-token: $GC_TOKEN" \
+       -d "$payload" >/dev/null; then
+    ok "gitcode release $TAG 正文已更新（$(printf '%s\n' "$NOTES" | wc -l | tr -d ' ') 行）"
+    return 0
+  fi
+  warn "gitcode 拒绝更新 release $TAG 的正文"
+  warn "  兜底：在 https://gitcode.com/$GITCODE_REPO/releases 里手工编辑 $TAG 的说明"
+  return 1
+}
+
 gc_ensure_release() {
   local body
   if gc_api GET "/repos/$GITCODE_REPO/releases/tags/$TAG" >/dev/null 2>&1; then
     ok "gitcode release $TAG 已存在"
+    gc_sync_notes || true
     return 0
   fi
   # release_status: pre = 预发布。带 `-` 的版本号（0.7.1-beta）按预发布，否则 latest。
   local status='latest'
   [[ "$TAG" == *-* ]] && status='pre'
-  body="$(jq -nc --arg t "$TAG" --arg n "$TAG" --arg b "qialike $TAG" --arg s "$status" \
+  body="$(jq -nc --arg t "$TAG" --arg n "$TAG" --arg b "$NOTES" --arg s "$status" \
     '{tag_name:$t, name:$n, body:$b, release_status:$s}')"
   gc_api POST "/repos/$GITCODE_REPO/releases" -H 'Content-Type: application/json' -d "$body" >/dev/null \
     || die "gitcode 创建 release $TAG 失败（tag 是否已推送？release 需要 tag 存在）"
@@ -490,6 +566,48 @@ verify_manifest() {  # $1=下载根 $2=源名
   die "$label 上取不到 $TAG/sha256sums.txt（试了 5 次）—— 清单没传上去，安装器会拒绝安装"
 }
 
+# ── 0b. --notes-only：只把 CHANGELOG 同步到两个源的 Release 正文 ─────────────
+# 用途：给**已经发布过**的版本补写正文（0.9.0 就是这样 —— 它的正文是建 release 那一刻
+# 写进去的一行 `qialike 0.9.0`）。这条路**不推标签、不碰资产**，所以它不会移动任何
+# 已发布的东西：只读 release → PATCH body。
+# 放在清单自校验**之前**：它只需要 CHANGELOG 与令牌，不需要本地 dist/。
+if [[ "$NOTES_ONLY" == 1 ]]; then
+  bold "notes-only：同步 Release 正文"
+
+  if [[ "$SOURCE" != gitcode ]]; then
+    [[ -n "${GH_TOKEN:-}" ]] || die "缺少 GITHUB_TOKEN（或 GH_TOKEN）—— --notes-only 仍要写 GitHub"
+  fi
+  if [[ "$SOURCE" != github ]]; then
+    [[ -n "${GC_TOKEN:-}" ]] || die "缺少 GITCODE_TOKEN（或 GITCODE_ACCESS_TOKEN）"
+  fi
+  rc=0
+  if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
+    bold "GitHub（$GITHUB_REPO）"
+    _rel="$(gh_api GET "/repos/$GITHUB_REPO/releases/tags/$TAG" 2>/dev/null || true)"
+    _id="$(jq -r '.id // empty' <<<"$_rel")"
+    if [[ -z "$_id" ]]; then
+      warn "GitHub 上没有 release $TAG —— 先做 ⑪ 推送（本模式只更新已有 release）"
+      rc=1
+    elif [[ "$(jq -r '.body // ""' <<<"$_rel")" == "$NOTES" ]]; then
+      ok "GitHub release $TAG 正文已是最新（未改动）"
+    elif gh_api PATCH "/repos/$GITHUB_REPO/releases/$_id" \
+           -H 'Content-Type: application/json' \
+           -d "$(jq -nc --arg b "$NOTES" '{body:$b}')" >/dev/null; then
+      ok "GitHub release $TAG 正文已更新"
+    else
+      warn "GitHub release $TAG 正文更新失败"
+      rc=1
+    fi
+  fi
+  if [[ "$SOURCE" == gitcode || "$SOURCE" == both ]]; then
+    bold "gitcode（$GITCODE_REPO）"
+    gc_sync_notes || rc=1
+  fi
+  [[ "$rc" == 0 ]] || die "notes-only 未全部成功（见上面的 warn）"
+  bold "notes-only 完成"
+  exit 0
+fi
+
 # ── 2. GitHub ───────────────────────────────────────────────────────────────
 if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
   bold "GitHub（$GITHUB_REPO）"
@@ -507,6 +625,18 @@ if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
         REL="$(gh_api GET "/repos/$GITHUB_REPO/releases/tags/$TAG")" \
           || die "取 GitHub release $TAG 详情失败（状态码 200，但正文取不到）"
         ok "release $TAG 已存在"
+        # 正文同步：release 已存在时创建路径不会走，若不在这里补一次，远端正文就会
+        # 永远停在建 release 那一刻的内容（0.9.0 实测：13 个字符、没有任何修改点）。
+        # 幂等：正文相同就不 PATCH，避免无谓的写与无谓的事件。
+        _id="$(jq -r '.id // empty' <<<"$REL")"
+        _cur="$(jq -r '.body // ""' <<<"$REL")"
+        if [[ -n "$_id" && "$_cur" != "$NOTES" ]]; then
+          gh_api PATCH "/repos/$GITHUB_REPO/releases/$_id" \
+            -H 'Content-Type: application/json' \
+            -d "$(jq -nc --arg b "$NOTES" '{body:$b}')" >/dev/null \
+            && ok "release $TAG 正文已同步为 CHANGELOG 该节" \
+            || warn "release $TAG 正文同步失败（资产与标签不受影响）"
+        fi
         ;;
       404)
         PRE='false'
@@ -521,7 +651,7 @@ if [[ "$SOURCE" == github || "$SOURCE" == both ]]; then
         #   发布动作被显式挪到第 527-531 行的上传循环之后。
         REL="$(gh_api POST "/repos/$GITHUB_REPO/releases" \
           -H 'Content-Type: application/json' \
-          -d "$(jq -nc --arg t "$TAG" --arg n "$TAG" --arg b "qialike $TAG" --argjson pre "$PRE" \
+          -d "$(jq -nc --arg t "$TAG" --arg n "$TAG" --arg b "$NOTES" --argjson pre "$PRE" \
                 '{tag_name:$t, name:$n, body:$b, draft:true, prerelease:$pre}')")" \
           || die "GitHub 创建 release $TAG 失败（tag 是否已推送？）"
         ok "release $TAG 已创建（draft —— 资产传完才发布）"

@@ -55,6 +55,17 @@ const ASSETS = [
 const TAG_SHA = '1111111111111111111111111111111111111111'
 const VERSION = '0.7.1'
 
+/**
+ * The release body the scripts should compute for a version — read from the real
+ * extractor rather than retyped, so this test cannot drift from what ships.
+ * @param version - the version whose CHANGELOG entry is wanted.
+ * @returns the section text the release body should carry.
+ */
+function notesFor(version: string): string {
+  const r = spawnSync('bash', [join(REPO, 'scripts', 'release', 'changelog-section.sh'), version], { encoding: 'utf8' })
+  return (r.stdout ?? '').replace(/\n$/, '')
+}
+
 /** The script under test assumes GNU userland in its own manifest self-check
  *  (`sha256sum`, `stat -c%s`). Where those are missing — a macOS dev box — this
  *  suite cannot drive it meaningfully, so it skips instead of failing for a
@@ -209,11 +220,19 @@ describe('the release is published only after every asset is uploaded', () => {
 
     expect(r.status).toBe(0)
     expect(r.out).toContain('已存在')
-    expect(lineAt(r.calls, /-X PATCH/)).toBeGreaterThan(lastUploadAt(r.calls))
+    // Which PATCH matters here: the draft→published one. (A second PATCH may legitimately
+    // appear — the release-body sync — and it is supposed to run BEFORE the uploads.)
+    expect(lineAt(r.calls, /-X PATCH[^\n]*"draft"/)).toBeGreaterThan(lastUploadAt(r.calls))
   })
 
   test.skipIf(!canRun)('an already-published release is left alone, so no second event fires', () => {
-    const r = run({ FIX_RELEASE_STATUS: '200', FIX_DRAFT_BODY: '{"draft":false}' })
+    // The body is already the CHANGELOG entry, so neither PATCH should happen: not the
+    // draft→published one (already published) nor the notes sync (already current).
+    const r = run({
+      FIX_RELEASE_STATUS: '200',
+      FIX_RELEASE_BODY: JSON.stringify({ id: 42, body: notesFor(VERSION) }),
+      FIX_DRAFT_BODY: '{"draft":false}',
+    })
 
     expect(r.status).toBe(0)
     expect(r.calls).not.toMatch(/-X PATCH/)
@@ -252,6 +271,43 @@ describe('the GitHub release branch judges by status code, not by a non-empty bo
     expect(uploadCount(r.calls)).toBe(7)
     expect(r.out).toContain('GitHub 的 sha256sums.txt 与本地逐字节一致')
     expect(r.out).toContain('推送完成')
+  })
+})
+
+describe('the release body is the CHANGELOG entry, not a placeholder', () => {
+  // WHY THIS EXISTS. GitHub and GitCode show a release's body when you click a tag, and
+  // it was the literal string `qialike <version>` — so no release ever showed what
+  // changed (measured on 0.9.0: 13 characters). These pin the wiring: the body comes
+  // from the repository CHANGELOG, in both languages, and an existing release whose body
+  // does not match is PATCHed.
+
+  test('the create request carries this version\'s CHANGELOG text, both languages', () => {
+    const r = run({ FIX_RELEASE_STATUS: '404', FIX_DRAFT_BODY: '{"draft":true}' })
+
+    expect(r.status).toBe(0)
+    // Phrases only the 0.7.1 entry (the fixture version) contains, one per language.
+    expect(r.calls).toContain('The installer verifies what it downloads')
+    expect(r.calls).toContain('安装器会校验下载到的东西')
+    // …and the old one-line placeholder is not what the create payload says.
+    expect(r.calls).toMatch(/-X POST[^\n]*"body":"### Added/)
+    expect(r.calls).not.toContain('"body":"qialike 0.7.1"')
+  })
+
+  test('an existing release with a stale body is PATCHed to the CHANGELOG', () => {
+    const r = run({ FIX_RELEASE_STATUS: '200', FIX_RELEASE_BODY: '{"id":42,"body":"qialike 0.7.1"}' })
+
+    expect(r.status).toBe(0)
+    expect(r.calls).toMatch(/-X PATCH[^\n]*"body":"### Added/)
+  })
+
+  test('an existing release already carrying the CHANGELOG is left alone', () => {
+    // Idempotence matters because re-running a push is routine: an unconditional PATCH
+    // would rewrite the body on every run, and the drift it corrects is rare.
+    const notes = notesFor(VERSION)
+    const r = run({ FIX_RELEASE_STATUS: '200', FIX_RELEASE_BODY: JSON.stringify({ id: 42, body: notes }) })
+
+    expect(r.status).toBe(0)
+    expect(r.calls).not.toMatch(/-X PATCH/)
   })
 })
 

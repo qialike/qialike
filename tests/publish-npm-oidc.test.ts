@@ -40,6 +40,7 @@ const FIFTY_MIB = 50 * 1024 * 1024
 let work = ''
 let stubBin = ''
 let callLog = ''
+let publishedLog = ''
 let distDir = ''
 let pubDir = ''
 
@@ -63,11 +64,30 @@ const VERSION = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).ver
 function writeNpmStub(): void {
   const shim = `#!/usr/bin/env bash
 printf 'npm %s\\n' "$*" >> "$SHIM_LOG"
+# The registry is modelled as a growing set of "already published" package names.
+# The view subcommand must answer "not there yet" BEFORE a publish and "there" AFTER
+# it: the script now confirms every publish against the registry before moving on,
+# so a stub that always failed view would make every publish look unconfirmed.
+published() { grep -qx "$1" "$SHIM_PUBLISHED" 2>/dev/null; }
 case "$1" in
   --version) printf '%s\\n' "\${NPM_VERSION_FIXTURE:-11.5.1}" ;;
-  view)      exit 1 ;;
+  view)
+    # Strip the version from the LAST at-sign, not the first: a scoped name
+    # STARTS with one, so the longest-suffix form deletes the whole spec and
+    # every lookup misses. The shortest-suffix form takes "@<version>".
+    want="\${2%@*}"
+    if ! published "$want"; then exit 1; fi
+    case "$*" in
+      # The confirmation also reads the registry fingerprint; answer with a distinct
+      # value so a test can prove THAT query ran and was surfaced to the operator.
+      *dist.*) printf 'fixture-sha1\\nsha512-fixture\\n' ;;
+      *)       printf '%s\\n' "\${2##*@}" ;;
+    esac ;;
   pack)      printf 'npm notice filename: fixture.tgz\\nnpm notice package size: 1 B\\n' ;;
   publish)   printf 'published (stub)\\n'
+             if [[ "\${SHIM_SUPPRESS_PUBLISH_RECORD:-0}" != 1 ]]; then
+               node -p "require('./package.json').name" >> "$SHIM_PUBLISHED" 2>/dev/null || true
+             fi
              cp README.md "$SHIM_PUBDIR/$(basename "$PWD").README.md" 2>/dev/null || true ;;
   whoami)    printf 'npm error code ENEEDAUTH\\n' >&2; exit 1 ;;
   *)         : ;;
@@ -81,6 +101,7 @@ beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), 'qialike-npm-oidc-'))
   stubBin = join(work, 'bin')
   callLog = join(work, 'calls.log')
+  publishedLog = join(work, 'published.log')
   distDir = join(work, 'dist')
   pubDir = join(work, 'published')
   mkdirSync(stubBin)
@@ -112,6 +133,9 @@ afterAll(() => {
  */
 function run(extra: string[], env: Record<string, string> = {}) {
   writeFileSync(callLog, '')
+  // The registry starts EMPTY: a stub that pre-answered `view` would let the
+  // post-publish confirmation pass without any publish having happened.
+  writeFileSync(publishedLog, '')
   // Fresh capture dir per run, so one test cannot read another's package.
   rmSync(pubDir, { recursive: true, force: true })
   mkdirSync(pubDir)
@@ -126,6 +150,10 @@ function run(extra: string[], env: Record<string, string> = {}) {
         PATH: `${stubBin}:${process.env.PATH ?? ''}`,
         SHIM_LOG: callLog,
         SHIM_PUBDIR: pubDir,
+        SHIM_PUBLISHED: publishedLog,
+        // Keep the confirmation poll instant: the default is 10 x 3 s.
+        QIALIKE_PUBLISH_CONFIRM_ATTEMPTS: '3',
+        QIALIKE_PUBLISH_CONFIRM_INTERVAL: '0',
         QIALIKE_DIST: distDir,
         NPM_VERSION_FIXTURE: '11.5.1',
         // No credentials of any kind: the token path must have nothing to fall back on.
@@ -156,6 +184,8 @@ function publishedReadme(pkg: string): string | undefined {
   return existsSync(file) ? readFileSync(file, 'utf8') : undefined
 }
 
+const calls_publish_count = (out: string) => out.split('已上传').length - 1
+
 const OIDC_ENV = {
   ACTIONS_ID_TOKEN_REQUEST_URL: 'https://example.invalid/oidc',
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'fixture-request-token',
@@ -179,6 +209,38 @@ describe('--oidc skips the credential pre-flight and publishes with provenance',
     expect(status).toBe(0)
     expect(calls).not.toContain('npm whoami')
     expect(calls.match(/npm publish/g)?.length).toBe(3)
+  })
+})
+
+describe('a publish that the registry never acknowledges stops the run', () => {
+  // WHY THIS EXISTS. The publish order is load-bearing: the main package's
+  // optionalDependencies name the two platform packages exactly, so publishing the
+  // main package after a platform package that did not actually land produces an
+  // install that succeeds and then cannot run (npm skips an unresolvable optional
+  // dependency silently). Exit code 0 from `npm publish` only says the upload call
+  // did not error, so it is not enough to move on.
+  test('the next package is NOT published when confirmation fails', () => {
+    // Publish reports success but records nothing, so the confirmation poll can
+    // never see the version — the shape of "uploaded, never landed".
+    const { status, calls } = run(['--oidc'], { SHIM_SUPPRESS_PUBLISH_RECORD: '1' })
+
+    expect(status).toBe(1)
+    // Exactly ONE publish attempt — it stopped instead of walking the other two.
+    // This is the whole point of the gate: the platform packages must be resolvable
+    // before the main package (whose optionalDependencies name them) goes out.
+    expect(calls.match(/npm publish/g)?.length).toBe(1)
+    expect(calls).toContain('@qialike/cli-win32-x64@0.9.0')
+    // It never even staged a publish for the second platform package.
+    expect(calls).not.toContain('@qialike/cli-win32-arm64@0.9.0')
+  })
+
+  test('a confirmed publish records the registry fingerprint it read back', () => {
+    const { status, stdout } = run(['--oidc'])
+
+    expect(status).toBe(0)
+    expect(stdout).toContain('注册表已确认')
+    expect(stdout).toContain('fixture-sha1')
+    expect(calls_publish_count(stdout)).toBe(3)
   })
 })
 
