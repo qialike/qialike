@@ -119,14 +119,18 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ''
           # 发布后的确认窗口（`publish-npm.sh` 的 CONFIRM_ATTEMPTS × CONFIRM_INTERVAL）。
-          # 脚本默认 10 × 3 s = 30 s，而实测注册表比这慢得多：0.9.1 那次 run #5 里，
-          # x64 平台包**确实上传成功**（provenance 的 invocationId 就指向该 run），
-          # 但注册表把 `time` 记在该 job **结束之后 67 s**（packument 17:34:01.965Z、
-          # tarball Last-Modified 17:34:04，job 17:32:54Z 就结束了）⇒ 30 s 窗口看不到它，
-          # 脚本按设计「确认不到就不发下一个包」中止 ⇒ **只有 x64 一个包上线、arm64 与主包没发**。
-          # 这里放宽到 20 × 6 s = 120 s，并保留「先确认再发下一个」这道顺序保证（不削弱它）。
+          # `npm publish` 返回后，注册表**提交**该版本还要一段时间；带 attestations 的
+          # 这次写入实测要 100–130 s（不带 provenance 的 0.9.0 手动发布则 < 30 s，当时
+          # 30 s 窗口连发三包没问题）。两次实测：
+          #   #5 x64  窗口 30 s  → 超时（上报成功、注册表 98 s 后才记录）
+          #   #7 arm64 窗口 120 s → 超时（同样是上传成功、注册表 ≈127 s 后才记录；
+          #                          主包因此**根本没轮到**，见 run #7 第 10 步 165 s）
+          # 这里放宽到 20 × 15 s = **300 s**（观测最大值的 2.4 倍）。只动等待时长，
+          # 「先确认再发下一个包」这道顺序保证不削弱 —— 它防止主包先于平台包上线。
+          # 注意 `npm publish` 非零退出时脚本**立即**中止、不会等满窗口，所以 300 s 只会
+          # 花在「上传成功但尚未可见」这一种情形上。
           QIALIKE_PUBLISH_CONFIRM_ATTEMPTS: '20'
-          QIALIKE_PUBLISH_CONFIRM_INTERVAL: '6'
+          QIALIKE_PUBLISH_CONFIRM_INTERVAL: '15'
         run: |
           set -euo pipefail
           # 再显式置空一次：不依赖 runner 对 GITHUB_ENV 与步骤级 env 的合并顺序。
