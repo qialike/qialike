@@ -48,6 +48,21 @@ describe('Ctrl+U clears the whole line in dialog inputs', () => {
     expect(read('theme-picker.tsx')).toContain("k.ctrl && k.char === 'u'")
   })
 
+  test('the @file popup routes Ctrl+U onward instead of typing the chord', () => {
+    // It owns the composer draft while it is open — and it can be open while
+    // INVISIBLE (no matching candidate renders nothing, but `store.panel` still
+    // names it). It has no clear action of its own, so the contract is the
+    // delegation, not a `store.*Clear()` call: every modifier chord goes to the
+    // conversation panel, and the text branch is modifier-guarded.
+    const text = read('file-reference.tsx')
+    expect(text).toContain("tui.panels.byId('conversation')?.handleKey?.(k, store)")
+    expect(text).toContain('if (k.ctrl === true || k.meta === true) {')
+    expect(text).toContain('if (k.char !== undefined && !k.ctrl && !k.meta)')
+    expect(text, 'the unguarded text branch must be gone').not.toContain(
+      'if (k.char !== undefined) { store.insertAtCursor(k.char); return }',
+    )
+  })
+
   test('the theme filter really is cleared by Ctrl+U (and the picker stays open)', () => {
     const calls: string[] = []
     const applied: string[] = []

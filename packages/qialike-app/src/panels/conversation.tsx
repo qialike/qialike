@@ -2401,7 +2401,13 @@ function conversationKey(k: RawKey, tui: TuiService): void {
     syncCommandFilter()
     return
   }
-  if (char) {
+  // A chord that fell through every binding above is NOT text. Without this
+  // guard the decoder's `{ char: 'd'|'r'|'f', ctrl: true }` (stdin.ts maps those
+  // bytes to their letters) reached the insert branch below and typed a literal
+  // `d`/`r`/`f` — the three recognised chords this surface has no action for.
+  // Meta is excluded for the same reason: `{ char: 't', meta: true }` is the
+  // documented Alt+T fallback and is already handled above.
+  if (char && !k.ctrl && !k.meta) {
     resetHistoryBrowse()
     store.insertAtCursor(char)
     syncCommandFilter()

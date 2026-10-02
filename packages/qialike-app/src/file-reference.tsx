@@ -157,7 +157,12 @@ function pick(candidate: FileCandidate, drill: boolean): void {
   close(null)
 }
 
-function paletteKey(k: RawKey): void {
+/**
+ * The popup's key handler. Exported (like `themePickerKey`) so the modifier
+ * contract below can be driven directly from a test: the popup must never type
+ * a control chord's letter into the draft.
+ */
+export function fileReferenceKey(k: RawKey): void {
   const len = Math.max(1, candidates.length)
   if (k.upArrow) { index = (index - 1 + len) % len; store.repaint(); return }
   if (k.downArrow) { index = (index + 1) % len; store.repaint(); return }
@@ -189,10 +194,24 @@ function paletteKey(k: RawKey): void {
     // is visibly mid-completion.
     return
   }
+  // A control/Alt CHORD is the composer's, not this popup's: hand it to the
+  // conversation panel's handler, which is the single definition of every chord
+  // (Ctrl+U delete-to-line-start, Ctrl+P, Ctrl+Y copy, Ctrl+T, Ctrl+C). This
+  // popup owns only plain editing, and it did NOT check the modifier before
+  // typing `k.char` — so a draft ending in an open `@token` turned every chord
+  // into its own LETTER. The popup is the more dangerous owner of the two
+  // because it can be INVISIBLE: with no matching candidate the box renders
+  // nothing while `store.panel` still names it (see `sync`), so Ctrl+U on the
+  // composer draft `npm i -g @qialike/cli` silently inserted a literal `u`
+  // instead of deleting the line.
+  if (k.ctrl === true || k.meta === true) {
+    tui.panels.byId('conversation')?.handleKey?.(k, store)
+    return
+  }
   // Anything else edits the draft; the subscription re-syncs from the new text.
   if (k.backspace) { store.backspaceAtCursor(); return }
   if (k.delete) { store.deleteForward(); return }
-  if (k.char !== undefined) { store.insertAtCursor(k.char); return }
+  if (k.char !== undefined && !k.ctrl && !k.meta) { store.insertAtCursor(k.char); return }
 }
 
 /** Bottom-anchored box just above the composer card. Placement mirrors the
@@ -255,7 +274,7 @@ export function apply(ctx: Context): void {
     id: FILE_PANEL,
     mode: 'overlay',
     render: () => <FileReferencePalette />,
-    handleKey: (k) => { paletteKey(k); return true },
+    handleKey: (k) => { fileReferenceKey(k); return true },
   })
   ctx.effect(() => store.subscribe(sync), 'tui-file-reference: draft watch')
 }
