@@ -248,11 +248,14 @@ describe('the package manager is pinned in exactly one place', () => {
   // copy of one fact that nothing compared, so the two could drift silently — the same
   // shape as the `HARNESS_REF` guard above.
   //
-  // The lockfile is the other half, and it is the half that fails loudly: pnpm 12 records
-  // the package manager itself in `packageManagerDependencies` (plus one `@pnpm/exe.<os>`
-  // entry per platform), so bumping `packageManager` without regenerating the lockfile
-  // makes `pnpm install --frozen-lockfile` — which CI runs — die with
-  // ERR_PNPM_FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE. Verified by trying it.
+  // The lockfile is the other half, and under pnpm 12 it is the half that fails loudly:
+  // pnpm 12 records the package manager itself in `packageManagerDependencies` (plus one
+  // `@pnpm/exe.<os>` entry per platform), so bumping `packageManager` without regenerating
+  // the lockfile makes `pnpm install --frozen-lockfile` — which CI runs — die with
+  // ERR_PNPM_FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE. Verified by trying it, on the pnpm 12
+  // upgrade that was reverted back to 11.7.0 (user decision). The repo pins 11 today, where
+  // the pin lives only in `package.json` and the lockfile records nothing about it — hence
+  // the guard states the invariant for whichever major is pinned.
   const CI = read('.github/workflows/ci.yml')
   const PKG = JSON.parse(read('package.json')) as { packageManager?: string }
   const LOCK = read('pnpm-lock.yaml')
@@ -266,14 +269,21 @@ describe('the package manager is pinned in exactly one place', () => {
     expect(prepare, 'must not hardcode a pnpm version').not.toMatch(/pnpm@\d/)
   })
 
-  test('the lockfile records the same package manager', () => {
+  test('the lockfile agrees with the pin about which pnpm writes it', () => {
     // Tolerate Corepack's integrity form (`pnpm@1.2.3+sha512.…`), which `corepack use`
     // writes: the lockfile only ever records the bare version.
     const pinned = PKG.packageManager!.replace(/^pnpm@/, '').split('+')[0]
-    // pnpm 12 writes this into a leading YAML document of its own.
-    expect(LOCK, 'the lockfile has a packageManagerDependencies section').toContain('packageManagerDependencies:')
+    const major = Number(pinned.split('.')[0])
+    // pnpm 12 records the package manager itself in a leading YAML document of its own;
+    // pnpm 11 does not. The invariant runs both ways, so it also catches regenerating the
+    // lockfile with a pnpm other than the pinned one.
     const specifier = /packageManagerDependencies:\s*\n\s+pnpm:\s*\n\s+specifier:\s*(\S+)/.exec(LOCK)
-    expect(specifier, 'pnpm is listed there with a specifier').not.toBeNull()
-    expect(specifier![1], 'lockfile and package.json must agree, or --frozen-lockfile fails').toBe(pinned)
+    if (major >= 12) {
+      expect(LOCK, 'pnpm 12 writes packageManagerDependencies').toContain('packageManagerDependencies:')
+      expect(specifier, 'pnpm is listed there with a specifier').not.toBeNull()
+      expect(specifier![1], 'lockfile and package.json must agree, or --frozen-lockfile fails').toBe(pinned)
+    } else {
+      expect(specifier, `pnpm ${major} does not write packageManagerDependencies; a lockfile that has one was written by pnpm 12+`).toBeNull()
+    }
   })
 })

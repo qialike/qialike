@@ -4,7 +4,7 @@
   "license": "MIT",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@12.2.0",
+  "packageManager": "pnpm@11.7.0",
   "bin": {
     "qialike": "dist/qialike"
   },
