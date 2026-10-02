@@ -1,6 +1,6 @@
 /**
  * Regression tests for "the last wrapped line of the answer is never painted"
- * (qialike-development §2.5.51).
+ * (qialike-desktop-dev §2.5.51).
  *
  * Root cause: the transcript viewport is laid out from a per-row height, and
  * the newest (still growing) row's height is the one that decides whether the

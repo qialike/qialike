@@ -610,7 +610,7 @@ const MEASURE_THROTTLE_MS = 100
  *  streamed answer: the cached height stayed one row short, `content` (hence
  *  `maxScroll`) stayed one row short, and with follow-tail the newest wrapped
  *  line fell below the viewport — the "answer's tail never shows up, End does
- *  not help" report (see qialike-development §2.5.51).
+ *  not help" report (see qialike-desktop-dev §2.5.51).
  *
  *  Two safeguards replace that tolerance:
  *   · a reading more than one row BELOW the markdown estimate is the documented
@@ -894,7 +894,7 @@ const MemoTranscriptItemView = React.memo(function TranscriptItemView(props: {
     // its timers — a timer that fires therefore proves the text has been stable
     // for that long. Without the forced final sample a last one-row growth was
     // dropped, leaving the cached height one row short and clipping the tail of
-    // the answer below the transcript viewport (qialike-development §2.5.51).
+    // the answer below the transcript viewport (qialike-desktop-dev §2.5.51).
     if (ref.current) {
       setMeasuredHeight(key, measureElement(ref.current).height, est, { force: true, throttled: true })
     }

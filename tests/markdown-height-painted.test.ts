@@ -8,7 +8,7 @@
  * measurement was dropped, falls back to `estimateMarkdownHeight`. A silent
  * undercount there puts the newest wrapped line below the viewport (the
  * "answer's tail never shows up; End does not help" report — see
- * qialike-development §2.5.51). The two sides of this test are the real
+ * qialike-desktop-dev §2.5.51). The two sides of this test are the real
  * renderer (`<MarkdownText>`, measured through Ink's `measureElement`) and the
  * real estimator, at the geometry `conversation.tsx` uses:
  *
