@@ -15,6 +15,7 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 - **A release already live on npm is no longer reported as a failure** — the post-publish wait is 900 s, up from 30.
 - **CI verifies the binary it actually built** — the step no longer assumes `dist/qialike`.
+- **Ctrl+U works with the @file popup open** — a draft ending in an unfinished `@token` made every control chord type its own letter instead of reaching the composer.
 
 ## [0.9.1] - 2026-10-01
 
