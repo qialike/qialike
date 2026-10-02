@@ -366,7 +366,7 @@ sync_tag() {  # $1 = remote 名或 URL，$2 = 标签
 # `{"message":"Not Found"}` 与 401 的 `{"message":"Bad credentials"}` 都非空。GitHub 分支曾
 # 据此判"release 已存在"：首次发布时 release 还不存在、GET 必然 404，却被读成"已存在"，于是
 # 永远不进创建分支、永远拿不到 release id —— 每次重跑都停在同一处（0.7.1 首次发布就撞在这
-# 里，见 qialike-desktop-dev.md §9.4.16）。判据必须是状态码。
+# 里，见 qialike-cli-dev.md §9.4.16）。判据必须是状态码。
 #
 # `-o /dev/null` 丢掉 body，`-w` 给状态码；连不上时 curl 给 `000`，同样能用 case 归类。
 # 位置：必须定义在**下面那道凭据前置检查之前**（bash 按执行顺序解析函数，放到后面的

@@ -25,7 +25,7 @@
  * What this does NOT replace: the deployed-host checks (that
  * `https://qialike.com/install` serves what the repo has, that the release really
  * carries all six assets, that the tag is bare). Those need the real network and
- * are verified per release — see qialike-desktop-dev.md §9.4.11.
+ * are verified per release — see qialike-cli-dev.md §9.4.11.
  *
  * Run with `bun test tests/install-integration.test.ts`.
  *

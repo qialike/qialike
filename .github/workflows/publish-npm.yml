@@ -7,7 +7,7 @@ name: npm publish
 # OIDC 让 CI 每次运行向 GitHub 换一张短期、带签名的身份令牌，注册表按**该包预登记的
 # trusted publisher 规则**（仓库 + workflow 文件名 + environment）放行。
 #
-# 前置（缺一不可，见 qialike-desktop-dev.md §9.5.1）：
+# 前置（缺一不可，见 qialike-cli-dev.md §9.5.1）：
 #   ① 三个包**已经存在** —— trusted publisher 是**逐包**配置在包的设置页上，无法 bootstrap 首包；
 #   ② 每个包都登记了本仓库、本文件名（`publish-npm.yml`）与 environment `npm-publish`；
 #   ③ npm CLI ≥ 11.5.1（本工作流会先升级；`publish-npm.sh --oidc` 也会校验）。

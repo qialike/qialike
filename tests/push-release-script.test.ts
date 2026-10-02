@@ -10,7 +10,7 @@
  * empty, and every re-run stopped at the same line. The first release of any
  * version necessarily 404s, so this blocked the whole upload path — 0.7.1 hit it
  * and could not be published until the judgment was changed (see
- * qialike-desktop-dev.md §9.4.16). The same misreading turned a 401 into the
+ * qialike-cli-dev.md §9.4.16). The same misreading turned a 401 into the
  * same confusing "拿不到 release id" message.
  *
  * WHAT IS PINNED. Two behaviors, both of which have a live failure behind them:

@@ -357,7 +357,7 @@ if [[ "$DISPATCH" == 1 ]]; then
 
   # ② Release 与资产：工作流下载它们发布，不在 CI 里重新编译。
   assets="$(gh release view "$VERSION" --repo "$SLUG" --json assets --jq '.assets[].name' 2>/dev/null || true)"
-  [[ -n "$assets" ]] || die "GitHub Release $VERSION 不存在或取不到 —— 先做 ⑪ 推送（release-menu.sh 11）"
+  [[ -n "$assets" ]] || die "GitHub Release $VERSION 不存在或取不到 —— 先做 ⑪ 推送（cli-release-menu.sh 11）"
   for a in qialike-windows-x64.zip qialike-windows-arm64.zip sha256sums.txt; do
     grep -qx "$a" <<<"$assets" || die "Release $VERSION 缺少资产 $a —— 工作流靠它发布，先补 ⑪"
   done
@@ -435,7 +435,7 @@ declare -A EXE_PATH=() EXE_NAME=()
 for spec in "${TARGETS[@]}"; do
   pkg="${spec%%|*}"; rest="${spec#*|}"; dir="${rest%%|*}"; bin="${rest##*|}"
   exe="$DIST/$dir/$bin"
-  [[ -f "$exe" ]] || die "缺少 $exe —— 先跑 ⓪ 编译（release-menu.sh 第 1 项 / build-qialike.sh $VERSION）"
+  [[ -f "$exe" ]] || die "缺少 $exe —— 先跑 ⓪ 编译（cli-release-menu.sh 第 1 项 / build-qialike.sh $VERSION）"
   bytes="$(stat -c %s "$exe" 2>/dev/null || stat -f %z "$exe")"
   [[ "$bytes" -ge "$MIN_EXE_BYTES" ]] \
     || die "$exe 只有 $bytes B（< 下限 $MIN_EXE_BYTES）—— 构建可能被截断，拒绝发布"
@@ -675,7 +675,7 @@ publish_one() { # $1 = 包名
     if grep -qE 'Two-factor authentication or granular access token' "$log"; then
       warn "注册表要求 **2FA 挑战**：当前凭据不能绕 2FA，必须显式给一次性码"
       warn "  npm **不会**为这类 403 自动提示 OTP（它只在 EOTP 上提示），所以请重跑并加 --otp："
-      warn "      ./release-menu.sh 13 --allow-dirty --otp <6 位码>"
+      warn "      ./cli-release-menu.sh 13 --allow-dirty --otp <6 位码>"
       warn "  码的有效期很短（约 30 秒），三个包可能要**各用一次**；"
       warn "  已发布的包会被自动跳过，所以「一包一码、失败就重跑」是可行节奏。"
       warn "  另一条路：用 Classic token 里的 **Automation** 类型（既能创建包、又能绕 2FA）。"
