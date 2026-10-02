@@ -57,6 +57,8 @@ import type {} from '@deepseek-ai/dsh-cmdline'
 import { type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
 import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
 import { isNewerAvailable, parseUpdateReport, updateHintText, updateNoticeLines, type UpdateOffer } from './update-hint.ts'
+import { canSelfInstall } from './upgrade-policy.ts'
+import { installMethod } from './self-update.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
 import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
@@ -4114,14 +4116,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     })
   }
   /**
-   * The Windows `/upgrade`: check, then HINT in the status line, never install.
+   * The `/upgrade` for a Windows copy the updater CANNOT replace: check, then HINT
+   * in the status line, never install.
    *
-   * Windows cannot replace a running `.exe` and has no bash for the installer, so
-   * the launcher refuses to install there (and the startup check says so too). What
-   * this adds is the answer to "is there something newer?" in the place the user is
-   * already looking: the update hint (hero row / docked status bar), plus the two
-   * download URLs as ordinary transcript notices, because a status line cannot carry
-   * two 85-character links.
+   * Reached only for a copy nobody's package manager owns (`canSelfInstall` is
+   * false — see the command below): Windows cannot replace a running `.exe` and has
+   * no bash for the installer, so fetching the release really is the only way that
+   * copy moves forward. What this adds is the answer to "is there something newer?"
+   * in the place the user is already looking: the update hint (hero row / docked
+   * status bar), plus the two download URLs as ordinary transcript notices, because
+   * a status line cannot carry two 85-character links.
    *
    * Deliberately NOT a dialog: the user asked for a hint, and a fullscreen panel would
    * interrupt whatever they were typing on the frame the check returns.
@@ -4167,6 +4171,16 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // The hint path is Windows-only by requirement, so Linux/macOS behaviour — and
       // with it the verified silent patch install — cannot be disturbed here.
       if (process.platform !== 'win32') { installUpdate(); return }
+      // On Windows the PLATFORM alone does not decide this. An npm copy is replaced
+      // by npm itself — no bash, no `.zip` to swap — so it takes the ordinary install
+      // path, which is the same route the launcher picks from the same probe and the
+      // same predicate (`canSelfInstall`, shared through `upgrade-policy.ts`).
+      // Falling through for npm is the point: this branch used to ask only
+      // `platform !== 'win32'`, so an npm user's `/upgrade` printed "download it and
+      // replace the file by hand" plus two `.zip` links their layout has nowhere to
+      // unpack — while the one command that works for them went unmentioned.
+      // Only a copy no package manager owns is genuinely stuck with the manual file.
+      if (canSelfInstall(installMethod(), process.platform)) { installUpdate(); return }
       checkUpdateOnWindows()
     },
   })

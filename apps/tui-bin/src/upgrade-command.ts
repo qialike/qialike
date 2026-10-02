@@ -35,13 +35,13 @@ import { spawn } from 'node:child_process'
 import type { Context } from '@deepseek-ai/cordis'
 import {
   buildMode,
+  canSelfInstall,
   compareVersions,
   decideUpdate,
   getReleaseType,
   platformKind,
   readEnvPolicy,
   readUpdateSettings,
-  type InstallMethod,
 } from '@qialike/qialike-app/src/upgrade-policy.ts'
 import {
   assetFor,
@@ -101,17 +101,13 @@ export interface UpgradeIo {
 /**
  * Whether `qialike upgrade` can replace this copy at all.
  *
- * Two independent reasons it cannot: the platform (Windows) and the install
- * (a binary nobody's installer put in `~/.dsh/bin`). Both must be told to fetch the
- * release by hand — and the difference matters, so the notice is built from this
- * rather than from the decision kind alone.
+ * Defined in the shared policy module (`upgrade-policy.ts`) and re-exported here:
+ * the TUI's `/upgrade` needs the SAME answer to decide between installing and
+ * printing the manual-download notice, and a second copy of the predicate is how
+ * the two would drift apart. See its docstring for why the platform alone is not
+ * the question.
  */
-export function canSelfInstall(method: InstallMethod, platform: NodeJS.Platform = process.platform): boolean {
-  // npm owns this copy and needs no bash, so neither the platform nor the installer
-  // stands in the way — this is the layout Windows updates in place.
-  if (method === 'npm') return true
-  return method === 'curl' && platformKind(platform) !== 'windows'
-}
+export { canSelfInstall }
 
 /**
  * What a person is told about one newer release.

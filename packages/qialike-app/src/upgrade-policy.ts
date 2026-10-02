@@ -79,6 +79,33 @@ export function platformKind(platform: NodeJS.Platform = process.platform): Plat
   return platform === 'win32' ? 'windows' : 'unix'
 }
 
+/**
+ * Whether the updater can replace this copy itself, given who owns it.
+ *
+ * The PLATFORM alone does not answer this, which is the whole point of the
+ * function: Windows cannot replace a running `.exe`, so the shell installer is out
+ * there — but an npm copy is replaced by npm itself, which needs no bash and no
+ * `mv`, so it is NOT detect-only. Reading the platform by itself therefore told
+ * every Windows user to fetch a `.zip`, including the npm users whose layout has
+ * nowhere to unpack one and whose own command works.
+ *
+ * Lives here, beside {@link platformKind} and {@link InstallMethod}, because BOTH
+ * sides of the updater need the same answer: the launcher (`upgrade --check/--auto`
+ * reports it as `canSelfInstall`, and picks its route with it) and the TUI's
+ * `/upgrade`, which must not print the manual-download notice for a copy that can
+ * install itself. One definition, so the two can never disagree about a user.
+ *
+ * @param method - who owns this install ({@link InstallMethod}).
+ * @param platform - the platform this binary runs on.
+ * @returns whether `qialike upgrade` may replace this copy in place.
+ */
+export function canSelfInstall(method: InstallMethod, platform: NodeJS.Platform = process.platform): boolean {
+  // npm owns this copy and needs no bash, so neither the platform nor the installer
+  // stands in the way — this is the layout Windows updates in place.
+  if (method === 'npm') return true
+  return method === 'curl' && platformKind(platform) !== 'windows'
+}
+
 /** What the updater should do about one observed pair of versions. */
 export type UpdateDecision =
   | { kind: 'skip'; reason: 'disabled' | 'dev-build' | 'unmanaged-install' }

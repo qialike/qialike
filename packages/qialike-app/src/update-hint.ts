@@ -15,9 +15,14 @@
  *  3. compose the transcript lines that carry the two download URLs, so the hint can
  *     stay short and the links are still there to copy.
  *
- * Windows-only by construction: every caller gates on `process.platform`, so
- * Linux/macOS keep the update flow they already had (silent patch installs, and the
- * `run 'qialike upgrade'` notice for the rest).
+ * For Windows copies NOBODY's package manager owns. Every caller gates on
+ * `process.platform` first, so Linux/macOS keep the update flow they already had
+ * (silent patch installs, and the `run 'qialike upgrade'` notice for the rest) — but
+ * on Windows the platform is only half the gate: an npm copy is updated by npm
+ * itself and must never be shown a download (`canSelfInstall` in `upgrade-policy.ts`),
+ * so the hint and these URLs reach only a hand-placed or installer-managed copy.
+ * Text here says "download it and replace the file by hand", which is true for
+ * exactly that copy and for no other.
  *
  * @module @qialike/qialike-app/update-hint
  */

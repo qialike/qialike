@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildMode,
+  canSelfInstall,
   decideUpdate,
   getReleaseType,
   platformKind,
@@ -167,6 +168,36 @@ describe('the gate matrix', () => {
     expect(platformKind('linux')).toBe('unix')
     expect(platformKind('darwin')).toBe('unix')
     expect(platformKind('freebsd')).toBe('unix')
+  })
+
+  test('whether the updater may replace this copy is not a platform question', () => {
+    // npm is its own updater and needs no bash, so it replaces itself on Windows
+    // too — this is the layout Windows updates in place. Reading the platform
+    // alone is what told an npm user on Windows to fetch a `.zip`.
+    expect(canSelfInstall('npm', 'win32')).toBe(true)
+    expect(canSelfInstall('npm', 'linux')).toBe(true)
+    expect(canSelfInstall('npm', 'darwin')).toBe(true)
+    // The shell installer is bash plus `mv`, which Windows has neither of.
+    expect(canSelfInstall('curl', 'win32')).toBe(false)
+    expect(canSelfInstall('curl', 'linux')).toBe(true)
+    expect(canSelfInstall('curl', 'darwin')).toBe(true)
+    // Nobody owns a hand-placed binary, so nobody replaces it anywhere.
+    expect(canSelfInstall('unknown', 'win32')).toBe(false)
+    expect(canSelfInstall('unknown', 'linux')).toBe(false)
+  })
+
+  test('canSelfInstall agrees with what decideUpdate does about Windows', () => {
+    // The two must not drift: the predicate decides what the UI OFFERS (install vs
+    // the manual-download notice) and `decideUpdate` what the auto check DOES. A
+    // Windows copy the predicate calls replaceable can never come back 'notify'.
+    for (const method of ['npm', 'curl', 'unknown'] as const) {
+      const decision = decideUpdate(input({ platform: 'windows', method }))
+      if (canSelfInstall(method, 'win32')) {
+        expect(decision, `${method} on windows`).toEqual({ kind: 'install', version: '0.6.1' })
+      } else {
+        expect(decision, `${method} on windows`).toEqual({ kind: 'notify', version: '0.6.1' })
+      }
+    }
   })
 })
 
