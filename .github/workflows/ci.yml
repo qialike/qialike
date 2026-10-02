@@ -114,8 +114,13 @@ jobs:
       - name: Enable pnpm
         run: corepack enable
 
-      - name: Activate pnpm from the lockfile
-        run: corepack prepare pnpm@11.7.0 --activate
+      # Read the version out of `package.json` instead of repeating it here. A literal
+      # would be a second copy of one fact, and nothing would catch the two drifting
+      # apart — the same trap `HARNESS_REF` above avoids and `release-consistency`
+      # guards. `packageManager` is the normative field (Corepack reads it), so the
+      # workflow follows it rather than restating it.
+      - name: Activate pnpm from package.json
+        run: corepack prepare "$(node -p 'require("./package.json").packageManager')" --activate
 
       # --- the harness checkout ------------------------------------------------
       # Cloned to the sibling path the job env names, because `tsconfig.typecheck.json`

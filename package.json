@@ -1,10 +1,10 @@
 {
   "name": "@qialike/qialike-root",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "license": "MIT",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.7.0",
+  "packageManager": "pnpm@12.2.0",
   "bin": {
     "qialike": "dist/qialike"
   },

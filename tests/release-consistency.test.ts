@@ -240,3 +240,40 @@ describe('the npm publish workflow is wired to actually finish', () => {
     expect(read('package.json')).toContain('"build": "node apps/tui-bin/build.mjs"')
   })
 })
+
+describe('the package manager is pinned in exactly one place', () => {
+  // WHY THIS EXISTS. `packageManager` is the normative field — Corepack reads it, and
+  // pnpm itself self-switches to it (`manage-package-manager-versions` defaults on).
+  // CI used to restate the version as a literal in `corepack prepare pnpm@<v>`, a second
+  // copy of one fact that nothing compared, so the two could drift silently — the same
+  // shape as the `HARNESS_REF` guard above.
+  //
+  // The lockfile is the other half, and it is the half that fails loudly: pnpm 12 records
+  // the package manager itself in `packageManagerDependencies` (plus one `@pnpm/exe.<os>`
+  // entry per platform), so bumping `packageManager` without regenerating the lockfile
+  // makes `pnpm install --frozen-lockfile` — which CI runs — die with
+  // ERR_PNPM_FROZEN_LOCKFILE_WITH_OUTDATED_LOCKFILE. Verified by trying it.
+  const CI = read('.github/workflows/ci.yml')
+  const PKG = JSON.parse(read('package.json')) as { packageManager?: string }
+  const LOCK = read('pnpm-lock.yaml')
+
+  test('CI derives the pnpm version instead of repeating it', () => {
+    expect(PKG.packageManager, 'package.json pins the package manager').toMatch(/^pnpm@\d+\.\d+\.\d+/)
+    const prepare = CI.split('\n').find((l) => l.includes('corepack prepare'))
+    expect(prepare, 'the workflow still activates a pinned pnpm').toBeDefined()
+    expect(prepare, 'reads the version out of package.json').toContain('package.json')
+    // A literal here would be an unguarded second copy — the thing this test exists for.
+    expect(prepare, 'must not hardcode a pnpm version').not.toMatch(/pnpm@\d/)
+  })
+
+  test('the lockfile records the same package manager', () => {
+    // Tolerate Corepack's integrity form (`pnpm@1.2.3+sha512.…`), which `corepack use`
+    // writes: the lockfile only ever records the bare version.
+    const pinned = PKG.packageManager!.replace(/^pnpm@/, '').split('+')[0]
+    // pnpm 12 writes this into a leading YAML document of its own.
+    expect(LOCK, 'the lockfile has a packageManagerDependencies section').toContain('packageManagerDependencies:')
+    const specifier = /packageManagerDependencies:\s*\n\s+pnpm:\s*\n\s+specifier:\s*(\S+)/.exec(LOCK)
+    expect(specifier, 'pnpm is listed there with a specifier').not.toBeNull()
+    expect(specifier![1], 'lockfile and package.json must agree, or --frozen-lockfile fails').toBe(pinned)
+  })
+})

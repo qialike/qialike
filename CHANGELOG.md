@@ -5,6 +5,17 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.9.2] - 2026-10-02
+
+### Changed
+
+- Version bump to 0.9.2. No user-visible changes to the TUI or the harness.
+
+### Fixed
+
+- **A release that had already reached npm could be reported as a failure.** An attested publish is committed to the registry 100-630 s after `npm publish` returns, while the job waited 30 s, so it gave up on packages that were already live and — refusing to publish the next package until the previous one is visible — stopped before publishing the rest; the wait is now 900 s.
+- **CI verifies the binary it actually built.** The self-report step ran `./dist/qialike`, a path the default all-targets build never creates; it went unnoticed because two earlier steps failed first.
+
 ## [0.9.1] - 2026-10-01
 
 ### Changed
