@@ -5,6 +5,16 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.9.3] - 2026-10-02
+
+### Changed
+
+- Version bump to 0.9.3.
+
+### Fixed
+
+- **`/upgrade` updates an npm install on Windows instead of naming a `.zip`** — it asked the platform rather than who owns the copy, so every Windows install was told to download the release and replace the file by hand.
+
 ## [0.9.2] - 2026-10-02
 
 ### Changed
