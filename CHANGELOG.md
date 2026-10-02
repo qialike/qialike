@@ -9,169 +9,169 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Changed
 
-- Version bump to 0.9.2. No user-visible changes to the TUI or the harness.
+- Version bump to 0.9.2; no user-visible changes to the TUI or the harness.
 
 ### Fixed
 
-- **A release that had already reached npm could be reported as a failure.** An attested publish is committed to the registry 100-630 s after `npm publish` returns, while the job waited 30 s, so it gave up on packages that were already live and — refusing to publish the next package until the previous one is visible — stopped before publishing the rest; the wait is now 900 s.
-- **CI verifies the binary it actually built.** The self-report step ran `./dist/qialike`, a path the default all-targets build never creates; it went unnoticed because two earlier steps failed first.
+- **A release already live on npm is no longer reported as a failure** — the post-publish wait is 900 s, up from 30.
+- **CI verifies the binary it actually built** — the step no longer assumes `dist/qialike`.
 
 ## [0.9.1] - 2026-10-01
 
 ### Changed
 
-- **Release pages now say what changed.** The notes on GitHub and GitCode are generated from this file, and a tag's own annotation carries the same text — so `git show <tag>` reads as a changelog entry rather than a bare version number.
-- **The shell works on Windows outside the build tree.** The embedded `koffi` FFI binding was resolved at runtime against the process's working directory, so a released binary refused every confined command unless a `node_modules/koffi` happened to sit beside it; it is now compiled in.
+- **Release pages now carry this changelog** — GitHub, GitCode and each tag's own annotation are generated from it.
+- **The shell works on Windows outside the build tree** — the `koffi` FFI binding is compiled in instead of resolved at runtime.
 - Version bump to 0.9.1.
 
 ### Fixed
 
-- **The telemetry off switch works.** `DSH_TELEMETRY_DISABLED` reached the profile context and stopped there — nothing on the boot path read it — so both READMEs promised an opt-out that did nothing; the launcher now applies the harness's own rule to the stack it builds.
-- **`pnpm typecheck` no longer fails on the known baseline.** It exited non-zero on the three `wrap-ansi` declaration errors, and CI — running a bare `tsc` without that rule — additionally reported `Cannot find module '@deepseek-ai/cordis'` in files that were fine, because the harness checkout was not where `tsconfig.typecheck.json` resolves it; one policy now serves CI and the release gate, and a missing prerequisite says which it is.
-- **A paste can no longer kill the keyboard or move the cursor out of the input box.** A paste whose bracketed-paste terminator never arrived left the decoder waiting for it forever and swallowing every later key — Ctrl+u and Ctrl+C included — and a pasted command left the suggestion palette unfiltered and painted over the input row, which is where the caret then sat; both are fixed, with the recovery bounded by size and silence.
+- **The telemetry off switch works** — `DSH_TELEMETRY_DISABLED` was never read on the boot path.
+- **`pnpm typecheck` no longer fails on the known baseline** — CI and the release gate share one policy.
+- **A paste can no longer kill the keyboard, and it no longer parks the cursor outside the input box.**
 
 ## [0.9.0] - 2026-10-01
 
 ### Changed
 
-- **Rebuilt on DeepSeek Harness `0.2.0-rc.2`** (up from `0.1.7-rc.2`); no patch anchor moved, no source changed, plugin specifiers 124 → 125.
-- **The new `otel` row is load-bearing, so both telemetry rows stay enabled** — `session-telemetry-otel` now injects it, and disabling that row alone would stop telemetry *silently*.
-- **Telemetry now defaults to `https://dsh-otel-collector.deepseeksvc.com/v1/logs`** (was `harness-telemetry.deepseeksvc.com`), and the row gained a `maxRequestBytes` bound.
+- **Rebuilt on DeepSeek Harness `0.2.0-rc.2`** (up from `0.1.7-rc.2`); plugin specifiers 124 → 125.
+- **Both telemetry rows stay enabled** — the new `otel` row is load-bearing, so disabling it alone would stop telemetry *silently*.
+- **Telemetry now defaults to `https://dsh-otel-collector.deepseeksvc.com/v1/logs`** (was `harness-telemetry.deepseeksvc.com`).
 
 ## [0.8.3] - 2026-09-28
 
 ### Changed
 
-- **`qialike uninstall` no longer repeats or contradicts itself** — the kept install directory and its removal command are reported once, and a home holding only `bin/` no longer claims there is nothing to remove.
-- **The npm package page can no longer go stale** — its version example is back to the `0.0.0-template` placeholder that `scripts/release/publish-npm.sh` rewrites, and that script refuses to publish a pinned or placeholder-less README.
-- **The install docs gained the npm route's missing prerequisite** (Node.js ≥ 18, terminal reopened) and the recommendation to run inside Windows Terminal rather than the legacy console host.
-- **The READMEs gained an "Uninstall" section** — one two-step procedure across all four install routes, including the ordering trap that leaves `~/.dsh` behind with no command to clear it.
-- **The "Updates" chapter is organised by install route**, so "how do I update an npm install?" is answered by a table.
-- **`qialike upgrade` recognises an npm install** and now names `npm i -g @qialike/cli@latest` instead of a release `.zip` that such a copy has none of.
-- **The npm install updates itself on Windows** — a patch installs silently through `npm install -g @qialike/cli@<exact version>`, a minor or major release is announced, and `qialike-update.auto` still governs it.
-- **`qialike uninstall` also names the npm removal command** — `npm uninstall -g @qialike/cli`.
+- **`qialike uninstall` no longer repeats or contradicts itself.**
+- **The npm package page can no longer go stale** — its version example is the placeholder the publish script rewrites.
+- **The install docs gained the npm route's missing prerequisite** (Node.js ≥ 18, reopen the terminal).
+- **The READMEs gained an "Uninstall" section** covering all four install routes.
+- **The "Updates" chapter is organised by install route.**
+- **`qialike upgrade` recognises an npm install** and names the npm command instead of a release `.zip`.
+- **The npm install updates itself on Windows.**
+- **`qialike uninstall` also names the npm removal command.**
 
 ## [0.8.2] - 2026-09-27
 
 ### Changed
 
-- **`qialike uninstall` keeps the install directory** — it clears the rest of the harness home (`$DSH_HOME`, default `~/.dsh`) and leaves `<home>/bin`, printing the platform command that removes it completely.
-- **The pre-rename `dsh-tui` compatibility layer was removed** — state files, settings namespaces, `DSH_TUI_*` environment variables and old plugin specifiers are no longer migrated or read.
+- **`qialike uninstall` keeps the install directory** and prints the platform command that removes it.
+- **The pre-rename `dsh-tui` compatibility layer was removed.**
 
 ## [0.8.1] - 2026-09-26
 
 ### Changed
 
-- **A Windows npm channel: `npm i -g @qialike/cli`** (Windows Terminal has no `bash`, so the shell installer cannot run there) — a few-KB launcher plus one `os`/`cpu`-gated `optionalDependencies` package per architecture (`@qialike/cli-win32-x64`, `@qialike/cli-win32-arm64`); **Windows only, by design**.
-- Version bump to 0.8.1. No user-visible changes to the TUI or the harness.
+- **A Windows npm channel: `npm i -g @qialike/cli`** — a few-KB launcher plus one `os`/`cpu`-gated package per architecture.
+- Version bump to 0.8.1; no user-visible changes to the TUI or the harness.
 
 ## [0.8.0] - 2026-09-26
 
 ### Changed
 
-- **Rebuilt on DeepSeek Harness `0.1.7-rc.2`** (up from `0.1.7-alpha.2`); no patch anchor moved, plugin specifiers 123 → 124.
-- **`llm-deepseek-account` is disabled in the TUI composition** — upstream split the DeepSeek provider in two, and the new account-token route has no sign-in surface in a terminal client.
+- **Rebuilt on DeepSeek Harness `0.1.7-rc.2`** (up from `0.1.7-alpha.2`); plugin specifiers 123 → 124.
+- **`llm-deepseek-account` is disabled in the TUI composition** — the new account-token route has no terminal sign-in surface.
 
 ## [0.7.2] - 2026-09-25
 
 ### Fixed
 
-- **Two hosts can no longer append one session log at once** — the harness's file lock had been replaced by a no-op stub, so a qialike host sharing `~/.dsh/sessions` with `dsh web` or a second qialike could interleave appends until the session refused to open; the stub is now a real non-blocking `flock(2)`.
-- **Deleting a session another process is writing is refused** — `/sessions` probes the lease read-only first and names the holder.
-- **"Already owned" now reads as an instruction** rather than echoing the raw harness error.
-- **`qialike web` refuses a session store a newer harness has migrated** and names the offending `session.vN` file up front.
-- **The first publish of a release no longer deadlocks** — it now decides by HTTP status instead of reading a `404 Not Found` body as "already exists".
+- **Two hosts can no longer append one session log at once** — the file lock is a real `flock(2)` again.
+- **Deleting a session another process is writing is refused**, naming the holder.
+- **"Already owned" now reads as an instruction** instead of the raw harness error.
+- **`qialike web` refuses a session store a newer harness has migrated**, naming the file.
+- **The first publish of a release no longer deadlocks** — it decides by HTTP status.
 
 ### Changed
 
-- **The sidebar footer no longer prints the embedded harness version**, shrinking the reserved footer rows from three to two.
-- **A default all-target build is testable again** — `tests/smoke.mjs` hardcoded `dist/qialike`, which `BUILD_TARGETS=ALL` never creates; it now resolves `$QIALIKE_BIN`, then `dist/qialike`, then the host target.
-- **Release testing is split in two** — `scripts/release/test-required.sh` in the repository, the real-machine/PTY suite (`~/deepseek/cli-test/full-suite.sh`) optional and outside it.
+- **The sidebar footer no longer prints the embedded harness version**, shrinking it from three rows to two.
+- **A default all-target build is testable again** — `tests/smoke.mjs` no longer hardcodes `dist/qialike`.
+- **Release testing is split in two** — the required steps in the repository, the real-machine suite outside it.
 
 ## [0.7.1] - 2026-09-23
 
 ### Added
 
-- **The installer verifies what it downloads** — every release ships a `dist/sha256sums.txt` beside the six binaries, and a mismatch is refused rather than unpacked.
+- **The installer verifies what it downloads** — every release ships `dist/sha256sums.txt` beside the six binaries.
 
 ### Fixed
 
-- **The check was written but never ran** — a missing manifest and one that omitted the asset were both treated as "nothing to verify"; releases older than this one have none, so installing from them is refused unless `QIALIKE_ALLOW_UNVERIFIED=1`.
+- **The check was written but never ran** — a missing manifest read as "nothing to verify"; older releases need `QIALIKE_ALLOW_UNVERIFIED=1`.
 
 ### Changed
 
-- The release scripts now live in this repository under `scripts/release/`, so what an official release does can be read rather than guessed.
+- The release scripts now live in this repository under `scripts/release/`.
 
 ## [0.7.0] - 2026-09-23
 
 ### Changed
 
 - **Rebuilt on DeepSeek Harness `0.1.7-alpha.2`** (up from `0.1.5-rc.2`, 3,148 upstream commits).
-- **Settings moved into `qialike.json`** because harness 0.1.7 removed runtime settings namespaces; a one-time migration **never overwrites a value you already have**, and the file is written `0600`.
+- **Settings moved into `qialike.json`**; the one-time migration never overwrites a value you already have.
 
 ### Fixed
 
-- **The plugin trust gate is fatal again** — 0.1.7 had downgraded the failure of *optional* startup entries to a warning, quietly making the check advisory.
-- **An unreadable, unrelated session log no longer kills a resume** — qialike names that file and leaves your session intact; the log you did ask to resume is still fatal.
+- **The plugin trust gate is fatal again** — 0.1.7 had made it advisory.
+- **An unreadable, unrelated session log no longer kills a resume.**
 - Recovered and torn session files are tolerated instead of aborting startup.
 
 ## [0.6.4] - 2026-09-23
 
 ### Added
 
-- **Drag to select and copy text inside dialogs** — the question box, the approval box, the command palette and the `@file` popup; the selection comes from the **frame buffer**, so the conversation behind the box is never copied. The full-screen panels (`/models`, `/theme`, `/sessions`) deliberately do not do this.
+- **Drag to select and copy text inside dialogs** — the selection comes from the frame buffer, so what is behind the box is never copied.
 
 ### Fixed
 
-- **Copying dropped every line drawn in reverse video** — taking the text and applying the highlight are now decided separately.
+- **Copying dropped every line drawn in reverse video.**
 
 ## [0.6.3] - 2026-09-22
 
 ### Changed
 
-- The hero screen now reads `Ver: <version> <channel> . URL: <site>`, so a binary states its own version and build channel without `--version`.
+- The hero screen now reads `Ver: <version> <channel> . URL: <site>`.
 
 ### Fixed
 
-- **`curl … | bash` aborted on macOS** — bash 3.2 treats an empty array under `set -u` as unbound, and that array is empty precisely on the success path; every expansion is guarded now.
+- **`curl … | bash` aborted on macOS** — bash 3.2 treats an empty array under `set -u` as unbound.
 
 ### Documentation
 
-- Both READMEs were rewritten around what a user actually does, with a matching `CONTRIBUTING` in both languages.
+- Both READMEs were rewritten around what a user actually does, with a matching `CONTRIBUTING`.
 
 ## [0.6.2] - 2026-09-21
 
 ### Added
 
-- **Windows: detect-only update notices** — it cannot replace a running `.exe` and has no `bash`, so it now says so instead of failing silently.
-- **The installer picks a release source by measuring it**, because a "reachable" host can still crawl; `--source github|gitcode|auto` pins the choice.
-- **Source choice is four cases, in order**: only GitHub → GitHub; only gitcode → gitcode; both → measure; neither → stop and keep the installed version (exit code 3, not an error).
+- **Windows: detect-only update notices** — it cannot replace a running `.exe`, so it says so instead of failing silently.
+- **The installer picks a release source by measuring it**; `--source github|gitcode|auto` pins the choice.
+- **Source choice is four cases, in order**: one reachable → use it; both → measure; neither → stop and keep the installed version.
 
 ### Fixed
 
-- **An older tag is never treated as an update** — a lagging mirror reporting an older version could otherwise overwrite a newer install.
-- **Windows picked the mirror even when GitHub worked**, because the probe used `-o /dev/null`, which Windows' curl does not map to a null device.
+- **An older tag is never treated as an update.**
+- **Windows picked the mirror even when GitHub worked**, because the probe used `-o /dev/null`.
 
 ## [0.6.1] - 2026-09-21
 
 ### Added
 
 - **Mirror fallback: gitcode is used when GitHub is unreachable** — a host that connects but transfers nothing is given up on too.
-- **End-to-end tests for the installer and the upgrade chain**, driven against a real local release host.
+- **End-to-end tests for the installer and the upgrade chain.**
 
 ### Fixed
 
-- **The updater's version lookup ignored its injected environment**, so a caller pointing it at one release host got another's answer.
+- **The updater's version lookup ignored its injected environment.**
 - Pinning a source with `--base-url` / `QIALIKE_INSTALL_BASE_URL` stays a single source with no fallback.
 
 ## [0.6.0] - 2026-09-20
 
 ### Changed
 
-- **The installer became a networked downloader** — `curl -fsSL https://qialike.com/install | bash` fetches the released binary instead of placing a local build, and installs to `~/.dsh/bin`.
-- **Six published targets** — Linux, macOS and Windows, x64 and arm64 each; Windows installs as `qialike.exe` and the `.zip` archives need `unzip`.
+- **The installer became a networked downloader** — `curl -fsSL https://qialike.com/install | bash` installs the released binary to `~/.dsh/bin`.
+- **Six published targets** — Linux, macOS and Windows, x64 and arm64 each.
 - A minor bump on purpose: this is the release that changed how qialike is delivered.
 
 ### Added
 
-- **Automatic updates** — `qialike upgrade` and `/upgrade`, with a background check after launch; patches install silently, minors only announce, and `QIALIKE_DISABLE_AUTOUPDATE=1` turns it off.
+- **Automatic updates** — `qialike upgrade` and `/upgrade`; patches install silently, minors announce; `QIALIKE_DISABLE_AUTOUPDATE=1` turns it off.
