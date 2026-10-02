@@ -13,7 +13,7 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Fixed
 
-- **`/upgrade` updates an npm install on Windows instead of naming a `.zip`** — it asked the platform rather than who owns the copy, so every Windows install was told to download the release and replace the file by hand.
+- **`/upgrade` updates an npm install on Windows** — the gate asked the platform, not who owns the copy.
 
 ## [0.9.2] - 2026-10-02
 
