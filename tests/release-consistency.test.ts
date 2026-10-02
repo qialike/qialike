@@ -179,11 +179,14 @@ describe('the npm publish workflow is wired to actually finish', () => {
   // WHY THIS EXISTS. Three separate assumptions in these two workflows were wrong or
   // too tight, and each one was invisible until the ones before it stopped failing:
   //   · `publish-npm.yml` used the script's default post-publish window. Publishing
-  //     with provenance (OIDC) makes the registry commit the version 100-130 s after
+  //     with provenance (OIDC) makes the registry commit the version long after
   //     `npm publish` returns; publishing without it (0.9.0, token/OTP) was under 30 s,
-  //     which is why a 30 s window used to be fine. Two measurements, same failure:
-  //     run #5 (30 s window) missed x64 by ~98 s; run #7 (120 s window) missed arm64
-  //     by ~127 s and therefore never even reached the main package;
+  //     which is why a 30 s window used to be fine. The lag ALSO varies wildly, so the
+  //     window has to be sized for the worst case, not the median: run #5 missed x64 by
+  //     ~98 s (30 s window), run #7 missed arm64 by ~127 s (120 s window), and run #8
+  //     missed the main package by ~630 s (300 s window). Run #8 is the dangerous shape:
+  //     that package DID publish — the registry just committed it after the script gave
+  //     up — so the job reported failure while npm had the version;
   //   · `ci.yml`'s last step ran `./dist/qialike`, a path the default build NEVER
   //     creates (BUILD_TARGETS=ALL writes `dist/<os>-<arch>/qialike`). It had never
   //     been reached because two earlier steps failed first;
@@ -201,15 +204,15 @@ describe('the npm publish workflow is wired to actually finish', () => {
     expect(attempts, 'the workflow sets an attempt count').not.toBeNull()
     expect(interval, 'the workflow sets an interval').not.toBeNull()
     const window = Number(attempts![1]) * Number(interval![1])
-    // 127 s was the largest measured commit delay; require comfortable headroom over it.
-    expect(window, `window ${window}s must clear the measured 127s delay`).toBeGreaterThanOrEqual(300)
+    // 630 s was the largest measured commit delay; require comfortable headroom over it.
+    expect(window, `window ${window}s must clear the measured 630s delay`).toBeGreaterThanOrEqual(900)
     // …and the script's own default must not be the tight 30 s again.
     const dAttempts = /CONFIRM_ATTEMPTS="\$\{QIALIKE_PUBLISH_CONFIRM_ATTEMPTS:-(\d+)\}"/.exec(SCRIPT)
     const dInterval = /CONFIRM_INTERVAL="\$\{QIALIKE_PUBLISH_CONFIRM_INTERVAL:-(\d+)\}"/.exec(SCRIPT)
     expect(dAttempts, 'the script default is parseable').not.toBeNull()
     expect(dInterval, 'the script default is parseable').not.toBeNull()
     expect(Number(dAttempts![1]) * Number(dInterval![1]),
-      'the script default window must also clear the measured delay').toBeGreaterThanOrEqual(300)
+      'the script default window must also clear the measured delay').toBeGreaterThanOrEqual(900)
   })
 
   test('the confirmation gate still stops before the next package', () => {
