@@ -241,6 +241,20 @@ const DEEPSEEK_OFFICIAL: TuiProviderProfile = {
 /** Route key of the built-in DeepSeek provider. */
 export const DEEPSEEK_OFFICIAL_ROUTE = 'deepseek-official'
 
+/**
+ * Route key of **QiaLike Bee**, qialike's own model gateway
+ * (`https://qialike.com/bee/v1`, OpenAI-compatible `/chat/completions`).
+ *
+ * It is a template row like any other provider — the row in
+ * `provider-templates.json` carries the endpoint, the `QIALIKE_API_KEY`
+ * credential reference and the `deepseek-` model filter — but the TUI treats
+ * this ONE route as qialike-owned: it is always listed in `/models` (even
+ * before a key is set, so the dialog can ask for one) and it can never be
+ * deactivated with `Ctrl+D`. See `PROTECTED_PROVIDER_ROUTES` in `index.tsx`
+ * and `listConfigured` in `models.ts`.
+ */
+export const QIALIKE_BEE_ROUTE = 'qialike'
+
 /** The `qialike-llm` settings section shape. */
 interface TuiLlmSection {
   providers?: Record<string, TuiProviderProfile>

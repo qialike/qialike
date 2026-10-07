@@ -55,7 +55,7 @@ import type {
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
-import { reasoningEffortName, type TuiProviderTemplate } from './llm.ts'
+import { reasoningEffortName, QIALIKE_BEE_ROUTE, type TuiProviderTemplate } from './llm.ts'
 import { isNewerAvailable, parseUpdateReport, updateHintText, updateNoticeLines, type UpdateOffer } from './update-hint.ts'
 import { canSelfInstall } from './upgrade-policy.ts'
 import { installMethod } from './self-update.ts'
@@ -191,7 +191,22 @@ export interface ProviderModelsEntry {
   name: string
   /** The provider's model options (the second-level list). */
   models: readonly ModelsOption[]
+  /** qialike's own route (QiaLike Bee): always listed, never deactivatable —
+   *  `Ctrl+D` refuses it and `hideProvider` ignores it. */
+  builtin?: boolean
+  /** Whether this route's API key is set. `false` on a `builtin` entry means
+   *  the dialog must ask for the key before it can show any model. */
+  configured?: boolean
 }
+
+/**
+ * Provider routes the user cannot deactivate: qialike's own gateway (QiaLike
+ * Bee, `QIALIKE_BEE_ROUTE`). `Ctrl+D`/`Alt+D` refuses them with a notice, the
+ * store's hide path ignores them, and a hand-written `hidden_providers` entry
+ * naming one is filtered out on seed — so no local state can remove the route
+ * from `/models`.
+ */
+const PROTECTED_PROVIDER_ROUTES: ReadonlySet<string> = new Set([QIALIKE_BEE_ROUTE])
 
 // `todo/write` is typed in the harness by declaration merging from
 // `@deepseek-ai/dsh-tool-todo`, whose types this package's typecheck does not
@@ -2637,11 +2652,20 @@ export class Store {
   /** Hidden provider routes (persisted); wired persistence hook in start(). */
   onHiddenProvidersChange: (routes: string[]) => void = () => {}
   get hiddenProviders(): readonly string[] { return [...this._hiddenProviders] }
-  isProviderHidden(route: string): boolean { return this._hiddenProviders.has(route) }
-  /** Seed the hidden set from the config file at startup. */
-  seedHiddenProviders(routes: readonly string[]): void { this._hiddenProviders = new Set(routes) }
-  /** Hide one provider from the first-level list (persisted); no-op when already hidden. */
+  /** A protected route (qialike's own Bee gateway) is never hidden, whatever
+   *  the persisted list says — see `PROTECTED_PROVIDER_ROUTES`. */
+  isProviderHidden(route: string): boolean {
+    return !PROTECTED_PROVIDER_ROUTES.has(route) && this._hiddenProviders.has(route)
+  }
+  /** Seed the hidden set from the config file at startup (protected routes are
+   *  dropped here, so no existing config can hide qialike's own gateway). */
+  seedHiddenProviders(routes: readonly string[]): void {
+    this._hiddenProviders = new Set(routes.filter((route) => !PROTECTED_PROVIDER_ROUTES.has(route)))
+  }
+  /** Hide one provider from the first-level list (persisted); no-op when
+   *  already hidden or when the route is protected (see `isProviderHidden`). */
   hideProvider(route: string): void {
+    if (PROTECTED_PROVIDER_ROUTES.has(route)) return
     if (this._hiddenProviders.has(route)) return
     this._hiddenProviders.add(route)
     this._providers = this._providers.filter((p) => p.provider !== route)
@@ -2828,7 +2852,7 @@ export class Store {
   openModels(providers: readonly ProviderModelsEntry[], initialIndex: number): void {
     this._secret = ''
     const target = providers[Math.max(0, Math.min(initialIndex, providers.length - 1))]?.provider
-    const visible = providers.filter((p) => !this._hiddenProviders.has(p.provider))
+    const visible = providers.filter((p) => !this.isProviderHidden(p.provider))
     this._providers = visible
     const anchor = target === undefined ? 0 : visible.findIndex((p) => p.provider === target)
     this._providerIndex = anchor < 0 ? 0 : anchor
@@ -3468,7 +3492,18 @@ function buildProviderEntries(providers: readonly ModelsProviderOption[]): Provi
       ...(m.efforts === undefined ? {} : { efforts: m.efforts }),
       ...(m.defaultEffort === undefined ? {} : { defaultEffort: m.defaultEffort }),
     })),
+    // qialike's own route keeps its two flags: the dialog refuses to hide it and
+    // asks for its API key while it has none.
+    ...(p.builtin === undefined ? {} : { builtin: p.builtin }),
+    ...(p.configured === undefined ? {} : { configured: p.configured }),
   }))
+}
+
+/** Whether the user has NO provider of their own configured yet — qialike's own
+ *  gateway is always listed, so it must not count (otherwise the "first provider
+ *  the user configures becomes the current model" promotion never fires). */
+function noUserConfiguredProviders(providers: readonly ModelsProviderOption[]): boolean {
+  return providers.filter((p) => p.builtin !== true).length === 0
 }
 
 /** Map a provider model id to a friendly display name (display only). */
@@ -4621,8 +4656,15 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   }
   // Hidden-provider list (Ctrl+D/Alt+D in the /models first level): seed from
   // the config file and persist every change back to it.
-  store.seedHiddenProviders(readHiddenProviders())
+  const storedHidden = readHiddenProviders()
+  store.seedHiddenProviders(storedHidden)
   store.onHiddenProvidersChange = (routes) => { setHiddenProviders(routes) }
+  // A hand-written config may still name a PROTECTED route (qialike's own
+  // gateway): the seed drops it from the set, so drop it from the file too —
+  // otherwise the entry sits there forever looking effective.
+  if (storedHidden.some((route) => PROTECTED_PROVIDER_ROUTES.has(route))) {
+    setHiddenProviders([...store.hiddenProviders])
+  }
   // Belt-and-braces: a session whose current model provider is hidden (e.g. it
   // was deactivated in an older build, or the default persisted before the
   // hide) must not keep `current:` pointing at it. Switch to the first still
@@ -4630,7 +4672,11 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   if (store.isProviderHidden(store.currentModel.provider)) {
     const service = ctx.get('tuiModels') as TuiModelsService | undefined
     void (service?.listConfigured() ?? Promise.resolve([])).then((providers) => {
-      const visible = providers.filter((p) => !store.isProviderHidden(p.provider))
+      // Keyless entries are not candidates: qialike's own gateway is ALWAYS
+      // listed (so no key is not "hidden"), and switching the current model to
+      // it would only relabel `current:` as "not set". Entries without a
+      // `configured` flag (listProviders() output) stay usable, as before.
+      const visible = providers.filter((p) => !store.isProviderHidden(p.provider) && p.configured !== false)
       if (visible.length === 0) {
         // No active (configured + visible) provider remains: show "not set"
         // rather than pointing at a dead route.
@@ -5091,6 +5137,13 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
   // be deleted from here) — the hidden set keeps the provider off the list
   // until a stored key is set again in "Add provider".
   store.deactivateProvider = (route: string, name: string) => {
+    // qialike's own gateway cannot be removed: Ctrl+D/Alt+D on it explains why
+    // instead of dropping its key and hiding the route (see
+    // PROTECTED_PROVIDER_ROUTES — the store refuses to hide it either).
+    if (PROTECTED_PROVIDER_ROUTES.has(route)) {
+      store.setDialogNotice(`${name} is qialike's own gateway — it cannot be removed`)
+      return
+    }
     const service = ctx.get('tuiModels') as TuiModelsService | undefined
     void (async (): Promise<void> => {
       let envNote = ''
@@ -5107,8 +5160,12 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
       // Prefer the built-in DeepSeek route (a clearly different brand) over
       // the first sibling — same-brand gateways (e.g. Moonshot AI vs Moonshot
       // AI (CN), which share one API key) would otherwise keep the composer
-      // and `current:` looking like the hidden provider.
-      const others = wasCurrent ? store.providers.filter((p) => p.provider !== route) : []
+      // and `current:` looking like the hidden provider. Keyless entries are
+      // skipped: qialike's own gateway is always listed, and falling back to a
+      // route without a key would only relabel `current:` as "not set".
+      const others = wasCurrent
+        ? store.providers.filter((p) => p.provider !== route && p.configured !== false)
+        : []
       const fallback = others.find((p) => p.provider === 'deepseek-official') ?? others[0]
       store.hideProvider(route)
       if (wasCurrent && others.length === 0) {
@@ -5167,7 +5224,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     if (modelsService === undefined) return
     void (async (): Promise<void> => {
       let wasEmpty = true
-      try { wasEmpty = (await modelsService.listConfigured()).length === 0 } catch { /* treat as empty */ }
+      try { wasEmpty = noUserConfiguredProviders(await modelsService.listConfigured()) } catch { /* treat as empty */ }
       const result = await modelsService.setKey(provider, key)
       if (!result.ok) {
         store.append('status', `models: ${result.error}`, true)
@@ -5203,7 +5260,7 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     }
     void (async (): Promise<void> => {
       let wasEmpty = true
-      try { wasEmpty = (await modelsService.listConfigured()).length === 0 } catch { /* treat as empty */ }
+      try { wasEmpty = noUserConfiguredProviders(await modelsService.listConfigured()) } catch { /* treat as empty */ }
       const result = await modelsService.addProvider(input)
       if (!result.ok) {
         store.showProviderFormError(result.error)

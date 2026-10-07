@@ -54,6 +54,10 @@ function buildProviderEntries(providers: readonly ModelsProviderOption[]): Provi
       ...(m.efforts === undefined ? {} : { efforts: m.efforts }),
       ...(m.defaultEffort === undefined ? {} : { defaultEffort: m.defaultEffort }),
     })),
+    // qialike's own gateway (QiaLike Bee) keeps both flags through the mapping:
+    // `builtin` blocks Ctrl+D, `configured: false` routes Enter to the key dialog.
+    ...(p.builtin === undefined ? {} : { builtin: p.builtin }),
+    ...(p.configured === undefined ? {} : { configured: p.configured }),
   }))
 }
 
@@ -291,10 +295,16 @@ function ModelsDialog(): React.JSX.Element {
                 ))
                 const rows = list.slice(start, start + listRows).map((p, i) => {
                   const index = start + i
+                  // A keyless builtin row (qialike's own gateway) advertises what
+                  // Enter will do — ask for the API key — rather than a model
+                  // count it cannot serve yet.
+                  const keyless = p.builtin === true && p.configured === false
                   return (
                     <Text key={p.provider} color={index === store.providerIndex ? theme.accent : undefined} inverse={index === store.providerIndex}>
                       {index === store.providerIndex ? '› ' : '  '}{p.name}
-                      <Text dimColor>  · {p.models.length} model{p.models.length === 1 ? '' : 's'}</Text>
+                      {keyless
+                        ? <Text color={theme.warning}>  · API key required</Text>
+                        : <Text dimColor>  · {p.models.length} model{p.models.length === 1 ? '' : 's'}</Text>}
                     </Text>
                   )
                 })
@@ -536,6 +546,14 @@ function connectKey(k: RawKey): boolean {
     if (!filtered && store.providerIndex === store.providers.length + 1) { store.startProviderForm(store.providerTemplates); return true }
     const entry = store.providerFiltered[store.providerIndex]
     if (entry !== undefined) {
+      // qialike's own gateway (QiaLike Bee) is listed BEFORE it has a key: with
+      // none, Enter asks for one (the key dialog) instead of opening an empty
+      // model list. Once a key is set (`configured`), it behaves like any other
+      // provider and Enter shows its models.
+      if (entry.builtin === true && entry.configured === false) {
+        store.openKeyDialog(entry.provider, entry.name, false)
+        return true
+      }
       const initial = store.currentModel.provider === entry.provider
         ? Math.max(0, entry.models.findIndex((m) => m.model === store.currentModel.model))
         : 0

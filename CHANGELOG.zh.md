@@ -7,6 +7,18 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [Unreleased]
+
+### 新增
+
+- **QiaLike Bee —— qialike 自有 API 路由进入 `/models`** —— 目录里唯一由 qialike 自己提供的一家
+  （route `qialike`，`https://qialike.com/bee/v1`，密钥引用 `QIALIKE_API_KEY`）。**没有 key 时它照常列出**：
+  此时选中它是先弹窗要求输入 API key，而不是打开一个空模型列表；设好 key 后再选中它，列出的是 qialike
+  提供的模型 —— 目前只有 `deepseek` 系列（`deepseek-v4-pro` / `deepseek-v4-flash` /
+  `deepseek-v4-flash-free`；实时读 `GET /bee/v1/models` 并按 `deepseek-*` 过滤，网关不可达时用这组静态
+  目录兜底）。`Ctrl+D` / `Alt+D` 对它无效，`qialike.json` 的 `hidden_providers` 也藏不住它：
+  qialike 自有路由不可删除。
+
 ## [0.9.3] - 2026-10-02
 
 ### 变更

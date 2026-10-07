@@ -5,6 +5,19 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [Unreleased]
+
+### Added
+
+- **QiaLike Bee — qialike's own API route in `/models`** — the catalogue's one built-in provider
+  (`qialike`, `https://qialike.com/bee/v1`, key reference `QIALIKE_API_KEY`). It is listed before it
+  has a key: selecting it then asks for the API key instead of opening an empty model list, and once
+  a key is set selecting it lists the models qialike serves — for now the `deepseek` family
+  (`deepseek-v4-pro` / `deepseek-v4-flash` / `deepseek-v4-flash-free`, read live from
+  `GET /bee/v1/models` and filtered to `deepseek-*`, with that list as the offline fallback).
+  `Ctrl+D` / `Alt+D` refuses it, and a `hidden_providers` entry in `qialike.json` cannot hide it:
+  qialike's own route cannot be removed.
+
 ## [0.9.3] - 2026-10-02
 
 ### Changed

@@ -3430,5 +3430,33 @@
       }
     ],
     "needsBaseURL": true
+  },
+  {
+    "route": "qialike",
+    "name": "QiaLike Bee",
+    "baseURL": "https://qialike.com/bee/v1",
+    "apiKeyEnv": "QIALIKE_API_KEY",
+    "api": "openai-completions",
+    "includeModelPrefixes": ["deepseek-"],
+    "models": [
+      {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "deepseek-v4-flash-free",
+        "name": "DeepSeek V4 Flash Free",
+        "contextWindow": 1000000,
+        "maxTokens": 256000
+      }
+    ]
   }
 ]

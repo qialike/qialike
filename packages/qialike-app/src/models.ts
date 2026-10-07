@@ -6,6 +6,12 @@
  * renders the /models dialog and consumes this service; nothing here touches
  * the UI store.
  *
+ * One route is special: **`QIALIKE_BEE_ROUTE`** (QiaLike Bee), qialike's own
+ * OpenAI-compatible gateway. It ships as an ordinary template row, but
+ * `listProviders` marks it `builtin` and `listConfigured` keeps it listed even
+ * while it has no credential (`configured: false`), which is what lets the
+ * dialog ask for the key instead of hiding the provider.
+ *
  * @module @qialike/qialike-app/models
  */
 
@@ -14,6 +20,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import {
   resolveDefaultEffort,
   effectiveProfile,
+  QIALIKE_BEE_ROUTE,
   type ReasoningEffortOption,
   type TuiProviderProfile,
   type TuiProviderTemplate,
@@ -54,6 +61,14 @@ export interface ModelsProviderOption {
   name: string
   /** Models this route serves (built-in catalog for deepseek, settings for pi-ai routes). */
   models: readonly ModelsModelOption[]
+  /** qialike's own route (`QIALIKE_BEE_ROUTE`): the dialog always lists it —
+   *  even with no key, so selecting it can ask for one — and never lets it be
+   *  hidden (`Ctrl+D`). */
+  builtin?: boolean
+  /** Whether this route's credential is configured. Filled by `listConfigured`
+   *  (which lists keyless routes only when they are `builtin`), so the dialog
+   *  can tell "ask for a key" from "show its models" without a second probe. */
+  configured?: boolean
 }
 
 /** The "Add provider" form input. */
@@ -186,7 +201,14 @@ export function apply(ctx: Context): void {
       const registered = llm()?.listProviders() ?? []
       const providers = new Map<string, ModelsProviderOption>()
       const declare = (provider: string, name: string, models: readonly ModelsModelOption[]): void => {
-        providers.set(provider, { provider, name, models })
+        providers.set(provider, {
+          provider,
+          name,
+          models,
+          // qialike's own gateway (Bee) is not a user-contributed route: the
+          // dialog always shows it and refuses to deactivate it.
+          ...(provider === QIALIKE_BEE_ROUTE ? { builtin: true as const } : {}),
+        })
       }
       for (const entry of configurable) {
         if (isHidden(entry.provider)) continue
@@ -212,7 +234,12 @@ export function apply(ctx: Context): void {
       // (one key check + one gateway /models fetch per provider) made the
       // first open visibly slow.
       const settled = await Promise.all(providers.map(async (provider) => {
-        if (!(await this.keyConfigured(provider.provider))) return undefined
+        const configured = await this.keyConfigured(provider.provider)
+        // Every route is listed only once its credential is set — except
+        // qialike's own Bee gateway, which stays listed while keyless so the
+        // dialog can ask for the key (Enter on a `builtin` entry with
+        // `configured: false` opens the key dialog instead of a model list).
+        if (!configured && provider.builtin !== true) return undefined
         // Prefer the adapter's live view: tui-llm enumerates the gateway's real
         // /models catalog (filtered to the adapter's wire protocol) for
         // OpenAI-compatible routes and falls back to the static catalog; the
@@ -220,26 +247,30 @@ export function apply(ctx: Context): void {
         // not (yet) serviceable keeps its static models; the picker still lists
         // the provider and the next refresh re-enumerates.
         let models = provider.models
-        try {
-          const live = (await llm()?.listModels(provider.provider)) ?? []
-          if (live.length > 0) {
-            // Re-attach effort metadata to live ids by matching the effective
-            // profile catalog (live enumeration carries ids/names only).
-            const profile = effectiveProfile(provider.provider, piProviders(), templates())
-            const byId = new Map((profile?.models ?? []).map((model) => [model.id, model]))
-            models = live.map((m) => {
-              const known = byId.get(m.id)
-              return known === undefined
-                ? { id: m.id, name: m.name, ...effortAnnotation(provider.provider, profile, m.id) }
-                : { ...modelOption(provider.provider, known, profile), name: m.name }
-            })
+        if (configured) {
+          try {
+            const live = (await llm()?.listModels(provider.provider)) ?? []
+            if (live.length > 0) {
+              // Re-attach effort metadata to live ids by matching the effective
+              // profile catalog (live enumeration carries ids/names only).
+              const profile = effectiveProfile(provider.provider, piProviders(), templates())
+              const byId = new Map((profile?.models ?? []).map((model) => [model.id, model]))
+              models = live.map((m) => {
+                const known = byId.get(m.id)
+                return known === undefined
+                  ? { id: m.id, name: m.name, ...effortAnnotation(provider.provider, profile, m.id) }
+                  : { ...modelOption(provider.provider, known, profile), name: m.name }
+              })
+            }
+          } catch {
+            // keep `models` as-is
           }
-        } catch {
-          // keep `models` as-is
         }
-        return { ...provider, models }
+        return { ...provider, models, configured }
       }))
-      return settled.filter((entry): entry is ModelsProviderOption => entry !== undefined)
+      // `configured` is always filled here, so the predicate narrows the
+      // optional flag away with the element itself.
+      return settled.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined)
     },
     async listAll() {
       const providers = this.listProviders()
@@ -262,6 +293,12 @@ export function apply(ctx: Context): void {
       const route = input.route.trim()
       if (!ROUTE_PATTERN.test(route)) {
         return { ok: false, error: 'route must be lowercase kebab-case, e.g. my-gateway' }
+      }
+      if (route === QIALIKE_BEE_ROUTE) {
+        // The route is qialike's own gateway: a settings profile under it would
+        // shadow the shipped endpoint while the dialog kept treating the entry
+        // as qialike-owned (always listed, never removable).
+        return { ok: false, error: `route "${QIALIKE_BEE_ROUTE}" is reserved for qialike's own gateway (QiaLike Bee)` }
       }
       const baseURL = input.baseURL.trim()
       if (baseURL === '') return { ok: false, error: 'base URL is required' }
