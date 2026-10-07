@@ -207,8 +207,8 @@ describe('the reserved second cell is a real space (render level)', () => {
     expect(weatherRow).not.toContain('\uFE0F')
     // Its terminal advance equals the model line tableGrid predicted — that is
     // what keeps the row's `│` cells (and the sidebar divider) in column.
-    const model = tableGrid([['项目', '数据'], ['天气', '☀️ 晴'], ['气温', '32°C']], usable).lines
-      .find((line) => line.includes('天气')) ?? ''
+    const grid = tableGrid([['项目', '数据'], ['天气', '☀️ 晴'], ['气温', '32°C']], usable)
+    const model = [...grid.header, ...grid.body].find((line) => line.includes('天气')) ?? ''
     expect(model).not.toBe('')
     expect(advance(weatherRow, stringWidth)).toBe(stringWidth(model))
   })

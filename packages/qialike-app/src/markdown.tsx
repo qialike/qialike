@@ -242,19 +242,22 @@ function renderBlock(node: MdNode, key: number | string, usable: number): React.
       )
     }
     case 'table': {
-      // Grid via the shared tableGrid (visual-width aligned, never wraps);
-      // header row bold + a ── separator so the table reads as a structure,
-      // not a wall of pipes.
+      // Grid via the shared tableGrid (visual-width aligned; a cell that does
+      // not fit WRAPS rather than losing its tail); header row bold + a ──
+      // separator so the table reads as a structure, not a wall of pipes. The
+      // separator follows the header's painted lines — several when the header
+      // itself wrapped — which is why tableGrid hands header and body separately.
       const cells = (node.children ?? []).map((row: MdNode) =>
         (row.children ?? []).map((cell: MdNode) => inlinePlain(cell)))
       if (cells.length === 0) return null
-      const { lines, widths } = tableGrid(cells, usable)
-      if (lines.length === 0) return null
-      const body = lines.slice(1)
+      const { header, body, widths } = tableGrid(cells, usable)
+      if (header.length === 0) return null
       return (
         <Box key={key} width="100%" flexDirection="column">
-          <Text wrap="truncate"><Text bold color={theme.secondary}>{lines[0]}</Text></Text>
-          {lines.length > 1
+          {header.map((line, i) => (
+            <Text key={`h${i}`} wrap="truncate"><Text bold color={theme.secondary}>{line}</Text></Text>
+          ))}
+          {body.length > 0
             ? <Text wrap="truncate" color={theme.borderSubtle}>{tableSeparator(widths)}</Text>
             : null}
           {body.map((line, r) => (
@@ -331,6 +334,21 @@ export function visualWidth(text: string): number {
   return stringWidth(text)
 }
 
+/** Columns at least this wide wrap an overflowing cell; narrower ones still
+ *  ellipsize. Below it a wrap is a wall of 1–2 character lines, which reads
+ *  worse than an `…` AND costs many rows — and the situation only arises when
+ *  the grid physically cannot fit the pane, where something has to give. */
+const MIN_WRAP_COLS = 8
+
+/** `text` as painted lines of at most `w` visual columns each, wrapped by the
+ *  same `wrap-ansi` the paragraphs go through (greedy word break; a word wider
+ *  than the column is hard-broken). Sharing that wrapper is what keeps the
+ *  height estimate equal to the paint — see `countWrappedLines`. */
+function wrapCell(text: string, w: number): string[] {
+  if (visualWidth(text) <= w) return [text]
+  return wrapAnsi(text, w, { trim: false, hard: true }).split('\n')
+}
+
 /**
  * Lay out a markdown table (mdast table rows → cell strings) into a grid of
  * aligned terminal lines. Single source of truth for BOTH the renderer and the
@@ -339,26 +357,33 @@ export function visualWidth(text: string): number {
  * Rules:
  *  - column widths are the max VISUAL width (CJK/emoji count 2) across every
  *    cell of that column (not just the header), with a readable floor;
- *  - rows never wrap: when the natural grid is wider than `usable`, the widest
- *    columns are shrunk first (long cells get an ellipsis) until it fits;
+ *  - a cell that does not fit its column WRAPS onto the next painted line
+ *    instead of losing its tail behind an `…`. A table cell is content the user
+ *    reads (a model's answer often lives in the second column), and the tail is
+ *    frequently the point — the code-block path made the same call for the same
+ *    reason. Columns below `MIN_WRAP_COLS` are the exception, documented there;
+ *  - when the natural grid is wider than `usable`, the widest columns are shrunk
+ *    first and the cells then wrap into whatever width is left;
  *  - alignment is by visual width, so the `│` separators line up even with
  *    wide glyphs (misaligned pipes are what make a table read as "乱");
  *  - the first row is the header — callers decide how to style it.
  *
  * @param cells - table rows as cell-string rows (rows[0] = header).
  * @param usable - the text columns available (0/undefined → no shrink).
- * @returns `{ lines, widths }` — every row as one pre-padded, non-wrapping
- *          line (with surrounding `│ … │`), and the final column widths.
+ * @returns `{ header, body, widths }` — the painted lines of the header and of
+ *          the data rows (each pre-padded, with surrounding `│ … │`; a wrapped
+ *          cell contributes several), and the final column widths. Header and
+ *          body are separate rather than one `lines` array so the separator
+ *          still lands after the header when the header itself wrapped.
  */
 export function tableGrid(
   cells: string[][],
   usable: number,
-): { lines: string[]; widths: number[] } {
-  if (cells.length === 0) return { lines: [], widths: [] }
+): { header: string[]; body: string[]; widths: number[] } {
+  if (cells.length === 0) return { header: [], body: [], widths: [] }
   const colCount = Math.max(...cells.map((r) => r.length), 0)
-  if (colCount === 0) return { lines: [], widths: [] }
+  if (colCount === 0) return { header: [], body: [], widths: [] }
   const pad = (s: string, w: number) => s + ' '.repeat(Math.max(0, w - visualWidth(s)))
-  const cut = (s: string, w: number) => truncateWide(s, w)
   // Natural visual widths per column.
   const widths: number[] = []
   for (let c = 0; c < colCount; c++) {
@@ -381,13 +406,24 @@ export function tableGrid(
       widths[widest] -= 1
     }
   }
-  const lines = cells.map((row) => {
-    const filled = widths.map((w, c) => cut(row[c] ?? '', w))
-    // Pad cells to their column width by VISUAL width; single-line guarantee:
-    // cut() above never exceeds w, so the joined line fits its budget.
-    return `│ ${filled.map((s, c) => pad(s, widths[c])).join(' │')} │`
-  })
-  return { lines, widths }
+  // One logical row → one or more painted lines. A cell that wraps adds lines;
+  // the row's other columns are padded on those extra lines so the `│`s stay in
+  // column. Pad by VISUAL width, and note every chunk already fits its column,
+  // so a joined line never exceeds the budget the shrink loop above fitted.
+  const grid = (row: string[]): string[] => {
+    const chunks = widths.map((w, c) => {
+      const text = row[c] ?? ''
+      if (w < MIN_WRAP_COLS) return [truncateWide(text, w)]
+      return wrapCell(text, w)
+    })
+    const depth = Math.max(1, ...chunks.map((c) => c.length))
+    const out: string[] = []
+    for (let i = 0; i < depth; i++) {
+      out.push(`│ ${chunks.map((c, ci) => pad(c[i] ?? '', widths[ci])).join(' │')} │`)
+    }
+    return out
+  }
+  return { header: grid(cells[0]), body: cells.slice(1).flatMap((row) => grid(row)), widths }
 }
 
 /** One dashed separator row for a table header, sized to the column widths. */
@@ -497,9 +533,10 @@ function blockRows(node: MdNode, usable: number): number {
       const cells = (node.children ?? []).map((row) =>
         (row.children ?? []).map((cell) => inlinePlain(cell)))
       if (cells.length === 0) return 0
-      const { lines } = tableGrid(cells, usable)
-      // Painted rows: header + (separator) + data rows — mirrors the renderer.
-      return lines.length + (lines.length > 1 ? 1 : 0)
+      const { header, body } = tableGrid(cells, usable)
+      // Painted rows: header lines + (separator) + data lines — mirrors the
+      // renderer, including the extra lines a wrapped cell contributed.
+      return header.length + body.length + (body.length > 0 ? 1 : 0)
     }
     case 'image':
       return countWrappedLines(`![${node.alt ?? ''}](${node.url ?? ''})`, usable)
@@ -518,9 +555,8 @@ function blockRows(node: MdNode, usable: number): number {
  * Render assistant Markdown to Ink. User and status text stays plain; only the
  * assistant surface goes through this.
  * @param props.text - the assistant text (possibly streaming).
- * @param props.usable - available text columns; tables shrink to it (omitting
- *                       keeps natural widths; long grids truncate at the Ink
- *                       box edge instead of wrapping).
+ * @param props.usable - available text columns; tables shrink to it and wrap
+ *                       their cells to fit (omitting keeps natural widths).
  */
 export function MarkdownText(props: { text: string; usable?: number }): React.JSX.Element {
   // Render the live text directly (no debounce): the transcript measures this
