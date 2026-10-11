@@ -9,14 +9,11 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Added
 
-- **QiaLike Bee — qialike's own API route in `/models`** — the catalogue's one built-in provider
-  (`qialike`, `https://qialike.com/bee/v1`, key reference `QIALIKE_API_KEY`). It is listed before it
-  has a key: selecting it then asks for the API key instead of opening an empty model list, and once
-  a key is set selecting it lists the models qialike serves — for now the `deepseek` family
-  (`deepseek-v4-pro` / `deepseek-v4-flash` / `deepseek-v4-flash-free`, read live from
-  `GET /bee/v1/models` and filtered to `deepseek-*`, with that list as the offline fallback).
-  `Ctrl+D` / `Alt+D` refuses it, and a `hidden_providers` entry in `qialike.json` cannot hide it:
-  qialike's own route cannot be removed.
+- **QiaLike Bee, qialike's own API route, joins `/models`** — always listed, never removable, and it asks for the key before it shows a model.
+
+### Fixed
+
+- **`web_fetch` works again** — Bun resolved the web stack's bare `undici` import to its own stub, whose client had no `close()` and silently dropped the fetch pin and the proxy dispatcher.
 
 ## [0.9.3] - 2026-10-02
 

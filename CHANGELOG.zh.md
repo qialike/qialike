@@ -11,13 +11,11 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 ### 新增
 
-- **QiaLike Bee —— qialike 自有 API 路由进入 `/models`** —— 目录里唯一由 qialike 自己提供的一家
-  （route `qialike`，`https://qialike.com/bee/v1`，密钥引用 `QIALIKE_API_KEY`）。**没有 key 时它照常列出**：
-  此时选中它是先弹窗要求输入 API key，而不是打开一个空模型列表；设好 key 后再选中它，列出的是 qialike
-  提供的模型 —— 目前只有 `deepseek` 系列（`deepseek-v4-pro` / `deepseek-v4-flash` /
-  `deepseek-v4-flash-free`；实时读 `GET /bee/v1/models` 并按 `deepseek-*` 过滤，网关不可达时用这组静态
-  目录兜底）。`Ctrl+D` / `Alt+D` 对它无效，`qialike.json` 的 `hidden_providers` 也藏不住它：
-  qialike 自有路由不可删除。
+- **qialike 自有 API 路由 QiaLike Bee 进入 `/models`** —— 始终在列、不可移除，且没有 key 时先索要 key 再显示模型。
+
+### 修复
+
+- **`web_fetch` 恢复可用** —— Bun 把 web 栈的裸 `undici` 说明符解析成自己的壳，那个客户端没有 `close()`，还静默丢掉了取回地址钉定与代理 dispatcher。
 
 ## [0.9.3] - 2026-10-02
 

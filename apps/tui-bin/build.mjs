@@ -22,7 +22,7 @@
  * @module qialike/build
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -802,6 +802,10 @@ function createResolveFarm() {
   // against the build machine's farm path — which exists while the build tree
   // does and is gone on every user machine.
   patchKoffiLazyResolution()
+  // The web stack's `import("undici")` must not reach Bun's built-in stub (see
+  // the function): the stub breaks `web_fetch` outright and silently drops the
+  // fetch pinning and the proxy routing. Same "before every bundle step" rule.
+  patchUndiciImports(nm)
   // The Windows ACL runner is a SECOND ENTRY the harness resolves by specifier
   // at call time; a single file cannot answer that (see the function).
   buildAclRunnerBundle()
@@ -1234,6 +1238,189 @@ function patchKoffiLazyResolution() {
   }
   writeFileSync(file, patched)
   console.log('qialike: patched the koffi resolution in the bundled dsh-lazy-require')
+}
+
+/**
+ * The Bun-safe name the real `undici` is published under inside the farm.
+ *
+ * The harness's web stack imports `undici` by its BARE specifier and Bun
+ * intercepts that name: the resolver answers it from the runtime's own stub
+ * rather than from the package on disk, so the real undici never enters the
+ * bundle (measured: `bundle 1 modules` for a bare `import("undici")`, against
+ * `bundle 111 modules` for the same tree under any other name). The stub is not
+ * a drop-in: `new Agent().close` is `undefined`, and Bun's `fetch` ignores the
+ * `dispatcher` option outright. See {@link patchUndiciImports} for what that
+ * costs.
+ */
+const UNDICI_ALIAS = 'qialike-undici'
+
+/**
+ * The text half of {@link patchUndiciImports}: pure, so its test can pin the
+ * rewrite, the quote styles and the idempotency marker without a farm.
+ *
+ * Only the bare `undici` specifier is rewritten — `qialike-undici` must survive
+ * a second run untouched, or the patch would rewrite its own output.
+ * @param text - one farm module's source.
+ * @returns the patched source, or `undefined` when there is nothing to do.
+ */
+export function patchUndiciSpecifiers(text) {
+  if (text.includes(UNDICI_ALIAS)) return undefined
+  // Both quote styles occur in the farm: the harness's bundled `lib/index.js`
+  // keeps the emitted double quotes, `lib/types/*.js` the source single quotes.
+  if (!/(\bimport\(\s*)(["'])undici\2(\s*\))/.test(text)) return undefined
+  return text.replace(/(\bimport\(\s*)(["'])undici\2(\s*\))/g, `$1$2${UNDICI_ALIAS}$2$3`)
+}
+
+/** Directories of the undici package that never reach the bundle. */
+const UNDICI_SKIP_DIRS = new Set(['docs', 'types', 'scripts', 'test', 'tests', 'benchmarks'])
+
+/**
+ * Escape every non-ASCII character of a JavaScript source as a `\uXXXX` escape.
+ *
+ * WHY: `bun build --compile` stores the embedded module sources as UTF-16 as
+ * soon as ONE non-ASCII character survives bundling, which doubles the whole
+ * blob. Measured on this bundle: a single `ä` in undici's formdata-polyfill
+ * attribution comment (`Jimmy Wärting`) took the compiled binary from
+ * 102,852,064 to 124,388,832 bytes — +21.5 MiB for one character.
+ *
+ * It survives because esbuild escapes non-ASCII in CODE (its default
+ * `charset: ascii`, which is why qialike's own box-drawing glyphs never trigger
+ * this) but copies `/*!` legal comments through verbatim.
+ *
+ * Escaping is behaviour-preserving: an escape denotes the same character in a
+ * string, a template literal and a regular expression alike, and inside a
+ * comment it is inert text. This is the same trade esbuild already makes
+ * everywhere else in the bundle, applied to the one construct it skips.
+ * @param text - a JavaScript source file's content.
+ * @returns the escaped content, or `undefined` when it is already pure ASCII.
+ */
+export function escapeNonAsciiSource(text) {
+  if (!/[^\x00-\x7F]/.test(text)) return undefined
+  // Escape the matched code point's UTF-16 CODE UNITS, not its code points: an
+  // astral character is two units, and emitting only the first would produce a
+  // lone high surrogate — a different string.
+  return text.replace(/[^\x00-\x7F]/gu, (char) => {
+    let out = ''
+    for (let unit = 0; unit < char.length; unit += 1) {
+      out += `\\u${char.charCodeAt(unit).toString(16).padStart(4, '0')}`
+    }
+    return out
+  })
+}
+
+/**
+ * Publish the real `undici` under {@link UNDICI_ALIAS}, so the specifier the
+ * harness writes can be rewritten to something Bun does not intercept.
+ *
+ * A COPY rather than the symlink the other mirrored packages get, because the
+ * copy is transformed: its source is the harness's shared pnpm store, which this
+ * build must not write to. The copy carries the {@link escapeNonAsciiSource}
+ * pass — without it one `ä` in undici's attribution comment doubles the shipped
+ * binary — and running it over the whole package means a future undici that adds
+ * another typographic quote cannot silently reintroduce the cost.
+ * @param nm - the resolve-farm `node_modules` root.
+ * @returns the copied package directory.
+ * @throws when the real `undici` is not in the farm — the web stack cannot work
+ *   without it, and building anyway would ship the broken tool this patch fixes.
+ */
+function installUndiciAlias(nm) {
+  const real = join(nm, 'undici')
+  if (!existsSync(real)) {
+    throw new Error(
+      `qialike: the real undici is not in the farm (${real}); the web fetch stack imports it and `
+      + 'Bun cannot substitute its own stub — check that harness dependencies still mirror into '
+      + 'node_modules (mirrorHarnessStore)',
+    )
+  }
+  const source = realpathSync(real)
+  const copy = join(ROOT, 'apps/tui-bin/x', UNDICI_ALIAS)
+  rmSync(copy, { recursive: true, force: true })
+  mkdirSync(copy, { recursive: true })
+  let escaped = 0
+  const copyTree = (from, to) => {
+    for (const entry of readdirSync(from, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (UNDICI_SKIP_DIRS.has(entry.name)) continue
+        mkdirSync(join(to, entry.name), { recursive: true })
+        copyTree(join(from, entry.name), join(to, entry.name))
+      } else if (/\.(js|mjs|cjs)$/.test(entry.name)) {
+        const text = readFileSync(join(from, entry.name), 'utf8')
+        const clean = escapeNonAsciiSource(text)
+        if (clean !== undefined) escaped += 1
+        writeFileSync(join(to, entry.name), clean ?? text)
+      } else if (/\.(json|node|wasm)$/.test(entry.name)) {
+        copyFileSync(join(from, entry.name), join(to, entry.name))
+      }
+    }
+  }
+  copyTree(source, copy)
+  const target = join(nm, UNDICI_ALIAS)
+  rmSync(target, { recursive: true, force: true })
+  mkdirSync(dirname(target), { recursive: true })
+  symlinkSync(copy, target, 'dir')
+  console.log(`qialike: aliased undici -> ${UNDICI_ALIAS} (${source}; ${escaped} file(s) escaped to ASCII)`)
+  return copy
+}
+
+/**
+ * Point every farm module that imports `undici` at {@link UNDICI_ALIAS}.
+ *
+ * WHY THIS IS LOAD-BEARING (measured under bun 1.4.2 on the shipped binary):
+ *
+ *  * `new Agent().close` is `undefined` on Bun's stub, so `web-fetch-http`'s
+ *    `requestPinned()` threw `dispatcher.close is not a function` on EVERY
+ *    request — the `web_fetch` tool was dead in every qialike build, on every
+ *    platform, under every profile (no proxy configured required). `web_search`
+ *    was unaffected, which is why it read as "the fetch tool is broken".
+ *  * The same stub made Bun's `fetch` drop the `dispatcher` option silently
+ *    (a bogus `{not:'a dispatcher'}` is accepted; the pinned `connect.lookup` is
+ *    never called). So even without the throw, the public-address PIN — the fix
+ *    for DNS rebinding between resolution and connection — was not applied.
+ *  * `dsh-http-proxy` installs a global dispatcher; Bun's `setGlobalDispatcher`
+ *    is inert, so a policied deployment would have sent traffic DIRECT instead
+ *    of through the proxy, with no error at all.
+ *
+ * The real package fixes all three: its own client owns the sockets and the
+ * parser, honours `dispatcher` (verified: the pinned lookup is called and the
+ * request lands on the pinned origin) and implements `close`.
+ *
+ * Runs before every bundle step, like the other source patches — and it must,
+ * because the farm copies are what `bun build --compile` reads.
+ */
+function patchUndiciImports(nm) {
+  const store = join(ROOT, 'apps/tui-bin/x')
+  const modules = []
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name)
+      if (entry.isDirectory()) walk(path)
+      else if (/\.(js|mjs|cjs)$/.test(entry.name) && /(\bimport\(\s*)(["'])undici\2(\s*\))/.test(readFileSync(path, 'utf8'))) modules.push(path)
+    }
+  }
+  walk(store)
+  if (modules.length === 0) {
+    console.log('qialike: no farm module imports undici; leaving the web fetch stack as the harness ships it')
+    return
+  }
+  // The alias has to exist before the bundle resolves anything, and the module
+  // list is what proves the rewrite below actually landed somewhere.
+  installUndiciAlias(nm)
+  let rewritten = 0
+  for (const file of modules) {
+    const patched = patchUndiciSpecifiers(readFileSync(file, 'utf8'))
+    if (patched === undefined) continue
+    writeFileSync(file, patched)
+    rewritten += 1
+  }
+  if (rewritten === 0) {
+    throw new Error(
+      `qialike: ${modules.length} farm module(s) import undici but none matched the specifier this `
+      + 'build rewrites; the harness changed how it loads undici — re-check apps/tui-bin/build.mjs '
+      + 'against the harness version (shipping the unrewritten import breaks web_fetch and silently '
+      + 'drops the fetch pinning and the proxy routing)',
+    )
+  }
+  console.log(`qialike: rewrote undici -> ${UNDICI_ALIAS} in ${rewritten} farm module(s)`)
 }
 
 /**
