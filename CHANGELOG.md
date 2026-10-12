@@ -5,17 +5,11 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
-## [Unreleased]
+## [0.9.3] - 2026-10-02
 
 ### Added
 
 - **QiaLike Bee, qialike's own API route, joins `/models`** — always listed, never removable, and it asks for the key before it shows a model.
-
-### Fixed
-
-- **`web_fetch` works again** — Bun resolved the web stack's bare `undici` import to its own stub, whose client had no `close()` and silently dropped the fetch pin and the proxy dispatcher.
-
-## [0.9.3] - 2026-10-02
 
 ### Changed
 
@@ -23,6 +17,8 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Fixed
 
+- **`web_fetch` works again** — Bun resolved the web stack's bare `undici` import to its own stub, whose client had no `close()` and silently dropped the fetch pin and the proxy dispatcher.
+- **Table cells wrap instead of losing their tail** — a narrow pane ellipsized every overflowing cell, so an answer living in a table's second column ended at an `…`.
 - **`/upgrade` updates an npm install on Windows** — the gate asked the platform, not who owns the copy.
 
 ## [0.9.2] - 2026-10-02
