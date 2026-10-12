@@ -7,10 +7,13 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ## [0.10.0] - 2026-10-12
 
+### Added
+
+- **The model can change the session's directory** — the harness mounts a `working_directory` tool, so a `cd` persists for the session.
+
 ### Changed
 
 - **Rebuilt on DeepSeek Harness `0.2.1-alpha.2`** (up from `0.2.0-rc.2`) — no anchored build patch moved.
-- **The model can change the session's directory** — the harness mounts a `working_directory` tool, so a `cd` persists for the session.
 
 ### Fixed
 
