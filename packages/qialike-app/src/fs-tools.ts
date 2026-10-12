@@ -51,6 +51,7 @@ import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { FsError } from '@deepseek-ai/dsh-fs'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import type { SandboxExecutionPolicy } from '@deepseek-ai/dsh-sandbox'
+import type { Session } from '@deepseek-ai/dsh-session'
 
 /** Plugin name. */
 export const name = 'qialike-fs-tools'
@@ -75,6 +76,36 @@ function policyFor(ctx: Context, exec: ToolExecution): SandboxExecutionPolicy {
 }
 
 /**
+ * The directory this call's relative paths resolve against.
+ *
+ * Harness 0.2.1 moved the session's directory out of the (immutable) session
+ * header and into a `workingDirectory` service the model can change mid-session
+ * through the `working_directory` tool; its own `read`/`write`/`edit`/`glob`/
+ * `grep` resolve through `ctx.workingDirectory.ensure()`. Resolving here against
+ * the header-derived `policy.workspaceRoot` instead would put these two tools on
+ * the other side of a `cd`: `write a.txt` would land in the new directory while
+ * `delete a.txt` still named the old one.
+ *
+ * Only the RESOLUTION base follows the session. The mutation FENCE stays on
+ * `policy.workspaceRoot`, so changing directory can never widen what may be
+ * modified — {@link resolvePermitted} keeps checking against the policy root.
+ *
+ * `get()` is synchronous and does no filesystem I/O (the service validates
+ * lazily in `ensure()`), so this stays inside the policy path.
+ * @param ctx - plugin context; `workingDirectory` is read through `ctx.get` so a
+ *   composition without the service keeps the previous behaviour.
+ * @param exec - the tool execution supplying the calling agent.
+ * @param policy - the calling session's resolved policy, and the fallback base.
+ * @returns the absolute directory relative paths resolve against.
+ */
+function resolutionCwd(ctx: Context, exec: ToolExecution, policy: SandboxExecutionPolicy): string {
+  const session = exec.agent?.session
+  if (session === undefined) return policy.workspaceRoot
+  const directories = ctx.get('workingDirectory') as { get(target: Session): string } | undefined
+  return directories?.get(session) ?? policy.workspaceRoot
+}
+
+/**
  * Resolve one model-supplied path and prove the policy permits mutating it.
  *
  * Returns the RESOLVED target, and every caller mutates exactly that, so the
@@ -82,13 +113,19 @@ function policyFor(ctx: Context, exec: ToolExecution): SandboxExecutionPolicy {
  * check-here-write-there window beyond the accepted one in `dsh-fs-sandbox`).
  *
  * @param ctx - plugin context supplying `ctx.fs` and `ctx.sandboxPolicy`.
- * @param policy - the calling session's resolved policy.
+ * @param policy - the calling session's resolved policy (the mutation fence).
+ * @param cwd - directory relative paths resolve against, from {@link resolutionCwd}.
  * @param rawPath - the path as the model wrote it.
  * @returns the resolved, permitted target.
  * @throws FsError with code `FS_SANDBOX_DENIED` when the policy refuses.
  */
-async function resolvePermitted(ctx: Context, policy: SandboxExecutionPolicy, rawPath: string): Promise<FsTarget> {
-  const target = await ctx.fs.resolve(rawPath, { cwd: policy.workspaceRoot })
+async function resolvePermitted(
+  ctx: Context,
+  policy: SandboxExecutionPolicy,
+  cwd: string,
+  rawPath: string,
+): Promise<FsTarget> {
+  const target = await ctx.fs.resolve(rawPath, { cwd })
   if (policy.mode === 'danger-full-access') return target
 
   if (policy.mode === 'read-only') {
@@ -157,11 +194,12 @@ export function apply(ctx: Context): void {
       const input = args as { path?: unknown; recursive?: unknown }
       const rawPath = requirePath(input.path, 'path')
       const policy = policyFor(ctx, exec)
-      const target = await resolvePermitted(ctx, policy, rawPath)
+      const cwd = resolutionCwd(ctx, exec, policy)
+      const target = await resolvePermitted(ctx, policy, cwd, rawPath)
 
       // `lstat`, not `stat`: deleting a symlink removes the LINK, and the
       // reported kind must describe the entry that actually went away.
-      const info = await ctx.fs.lstat(target.displayPath, { cwd: policy.workspaceRoot }, exec.signal)
+      const info = await ctx.fs.lstat(target.displayPath, { cwd }, exec.signal)
       if (info === undefined) {
         throw new FsError(`cannot delete "${target.displayPath}": no such file or directory`, 'FS_NOT_FOUND')
       }
@@ -207,10 +245,11 @@ export function apply(ctx: Context): void {
       const rawSource = requirePath(input.source, 'source')
       const rawDestination = requirePath(input.destination, 'destination')
       const policy = policyFor(ctx, exec)
+      const cwd = resolutionCwd(ctx, exec, policy)
       // BOTH ends are fenced: moving INTO the workspace from outside would make
       // this tool an exfiltration/ingest path around the policy.
-      const source = await resolvePermitted(ctx, policy, rawSource)
-      const destination = await resolvePermitted(ctx, policy, rawDestination)
+      const source = await resolvePermitted(ctx, policy, cwd, rawSource)
+      const destination = await resolvePermitted(ctx, policy, cwd, rawDestination)
 
       try {
         await rename(ctx.fs.processPath(source), ctx.fs.processPath(destination))

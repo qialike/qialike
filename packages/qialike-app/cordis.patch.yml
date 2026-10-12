@@ -28,7 +28,18 @@
   config:
     # Keep the same temporary process-wide Code Mode opt-in as the other
     # surfaces. Unset keeps the schema default (native).
-    mode: !!js process.env.DSH_TOOLS_MODE
+    #
+    # Harness 0.2.1 removed `both` from ToolPresentationMode (it is `native` |
+    # `ptc` now), so passing the variable through verbatim made a deployment
+    # that had set `DSH_TOOLS_MODE=both` fail schema validation and take the
+    # whole tools row down with it. Normalize instead: `ptc` is the only value
+    # that still selects something other than the default, and `both` maps to
+    # `native` — the presentation it shared with the old default.
+    #
+    # The quotes are required, not style: an unquoted `!!js` scalar carrying a
+    # ternary is parsed by YAML as a MAPPING (the `: ` becomes a key separator),
+    # and the row then receives `{"[object Object]": "native"}`.
+    mode: !!js "process.env.DSH_TOOLS_MODE === 'ptc' ? 'ptc' : 'native'"
 
 # The web surface groups sessions under a Workspace (workspaceId); the TUI
 # profile does not mount the Workspace registry by default, so qialike sessions

@@ -22,7 +22,7 @@
  * @module qialike/build
  */
 
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -55,7 +55,7 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-versio
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.2.0-rc.2'
+const HARNESS_VERSION_MAX = '0.2.1-alpha.2'
 
 /**
  * The npm scope this repo's own packages live under, and the placeholder scope
@@ -1700,6 +1700,7 @@ function linkUnhoistedHarnessDeps(nm, packages) {
     for (const name of Object.keys(manifest.dependencies ?? {})) {
       if (name.startsWith('@deepseek-ai/')) continue // vendored: linked by the caller
       const target = join(nm, ...name.split('/'))
+      clearDanglingLink(target)
       if (existsSync(target)) continue
       // pnpm's store directory name: `name@version`, with `/` -> `+` for scopes
       // and possibly a peer suffix (e.g. `execa@10.0.0_abc123`).
@@ -1720,12 +1721,34 @@ function linkUnhoistedHarnessDeps(nm, packages) {
   if (linked.length > 0) console.log(`qialike: linked ${linked.length} unhoisted harness dep(s): ${linked.join(', ')}`)
 }
 
+/**
+ * Clear a symlink whose target no longer exists.
+ *
+ * `existsSync` FOLLOWS links, so a dangling one reads as "absent" while still
+ * occupying its path. The linkers below then try to create it, `symlinkSync`
+ * fails with EEXIST, and their `catch` records it as "already linked" — leaving
+ * the broken link in place. `node_modules/` is gitignored and outlives a harness
+ * upgrade, so this is a normal state rather than a corrupt one: moving the
+ * harness store from `execa@10.0.0` to `10.0.1` left `node_modules/execa`
+ * dangling, and `bun build` then failed with `File not found …/node_modules/execa`
+ * even though the package was in the store the whole time.
+ * @param path - the candidate link path.
+ */
+function clearDanglingLink(path) {
+  try {
+    if (lstatSync(path).isSymbolicLink() && !existsSync(path)) rmSync(path, { force: true })
+  } catch {
+    // ENOENT: nothing occupies the path, which is the state the caller wants.
+  }
+}
+
 function mirrorHarnessStore(nm) {
   const store = join(HARNESS, 'node_modules/.pnpm/node_modules')
   if (!existsSync(store)) return
   for (const entry of readdirSync(store, { withFileTypes: true })) {
     if (entry.name === '@deepseek-ai') continue
     const target = join(nm, entry.name)
+    clearDanglingLink(target)
     if (existsSync(target)) continue
     try {
       mkdirSync(dirname(target), { recursive: true })

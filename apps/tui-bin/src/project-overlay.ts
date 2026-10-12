@@ -29,6 +29,12 @@ export const PROJECT_EXECUTION_PLUGINS: ReadonlySet<string> = new Set(['@deepsee
 export const PROJECT_FORBIDDEN_IDS: ReadonlySet<string> = new Set([
   'sandbox', 'sandbox-policy', 'fs-sandbox', 'bash-sandbox', 'pwsh-sandbox',
   'approval', 'permission', 'fs-observation-policy',
+  // Harness 0.2.1: the session's working directory is the base every filesystem
+  // tool resolves relative paths against, so a project layer that disabled this
+  // row would silently unwire tool-fs / tool-fs-search / tool-bash (each injects
+  // `workingDirectory`) and make `run_code` throw. Same rank as `sandbox-policy`,
+  // so it is fenced the same way.
+  'working-directory', 'tool-working-directory',
 ])
 
 /** Plugin names a project layer may never mount, whatever id it gives them. */
@@ -41,6 +47,8 @@ export const PROJECT_FORBIDDEN_PLUGINS: ReadonlySet<string> = new Set([
   '@deepseek-ai/dsh-user-approval',
   '@deepseek-ai/dsh-permission-presets',
   '@deepseek-ai/dsh-fs-observation-policy',
+  '@deepseek-ai/dsh-working-directory',
+  '@deepseek-ai/dsh-tool-working-directory',
 ])
 
 /** One project-layer row the policy refuses, and why. */

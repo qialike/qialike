@@ -111,7 +111,12 @@ describe('repository overlay policy', () => {
 
   test('⑥ the two sets name real rows and real plugins', () => {
     expect([...PROJECT_FORBIDDEN_IDS].sort()).toEqual(['approval', 'bash-sandbox', 'fs-observation-policy',
-      'fs-sandbox', 'permission', 'pwsh-sandbox', 'sandbox', 'sandbox-policy'])
+      'fs-sandbox', 'permission', 'pwsh-sandbox', 'sandbox', 'sandbox-policy',
+      // Harness 0.2.1: the session's working directory is the base every
+      // filesystem tool resolves relative paths against, so a project layer
+      // disabling it would unwire tool-fs / tool-fs-search / tool-bash and make
+      // run_code throw. Fenced at the same rank as sandbox-policy.
+      'tool-working-directory', 'working-directory'])
     // Every forbidden plugin name must exist in the embedded base layer, so the
     // policy cannot drift away from the composition it protects.
     const basePatch = readFileSync(new URL('../../deepseek-harness/packages/bundle/base/cordis.patch.yml', import.meta.url), 'utf8')
