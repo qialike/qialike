@@ -11,15 +11,15 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 ### 变更
 
-- **重建于 DeepSeek Harness `0.2.1-alpha.2`**（原 `0.2.0-rc.2`）；构建期锚点补丁**全部仍然命中**，无需移动任何锚点。
-- **模型可以改变会话的工作目录** —— harness 挂载了 `working_directory` 工具，`cd` 会在会话内持久，文件工具也随之改变解析基准。
+- **重建于 DeepSeek Harness `0.2.1-alpha.2`**（原 `0.2.0-rc.2`）—— 构建期锚点无需移动。
+- **模型可以改变会话目录** —— harness 挂载了 `working_directory` 工具，`cd` 由此在会话内持久。
 
 ### 修复
 
-- **`delete` 与 `move` 改为跟随会话当前目录** —— 它们此前按会话头部的原始路径解析相对路径，`cd` 之后所指的文件与 `write`、`edit` 不一致。
-- **`DSH_TOOLS_MODE=both` 不再拖垮 tools 行** —— harness 0.2.1 移除了展示模式的 `both`，现在归一化（`both` → `native`）而不是校验失败。
-- **仓库覆盖层无法再摘掉 `working-directory`** —— 该行决定所有文件工具的解析基准，故按 `sandbox-policy` 同级加锁。
-- **陈旧的 `node_modules` 不再导致构建失败** —— harness 升级会让构建此前建立的链接指向已迁移的 store 路径，而 `existsSync` 把断链读作"不存在"，于是重建报 `File not found` 而不是修复它。
+- **`delete` 与 `move` 改为跟随该目录** —— 它们此前按会话头部的原始路径解析，`cd` 之后所指文件与 `write` 不一致。
+- **`DSH_TOOLS_MODE=both` 不再拖垮 tools 行** —— 该模式已在上游移除，现在归一化而不是校验失败。
+- **仓库覆盖层无法再摘掉 `working-directory`** —— 该行决定所有文件工具的解析基准。
+- **陈旧的 `node_modules` 不再导致构建失败** —— `existsSync` 把断链读作"不存在"，于是构建报 `File not found` 而不是修复它。
 
 ## [0.9.3] - 2026-10-02
 

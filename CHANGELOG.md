@@ -9,15 +9,15 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Changed
 
-- **Rebuilt on DeepSeek Harness `0.2.1-alpha.2`** (up from `0.2.0-rc.2`); every anchored build patch still matches, so none moved.
-- **The model can change the session's working directory** — the harness mounts a `working_directory` tool, so `cd` persists for the session and the filesystem tools resolve against it.
+- **Rebuilt on DeepSeek Harness `0.2.1-alpha.2`** (up from `0.2.0-rc.2`) — no anchored build patch moved.
+- **The model can change the session's directory** — the harness mounts a `working_directory` tool, so a `cd` persists for the session.
 
 ### Fixed
 
-- **`delete` and `move` follow the session's current directory** — they resolved relative paths against the session header's original path, so after a `cd` they named a different file than `write` and `edit` did.
-- **`DSH_TOOLS_MODE=both` no longer takes the tools row down** — harness 0.2.1 removed `both` from the presentation modes, so the value is normalized (`both` → `native`) instead of failing validation.
-- **A repository overlay can no longer unwire `working-directory`** — that row decides the base every filesystem tool resolves against, so it is fenced like `sandbox-policy`.
-- **A stale `node_modules` no longer fails the build** — a harness upgrade leaves the links this build created pointing at moved store paths, and `existsSync` reads a dangling link as absent, so the rebuild reported `File not found` instead of repairing it.
+- **`delete` and `move` follow that directory** — they used the session header's original path, so after a `cd` they named a different file than `write` did.
+- **`DSH_TOOLS_MODE=both` no longer takes the tools row down** — the mode was removed upstream, so the value is normalized instead of rejected.
+- **A repository overlay cannot unwire `working-directory`** — that row decides the base every filesystem tool resolves against.
+- **A stale `node_modules` no longer fails the build** — `existsSync` reads a dangling link as absent, so the build reported `File not found` instead of repairing it.
 
 ## [0.9.3] - 2026-10-02
 
