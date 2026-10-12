@@ -37,7 +37,16 @@ interface Tool {
 }
 
 /** Build a plugin context whose only services are the three the plugin injects. */
-function rig(workspaceRoot: string, mode: Mode) {
+function rig(
+  workspaceRoot: string,
+  mode: Mode,
+  options: {
+    /** Give the call an agent. That is what makes the plugin consult `workingDirectory`. */
+    agent?: boolean
+    /** What that service reports. Omit to simulate a composition that never mounted it. */
+    currentDirectory?: string
+  } = {},
+) {
   const tools = new Map<string, Tool>()
   const fs = {
     async resolve(path: string, opts?: { cwd?: string }) {
@@ -73,14 +82,22 @@ function rig(workspaceRoot: string, mode: Mode) {
     sandboxPolicy: {
       resolve: () => ({ mode, workspaceRoot }),
     },
+    // Cordis' service lookup — the seam the plugin reads `workingDirectory`
+    // through. Returning `undefined` is the "composition does not mount it"
+    // case, which is what keeps the fallback path reachable here.
+    get: (name: string) => name === 'workingDirectory' && options.currentDirectory !== undefined
+      ? { get: () => options.currentDirectory }
+      : undefined,
   }
   apply(ctx as never)
+  const session = { header: { cwd: workspaceRoot } }
   return {
     /** Run one registered tool against the given arguments. */
     run: (name: string, args: unknown) => {
       const tool = tools.get(name)
       if (tool === undefined) throw new Error(`no such tool: ${name}`)
-      return tool.execute(args, { agent: undefined, signal: undefined })
+      const agent = options.agent === true ? { session } : undefined
+      return tool.execute(args, { agent, signal: undefined })
     },
     names: () => [...tools.keys()].sort(),
   }
@@ -256,5 +273,85 @@ describe('move semantics', () => {
     await writeFile(join(workspace, 'a.txt'), 'x')
     await expect(rig(workspace, 'workspace-write').run('move', { source: '.', destination: 'x' })).rejects.toThrow(/workspace root itself/)
     await expect(rig(workspace, 'workspace-write').run('move', { source: 'a.txt', destination: '.' })).rejects.toThrow(/workspace root itself/)
+  })
+})
+
+/**
+ * The session's CURRENT directory, which harness 0.2.1 made mutable.
+ *
+ * `working_directory` lets the model move the session, and the harness's own
+ * `read`/`write`/`edit`/`glob`/`grep` resolve against the moved directory. These
+ * two tools resolved against `policy.workspaceRoot` — the session header's
+ * original path — so after a `cd` they named a DIFFERENT file than `write` did:
+ * `write a.txt` landed in the new directory while `delete a.txt` still meant the
+ * old one. The first test below is that regression.
+ *
+ * The second is the part that must not move: the mutation fence stays on the
+ * policy root, so changing directory can never widen what may be modified.
+ */
+describe("the session's working directory", () => {
+  test('relative paths resolve against it once the session has moved', async () => {
+    const { workspace } = await sandbox()
+    const moved = join(workspace, 'src')
+    await mkdir(moved)
+    await writeFile(join(moved, 'a.txt'), 'x')
+    await writeFile(join(workspace, 'a.txt'), 'not the one')
+
+    const result = (await rig(workspace, 'workspace-write', { agent: true, currentDirectory: moved })
+      .run('delete', { path: 'a.txt' })) as { kind: string }
+
+    expect(result.kind).toBe('file')
+    // The moved-to copy went; the workspace-root one is untouched.
+    expect(existsSync(join(moved, 'a.txt'))).toBe(false)
+    expect(existsSync(join(workspace, 'a.txt'))).toBe(true)
+  })
+
+  test('the FENCE stays on the policy root — moving cannot widen it', async () => {
+    const { workspace, outside } = await sandbox()
+    const victim = join(outside, 'victim.txt')
+    await writeFile(victim, 'x')
+
+    // Resolution follows to `outside`, so the fence is what has to refuse.
+    await expect(
+      rig(workspace, 'workspace-write', { agent: true, currentDirectory: outside })
+        .run('delete', { path: 'victim.txt' }),
+    ).rejects.toThrow(/outside the workspace/)
+    expect(existsSync(victim)).toBe(true)
+  })
+
+  test('move follows it at BOTH ends', async () => {
+    const { workspace } = await sandbox()
+    const moved = join(workspace, 'src')
+    await mkdir(moved)
+    await writeFile(join(moved, 'old.txt'), 'payload')
+
+    const result = (await rig(workspace, 'workspace-write', { agent: true, currentDirectory: moved })
+      .run('move', { source: 'old.txt', destination: 'new.txt' })) as { to: string }
+
+    expect(result.to.endsWith(join('src', 'new.txt'))).toBe(true)
+    expect(existsSync(join(moved, 'old.txt'))).toBe(false)
+    expect(existsSync(join(moved, 'new.txt'))).toBe(true)
+  })
+
+  test('falls back to the policy root when the composition mounts no such service', async () => {
+    // An agent is present but `workingDirectory` is not — the plugin must not
+    // depend on a row a deployment may legitimately not mount.
+    const { workspace } = await sandbox()
+    await writeFile(join(workspace, 'a.txt'), 'x')
+    const result = (await rig(workspace, 'workspace-write', { agent: true })
+      .run('delete', { path: 'a.txt' })) as { kind: string }
+    expect(result.kind).toBe('file')
+    expect(existsSync(join(workspace, 'a.txt'))).toBe(false)
+  })
+
+  test('an agentless call still resolves against the policy root', async () => {
+    // No agent means no session to ask, which is the pre-0.2.1 behaviour and
+    // what every other test in this file exercises.
+    const { workspace } = await sandbox()
+    await mkdir(join(workspace, 'src'))
+    await writeFile(join(workspace, 'a.txt'), 'x')
+    await rig(workspace, 'workspace-write', { currentDirectory: join(workspace, 'src') })
+      .run('delete', { path: 'a.txt' })
+    expect(existsSync(join(workspace, 'a.txt'))).toBe(false)
   })
 })
