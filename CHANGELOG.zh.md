@@ -15,6 +15,7 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 ### 变更
 
+- **QiaLike Bee 出厂关闭，改为开关控制** —— 其网关尚未对外服务，只有在 `qialike.json` 写 `bee: { "enabled": true }` 或一次性 `QIALIKE_BEE=1` 时才提供该行。
 - **重建于 DeepSeek Harness `0.2.1-alpha.2`**（原 `0.2.0-rc.2`）—— 构建期锚点无需移动。
 
 ### 修复

@@ -26,7 +26,7 @@ import {
   type TuiProviderTemplate,
 } from './llm.ts'
 import { effortsFor } from './effort-catalog.ts'
-import { readSection, writeSection } from './config.ts'
+import { readSection, resolveBeeEnabled, writeSection } from './config.ts'
 
 /** Stable Cordis plugin name. */
 export const name = 'tui-models'
@@ -294,10 +294,12 @@ export function apply(ctx: Context): void {
       if (!ROUTE_PATTERN.test(route)) {
         return { ok: false, error: 'route must be lowercase kebab-case, e.g. my-gateway' }
       }
-      if (route === QIALIKE_BEE_ROUTE) {
+      if (resolveBeeEnabled() && route === QIALIKE_BEE_ROUTE) {
         // The route is qialike's own gateway: a settings profile under it would
         // shadow the shipped endpoint while the dialog kept treating the entry
-        // as qialike-owned (always listed, never removable).
+        // as qialike-owned (always listed, never removable). While Bee is OFF
+        // the route is not offered at all, so the name stops being reserved —
+        // reserving a route nothing uses would just be an unexplained refusal.
         return { ok: false, error: `route "${QIALIKE_BEE_ROUTE}" is reserved for qialike's own gateway (QiaLike Bee)` }
       }
       const baseURL = input.baseURL.trim()

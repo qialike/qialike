@@ -57,6 +57,21 @@ export const DEFAULT_RESUME_LAST = false
 /** Environment variable that overrides the auto-resume default and is persisted. */
 export const RESUME_LAST_ENV = 'QIALIKE_RESUME_LAST'
 
+/** Whether QiaLike Bee — qialike's own gateway route — is offered.
+ *
+ *  OFF by default, and deliberately the opposite default from the other
+ *  gateway switches: those unload a family a user may already depend on, so
+ *  they stay on unless disabled. Bee is qialike's own route and its gateway is
+ *  not serving yet, so shipping it on means shipping a provider whose dialog
+ *  cannot work. Turn it on (`bee: { enabled: true }`, or `QIALIKE_BEE=1`) to
+ *  exercise it against a gateway that does exist. */
+export const DEFAULT_BEE_ENABLED = false
+
+/** Environment variable that overrides the Bee default, for a one-off run or CI
+ *  (unlike {@link RESUME_LAST_ENV} this is NOT persisted — an override should
+ *  not rewrite the user's config). */
+export const BEE_ENV = 'QIALIKE_BEE'
+
 /** Right-sidebar visibility mode: `auto` follows the terminal width threshold,
  *  `on`/`off` pin it regardless of width. Persisted so a manual choice
  *  survives restarts; the `/sidebar` command and a Steps-title click cycle it. */
@@ -69,7 +84,7 @@ export type SidebarMode = 'auto' | 'on' | 'off'
  *  0.1.7 removed that capability — a section now belongs to a plugin's own
  *  `Config` — so they live in the config file this app already owns. */
 export type PluginSectionKey =
-  | 'llm' | 'opencode' | 'azure' | 'china_gateways' | 'foreign_gateways' | 'theme' | 'update'
+  | 'llm' | 'opencode' | 'azure' | 'china_gateways' | 'foreign_gateways' | 'theme' | 'update' | 'bee'
 
 /** The settings namespace each section used to be registered under. */
 export const SECTION_NAMESPACES: Record<PluginSectionKey, readonly string[]> = {
@@ -80,6 +95,7 @@ export const SECTION_NAMESPACES: Record<PluginSectionKey, readonly string[]> = {
   foreign_gateways: ['qialike-foreign-gateways'],
   theme: ['qialike-theme'],
   update: ['qialike-update'],
+  bee: ['qialike-bee'],
 }
 
 /** The parsed config document. */
@@ -98,6 +114,8 @@ export interface TuiConfig {
   foreign_gateways?: { enabled?: boolean }
   theme?: { colorscheme?: string; colors?: Record<string, string> }
   update?: { auto?: boolean | 'notify' }
+  /** QiaLike Bee (qialike's own gateway route): absent means {@link DEFAULT_BEE_ENABLED}. */
+  bee?: { enabled?: boolean }
   /** One-time record of the settings.yaml migration. Its PRESENCE is the latch:
    *  a section the user deletes later is never resurrected by a re-run. */
   settings_migrated?: { from: string; at: string; keys: readonly string[] }
@@ -146,6 +164,26 @@ export function resolveResumeLast(): boolean {
   }
   const fromConfig = readConfig().resume_last
   return fromConfig ?? DEFAULT_RESUME_LAST
+}
+
+/**
+ * Whether the QiaLike Bee route is offered this run.
+ *
+ * Precedence mirrors {@link resolveResumeLast} (environment over file,
+ * malformed values falling through), with one deliberate difference: the
+ * environment variable is **not** written back. Auto-resume is a preference the
+ * command line may legitimately re-state; this is a switch a run may need to
+ * flip for one invocation — persisting `QIALIKE_BEE=1` would silently turn the
+ * route back on for every later launch, which is the opposite of temporary.
+ * @returns whether Bee's template row is offered.
+ */
+export function resolveBeeEnabled(): boolean {
+  const envValue = process.env[BEE_ENV]
+  if (envValue !== undefined && envValue.trim() !== '') {
+    const fromEnv = parseBool(envValue)
+    if (fromEnv !== undefined) return fromEnv
+  }
+  return readSection('bee')?.enabled ?? DEFAULT_BEE_ENABLED
 }
 
 /** Write the config document (create the home dir if needed).

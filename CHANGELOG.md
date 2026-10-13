@@ -13,6 +13,7 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Changed
 
+- **QiaLike Bee ships off, behind a switch** — its gateway is not serving yet, so the row is offered only with `bee: { "enabled": true }` in `qialike.json` or `QIALIKE_BEE=1` for one run.
 - **Rebuilt on DeepSeek Harness `0.2.1-alpha.2`** (up from `0.2.0-rc.2`) — no anchored build patch moved.
 
 ### Fixed

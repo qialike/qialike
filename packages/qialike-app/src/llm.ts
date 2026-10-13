@@ -16,7 +16,7 @@
  */
 
 import { Context } from '@deepseek-ai/cordis'
-import { onSectionChange, readSection } from './config.ts'
+import { onSectionChange, readSection, resolveBeeEnabled } from './config.ts'
 import z from '@deepseek-ai/schemastery'
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { logErrorFileOnly } from './log.ts'
@@ -1993,6 +1993,12 @@ export function apply(ctx: Context): void {
   // UI and the adapter, not just the built-in templates.
   const extraTemplates: TuiProviderTemplate[] = []
   const hiddenRoutes = new Set<string>()
+  // QiaLike Bee ships OFF: its gateway is not serving yet, so offering the route
+  // would offer a provider whose dialog cannot work. Seeding it here rather than
+  // removing the template row keeps the row (and the route's reserved name, its
+  // keyless "ask for a key" behaviour, and its Ctrl+D protection) in one place,
+  // ready for the switch to turn back on.
+  if (!resolveBeeEnabled()) hiddenRoutes.add(QIALIKE_BEE_ROUTE)
   let adapterReg: { replace(providers: readonly string[]): void } | undefined
   let directoryReg: { replace(entries: readonly LlmConfigurableProvider[]): void } | undefined
   const reRegister = (): void => {

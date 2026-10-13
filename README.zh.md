@@ -44,10 +44,11 @@ qialike 是一个跑在终端里的全屏 AI 编程 Agent：你在项目目录�
 - **接着上次继续**：会话自动持久化——`qialike resume` 接续当前目录最近一次会话，`/sessions` 列出历史会话，
   可搜索、改名、置顶、删除。
 - **模型自己挑**：内置 DeepSeek 官方端点（配好 `DEEPSEEK_API_KEY` 即可用）；`/models` 的 `＋ Add provider`
-  列出 **63 家**供应商，国外如 OpenAI、Anthropic、Google Gemini、xAI、Mistral、OpenRouter、Groq、
+  列出 **62 家**供应商，国外如 OpenAI、Anthropic、Google Gemini、xAI、Mistral、OpenRouter、Groq、
   Hugging Face，国内如通义千问 Qwen、智谱 GLM、Kimi、MiniMax、火山引擎、硅基流动；选中即接入（OpenAI 兼容
-  为主，Anthropic/MiniMax 走原生 Messages 协议），`Ctrl+T` 循环切换推理强度。其中 **QiaLike Bee**
-  （qialike 自有网关）**始终在列且不可移除**。
+  为主，Anthropic/MiniMax 走原生 Messages 协议），`Ctrl+T` 循环切换推理强度。第 63 行 **QiaLike Bee**
+  （qialike 自有网关）**出厂为关闭**：网关尚未对外服务，故模板行、路由名与其 `Ctrl+D` 保护都已就位，
+  但**只有你打开开关才会出现**（见「提供商目录」一节）。
 - **操作集中在 `/`**：输入 `/` 弹出补全面板——`/models`、`/sessions`、`/theme`、`/export`、`/plan`、
   `/goal`、`/compact`、`/sidebar` 等，`↑/↓` 选择、`Enter` 执行。
 - **也能开在浏览器里**：`qialike web` 启动 DeepSeek Harness 自带的 Web 界面——把整条调用原样转发给已安装
@@ -93,7 +94,7 @@ qialike
 首次启动显示 hero 首屏；此时若还没配模型，首屏会提示 `No provider yet — use /models to add one`，模型标
 签显示 `not set`。配置模型：
 
-- **添加模型厂商**（共 63 家）：启动后输入 `/models`，在 `＋ Add provider` 里选一家并设置 API key（已配
+- **添加模型厂商**（共 62 家）：启动后输入 `/models`，在 `＋ Add provider` 里选一家并设置 API key（已配
   置的提供商会显示网关实时模型列表）；也可在 `＋ Add a custom provider` 里填自定义端点。
   **key 需自己到该提供商的官网/控制台申请**，qialike 不代申请、也不内置任何 key。
 
@@ -172,7 +173,7 @@ QIALIKE_COLOR=24bit qialike
 以下是 qialike 无法替你决定、但你应该知道的数据流向。
 
 - **发给你选定的模型厂商**：每次请求都会把对话发给你在 `/models` 里选定的提供商——包括你的消息、agent 的
-  工具调用，以及**工具结果**（agent 读到的文件内容就在其中）。qialike 让你在 63 家厂商中任选，因此
+  工具调用，以及**工具结果**（agent 读到的文件内容就在其中）。qialike 让你在 62 家厂商中任选，因此
   **适用哪一家的隐私与保留政策取决于你选了谁**；qialike 无法代其作出承诺，请按所选厂商查阅。
 - **harness 的反馈门控遥测**：组合 profile 默认挂载 `session-telemetry-otel`，模式为 `FEEDBACK_ONLY`，
   端点为 `https://dsh-otel-collector.deepseeksvc.com/v1/logs`。默认**不上传任何东西**——只有
@@ -455,10 +456,11 @@ ssh -L 3080:localhost:3080 user@headless-host
   **同步移除其 API key** 并使其从一级列表消失；隐藏的若是当前供应商会自动切换到其它已配置的，
   **若无任何可用供应商则当前模型显示 `not set`**，重新加入即再设一次 key。`＋ Add a custom provider`
   进入逐字段表单，可填自定义端点与模型 id。唯一例外是 **QiaLike Bee**（qialike 自有网关，
-  `https://qialike.com/bee/v1`）：它**没有 key 也照常列出**，此时选中它是**先要求输入 API key**（而不是
-  打开空的模型列表），且 `Ctrl+D` 会拒绝删除、永远无法移除。设好 key 后，其二级列表即 Bee 提供的
-  `deepseek` 系列（`deepseek-v4-pro` / `deepseek-v4-flash` / `deepseek-v4-flash-free`——实时读
-  `GET /bee/v1/models` 并按 `deepseek-*` 过滤）。
+  `https://qialike.com/bee/v1`），且它**出厂为关闭**：在 `qialike.json` 写
+  `bee: { "enabled": true }`（或一次性用 `QIALIKE_BEE=1`）才启用。启用后它**没有 key 也照常列出**，
+  此时选中它是**先要求输入 API key**（而不是打开空的模型列表），且 `Ctrl+D` 会拒绝删除、永远无法移除。
+  设好 key 后，其二级列表即 Bee 提供的 `deepseek` 系列（`deepseek-v4-pro` / `deepseek-v4-flash` /
+  `deepseek-v4-flash-free`——实时读 `GET /bee/v1/models` 并按 `deepseek-*` 过滤）。
 - **`/theme` 配色方案**（vim 风格 `:colorscheme`）：裸 `/theme` 弹出**主题选择对话框**——`↑/↓` 移动、直接
   打字过滤、移动时**实时预览**、`Enter` 应用并持久化、`Esc` 取消并还原；也支持 `/theme <name>` 与
   `/theme <role> <hex>` 快捷路径。内置 **16 套**方案，另可放 `~/.dsh/themes/*.json` 自定义。
@@ -527,8 +529,11 @@ qialike plugin remove-mcp <名字> [--project]
 ### 提供商目录与推理强度声明
 
 `/models` 的 `＋ Add provider` 列出**所有已知提供商**——自研适配器的内置模板加上可加载的网关子插件，共
-**63 家**（62 家模板 + 内置 `deepseek-official` 官方端点）。其中三组由**可加载子插件**提供，都默认开启、
+**62 家**（61 家模板 + 内置 `deepseek-official` 官方端点）。其中三组由**可加载子插件**提供，都默认开启、
 可整体卸载：在 `qialike.json` 写对应开关，模板与已配置路由会一并从 `/models` 与适配器消失。
+另有一行 **QiaLike Bee**（qialike 自有网关，route `qialike`）**出厂关闭**：网关尚未对外服务，故开关
+`bee: { "enabled": true }`（或一次性 `QIALIKE_BEE=1`）打开时才提供该行；关闭时它连同路由名一起从
+`/models` 与适配器消失，`qialike` 这个 route 也不再被保留。
 
 | 子插件 | 开关 | 提供商 |
 | --- | --- | --- |

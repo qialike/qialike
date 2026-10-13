@@ -24,12 +24,13 @@
  * @module qialike/qialike-bee-test
  */
 
-import { afterAll, describe, expect, test } from 'bun:test'
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs'
+import { afterAll, beforeEach, afterEach, describe, expect, test } from 'bun:test'
+import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { filterDynamicModels, fetchDynamicModels, PROVIDER_TEMPLATES, QIALIKE_BEE_ROUTE } from '../packages/qialike-app/src/llm.ts'
 import { Store, type ProviderModelsEntry } from '../packages/qialike-app/src/index.tsx'
+import { BEE_ENV, DEFAULT_BEE_ENABLED, resolveBeeEnabled } from '../packages/qialike-app/src/config.ts'
 
 const home = mkdtempSync(join(tmpdir(), 'qialike-bee-test-'))
 process.env.DSH_HOME = home
@@ -219,5 +220,87 @@ describe('selecting Bee: key first, models after', () => {
     // No key -> not a promotion candidate: the helper filters builtins out.
     const helper = source.slice(source.indexOf('function noUserConfiguredProviders'))
     expect(helper.slice(0, 400)).toContain('p.builtin !== true')
+  })
+})
+
+/**
+ * The `bee` switch (`qialike.json` `bee.enabled`, or `QIALIKE_BEE`).
+ *
+ * Bee ships OFF because its gateway is not serving yet, so these cases lead with
+ * the default and then the two ways to turn it back on. The environment variable
+ * deliberately does NOT persist (unlike `QIALIKE_RESUME_LAST`): a one-off
+ * override must not silently re-enable the route for every later launch.
+ */
+describe('the bee switch', () => {
+  let home = ''
+  const configFile = (): string => join(home, 'qialike.json')
+  const writeConfig = (doc: unknown): void => { writeFileSync(configFile(), JSON.stringify(doc)) }
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'qialike-bee-switch-'))
+    process.env.DSH_HOME = home
+    delete process.env[BEE_ENV]
+  })
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true })
+    delete process.env.DSH_HOME
+    delete process.env[BEE_ENV]
+  })
+
+  test('OFF by default — the whole point of the switch', () => {
+    expect(resolveBeeEnabled()).toBe(false)
+    expect(DEFAULT_BEE_ENABLED).toBe(false)
+  })
+
+  test('config turns it on, and back off', () => {
+    writeConfig({ bee: { enabled: true } })
+    expect(resolveBeeEnabled()).toBe(true)
+    writeConfig({ bee: { enabled: false } })
+    expect(resolveBeeEnabled()).toBe(false)
+  })
+
+  test('the environment turns it on for one run', () => {
+    process.env[BEE_ENV] = '1'
+    expect(resolveBeeEnabled()).toBe(true)
+  })
+
+  test('the environment wins over the config, both ways', () => {
+    writeConfig({ bee: { enabled: true } })
+    process.env[BEE_ENV] = '0'
+    expect(resolveBeeEnabled()).toBe(false)
+    writeConfig({ bee: { enabled: false } })
+    process.env[BEE_ENV] = 'true'
+    expect(resolveBeeEnabled()).toBe(true)
+  })
+
+  test('the environment is NOT persisted — an override stays an override', () => {
+    // The contrast with resolveResumeLast is the contract: that one writes the
+    // env value back, this one must not.
+    process.env[BEE_ENV] = '1'
+    expect(resolveBeeEnabled()).toBe(true)
+    delete process.env[BEE_ENV]
+    expect(resolveBeeEnabled(), 'a later run must fall back to the default').toBe(false)
+    expect(existsSync(configFile()) ? JSON.parse(readFileSync(configFile(), 'utf8')) : {}).toEqual({})
+  })
+
+  test('a malformed value falls through to the config rather than guessing', () => {
+    writeConfig({ bee: { enabled: true } })
+    process.env[BEE_ENV] = 'maybe'
+    expect(resolveBeeEnabled()).toBe(true)
+  })
+
+  test('an empty value is not an override', () => {
+    writeConfig({ bee: { enabled: true } })
+    process.env[BEE_ENV] = '  '
+    expect(resolveBeeEnabled()).toBe(true)
+  })
+
+  test('the switch is consulted where the route is offered, and where it is reserved', () => {
+    // Source guards: the two places that must agree with the switch. A gate that
+    // only hid the template row would leave `addProvider` refusing the name for
+    // a route nothing offers.
+    const llm = read('llm.ts')
+    expect(llm, 'the hidden set is seeded from the switch').toContain('if (!resolveBeeEnabled()) hiddenRoutes.add(QIALIKE_BEE_ROUTE)')
+    expect(read('models.ts')).toContain('if (resolveBeeEnabled() && route === QIALIKE_BEE_ROUTE)')
   })
 })

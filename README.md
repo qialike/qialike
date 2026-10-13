@@ -49,11 +49,13 @@ itself — showing every step and the model's streamed output on one screen.
   newest session in this directory, and `/sessions` lists past ones (searchable, renameable,
   pinnable, deletable).
 - **Pick your own model**: the built-in DeepSeek official endpoint works with `DEEPSEEK_API_KEY`;
-  `/models` → `＋ Add provider` lists **63 providers** — internationally OpenAI, Anthropic, Google
+  `/models` → `＋ Add provider` lists **62 providers** — internationally OpenAI, Anthropic, Google
   Gemini, xAI, Mistral, OpenRouter, Groq, Hugging Face; in China Qwen, Zhipu GLM, Kimi, MiniMax,
   Volcengine, SiliconFlow. Selecting one is all it takes (mostly OpenAI-compatible; Anthropic and
-  MiniMax speak their native Messages protocol), and `Ctrl+T` cycles the reasoning effort. The list
-  also carries **QiaLike Bee** — qialike's own gateway, always present and never removable.
+  MiniMax speak their native Messages protocol), and `Ctrl+T` cycles the reasoning effort. A
+  sixty-third row, **QiaLike Bee** (qialike's own gateway), ships **off**: its gateway is not
+  serving yet, so the row — and the route name, and its `Ctrl+D` protection — are in place but the
+  provider is only offered once you turn it on (see "Provider catalogue").
 - **Everything under `/`**: typing `/` opens the completion palette — `/models`, `/sessions`,
   `/theme`, `/export`, `/plan`, `/goal`, `/compact`, `/sidebar` and more; `↑/↓` to move, `Enter` to run.
 - **Also opens in a browser**: `qialike web` starts the Web UI DeepSeek Harness ships — it forwards
@@ -213,7 +215,7 @@ What follows are the data flows qialike cannot decide for you but that you shoul
 
 - **What goes to the model provider you pick**: every request sends the conversation to the provider
   selected in `/models` — your messages, the agent's tool calls, and the **tool results** (the file
-  contents the agent read are in there). Since qialike lets you choose among 63 providers, **which
+  contents the agent read are in there). Since qialike lets you choose among 62 providers, **which
   privacy and retention policy applies depends on who you chose**; qialike cannot make promises on
   their behalf — check the provider you selected.
 - **The harness's feedback-gated telemetry**: the composed profile mounts `session-telemetry-otel`
@@ -552,11 +554,13 @@ token URL does not change: `ssh -L 8080:localhost:3080 user@headless-host`, then
   the hidden one was current, the selection moves to another configured provider, and **with no
   usable provider left the model label reads `not set`**. Re-adding it means setting a key again.
   `＋ Add a custom provider` opens a field-by-field form for a custom endpoint and model ids.
-  **QiaLike Bee** (qialike's own gateway, `https://qialike.com/bee/v1`) is the one exception: it is
-  listed even before it has a key — selecting it then **asks for the API key** instead of opening an
-  empty model list — and `Ctrl+D` refuses it, so it can never be removed. With a key set, its
-  sub-list is the `deepseek` family Bee serves (`deepseek-v4-pro` / `deepseek-v4-flash` /
-  `deepseek-v4-flash-free`, read live from `GET /bee/v1/models` and filtered to `deepseek-*`).
+  **QiaLike Bee** (qialike's own gateway, `https://qialike.com/bee/v1`) is the one exception — and
+  it is **off by default**. Turn it on with `bee: { "enabled": true }` in `qialike.json` (or
+  `QIALIKE_BEE=1` for one run); the row then behaves as follows: it is listed even before it has a
+  key — selecting it **asks for the API key** instead of opening an empty model list — and `Ctrl+D`
+  refuses it, so it can never be removed. With a key set, its sub-list is the `deepseek` family Bee
+  serves (`deepseek-v4-pro` / `deepseek-v4-flash` / `deepseek-v4-flash-free`, read live from
+  `GET /bee/v1/models` and filtered to `deepseek-*`).
 - **`/theme` color schemes** (vim-style `:colorscheme`): bare `/theme` opens the **theme picker** —
   `↑/↓` to move, type to filter, **live preview** while moving, `Enter` applies and persists, `Esc`
   cancels and restores; `/theme <name>` and `/theme <role> <hex>` remain as shortcuts. **16 schemes**
@@ -661,8 +665,11 @@ templates and already-configured routes both leave `/models` and the adapter.
 
 Most speak the OpenAI-compatible protocol; Anthropic and MiniMax use their native Messages
 protocol. One template row is qialike's own: **QiaLike Bee** (`qialike`, the gateway at
-`https://qialike.com/bee/v1`) — the `/models` entry that is always listed, asks for its key when it
-has none, and cannot be deactivated. The official DeepSeek endpoint is not in the template
+`https://qialike.com/bee/v1`) — the `/models` entry that asks for its key when it has none and
+cannot be deactivated, and that ships **disabled** while its gateway is unbuilt. The switch is
+`bee.enabled` in `qialike.json`, overridable per run with `QIALIKE_BEE=1`; off, the row leaves the
+`/models` list and the adapter entirely, and the route name stops being reserved. The official
+DeepSeek endpoint is not in the template
 catalogue — the built-in `deepseek-official` default route serves it (3 models, ready with no
 configuration). Deployment-type endpoints (Vertex AI, Databricks, Snowflake Cortex, plus the Azure
 and Cloudflare rows the plugins provide) are flagged `endpoint required`.
