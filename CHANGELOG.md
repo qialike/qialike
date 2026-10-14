@@ -9,8 +9,8 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Fixed
 
-- **Windows builds no longer need an elevated shell** — the farm linked directories with symlinks, which need a privilege a normal token lacks, so the build died at the first one with `EPERM: … symlink`; junctions need none.
-- **The first `pwsh` command no longer freezes the interface** — `workspace-write` inherits its write ACE across the whole workspace in one synchronous call, which took 188 s on a 350k-object tree; the grant now runs in a child process at launch.
+- **Windows builds need no elevated shell** — the farm's links needed a privilege a normal token lacks and the build died on the first with `EPERM: … symlink`; junctions need none.
+- **The first `pwsh` command no longer freezes the UI** — the write ACE inherited across the tree in one call (188 s on 350k objects); the grant now runs in a child process at launch.
 
 ## [0.10.0] - 2026-10-12
 
