@@ -51,6 +51,7 @@ import pkg from '../../../package.json' with { type: 'json' }
 import { PLUGIN_MODE, UNINSTALL_MODE, UPGRADE_MODE, WEB_MODE } from './launcher-modes.ts'
 import { runUpgrade, scheduleAutoCheck } from './upgrade-command.ts'
 import { NPM_REMOVE_COMMAND, packageManagerInstall } from '@qialike/qialike-app/src/self-update.ts'
+import { prewarmAclGrant } from '@qialike/qialike-app/src/windows-acl-grant.ts'
 import { classifyProjectLayer } from './project-overlay.ts'
 import type { ProjectRowProblem } from './project-overlay.ts'
 
@@ -1705,6 +1706,32 @@ async function main(): Promise<void> {
   // The app is mounted; from here its own exit handler owns the leave (see the
   // comment above the backstop), so the backstop becomes a no-op.
   appMounted = true
+
+  // The Windows ACL workspace grant, started as early as the launcher can start
+  // it. `workspace-write` confines each PowerShell call through a restricted
+  // token whose write allow-list is a standing capability ACE on the workspace
+  // ROOT, and `SetNamedSecurityInfoW` inherits an inheritable ACE to every
+  // EXISTING descendant inside that one synchronous call. On a large tree that
+  // is minutes of work on the thread that renders the TUI: measured 188.5 s of
+  // frozen interface on a 352,634-object workspace, during which qialike's
+  // heartbeat logged a single `[stall] main loop blocked for 188.5s`.
+  //
+  // Starting it here pays that cost in a CHILD process, while the user reads the
+  // screen and types their first task, and the patched `materializeAclGrant`
+  // then awaits this one apply instead of beginning a second (see
+  // `@qialike/qialike-app/windows-acl-grant.ts`). The gate it arms covers the
+  // command either way; this only buys the head start.
+  //
+  // Gated on the deployment's mode because `read-only` and `danger-full-access`
+  // grant nothing: prewarming them would mutate the ACL of a tree the session
+  // never confines. A RESUMED session may carry a different logged mode, and a
+  // session whose logical root moves (the `working_directory` tool) derives a
+  // different write SID — both fall back to the on-demand path, which is why
+  // this is a head start rather than a correctness requirement.
+  const prewarmPolicy = ctx.get('sandboxPolicy') as { resolve(): { mode?: string } } | undefined
+  if (prewarmPolicy?.resolve().mode === 'workspace-write') {
+    prewarmAclGrant(process.cwd())
+  }
 
   // The automatic update check: ONCE, deferred, non-blocking, and spawned as a
   // child process. opencode does the same thing for the same reason — a check

@@ -32,6 +32,7 @@ import { build } from 'esbuild'
 import semver from 'semver'
 import { ACL_PACKAGE_DIR, patchDeleteConstraint } from './harness-patches/delete-constraint.mjs'
 import { patchPolicyAndHygiene } from './harness-patches/policy-and-hygiene.mjs'
+import { patchWindowsAclGrant } from './harness-patches/windows-acl-grant.mjs'
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)), '..')
 const HARNESS = process.env.DSH_HARNESS ?? resolve(ROOT, '../deepseek-harness')
@@ -263,6 +264,33 @@ const STUB_PACKAGES = new Set([
   'sharp', // native image processing — a text coding-agent TUI does not use it
   'react-devtools-core', // optional Ink devtools — dev-only
 ])
+
+/**
+ * Link a directory into the resolve farm.
+ *
+ * On Windows this MUST be a junction, never a symlink: `symlinkSync(…, 'dir')`
+ * requires SeCreateSymbolicLinkPrivilege, which a normal user token does not
+ * hold (the privilege is stripped from the filtered admin token, and Developer
+ * Mode — the other way to get it — is off by default). The build then died on
+ * the FIRST farm link with
+ *
+ *   Error: EPERM: operation not permitted, symlink '…\apps\tui-bin\x\-deepseek-ai-cordis'
+ *     -> '…\node_modules\@deepseek-ai\cordis'
+ *
+ * so `pnpm build --single` only ever worked from an ELEVATED shell, while a
+ * junction needs no privilege at all. It resolves identically for every consumer
+ * here: Node still reports it through `lstatSync().isSymbolicLink()` (so
+ * {@link clearDanglingLink} keeps working) and Bun's resolver canonicalizes it
+ * through realpath — the very reason {@link fixShadowLinks} already converts
+ * pnpm's own links to junctions. Every caller passes an existing absolute
+ * directory, which is what a junction requires.
+ *
+ * @param target - absolute path of the existing directory the link points at.
+ * @param path - the link path to create.
+ */
+function linkDirectory(target, path) {
+  symlinkSync(target, path, process.platform === 'win32' ? 'junction' : 'dir')
+}
 
 function readJson(file) {
   return JSON.parse(readFileSync(file, 'utf8'))
@@ -691,13 +719,13 @@ function createResolveFarm() {
         mkdirSync(dir, { recursive: true })
         writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, type: 'module', main: 'index.js' }, null, 2))
         writeFileSync(join(dir, 'index.js'), custom)
-        symlinkSync(dir, target, 'dir')
+        linkDirectory(dir, target)
       } else {
-        symlinkSync(STUB_DIR, target, 'dir')
+        linkDirectory(STUB_DIR, target)
       }
       console.log(`qialike: stubbed native ${name}`)
     } else {
-      symlinkSync(dir, target, 'dir')
+      linkDirectory(dir, target)
     }
   }
 
@@ -739,7 +767,7 @@ function createResolveFarm() {
       const target = join(nm, ...stubName.split('/'))
       rmSync(target, { recursive: true, force: true })
       mkdirSync(dirname(target), { recursive: true })
-      symlinkSync(dir, target, 'dir')
+      linkDirectory(dir, target)
       console.log('qialike: stubbed native ' + stubName)
     }
   }
@@ -758,7 +786,7 @@ function createResolveFarm() {
     const target = join(nm, ...stubName.split('/'))
     rmSync(target, { recursive: true, force: true })
     mkdirSync(dirname(target), { recursive: true })
-    symlinkSync(dir, target, 'dir')
+    linkDirectory(dir, target)
     console.log(`qialike: stubbed native ${stubName} (${Object.keys(subpaths).join(', ')})`)
   }
 
@@ -766,8 +794,8 @@ function createResolveFarm() {
   // `..\..\..\node_modules\.pnpm\...`) that `realpath`/`stat` cannot traverse
   // (EPERM), which breaks Bun's module resolution (its resolver canonicalizes
   // paths through realpath). Convert them to absolute-target junctions — the
-  // native, no-admin link type whose realpath works — before bundling. POSIX
-  // symlinks have no such problem, so this step is Windows-only.
+  // same no-admin link type {@link linkDirectory} creates — before bundling.
+  // POSIX symlinks have no such problem, so this step is Windows-only.
   if (process.platform === 'win32') {
     const fixShadowLinks = (base) => {
       if (!existsSync(base)) return
@@ -778,7 +806,7 @@ function createResolveFarm() {
         if (!existsSync(resolved)) continue
         rmSync(linkPath, { recursive: true, force: true })
         mkdirSync(dirname(linkPath), { recursive: true })
-        symlinkSync(resolved, linkPath, 'junction')
+        linkDirectory(resolved, linkPath)
       }
     }
     fixShadowLinks(join(ROOT, 'apps/tui-bin/node_modules', OWN_SCOPE))
@@ -810,6 +838,11 @@ function createResolveFarm() {
   // at call time; a single file cannot answer that (see the function).
   buildAclRunnerBundle()
   patchWindowsAclRunnerEntry()
+  // MUST follow patchWindowsAclRunnerEntry: the gate's import hangs off the
+  // runner-flag import that patch inserts (see the module). Moving the standing
+  // workspace grant off the UI thread is what keeps the first confined command
+  // of a large workspace from freezing the interface (see the module).
+  patchWindowsAclGrant({ root: join(ROOT, 'apps/tui-bin/x'), log: console.log })
   // The in-process filesystem fence must mirror the roots the ACL runner
   // actually grants (see the function); downstream carrier for the fix.
   patchWritableRootsWindows()
@@ -1357,7 +1390,7 @@ function installUndiciAlias(nm) {
   const target = join(nm, UNDICI_ALIAS)
   rmSync(target, { recursive: true, force: true })
   mkdirSync(dirname(target), { recursive: true })
-  symlinkSync(copy, target, 'dir')
+  linkDirectory(copy, target)
   console.log(`qialike: aliased undici -> ${UNDICI_ALIAS} (${source}; ${escaped} file(s) escaped to ASCII)`)
   return copy
 }
@@ -1711,7 +1744,7 @@ function linkUnhoistedHarnessDeps(nm, packages) {
       if (!existsSync(src)) continue
       mkdirSync(dirname(target), { recursive: true })
       try {
-        symlinkSync(src, target, 'dir')
+        linkDirectory(src, target)
         linked.push(name)
       } catch {
         // Already linked by an earlier package with the same dependency.
@@ -1752,7 +1785,7 @@ function mirrorHarnessStore(nm) {
     if (existsSync(target)) continue
     try {
       mkdirSync(dirname(target), { recursive: true })
-      symlinkSync(join(store, entry.name), target, 'dir')
+      linkDirectory(join(store, entry.name), target)
     } catch { /* a broken/odd entry is inert until imported */ }
   }
 }
