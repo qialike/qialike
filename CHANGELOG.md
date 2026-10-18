@@ -9,9 +9,9 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Fixed
 
-- **Five provider rows shipped without an endpoint** — `baseURL` was empty on the first-party rows, so picking one activated a route whose every request died as `request to /chat/completions failed`, naming neither the provider nor the cause; the templates now carry their endpoints.
-- **Templates are validated on load** — an empty `baseURL` (unless `needsBaseURL` asks for one), a non-absolute URL, or an `anthropic-messages` row that repeats the `/v1` the protocol appends now fails loudly instead of shipping a route that cannot work.
-- **`minimax` / `minimax-cn` / `perplexity` / `kimi-coding` pointed at the wrong depth** — the first two ended in `/anthropic/v1` while the protocol appends `/v1/messages` (a `/v1/v1/messages` 404), and the last two were missing a version segment.
+- **Five provider rows had no endpoint** — an empty `baseURL` made every request die as `request to /chat/completions failed`; they now name their endpoints.
+- **Templates are validated on load** — an empty `baseURL`, a non-absolute URL, or an `anthropic-messages` row repeating the `/v1` the protocol appends now fails loudly.
+- **Four rows pointed at the wrong depth** — `minimax`/`minimax-cn` ended in `/anthropic/v1` (protocol adds `/v1/messages`), `perplexity` had a stray `/v1`, `kimi-coding` lacked one.
 
 ### Changed
 

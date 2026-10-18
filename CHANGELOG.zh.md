@@ -11,9 +11,9 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 ### 修复
 
-- **5 个供应商模板缺少端点** —— 第一方模板的 `baseURL` 是空串，选中后会激活一条每次请求都报 `request to /chat/completions failed` 的路由，既不说是哪个厂商也不说原因；现已补全各自端点。
-- **模板改为加载时校验** —— 空 `baseURL`（未设 `needsBaseURL` 时）、非绝对 URL、以及 `anthropic-messages` 模板重复了协议自己追加的 `/v1`，都会直接报错，而不是放出一条跑不通的路由。
-- **`minimax` / `minimax-cn` / `perplexity` / `kimi-coding` 的路径层级不对** —— 前两者以 `/anthropic/v1` 结尾，而协议会再拼 `/v1/messages`（导致 `/v1/v1/messages` 404）；后两者缺版本段。
+- **5 个模板缺少端点** —— 空 `baseURL` 让每次请求都报 `request to /chat/completions failed`，既不说是哪个厂商也不说原因；现已补全。
+- **模板改为加载时校验** —— 空 `baseURL`、非绝对 URL、`anthropic-messages` 重复协议追加的 `/v1`，都会直接报错。
+- **4 个模板路径层级不对** —— `minimax`/`minimax-cn` 多 `/v1`（协议会再拼）、`perplexity` 多 `/v1`、`kimi-coding` 少 `/v1`。
 
 ### 变更
 
