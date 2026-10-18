@@ -15,6 +15,8 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Changed
 
+- **Rebuilt on DeepSeek Harness `0.2.1-rc.2`** (up from `0.2.1-alpha.2`) — every anchored build patch still applies; the supported range moves with it.
+
 - **`/.bun-cache/` is ignored** — cross-compiling downloads ~391 MB of runtimes there, and the release scripts stage whatever is not ignored.
 
 ## [0.10.1] - 2026-10-14
