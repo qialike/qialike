@@ -5,7 +5,7 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
-## [0.10.2] - 2026-10-18
+## [0.11.0] - 2026-10-18
 
 ### Fixed
 
