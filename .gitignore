@@ -44,3 +44,9 @@ build.log
 # - windows-acl runner: ~90 KB, but regenerated from the farm on every build.
 packages/qialike-app/src/ripgrep-binary.generated.ts
 apps/tui-bin/src/windows-acl-runner.generated.ts
+
+# `bun build --compile` fetches a runtime per cross-compile target into this
+# directory and leaves it behind: five files, ~391 MB. Nothing reads it back —
+# it is a download cache — but `git add -A` would commit the lot, because the
+# release scripts stage whatever is not ignored.
+/.bun-cache/

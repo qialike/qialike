@@ -5,6 +5,18 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.10.2] - 2026-10-18
+
+### Fixed
+
+- **Five provider rows shipped without an endpoint** — `baseURL` was empty on the first-party rows, so picking one activated a route whose every request died as `request to /chat/completions failed`, naming neither the provider nor the cause; the templates now carry their endpoints.
+- **Templates are validated on load** — an empty `baseURL` (unless `needsBaseURL` asks for one), a non-absolute URL, or an `anthropic-messages` row that repeats the `/v1` the protocol appends now fails loudly instead of shipping a route that cannot work.
+- **`minimax` / `minimax-cn` / `perplexity` / `kimi-coding` pointed at the wrong depth** — the first two ended in `/anthropic/v1` while the protocol appends `/v1/messages` (a `/v1/v1/messages` 404), and the last two were missing a version segment.
+
+### Changed
+
+- **`/.bun-cache/` is ignored** — cross-compiling downloads ~391 MB of runtimes there, and the release scripts stage whatever is not ignored.
+
 ## [0.10.1] - 2026-10-14
 
 ### Fixed

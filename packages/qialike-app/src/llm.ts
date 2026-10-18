@@ -304,7 +304,11 @@ export function validateProviderTemplates(data: unknown): TuiProviderTemplate[] 
   }
   const apis = new Set(['openai-completions', 'openai-responses', 'anthropic-messages', 'google-generative'])
   const effortWires = new Set(['reasoning-effort'])
-  const fail = (index: number, reason: string): never => {
+  // The explicit type annotation on the CONST (not just the arrow's return type) is
+  // what makes TypeScript treat a `fail(...)` call as a control-flow terminator, so
+  // the `if (typeof baseURL !== 'string') fail(...)` below narrows `baseURL` to
+  // `string`. Without it the narrowing silently does not happen.
+  const fail: (index: number, reason: string) => never = (index, reason) => {
     throw new Error(`provider-templates.json row ${index + 1}: ${reason}`)
   }
   const needString = (value: unknown, index: number, what: string): string => {
@@ -330,6 +334,29 @@ export function validateProviderTemplates(data: unknown): TuiProviderTemplate[] 
     if (effortWire !== undefined && !effortWires.has(effortWire as string)) fail(index, `unknown effortWire "${String(effortWire)}"`)
     const needsBaseURL = entry.needsBaseURL
     if (needsBaseURL !== undefined && typeof needsBaseURL !== 'boolean') fail(index, 'needsBaseURL must be a boolean')
+    // A row with no endpoint and no prompt activates a route that cannot work. The
+    // adapter builds its URL by appending the protocol path to `baseURL`, so an empty
+    // value sends `fetch()` a relative URL — which throws before any network call and
+    // surfaces as `request to /chat/completions failed`, naming neither the provider
+    // nor the missing endpoint. `needsBaseURL` is the one way an empty value is right:
+    // the Add-provider flow then asks for the endpoint instead of activating it.
+    if (baseURL.trim() === '' && needsBaseURL !== true) {
+      fail(
+        index,
+        `baseURL is empty and needsBaseURL is not set — the route would activate with a relative `
+        + 'URL and every request would fail. Give the endpoint, or set needsBaseURL to make the '
+        + 'Add-provider flow ask for one.',
+      )
+    }
+    if (baseURL.trim() !== '' && !/^https?:\/\/[^\s]+$/iu.test(baseURL)) {
+      fail(index, `baseURL "${baseURL}" is not an absolute http(s) URL`)
+    }
+    // `anthropic-messages` appends `/v1/messages`, so a baseURL that already ends in a
+    // version segment produces `/v1/v1/messages`: a 404 the provider reports as such,
+    // with nothing pointing back at the template row.
+    if (api === 'anthropic-messages' && /\/v\d+[a-z]*\/?$/iu.test(baseURL)) {
+      fail(index, `baseURL "${baseURL}" already ends in a version segment, and the anthropic-messages protocol appends "/v1/messages" — use the root endpoint instead`)
+    }
     const models = entry.models
     if (models !== undefined) {
       if (!Array.isArray(models)) fail(index, 'models must be an array')

@@ -235,7 +235,7 @@
   {
     "route": "anthropic",
     "name": "Anthropic",
-    "baseURL": "",
+    "baseURL": "https://api.anthropic.com",
     "apiKeyEnv": "ANTHROPIC_API_KEY",
     "api": "anthropic-messages",
     "models": [
@@ -474,8 +474,9 @@
   {
     "route": "google",
     "name": "Google",
-    "baseURL": "",
+    "baseURL": "https://generativelanguage.googleapis.com/v1beta",
     "apiKeyEnv": "GOOGLE_API_KEY",
+    "api": "google-generative",
     "models": [
       {
         "id": "gemini-2.5-flash",
@@ -554,7 +555,7 @@
   {
     "route": "kimi-coding",
     "name": "Kimi For Coding",
-    "baseURL": "https://api.kimi.com/coding",
+    "baseURL": "https://api.kimi.com/coding/v1",
     "apiKeyEnv": "KIMI_API_KEY",
     "models": [
       {
@@ -580,7 +581,7 @@
   {
     "route": "minimax",
     "name": "MiniMax (minimax.io)",
-    "baseURL": "https://api.minimax.io/anthropic/v1",
+    "baseURL": "https://api.minimax.io/anthropic",
     "apiKeyEnv": "MINIMAX_API_KEY",
     "api": "anthropic-messages",
     "models": [
@@ -631,7 +632,7 @@
   {
     "route": "minimax-cn",
     "name": "MiniMax (minimaxi.com)",
-    "baseURL": "https://api.minimaxi.com/anthropic/v1",
+    "baseURL": "https://api.minimaxi.com/anthropic",
     "apiKeyEnv": "MINIMAX_API_KEY",
     "api": "anthropic-messages",
     "models": [
@@ -682,7 +683,7 @@
   {
     "route": "mistral",
     "name": "Mistral",
-    "baseURL": "",
+    "baseURL": "https://api.mistral.ai/v1",
     "apiKeyEnv": "MISTRAL_API_KEY",
     "models": [
       {
@@ -808,7 +809,7 @@
   {
     "route": "openai",
     "name": "OpenAI",
-    "baseURL": "",
+    "baseURL": "https://api.openai.com/v1",
     "apiKeyEnv": "OPENAI_API_KEY",
     "models": [
       {
@@ -1356,7 +1357,7 @@
   {
     "route": "xai",
     "name": "xAI",
-    "baseURL": "",
+    "baseURL": "https://api.x.ai/v1",
     "apiKeyEnv": "XAI_API_KEY",
     "models": [
       {
@@ -3054,7 +3055,7 @@
   {
     "route": "perplexity",
     "name": "Perplexity",
-    "baseURL": "https://api.perplexity.ai/v1",
+    "baseURL": "https://api.perplexity.ai",
     "apiKeyEnv": "PERPLEXITY_API_KEY",
     "models": [
       {

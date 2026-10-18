@@ -7,6 +7,18 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.10.2] - 2026-10-18
+
+### 修复
+
+- **5 个供应商模板缺少端点** —— 第一方模板的 `baseURL` 是空串，选中后会激活一条每次请求都报 `request to /chat/completions failed` 的路由，既不说是哪个厂商也不说原因；现已补全各自端点。
+- **模板改为加载时校验** —— 空 `baseURL`（未设 `needsBaseURL` 时）、非绝对 URL、以及 `anthropic-messages` 模板重复了协议自己追加的 `/v1`，都会直接报错，而不是放出一条跑不通的路由。
+- **`minimax` / `minimax-cn` / `perplexity` / `kimi-coding` 的路径层级不对** —— 前两者以 `/anthropic/v1` 结尾，而协议会再拼 `/v1/messages`（导致 `/v1/v1/messages` 404）；后两者缺版本段。
+
+### 变更
+
+- **忽略 `/.bun-cache/`** —— 跨平台编译会往该目录下载约 391 MB 运行时，而发布脚本会 stage 所有未被忽略的内容。
+
 ## [0.10.1] - 2026-10-14
 
 ### 修复
