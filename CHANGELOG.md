@@ -7,8 +7,16 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ## [0.11.1] - 2026-10-19
 
+### Added
+
+- **The API-key dialog says where to get a key** — each of the 62 routes maps to its provider's console, and an unknown route says so rather than guessing a URL.
+- **`scripts/release/audit-gateway-endpoints.py` checks every route without a key** — it separates a 404 (wrong path) from a 401 (right path, missing credential).
+
 ### Fixed
 
+- **`fireworks` and `vercel-ai-gateway` were missing a version segment** — both 404'd on every request, probe and chat alike, so neither provider worked at all.
+- **The `/models` probe now sends the configured key** — the 40 routes that answer 401 anonymously show their live catalogue instead of a stale snapshot.
+- **Gateway snapshots refreshed from the endpoints themselves** — 314 models added across six tables, and `scripts/release/refresh-gateway-models.py` keeps them current.
 - **A gateway model no longer resolves without limits** — the live probe returned ids only, so a model absent from the static snapshot streamed with no context window or output ceiling.
 - **Limits come from the serving endpoint** — the probe reads `context_length`, `top_provider.max_completion_tokens` and `architecture.input_modalities`, falling back per field.
 - **An unreachable gateway no longer adds latency per request** — a failed probe is remembered for 30 s instead of paying the 4 s timeout on every `resolveModel` call.
