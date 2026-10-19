@@ -448,35 +448,162 @@ const DYNAMIC_MODELS_TTL = 5 * 60_000
 /** Timeout for the gateway `/models` probe; a slow gateway degrades to the static catalog. */
 const DYNAMIC_MODELS_TIMEOUT = 4_000
 
-/** Cached gateway model-id lists, keyed by the endpoint root (shared across routes). */
-const dynamicModelsCache = new Map<string, { at: number; ids: readonly string[] }>()
+/**
+ * The per-model metadata a gateway's `/models` endpoint can report.
+ *
+ * WHY THE ID LIST IS NOT ENOUGH. A live list answers "which models exist", but the
+ * harness also needs "how big is this model and what can it take" — `contextWindow`,
+ * `maxTokens`, `inputModalities` — to size requests, enforce the image gate and report
+ * limits. Those live in the *static* catalog, so a model the snapshot never saw was
+ * advertised by the endpoint yet resolved with no limits at all, and every model in
+ * the snapshot carried whatever ceiling it had on the day the snapshot was taken.
+ *
+ * All fields optional: a gateway that reports only ids stays supported, and each
+ * consumer falls back to the static catalog per field rather than per entry.
+ */
+export interface DynamicModelInfo {
+  readonly id: string
+  readonly name?: string
+  readonly contextWindow?: number
+  readonly maxTokens?: number
+  readonly inputModalities?: readonly ('text' | 'image')[]
+}
+
+/**
+ * Cached gateway catalogs, keyed by the endpoint root (shared across routes).
+ *
+ * `models: undefined` is a cached FAILURE, not an absent entry. That distinction is
+ * load-bearing: `resolveModel` consults the probe on the request path, so an endpoint
+ * that is down or slow would otherwise cost the full timeout on every single request.
+ */
+const dynamicModelsCache = new Map<
+  string,
+  { at: number; models: readonly DynamicModelInfo[] | undefined }
+>()
+
+/**
+ * How long a FAILED probe is remembered.
+ *
+ * Shorter than {@link DYNAMIC_MODELS_TTL} on purpose: a gateway that was briefly
+ * unreachable should be retried soon, but not once per request. Without this the
+ * request path paid {@link DYNAMIC_MODELS_TIMEOUT} every time — the failure was
+ * never the thing being cached.
+ */
+const DYNAMIC_MODELS_FAILURE_TTL = 30_000
+
+/** Read a finite positive number, or undefined. Gateways are inconsistent about types. */
+const positiveNumber = (value: unknown): number | undefined =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined
+
+/**
+ * Read one gateway entry's metadata.
+ *
+ * FIELD NAMES ARE THE OPENAI-STYLE ONES WHERE THEY EXIST, plus the two OpenRouter
+ * actually serves (`architecture.input_modalities`, `top_provider.max_completion_tokens`).
+ * Unknown shapes yield a bare id rather than an error: this is a catalogue probe, and
+ * a gateway that changes its schema should lose the extra fields, not the model list.
+ *
+ * @param entry - one element of the endpoint's `data` array.
+ * @returns the metadata it carries, always with an id.
+ */
+function dynamicModelInfo(entry: unknown): DynamicModelInfo | undefined {
+  if (entry === null || typeof entry !== 'object') return undefined
+  const row = entry as {
+    id?: unknown
+    name?: unknown
+    context_length?: unknown
+    context_window?: unknown
+    top_provider?: { max_completion_tokens?: unknown } | undefined
+    architecture?: { input_modalities?: unknown } | undefined
+  }
+  const id = typeof row.id === 'string' ? row.id : ''
+  if (id === '') return undefined
+
+  const name = typeof row.name === 'string' && row.name !== '' ? row.name : undefined
+  const contextWindow = positiveNumber(row.context_length) ?? positiveNumber(row.context_window)
+  const maxTokens = positiveNumber(row.top_provider?.max_completion_tokens)
+
+  let inputModalities: readonly ('text' | 'image')[] | undefined
+  const rawModalities = row.architecture?.input_modalities
+  if (Array.isArray(rawModalities)) {
+    const tagged = rawModalities.filter(
+      (m): m is 'text' | 'image' => m === 'text' || m === 'image',
+    )
+    // Only meaningful when the endpoint names at least one modality we model.
+    if (tagged.length > 0) inputModalities = [...new Set(tagged)]
+  }
+
+  return {
+    id,
+    ...(name === undefined ? {} : { name }),
+    ...(contextWindow === undefined ? {} : { contextWindow }),
+    ...(maxTokens === undefined ? {} : { maxTokens }),
+    ...(inputModalities === undefined ? {} : { inputModalities }),
+  }
+}
 
 /**
  * Probe an OpenAI-compatible gateway's live model catalog (`GET {baseURL}/models`,
  * the standard OpenAI list endpoint — OpenCode Zen/Go, OpenRouter, DeepSeek …
  * all serve it; some gateways expose it without auth, e.g. Zen). Returns the
- * model ids, or `undefined` when the endpoint is missing/unauthorized/slow, so
- * callers fall back to the static profile catalog. Results are cached per
- * endpoint root with a TTL; a stale cache miss re-fetches.
+ * catalog with whatever metadata the endpoint reports, or `undefined` when the
+ * endpoint is missing/unauthorized/slow, so callers fall back to the static
+ * profile catalog.
+ *
+ * BOTH OUTCOMES ARE CACHED, with different lifetimes: a successful catalog for
+ * {@link DYNAMIC_MODELS_TTL}, a failure for {@link DYNAMIC_MODELS_FAILURE_TTL}. Caching
+ * the failure is what keeps `resolveModel` cheap on the request path — see
+ * {@link dynamicModelsCache}.
  */
-export async function fetchDynamicModels(baseURL: string): Promise<readonly string[] | undefined> {
+export async function fetchDynamicModelInfo(
+  baseURL: string,
+): Promise<readonly DynamicModelInfo[] | undefined> {
   const root = baseURL.replace(/\/+$/, '')
   const hit = dynamicModelsCache.get(root)
-  if (hit !== undefined && Date.now() - hit.at < DYNAMIC_MODELS_TTL) return hit.ids
+  if (hit !== undefined) {
+    const ttl = hit.models === undefined ? DYNAMIC_MODELS_FAILURE_TTL : DYNAMIC_MODELS_TTL
+    if (Date.now() - hit.at < ttl) return hit.models
+  }
   try {
     const response = await fetch(`${root}/models`, {
       headers: { accept: 'application/json' },
       signal: AbortSignal.timeout(DYNAMIC_MODELS_TIMEOUT),
     })
-    if (!response.ok) return undefined
-    const body = (await response.json()) as { data?: readonly { id?: unknown }[] } | undefined
-    const ids = (body?.data ?? []).map((entry) => String(entry?.id ?? '')).filter((id) => id !== '')
-    if (ids.length === 0) return undefined
-    dynamicModelsCache.set(root, { at: Date.now(), ids })
-    return ids
+    if (!response.ok) {
+      dynamicModelsCache.set(root, { at: Date.now(), models: undefined })
+      return undefined
+    }
+    const body = (await response.json()) as { data?: readonly unknown[] } | undefined
+    const models: DynamicModelInfo[] = []
+    const seen = new Set<string>()
+    for (const entry of body?.data ?? []) {
+      const info = dynamicModelInfo(entry)
+      if (info === undefined || seen.has(info.id)) continue
+      seen.add(info.id)
+      models.push(info)
+    }
+    if (models.length === 0) {
+      dynamicModelsCache.set(root, { at: Date.now(), models: undefined })
+      return undefined
+    }
+    dynamicModelsCache.set(root, { at: Date.now(), models })
+    return models
   } catch {
+    dynamicModelsCache.set(root, { at: Date.now(), models: undefined })
     return undefined
   }
+}
+
+/**
+ * The same probe, returning ids alone.
+ *
+ * Kept because it is exported and used by callers that only need the list; it reads
+ * the same cache as {@link fetchDynamicModelInfo}, so the two never disagree and only
+ * one request is made per TTL window.
+ */
+export async function fetchDynamicModels(baseURL: string): Promise<readonly string[] | undefined> {
+  const models = await fetchDynamicModelInfo(baseURL)
+  return models === undefined ? undefined : models.map((model) => model.id)
 }
 
 /** Resolve the per-model wire override (protocol + endpoint) for one model id
@@ -1597,7 +1724,7 @@ class TuiLlmAdapter extends LlmAdapter {
     // the static catalog. Failures (no /models endpoint, auth, timeout) degrade
     // to the static catalog without surfacing.
     if (effective !== undefined && (effective.api ?? 'openai-completions') !== 'anthropic-messages') {
-      const dynamic = await fetchDynamicModels(effective.baseURL)
+      const dynamic = await fetchDynamicModelInfo(effective.baseURL)
       if (dynamic !== undefined) {
         // A modelsApi route is multi-protocol: every family routes to a wire
         // protocol at stream time, so the live catalog is NOT filtered (a
@@ -1605,20 +1732,27 @@ class TuiLlmAdapter extends LlmAdapter {
         // template — the template's modelsApi semantics win).
         const multiProtocol = template?.modelsApi !== undefined
         const ids = multiProtocol
-          ? dynamic
-          : filterDynamicModels(dynamic, {
+          ? dynamic.map((model) => model.id)
+          : filterDynamicModels(dynamic.map((model) => model.id), {
               include: effective.includeModelPrefixes,
               exclude: effective.excludeModelPrefixes,
             })
         if (ids.length > 0) {
-          const byId = new Map(staticModels.map((m) => [m.id, m]))
+          const staticById = new Map(staticModels.map((m) => [m.id, m]))
+          const liveById = new Map(dynamic.map((m) => [m.id, m]))
           return ids.map((id) => {
-            const known = byId.get(id)
+            const live = liveById.get(id)
+            const known = staticById.get(id)
+            // The live catalogue wins on name and modalities: it is the endpoint's
+            // current answer, and the static entry may predate a modality change.
+            // The static catalogue is the fallback for gateways that report ids only.
+            const name = live?.name ?? known?.name ?? id
+            const inputModalities = live?.inputModalities ?? known?.inputModalities
             return {
               provider,
               id,
-              name: known?.name ?? id,
-              ...(known?.inputModalities !== undefined ? { inputModalities: known.inputModalities } : {}),
+              name,
+              ...(inputModalities !== undefined ? { inputModalities } : {}),
             }
           })
         }
@@ -1632,6 +1766,20 @@ class TuiLlmAdapter extends LlmAdapter {
     const template = this.templates().find((t) => t.route === provider)
     const effective = profile ?? template
     const entry = providerModels(effective).find((candidate) => candidate.id === model)
+    // LIMITS COME FROM THE ENDPOINT WHEN IT REPORTS THEM, and from the static catalog
+    // otherwise. Without this a model the snapshot never carried resolved with no
+    // context window and no output ceiling at all — it streamed, but the harness had
+    // nothing to size a request against — and every model in the snapshot kept the
+    // ceiling it had on the day the snapshot was taken. Measured on OpenRouter: 145 of
+    // its 471 live models were absent from the snapshot (no limits), and 16 of the 326
+    // present ones disagreed on contextWindow.
+    //
+    // Per-field fallback, not per-entry: an endpoint that reports a context window but
+    // no output ceiling still contributes the one it knows.
+    const live = await this.liveModelInfo(effective, model)
+    const contextWindow = live?.contextWindow ?? entry?.contextWindow
+    const maxTokens = live?.maxTokens ?? entry?.maxTokens
+    const inputModalities = live?.inputModalities ?? entry?.inputModalities
     // Effort-capable models advertise their levels + route default to the
     // harness, which then validates explicit efforts and materializes the
     // default into every request before this adapter streams it.
@@ -1639,10 +1787,10 @@ class TuiLlmAdapter extends LlmAdapter {
     return {
       provider,
       id: model,
-      name: entry?.name ?? model,
-      ...(entry?.contextWindow !== undefined ? { context: { contextWindow: entry.contextWindow } } : {}),
-      ...(entry?.maxTokens !== undefined ? { defaultMaxTokens: entry.maxTokens } : {}),
-      ...(entry?.inputModalities !== undefined ? { inputModalities: entry.inputModalities } : {}),
+      name: entry?.name ?? live?.name ?? model,
+      ...(contextWindow !== undefined ? { context: { contextWindow } } : {}),
+      ...(maxTokens !== undefined ? { defaultMaxTokens: maxTokens } : {}),
+      ...(inputModalities !== undefined ? { inputModalities } : {}),
       ...(reasoning === undefined ? {} : {
         reasoning: {
           efforts: reasoning.efforts.map((effort) => ({
@@ -1654,6 +1802,29 @@ class TuiLlmAdapter extends LlmAdapter {
         },
       }),
     }
+  }
+
+  /**
+   * One model's entry in the route's live catalogue, or undefined.
+   *
+   * Guarded exactly like {@link listModels}: Anthropic-protocol routes have no
+   * `/models` endpoint to ask, and a route with no base URL cannot be asked either.
+   * Both fall back to the static catalog. Never throws — the probe itself already
+   * converts every failure into `undefined`.
+   *
+   * @param effective - the profile or template the route resolves to.
+   * @param model - the model id to look up.
+   * @returns the live metadata, or undefined when the endpoint cannot supply it.
+   */
+  private async liveModelInfo(
+    effective: TuiProviderProfile | undefined,
+    model: string,
+  ): Promise<DynamicModelInfo | undefined> {
+    if (effective === undefined || effective.baseURL === '') return undefined
+    if ((effective.api ?? 'openai-completions') === 'anthropic-messages') return undefined
+    const live = await fetchDynamicModelInfo(effective.baseURL)
+    if (live === undefined) return undefined
+    return live.find((candidate) => candidate.id === model)
   }
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {

@@ -5,6 +5,14 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.11.1] - 2026-10-19
+
+### Fixed
+
+- **A gateway model no longer resolves without limits** — the live probe returned ids only, so a model absent from the static snapshot streamed with no context window or output ceiling.
+- **Limits come from the serving endpoint** — the probe reads `context_length`, `top_provider.max_completion_tokens` and `architecture.input_modalities`, falling back per field.
+- **An unreachable gateway no longer adds latency per request** — a failed probe is remembered for 30 s instead of paying the 4 s timeout on every `resolveModel` call.
+
 ## [0.11.0] - 2026-10-18
 
 ### Fixed
