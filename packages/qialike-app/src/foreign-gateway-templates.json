@@ -594,7 +594,7 @@
   {
     "route": "fireworks",
     "name": "Fireworks AI",
-    "baseURL": "https://api.fireworks.ai/inference",
+    "baseURL": "https://api.fireworks.ai/inference/v1",
     "apiKeyEnv": "FIREWORKS_API_KEY",
     "models": [
       {
@@ -7818,7 +7818,7 @@
   {
     "route": "vercel-ai-gateway",
     "name": "Vercel AI Gateway",
-    "baseURL": "https://ai-gateway.vercel.sh",
+    "baseURL": "https://ai-gateway.vercel.sh/v1",
     "apiKeyEnv": "VERCEL_AI_GATEWAY_API_KEY",
     "models": [
       {
