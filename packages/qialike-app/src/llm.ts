@@ -470,16 +470,29 @@ export interface DynamicModelInfo {
 }
 
 /**
- * Cached gateway catalogs, keyed by the endpoint root (shared across routes).
+ * Cached gateway catalogs, keyed by the endpoint root AND whether the probe was
+ * authenticated (shared across routes).
  *
  * `models: undefined` is a cached FAILURE, not an absent entry. That distinction is
  * load-bearing: `resolveModel` consults the probe on the request path, so an endpoint
  * that is down or slow would otherwise cost the full timeout on every single request.
+ *
+ * WHY THE KEY IS PART OF THE CACHE KEY. Most gateways return 401 to an anonymous
+ * `/models` (measured: 40 of the 54 routes with a resolvable baseURL), and the first
+ * look at a provider usually happens BEFORE its key is stored — the Add-provider list
+ * is what prompts for one. Sharing one cache slot would let that early anonymous 401
+ * mask the authenticated answer for the whole TTL, so the two are kept apart. The
+ * credential itself never enters the key: a boolean says "authenticated", which is all
+ * the cache needs to know.
  */
 const dynamicModelsCache = new Map<
   string,
   { at: number; models: readonly DynamicModelInfo[] | undefined }
 >()
+
+/** Cache key for one endpoint: root plus whether the probe carried a credential. */
+const dynamicModelsCacheKey = (root: string, authenticated: boolean): string =>
+  `${authenticated ? 'auth' : 'anon'}:${root}`
 
 /**
  * How long a FAILED probe is remembered.
@@ -557,20 +570,31 @@ function dynamicModelInfo(entry: unknown): DynamicModelInfo | undefined {
  */
 export async function fetchDynamicModelInfo(
   baseURL: string,
+  apiKey?: string,
 ): Promise<readonly DynamicModelInfo[] | undefined> {
   const root = baseURL.replace(/\/+$/, '')
-  const hit = dynamicModelsCache.get(root)
+  // A credential changes the ANSWER, not just the odds of getting one: an anonymous
+  // probe of a gateway that requires auth is a 401, while the same request with the
+  // key returns the catalogue. Caching them together would let the early anonymous
+  // failure hide the authenticated list for the whole TTL — see {@link dynamicModelsCache}.
+  const authenticated = apiKey !== undefined && apiKey !== ''
+  const cacheKey = dynamicModelsCacheKey(root, authenticated)
+  const hit = dynamicModelsCache.get(cacheKey)
   if (hit !== undefined) {
     const ttl = hit.models === undefined ? DYNAMIC_MODELS_FAILURE_TTL : DYNAMIC_MODELS_TTL
     if (Date.now() - hit.at < ttl) return hit.models
   }
   try {
+    // OpenAI-compatible gateways expect `Bearer`. Anthropic-protocol routes never reach
+    // here (the caller skips them: they have no `/models`), so one scheme is enough.
+    const headers: Record<string, string> = { accept: 'application/json' }
+    if (authenticated) headers.authorization = `Bearer ${apiKey}`
     const response = await fetch(`${root}/models`, {
-      headers: { accept: 'application/json' },
+      headers,
       signal: AbortSignal.timeout(DYNAMIC_MODELS_TIMEOUT),
     })
     if (!response.ok) {
-      dynamicModelsCache.set(root, { at: Date.now(), models: undefined })
+      dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined })
       return undefined
     }
     const body = (await response.json()) as { data?: readonly unknown[] } | undefined
@@ -583,13 +607,13 @@ export async function fetchDynamicModelInfo(
       models.push(info)
     }
     if (models.length === 0) {
-      dynamicModelsCache.set(root, { at: Date.now(), models: undefined })
+      dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined })
       return undefined
     }
-    dynamicModelsCache.set(root, { at: Date.now(), models })
+    dynamicModelsCache.set(cacheKey, { at: Date.now(), models })
     return models
   } catch {
-    dynamicModelsCache.set(root, { at: Date.now(), models: undefined })
+    dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined })
     return undefined
   }
 }
@@ -662,6 +686,34 @@ async function resolveApiKey(
     + ' — store it through the Models dialog or export it',
     'MISSING_CREDENTIAL',
   )
+}
+
+/**
+ * The same lookup, but `undefined` when no credential is configured instead of throwing.
+ *
+ * The catalog probe is a best-effort read that must never turn a missing key into a
+ * failed dialog, so it cannot call {@link resolveApiKey} directly. Sending the key when
+ * one exists is what makes the probe useful at all: of the 54 routes with a resolvable
+ * baseURL, 40 answer 401 anonymously (measured 2026-10-19), so without this the
+ * majority of providers could only ever show their static snapshot.
+ * @param ctx - the Cordis context holding the credentials service.
+ * @param route - provider route, for the fallback env name.
+ * @param envName - the profile's `apiKeyEnv`.
+ * @returns the key, or undefined when none is stored and none is exported.
+ */
+async function optionalApiKey(
+  ctx: Context,
+  route: string,
+  envName: string | undefined,
+): Promise<string | undefined> {
+  try {
+    return await resolveApiKey(ctx, route, envName)
+  } catch {
+    // MISSING_CREDENTIAL is the expected case for a provider the user has not set up
+    // yet; any other failure (a broken credentials store) should degrade the same way
+    // rather than break the model list.
+    return undefined
+  }
 }
 
 /** OpenAI wire message. */
@@ -1724,7 +1776,10 @@ class TuiLlmAdapter extends LlmAdapter {
     // the static catalog. Failures (no /models endpoint, auth, timeout) degrade
     // to the static catalog without surfacing.
     if (effective !== undefined && (effective.api ?? 'openai-completions') !== 'anthropic-messages') {
-      const dynamic = await fetchDynamicModelInfo(effective.baseURL)
+      const dynamic = await fetchDynamicModelInfo(
+        effective.baseURL,
+        await optionalApiKey(this.ctx, provider, effective.apiKeyEnv),
+      )
       if (dynamic !== undefined) {
         // A modelsApi route is multi-protocol: every family routes to a wire
         // protocol at stream time, so the live catalog is NOT filtered (a
@@ -1776,7 +1831,7 @@ class TuiLlmAdapter extends LlmAdapter {
     //
     // Per-field fallback, not per-entry: an endpoint that reports a context window but
     // no output ceiling still contributes the one it knows.
-    const live = await this.liveModelInfo(effective, model)
+    const live = await this.liveModelInfo(effective, model, provider)
     const contextWindow = live?.contextWindow ?? entry?.contextWindow
     const maxTokens = live?.maxTokens ?? entry?.maxTokens
     const inputModalities = live?.inputModalities ?? entry?.inputModalities
@@ -1819,10 +1874,14 @@ class TuiLlmAdapter extends LlmAdapter {
   private async liveModelInfo(
     effective: TuiProviderProfile | undefined,
     model: string,
+    provider: string,
   ): Promise<DynamicModelInfo | undefined> {
     if (effective === undefined || effective.baseURL === '') return undefined
     if ((effective.api ?? 'openai-completions') === 'anthropic-messages') return undefined
-    const live = await fetchDynamicModelInfo(effective.baseURL)
+    const live = await fetchDynamicModelInfo(
+      effective.baseURL,
+      await optionalApiKey(this.ctx, provider, effective.apiKeyEnv),
+    )
     if (live === undefined) return undefined
     return live.find((candidate) => candidate.id === model)
   }

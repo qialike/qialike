@@ -190,3 +190,64 @@ describe('fetchDynamicModels', () => {
     expect(calls).toBe(1)
   })
 })
+
+describe('an authenticated probe', () => {
+  // A gateway that requires a credential answers 401 anonymously. The probe must send
+  // the key when one exists, and must keep the anonymous failure out of the way of the
+  // authenticated answer — the two are cached under separate keys, because the first
+  // look at a provider usually happens BEFORE its key is stored (the Add-provider list
+  // is what prompts for one).
+  const serve = async (): Promise<{ baseURL: string; seen: string[]; close: () => void }> => {
+    const { createServer } = await import('node:http')
+    const seen: string[] = []
+    const server = createServer((req, res) => {
+      const auth = req.headers.authorization
+      seen.push(auth ?? '(none)')
+      if (auth === 'Bearer secret-key') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({
+          data: [{ id: 'only-with-key', context_length: 4096, top_provider: { max_completion_tokens: 512 } }],
+        }))
+      } else {
+        res.writeHead(401)
+        res.end('{}')
+      }
+    })
+    await new Promise<void>((resolve) => { server.listen(0, '127.0.0.1', resolve) })
+    const address = server.address()
+    const port = typeof address === 'object' && address !== null ? address.port : 0
+    return { baseURL: `http://127.0.0.1:${port}`, seen, close: () => { server.close() } }
+  }
+
+  test('the key is sent, and the anonymous 401 does not shadow it', async () => {
+    const { baseURL, seen, close } = await serve()
+    try {
+      expect(await fetchDynamicModelInfo(baseURL), 'anonymous probe degrades').toBeUndefined()
+      const authed = await fetchDynamicModelInfo(baseURL, 'secret-key')
+      expect(authed?.map((m) => m.id)).toEqual(['only-with-key'])
+      expect(authed?.[0]?.contextWindow, 'limits come from the endpoint').toBe(4096)
+      expect(seen).toEqual(['(none)', 'Bearer secret-key'])
+    } finally { close() }
+  })
+
+  test('the two results are cached separately, so each is one request', async () => {
+    const { baseURL, seen, close } = await serve()
+    try {
+      await fetchDynamicModelInfo(baseURL)
+      await fetchDynamicModelInfo(baseURL, 'secret-key')
+      const afterFirstRound = seen.length
+      // Both should hit their own cache entry rather than re-probing.
+      await fetchDynamicModelInfo(baseURL)
+      await fetchDynamicModelInfo(baseURL, 'secret-key')
+      expect(seen.length, 'no extra requests on the second round').toBe(afterFirstRound)
+    } finally { close() }
+  })
+
+  test('an empty key is anonymous, not an empty credential', async () => {
+    const { baseURL, seen, close } = await serve()
+    try {
+      await fetchDynamicModelInfo(baseURL, '')
+      expect(seen).toEqual(['(none)'])
+    } finally { close() }
+  })
+})
