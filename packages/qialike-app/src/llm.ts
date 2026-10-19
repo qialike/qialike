@@ -22,6 +22,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import { logErrorFileOnly } from './log.ts'
 import { effortsFor } from './effort-catalog.ts'
 import providerTemplatesData from './provider-templates.json' with { type: 'json' }
+import keyUrlsData from './key-urls.json' with { type: 'json' }
 import {
   LlmAdapter,
   LlmError,
@@ -648,6 +649,27 @@ export function resolveModelApi(
 /** Drop model families that ride wire protocols this adapter does not speak.
  *  `include` is a whitelist (keep only matching ids, applied first); `exclude`
  *  then removes any remaining unwanted families. */
+/**
+ * Where a user obtains an API key for a route, or `undefined` when we do not know.
+ *
+ * WHY THIS EXISTS. The Add-provider flow ends at a bare "paste your key" prompt: the
+ * dialog names the provider and nothing else, so the next question ("from where?") is
+ * left entirely to the user — who has to leave the TUI, find the right console page and
+ * work out which of that vendor's several key types applies (a coding-plan key and a
+ * pay-as-you-go key are different strings from the same vendor). One URL removes all of
+ * that. Measured need: 62 routes in the catalogue, each with its own console.
+ *
+ * `undefined` is a deliberate answer, not a gap to paper over — a wrong URL wastes more
+ * of the user's time than no URL, so routes whose page we cannot state confidently are
+ * simply absent from the map and the dialog falls back to generic wording.
+ * @param route - the provider route (template `route` / profile key).
+ * @returns the console URL, or undefined when unknown.
+ */
+export function keyUrlFor(route: string): string | undefined {
+  const url = (keyUrlsData as Record<string, string | undefined>)[route]
+  return typeof url === 'string' && url !== '' ? url : undefined
+}
+
 export function filterDynamicModels(
   ids: readonly string[],
   filters: { include?: readonly string[] | undefined; exclude?: readonly string[] | undefined } | undefined,

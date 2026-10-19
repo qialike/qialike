@@ -14,6 +14,7 @@ import React from 'react'
 import type { Context } from '@deepseek-ai/cordis'
 import type { TuiService, ProviderModelsEntry, Store } from '../index.tsx'
 import { TUI_MODELS_SERVICE, type ModelsProviderOption, type TuiModelsService } from '../models.ts'
+import { keyUrlFor } from '../llm.ts'
 import { theme } from '../theme.ts'
 import type { RawKey } from '../stdin.ts'
 import { useListGeometry, dialogListIndexFromRow, dialogListContains } from '../list-geometry.ts'
@@ -145,6 +146,24 @@ function ModelsDialog(): React.JSX.Element {
             <Box marginTop={1}>
               <Text dimColor>{store.keyDialogConfigured ? 'replaces the current key · ' : ''}paste a single-line key · Enter save · Esc cancel</Text>
             </Box>
+            {(() => {
+              // Where to get the key. The dialog used to end at "paste a key", which assumes
+              // the user already knows which console page issues one — and for a vendor with
+              // several key types (a coding-plan key is a different string from a
+              // pay-as-you-go key) even that is not obvious. Unknown routes fall back to the
+              // generic hint rather than a guessed URL.
+              const url = keyUrlFor(store.keyDialogProvider)
+              return (
+                <Box marginTop={1} flexDirection="column">
+                  <Text dimColor>Get one at:</Text>
+                  {url !== undefined ? (
+                    <Text color={theme.primary}>{url}</Text>
+                  ) : (
+                    <Text dimColor>this provider&apos;s own console (its API keys page)</Text>
+                  )}
+                </Box>
+              )
+            })()}
           </>
         ) : store.providerList ? (
           <>
