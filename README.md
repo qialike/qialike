@@ -27,6 +27,7 @@ UI and experience: inspired by OpenCode, with stronger design and more features.
 - [Requirements](#requirements)
 - [Security boundaries](#security-boundaries)
 - [Data and responsibility](#data-and-responsibility)
+- [Compliance notice](#compliance-notice)
 - [Building from source](#building-from-source)
 - [Install as a command](#install-as-a-command)
 - [Uninstall](#uninstall)
@@ -235,6 +236,24 @@ What follows are the data flows qialike cannot decide for you but that you shoul
   automatic update check about a second after launch** (disable with
   `QIALIKE_DISABLE_AUTOUPDATE=1`; see "Updates"). The API key never enters the transcript and is
   never sent to a model.
+
+## Compliance notice
+
+**This project is a technical tool. It is not a generative-AI service.**
+
+qialike is a terminal client that runs locally: it does not provide models, proxy requests, relay or
+store your conversations, and it does not open accounts with any provider on your behalf. Model
+capability comes from third-party providers **you choose and whose credentials you supply**; the
+service relationship is between you and that provider.
+
+**If you offer a generative-AI service to the public from within mainland China, you are responsible
+for determining and fulfilling the applicable legal obligations — including filing, registration and
+algorithm filing.**
+
+Which obligations apply depends on how you use it (whether the service is offered to the public,
+whether you charge for it, what content and data you process). qialike cannot decide that for you and
+makes no representation or warranty about your compliance status. **For legal advice, consult a
+qualified professional.**
 
 ## Building from source
 
