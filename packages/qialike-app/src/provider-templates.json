@@ -2733,28 +2733,46 @@
     "apiKeyEnv": "ALIBABA_CODING_PLAN_API_KEY",
     "models": [
       {
+        "id": "kimi-k2.5",
+        "name": "kimi-k2.5",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3.5-plus",
+        "name": "qwen3.5-plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "glm-5",
+        "name": "glm-5",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
         "id": "MiniMax-M2.5",
         "name": "MiniMax-M2.5",
         "contextWindow": 196608,
         "maxTokens": 24576
       },
       {
+        "id": "qwen3.6-plus",
+        "name": "qwen3.6-plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "qwen3.7-plus",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
         "id": "glm-4.7",
         "name": "GLM-4.7",
         "contextWindow": 202752,
         "maxTokens": 16384
-      },
-      {
-        "id": "glm-5",
-        "name": "GLM-5",
-        "contextWindow": 202752,
-        "maxTokens": 16384
-      },
-      {
-        "id": "kimi-k2.5",
-        "name": "Kimi K2.5",
-        "contextWindow": 262144,
-        "maxTokens": 32768
       },
       {
         "id": "qwen3-coder-next",
@@ -2775,20 +2793,8 @@
         "maxTokens": 32768
       },
       {
-        "id": "qwen3.5-plus",
-        "name": "Qwen3.5 Plus",
-        "contextWindow": 1000000,
-        "maxTokens": 65536
-      },
-      {
         "id": "qwen3.6-flash",
         "name": "Qwen3.6 Flash",
-        "contextWindow": 1000000,
-        "maxTokens": 65536
-      },
-      {
-        "id": "qwen3.6-plus",
-        "name": "Qwen3.6 Plus",
         "contextWindow": 1000000,
         "maxTokens": 65536
       },
@@ -2797,12 +2803,6 @@
         "name": "Qwen3.7 Max",
         "contextWindow": 1000000,
         "maxTokens": 65536
-      },
-      {
-        "id": "qwen3.7-plus",
-        "name": "Qwen3.7 Plus",
-        "contextWindow": 1000000,
-        "maxTokens": 64000
       }
     ]
   },
@@ -2813,28 +2813,46 @@
     "apiKeyEnv": "ALIBABA_CODING_PLAN_API_KEY",
     "models": [
       {
+        "id": "kimi-k2.5",
+        "name": "kimi-k2.5",
+        "contextWindow": 262144,
+        "maxTokens": 32768
+      },
+      {
+        "id": "qwen3.5-plus",
+        "name": "qwen3.5-plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "glm-5",
+        "name": "glm-5",
+        "contextWindow": 202752,
+        "maxTokens": 16384
+      },
+      {
         "id": "MiniMax-M2.5",
         "name": "MiniMax-M2.5",
         "contextWindow": 196608,
         "maxTokens": 24576
       },
       {
+        "id": "qwen3.6-plus",
+        "name": "qwen3.6-plus",
+        "contextWindow": 1000000,
+        "maxTokens": 65536
+      },
+      {
+        "id": "qwen3.7-plus",
+        "name": "qwen3.7-plus",
+        "contextWindow": 1000000,
+        "maxTokens": 64000
+      },
+      {
         "id": "glm-4.7",
         "name": "GLM-4.7",
         "contextWindow": 202752,
         "maxTokens": 16384
-      },
-      {
-        "id": "glm-5",
-        "name": "GLM-5",
-        "contextWindow": 202752,
-        "maxTokens": 16384
-      },
-      {
-        "id": "kimi-k2.5",
-        "name": "Kimi K2.5",
-        "contextWindow": 262144,
-        "maxTokens": 32768
       },
       {
         "id": "qwen3-coder-next",
@@ -2855,20 +2873,8 @@
         "maxTokens": 32768
       },
       {
-        "id": "qwen3.5-plus",
-        "name": "Qwen3.5 Plus",
-        "contextWindow": 1000000,
-        "maxTokens": 65536
-      },
-      {
         "id": "qwen3.6-flash",
         "name": "Qwen3.6 Flash",
-        "contextWindow": 1000000,
-        "maxTokens": 65536
-      },
-      {
-        "id": "qwen3.6-plus",
-        "name": "Qwen3.6 Plus",
         "contextWindow": 1000000,
         "maxTokens": 65536
       },
@@ -2877,12 +2883,6 @@
         "name": "Qwen3.7 Max",
         "contextWindow": 1000000,
         "maxTokens": 65536
-      },
-      {
-        "id": "qwen3.7-plus",
-        "name": "Qwen3.7 Plus",
-        "contextWindow": 1000000,
-        "maxTokens": 64000
       }
     ]
   },
@@ -3438,7 +3438,9 @@
     "baseURL": "https://qialike.com/bee/v1",
     "apiKeyEnv": "QIALIKE_API_KEY",
     "api": "openai-completions",
-    "includeModelPrefixes": ["deepseek-"],
+    "includeModelPrefixes": [
+      "deepseek-"
+    ],
     "models": [
       {
         "id": "deepseek-v4-pro",

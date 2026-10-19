@@ -35,7 +35,16 @@ export const inject = ['settings', 'tuiLlmTemplates']
 
 /** The gateway templates registered when the plugin is enabled (data file
  *  `foreign-gateway-templates.json`, generated from the models.dev catalog). */
-export const FOREIGN_GATEWAY_TEMPLATES: readonly TuiProviderTemplate[] = gatewayData
+// The cast is needed because the data file's `models` entries are legitimately
+// heterogeneous: refreshing them from each gateway's own `/models` yields rows with
+// different subsets of `contextWindow` / `maxTokens` / `inputModalities` (measured
+// 2026-10-19: seven distinct shapes), so TypeScript infers a union that is not
+// assignable to the single `TuiModelProfile` shape even though every variant IS a
+// valid member of it. `provider-templates.json` gets the same guarantee from
+// `validateProviderTemplates`; this plugin's data has no loader of its own, and the
+// shapes are checked by `tests/foreign-gateways.test.ts` instead.
+export const FOREIGN_GATEWAY_TEMPLATES: readonly TuiProviderTemplate[] =
+  gatewayData as unknown as readonly TuiProviderTemplate[]
 
 export function apply(ctx: Context): void {
   const templates = ctx.get('tuiLlmTemplates') as {
