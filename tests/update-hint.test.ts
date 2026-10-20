@@ -110,13 +110,40 @@ describe('reading the launcher report', () => {
 })
 
 describe('what the user is shown', () => {
-  test('the hint leads with the fact and names the way to get the links', () => {
-    const hint = updateHintText({ installed: '0.6.2', version: '0.6.3', urls: [GITHUB, GITCODE] })
-    expect(hint).toBe('Update available: 0.6.3 - /upgrade for links')
+  test('an automatic patch says it is updating, and names the version', () => {
+    // The four wordings were specified by the user (2026-10-20). This is the case a
+    // patch on a layout the updater owns produces: it installs itself, so the hint
+    // reports progress rather than asking for anything.
+    const hint = updateHintText({ installed: '0.11.3', version: '0.11.4', urls: [], phase: 'installing' })
+    expect(hint).toBe('newer qialike v0.11.4 - updating')
     // A status line is one row in a bordered bar: the two 85-character URLs cannot be
     // in it, or the fact itself would be the part that gets truncated away.
     expect(hint.length).toBeLessThan(90)
     expect(hint).not.toContain('http')
+  })
+
+  test('a release this copy cannot install names the command instead', () => {
+    // A minor/major bump, or a copy nobody's package manager owns.
+    expect(updateHintText({ installed: '0.11.3', version: '0.12.0', urls: [], phase: 'manual', manual: true }))
+      .toBe("newer qialike v0.12.0 - run 'qialike upgrade'")
+    // `manual` alone is enough; `phase` is the same fact spelled for the other callers.
+    expect(updateHintText({ installed: '0.11.3', version: '0.12.0', urls: [], manual: true }))
+      .toBe("newer qialike v0.12.0 - run 'qialike upgrade'")
+  })
+
+  test('a finished update stays on the line until the user restarts', () => {
+    // True for both routes — the silent patch install and an explicit `/upgrade`.
+    for (const phase of ['installed'] as const) {
+      expect(updateHintText({ installed: '0.11.3', version: '0.11.4', urls: [], phase }))
+        .toBe('Updated, please restart qialike')
+    }
+  })
+
+  test('the wording never mentions a version the user is not being offered', () => {
+    // The installed version is deliberately absent: the line is about what to do next,
+    // and the installed one only shortens the room available for it.
+    const hint = updateHintText({ installed: '0.11.3', version: '0.12.0', urls: [], manual: true })
+    expect(hint).not.toContain('0.11.3')
   })
 
   test('the transcript lines carry ONE url per line, after the sentence', () => {

@@ -4148,6 +4148,19 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
         return
       }
       for (const line of lines) tui.notify(line)
+      // An explicit `/upgrade` that succeeded lands the same notice the automatic
+      // path does: the binary on disk is new, the RUNNING process is still the old
+      // build, and the status line is where a user notices that. It stays until they
+      // restart — nothing clears it on a timer, because the condition never resolves
+      // by itself.
+      if (lines.some((line) => /^updated to qialike /iu.test(line))) {
+        store.noteUpdate({
+          installed: pkg.version,
+          version: pkg.version,
+          urls: [],
+          phase: 'installed',
+        })
+      }
     })
   }
   /**

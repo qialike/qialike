@@ -113,14 +113,49 @@ describe('the automatic check spawns the launcher mode and relays its report', (
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
 
-    expect(hinted).toEqual([{ installed: '0.6.0', version: '9.9.9', urls: [url] }])
+    // `relation: minor` + `canSelfInstall: false` is the MANUAL case: the user runs
+    // `qialike upgrade` themselves, so the hint names the command rather than progress.
+    expect(hinted).toEqual([{ installed: '0.6.0', version: '9.9.9', urls: [url], phase: 'manual', manual: true }])
     expect(notified).toEqual([])
   })
 
-  test('the SAME answer on linux/macOS stays a notice (the auto-update path is untouched)', async () => {
-    // The requirement this pins: the hint is Windows-specific handling. A POSIX copy
-    // — including one no installer manages, which is what `canSelfInstall: false`
-    // describes there too — must keep the pre-existing behaviour word for word.
+    test('a silent patch install reports "installed", so the hero is not left blank', async () => {
+      // The other half of the requirement. `--auto` installs a patch by itself and then
+      // exits; without this branch the ONLY trace was a transcript line, which the hero
+      // screen does not paint — so an update could complete with the user seeing nothing.
+      const dir = tempDir('qialike-autocheck-')
+      const script = join(dir, 'fake-qialike')
+      writeFileSync(
+        script,
+        `#!/bin/sh\necho "updated to qialike 9.9.9 — restart to use it"\necho '{"decision":"install","installed":"0.6.0","newest":"9.9.9","relation":"patch","canSelfInstall":true,"downloads":[],"ok":true}'\n`,
+      )
+      chmodSync(script, 0o755)
+
+      const hinted: { phase?: string }[] = []
+      const notified: string[] = []
+      scheduleAutoCheck({
+        execPath: script,
+        notify: (m) => notified.push(m),
+        onUpdate: (offer) => hinted.push(offer),
+        platform: 'linux',
+        delayMs: 10,
+        env: {},
+      })
+
+      const deadline = Date.now() + 5_000
+      while (hinted.length === 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+
+      expect(hinted[0]?.phase).toBe('installed')
+      expect(notified).toEqual([])
+    })
+
+  test('the SAME answer on linux/macOS ALSO becomes the status-line hint', async () => {
+    // The requirement changed (2026-10-20): `tui.notify()` writes into the TRANSCRIPT,
+    // and the hero screen has no transcript — so a POSIX user sitting on the hero was
+    // told nothing at all, and a user in a session saw nothing in the docked status
+    // bar. Both surfaces paint `store.updateHint`, so every platform now feeds it.
     const dir = tempDir('qialike-autocheck-')
     const script = join(dir, 'fake-qialike')
     writeFileSync(
@@ -140,14 +175,18 @@ describe('the automatic check spawns the launcher mode and relays its report', (
       env: {},
     })
 
+    // Wait on the HINT now: this path no longer notifies, so waiting on `notified`
+    // would spin until the deadline and then assert against an empty hint.
     const deadline = Date.now() + 5_000
-    while (notified.length === 0 && Date.now() < deadline) {
+    while (hinted.length === 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
 
-    expect(hinted).toEqual([])
-    expect(notified).toHaveLength(1)
-    expect(notified[0]).toContain('download it and replace the file by hand')
+    expect(hinted).toHaveLength(1)
+    expect(hinted[0]).toMatchObject({ installed: '0.6.0', version: '9.9.9', manual: true, phase: 'manual' })
+    // `notify` stays silent: announcing the same release twice is what this avoids
+    // (that was already the rule for Windows).
+    expect(notified).toEqual([])
   })
 
   test('without a hint sink Windows still reaches the user as a notice', async () => {

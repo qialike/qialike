@@ -58,6 +58,19 @@ export interface UpdateOffer {
   installed: string
   version: string
   urls: readonly string[]
+  /**
+   * How far along the update is, which is what the hint line reports.
+   *
+   * `available` — a newer release exists and this copy will install it by itself
+   * (a patch on a layout the updater owns); `installing` — that install is running;
+   * `installed` — it finished and the running process is still the OLD build until
+   * it restarts; `manual` — the release cannot be installed by the updater (a
+   * minor/major bump, or a copy nobody's package manager owns), so the user runs
+   * `qialike upgrade` themselves.
+   */
+  phase?: 'available' | 'installing' | 'installed' | 'manual'
+  /** True when the user has to run `qialike upgrade` (the `manual` wording). */
+  manual?: boolean
 }
 
 const RELATIONS = ['up-to-date', 'older', 'patch', 'minor', 'major'] as const
@@ -138,7 +151,10 @@ export function isNewerAvailable(report: UpdateReport): boolean {
  * {@link updateNoticeLines}).
  */
 export function updateHintText(offer: UpdateOffer): string {
-  return `Update available: ${offer.version} - /upgrade for links`
+  if (offer.phase === 'installed') return 'Updated, please restart qialike'
+  if (offer.phase === 'installing') return `newer qialike v${offer.version} - updating`
+  if (offer.manual) return `newer qialike v${offer.version} - run 'qialike upgrade'`
+  return `newer qialike v${offer.version} - updating`
 }
 
 /**

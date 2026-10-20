@@ -459,16 +459,46 @@ export function scheduleAutoCheck(options: AutoCheckOptions): void {
       // The report is the last line; everything before it is the human notice.
       const notice = report === undefined ? lines : lines.slice(0, -1)
 
-      if (
-        options.onUpdate !== undefined
-        && platformKind(platform) === 'windows'
-        && report !== undefined
-        && report.decision === 'notify'
-        && report.newest !== null
-      ) {
-        options.onUpdate({ installed: report.installed, version: report.newest, urls: report.downloads })
-        return
-      }
+        // `onUpdate` carries the STATUS LINE, and every platform needs it — not just
+        // Windows. `tui.notify()` writes a status row into the TRANSCRIPT, and the hero
+        // screen has no transcript: on Linux/macOS a check that found a newer release
+        // therefore said nothing to someone sitting on the hero, and nothing in the
+        // docked status bar for someone in a session (both measured).
+        //
+        // The wording differs by whether this copy can finish the job itself, which is
+        // exactly `canSelfInstall`: a patch on a layout the updater owns installs itself,
+        // while a minor/major bump (or a copy nobody's package manager owns) needs
+        // `qialike upgrade` from the user.
+        if (options.onUpdate !== undefined && report !== undefined && report.newest !== null) {
+          if (report.decision === 'notify') {
+            // `relation` is what the launcher already computed from the same two
+            // versions; `canSelfInstall` answers "may this copy replace itself at all".
+            // Both must hold for the silent path — a patch on an npm copy is installed
+            // by npm, a patch on a hand-placed binary is not.
+            const manual = report.canSelfInstall !== true || report.relation !== 'patch'
+            options.onUpdate({
+              installed: report.installed,
+              version: report.newest,
+              urls: report.downloads,
+              phase: manual ? 'manual' : 'installing',
+              manual,
+            })
+            return
+          }
+          if (report.decision === 'install') {
+            // `--auto` already ran the install; its report says how it went. Either way
+            // the running process is still the OLD build, so the hint stays up until the
+            // user restarts.
+            options.onUpdate({
+              installed: report.installed,
+              version: report.installed,
+              urls: [],
+              phase: report.ok === true ? 'installed' : 'manual',
+              manual: report.ok !== true,
+            })
+            return
+          }
+        }
       for (const line of notice) options.notify(line)
     })
   }, options.delayMs ?? 1000)
