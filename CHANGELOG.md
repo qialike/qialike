@@ -5,6 +5,12 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.11.2] - 2026-10-20
+
+### Added
+
+- **`moss` is now a built-in scheme and the default** — qialike's own dark-forest palette lived in `~/.dsh/themes/`, so only machines that had it showed it.
+
 ## [0.11.1] - 2026-10-19
 
 ### Added
