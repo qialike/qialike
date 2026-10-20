@@ -7,6 +7,13 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.11.3] - 2026-10-20
+
+### 修复
+
+- **升级提示在所有平台都能到达 hero 与状态栏** —— 此前只有 Windows 的检查会写入，Linux/macOS 用户在 hero 界面什么都看不到。
+- **手动安装的副本沿用原有提示文案** —— `run 'qialike upgrade'` 对它无效（Windows 无 bash）；恢复指向 `/upgrade` 取下载链接的措辞。
+
 ## [0.11.2] - 2026-10-20
 
 ### 新增
