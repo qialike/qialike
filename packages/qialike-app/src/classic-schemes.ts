@@ -141,4 +141,17 @@ export const CLASSIC_SCHEMES: Record<string, ThemePalette> = {
     primary: '#268bd2', secondary: '#6c71c4', accent: '#2aa198', success: '#859900',
     warning: '#b58900', info: '#cb4b16', error: '#dc322f', yellow: '#b58900',
   },
+  /**
+   * moss — qialike's own scheme (no upstream project; authored for this repo, so
+   * no third-party attribution to carry). A dark forest palette: warm bone-white
+   * text on a green-black ground, moss-green primary, lichen-teal accent.
+   * It lived as a user scheme in `~/.dsh/themes/moss.json` and moved here so that
+   * every install ships it; that file remains the reference for the exact values.
+   */
+  moss: {
+    bg: '#0c0f0d', panel: '#141815', element: '#1e241f', borderSubtle: '#2a3128',
+    border: '#3a4438', borderActive: '#5d665b', text: '#e6e2d6', textMuted: '#8c9384',
+    primary: '#8fb56c', secondary: '#c3b79a', accent: '#6fb3ae', success: '#8fb56c',
+    warning: '#d6a96a', info: '#6fb3ae', error: '#c8705f', yellow: '#d6bb7f',
+  },
 }

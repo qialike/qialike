@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { theme } from '../packages/qialike-app/src/theme.ts'
+import { CLASSIC_SCHEMES } from '../packages/qialike-app/src/classic-schemes.ts'
 import {
   BUILTIN_SCHEMES, DEFAULT_SCHEME, applyScheme, resolveScheme, schemeRegistry, apply,
 } from '../packages/qialike-app/src/theme-plugin.ts'
@@ -208,3 +209,45 @@ function contrastRatio(a: string, b: string): number {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
   return (hi + 0.05) / (lo + 0.05)
 }
+
+describe('the moss scheme', () => {
+  // `moss` is qialike's own palette: it shipped as a USER scheme
+  // (`~/.dsh/themes/moss.json`) and moved into the built-in set so that every
+  // install carries it, then became `DEFAULT_SCHEME`. Two things follow, and both
+  // are asserted here: it must resolve like any built-in (picker, prefix
+  // completion), and it must be the palette a fresh profile gets.
+  test('is a built-in, not something that depends on the user directory', () => {
+    expect(Object.keys(BUILTIN_SCHEMES)).toContain('moss')
+    // The registry merges user files UNDER built-ins, so a stale copy in
+    // ~/.dsh/themes/ can never shadow the shipped palette.
+    expect(schemeRegistry().moss).toBe(CLASSIC_SCHEMES.moss)
+  })
+
+  test('carries all 16 roles, as a dark scheme', () => {
+    const moss = BUILTIN_SCHEMES.moss
+    const roles = Object.keys(theme) as (keyof typeof theme)[]
+    expect(Object.keys(moss).sort()).toEqual([...roles].sort())
+    for (const role of roles) {
+      expect(moss[role], `${role} must be a hex colour`).toMatch(/^#[0-9a-f]{6}$/u)
+    }
+    // A dark scheme: the ground is darker than the text, by a wide margin.
+    const lum = (hex: string): number => {
+      const n = Number.parseInt(hex.slice(1), 16)
+      return 0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)
+    }
+    expect(lum(moss.text)).toBeGreaterThan(lum(moss.bg) * 3)
+  })
+
+  test('is the default, and is reachable by name and by prefix', () => {
+    expect(DEFAULT_SCHEME).toBe('moss')
+    expect(resolveScheme('moss')).toBe('moss')
+    expect(resolveScheme('mo')).toBe('moss')
+  })
+
+  test('applying it paints the palette onto the shared theme object', () => {
+    applyScheme('moss')
+    expect(theme.bg).toBe('#0c0f0d')
+    expect(theme.primary).toBe('#8fb56c')
+    expect(theme.accent).toBe('#6fb3ae')
+  })
+})

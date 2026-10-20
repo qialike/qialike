@@ -104,8 +104,16 @@ export const BUILTIN_SCHEMES: Record<string, ThemePalette> = {
   ...CLASSIC_SCHEMES,
 }
 
-/** The default scheme when nothing is configured (vim's default). */
-export const DEFAULT_SCHEME = 'dark'
+/**
+ * The default scheme when nothing is configured.
+ *
+ * `moss` — qialike's own dark-forest palette — rather than the upstream `dark`
+ * tokens: this is the surface's shipped look, so a fresh install should not have to
+ * go looking for it. `dark` stays selectable (`/theme dark`), and a profile that
+ * already chose a scheme keeps its choice: this only decides what an unset
+ * `qialike-theme.colorscheme` resolves to.
+ */
+export const DEFAULT_SCHEME = 'moss'
 
 /** Load one user scheme file → palette (best-effort, unknown keys dropped). */
 function loadUserScheme(file: string): { name: string; palette: ThemePalette } | undefined {
