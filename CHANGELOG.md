@@ -5,18 +5,16 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
-## [0.11.3] - 2026-10-20
-
-### Fixed
-
-- **The update notice reaches the hero screen and the status bar on every platform** — only a Windows check ever fed them, so a POSIX user sitting on the hero was told nothing.
-- **A hand-placed copy keeps its original hint wording** — `run 'qialike upgrade'` cannot work there (no bash on Windows); it points at `/upgrade` for the download links again.
-
 ## [0.11.2] - 2026-10-20
 
 ### Added
 
 - **`moss` is now a built-in scheme and the default** — qialike's own dark-forest palette lived in `~/.dsh/themes/`, so only machines that had it showed it.
+
+### Fixed
+
+- **The update notice reaches the hero screen and the status bar on every platform** — only a Windows check ever fed them, so a POSIX user sitting on the hero was told nothing.
+- **A hand-placed copy keeps its original hint wording** — `run 'qialike upgrade'` cannot work there (no bash on Windows); it points at `/upgrade` for the download links again.
 
 ## [0.11.1] - 2026-10-19
 

@@ -1,6 +1,6 @@
 {
   "name": "@qialike/qialike-bin",
-  "version": "0.11.3",
+  "version": "0.11.2",
   "private": true,
   "type": "module",
   "license": "MIT",
