@@ -115,7 +115,9 @@ describe('the automatic check spawns the launcher mode and relays its report', (
 
     // `relation: minor` + `canSelfInstall: false` is the MANUAL case: the user runs
     // `qialike upgrade` themselves, so the hint names the command rather than progress.
-    expect(hinted).toEqual([{ installed: '0.6.0', version: '9.9.9', urls: [url], phase: 'manual', manual: true }])
+    // `canSelfInstall: false` is a hand-placed copy: it can only be replaced by
+    // downloading, so `downloadOnly` marks it for the original wording.
+    expect(hinted).toEqual([{ installed: '0.6.0', version: '9.9.9', urls: [url], phase: 'manual', manual: true, downloadOnly: true }])
     expect(notified).toEqual([])
   })
 
@@ -183,7 +185,7 @@ describe('the automatic check spawns the launcher mode and relays its report', (
     }
 
     expect(hinted).toHaveLength(1)
-    expect(hinted[0]).toMatchObject({ installed: '0.6.0', version: '9.9.9', manual: true, phase: 'manual' })
+    expect(hinted[0]).toMatchObject({ installed: '0.6.0', version: '9.9.9', manual: true, phase: 'manual', downloadOnly: true })
     // `notify` stays silent: announcing the same release twice is what this avoids
     // (that was already the rule for Windows).
     expect(notified).toEqual([])

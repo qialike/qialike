@@ -71,6 +71,17 @@ export interface UpdateOffer {
   phase?: 'available' | 'installing' | 'installed' | 'manual'
   /** True when the user has to run `qialike upgrade` (the `manual` wording). */
   manual?: boolean
+  /**
+   * True when the ONLY way forward is downloading the release — a copy the updater
+   * cannot replace (Windows hand-placed, or an unmanaged layout anywhere else).
+   *
+   * Distinct from {@link manual} on purpose: an npm copy on Windows is also "manual"
+   * for a minor/major bump, but `qialike upgrade` WORKS there (npm is its own
+   * updater). For a hand-placed copy it does not: the command runs the shell
+   * installer, and Windows has no bash. Those two groups need different sentences,
+   * and the download links are what the first group actually needs.
+   */
+  downloadOnly?: boolean
 }
 
 const RELATIONS = ['up-to-date', 'older', 'patch', 'minor', 'major'] as const
@@ -153,6 +164,10 @@ export function isNewerAvailable(report: UpdateReport): boolean {
 export function updateHintText(offer: UpdateOffer): string {
   if (offer.phase === 'installed') return 'Updated, please restart qialike'
   if (offer.phase === 'installing') return `newer qialike v${offer.version} - updating`
+  // A copy that can only be replaced by hand keeps its original wording, which points
+  // at `/upgrade` for the download LINKS. `run 'qialike upgrade'` would be wrong here:
+  // that command runs the shell installer, and on Windows there is no bash to run it.
+  if (offer.downloadOnly === true) return `Update available: ${offer.version} - /upgrade for links`
   if (offer.manual) return `newer qialike v${offer.version} - run 'qialike upgrade'`
   return `newer qialike v${offer.version} - updating`
 }

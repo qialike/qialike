@@ -476,12 +476,21 @@ export function scheduleAutoCheck(options: AutoCheckOptions): void {
             // Both must hold for the silent path — a patch on an npm copy is installed
             // by npm, a patch on a hand-placed binary is not.
             const manual = report.canSelfInstall !== true || report.relation !== 'patch'
+            // TWO different manuals, and they need different words. A copy the updater
+            // cannot touch (`canSelfInstall: false` — Windows hand-placed, or an
+            // unmanaged layout anywhere) can only be replaced by downloading the
+            // release; `qialike upgrade` would run the shell installer, which on
+            // Windows is bash and does not exist. An npm copy CAN run the command
+            // (npm is its own updater) — it is only a minor/major bump that makes it
+            // the user's call. Telling the first group to run a command that cannot
+            // work is the kind of help that costs more time than silence.
             options.onUpdate({
               installed: report.installed,
               version: report.newest,
               urls: report.downloads,
               phase: manual ? 'manual' : 'installing',
               manual,
+              downloadOnly: manual && report.canSelfInstall !== true,
             })
             return
           }

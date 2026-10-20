@@ -122,6 +122,26 @@ describe('what the user is shown', () => {
     expect(hint).not.toContain('http')
   })
 
+  test('a copy that can only be REPLACED keeps the original wording', () => {
+    // Windows hand-placed, or an unmanaged layout anywhere: `qialike upgrade` runs the
+    // shell installer, and Windows has no bash — so telling this copy to run the
+    // command sends the user at something that cannot work. It keeps the sentence that
+    // points at `/upgrade`, which is where the download LINKS are.
+    expect(updateHintText({ installed: '0.11.3', version: '0.11.4', urls: [], phase: 'manual', manual: true, downloadOnly: true }))
+      .toBe('Update available: 0.11.4 - /upgrade for links')
+    // A minor bump on such a copy is the same situation, not a different one.
+    expect(updateHintText({ installed: '0.11.3', version: '0.12.0', urls: [], phase: 'manual', manual: true, downloadOnly: true }))
+      .toBe('Update available: 0.12.0 - /upgrade for links')
+  })
+
+  test('an npm copy is told the command, because npm can run it', () => {
+    // Same `manual` flag, different capability: `downloadOnly` is what separates the
+    // two. This is the case the flag exists for.
+    const npm = { installed: '0.11.3', version: '0.12.0', urls: [], phase: 'manual' as const, manual: true }
+    expect(updateHintText(npm)).toBe("newer qialike v0.12.0 - run 'qialike upgrade'")
+    expect(updateHintText({ ...npm, downloadOnly: false })).toBe(updateHintText(npm))
+  })
+
   test('a release this copy cannot install names the command instead', () => {
     // A minor/major bump, or a copy nobody's package manager owns.
     expect(updateHintText({ installed: '0.11.3', version: '0.12.0', urls: [], phase: 'manual', manual: true }))
