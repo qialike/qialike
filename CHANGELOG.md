@@ -15,6 +15,7 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Fixed
 
+- **A reply no longer comes back empty** — a gateway may answer SSE compressed, so streams ask for `identity` and an undecodable body is an error, not silence.
 - **Bee's key dialog points at `https://qialike.com/bee`** — it opened the homepage, which has no console entry.
 
 ## [0.11.2] - 2026-10-20
