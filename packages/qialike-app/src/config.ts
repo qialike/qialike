@@ -61,10 +61,12 @@ export const RESUME_LAST_ENV = 'QIALIKE_RESUME_LAST'
  *
  *  OFF by default, and deliberately the opposite default from the other
  *  gateway switches: those unload a family a user may already depend on, so
- *  they stay on unless disabled. Bee is qialike's own route and its gateway is
- *  not serving yet, so shipping it on means shipping a provider whose dialog
- *  cannot work. Turn it on (`bee: { enabled: true }`, or `QIALIKE_BEE=1`) to
- *  exercise it against a gateway that does exist. */
+ *  they stay on unless disabled. Bee's gateway IS serving (its `/models`,
+ *  `/chat/completions`, `/responses`, `/messages` and Google endpoints are
+ *  live), but the service is still in internal testing and closed to the
+ *  public — a shipped-on row would offer every user a provider they cannot
+ *  buy a key for. Turn it on (`bee: { enabled: true }`, or `QIALIKE_BEE=1`)
+ *  to use the route now; when Bee opens, flip this one constant. */
 export const DEFAULT_BEE_ENABLED = false
 
 /** Environment variable that overrides the Bee default, for a one-off run or CI

@@ -48,7 +48,7 @@ qialike 是一个跑在终端里的全屏 AI 编程 Agent：你在项目目录�
   列出 **62 家**供应商，国外如 OpenAI、Anthropic、Google Gemini、xAI、Mistral、OpenRouter、Groq、
   Hugging Face，国内如通义千问 Qwen、智谱 GLM、Kimi、MiniMax、火山引擎、硅基流动；选中即接入（OpenAI 兼容
   为主，Anthropic/MiniMax 走原生 Messages 协议），`Ctrl+T` 循环切换推理强度。第 63 行 **QiaLike Bee**
-  （qialike 自有网关）**出厂为关闭**：网关尚未对外服务，故模板行、路由名与其 `Ctrl+D` 保护都已就位，
+  （qialike 自有网关）**出厂为关闭**：Bee 仍在内测，故模板行、路由名与其 `Ctrl+D` 保护都已就位，
   但**只有你打开开关才会出现**（见「提供商目录」一节）。
 - **操作集中在 `/`**：输入 `/` 弹出补全面板——`/models`、`/sessions`、`/theme`、`/export`、`/plan`、
   `/goal`、`/compact`、`/sidebar` 等，`↑/↓` 选择、`Enter` 执行。
@@ -470,11 +470,13 @@ ssh -L 3080:localhost:3080 user@headless-host
   **同步移除其 API key** 并使其从一级列表消失；隐藏的若是当前供应商会自动切换到其它已配置的，
   **若无任何可用供应商则当前模型显示 `not set`**，重新加入即再设一次 key。`＋ Add a custom provider`
   进入逐字段表单，可填自定义端点与模型 id。唯一例外是 **QiaLike Bee**（qialike 自有网关，
-  `https://qialike.com/bee/v1`），且它**出厂为关闭**：在 `qialike.json` 写
+  `https://qialike.com/bee/v1`），且它在 Bee 内测期间**出厂为关闭**：在 `qialike.json` 写
   `bee: { "enabled": true }`（或一次性用 `QIALIKE_BEE=1`）才启用。启用后它**没有 key 也照常列出**，
-  此时选中它是**先要求输入 API key**（而不是打开空的模型列表），且 `Ctrl+D` 会拒绝删除、永远无法移除。
-  设好 key 后，其二级列表即 Bee 提供的 `deepseek` 系列（`deepseek-v4-pro` / `deepseek-v4-flash` /
-  `deepseek-v4-flash-free`——实时读 `GET /bee/v1/models` 并按 `deepseek-*` 过滤）。
+  此时选中它是**先要求输入 API key**（弹窗给出取 key 地址 `https://qialike.com/bee`，而不是打开空的模型
+  列表），且 `Ctrl+D` 会拒绝删除、永远无法移除。设好 key 后，其二级列表即 Bee 的完整实时目录
+  （`GET /bee/v1/models`）：一把 key 覆盖四种协议，按 Bee 官方文档把每个模型族路由到对应端点——
+  `claude-` / `qwen` 走 Anthropic Messages，`gpt-` 走 OpenAI Responses，`gemini-` 走 Google
+  generateContent，其余（DeepSeek、GLM、Kimi、MiniMax、Grok 等）走 chat/completions。
 - **`/theme` 配色方案**（vim 风格 `:colorscheme`）：裸 `/theme` 弹出**主题选择对话框**——`↑/↓` 移动、直接
   打字过滤、移动时**实时预览**、`Enter` 应用并持久化、`Esc` 取消并还原；也支持 `/theme <name>` 与
   `/theme <role> <hex>` 快捷路径。内置 **16 套**方案，另可放 `~/.dsh/themes/*.json` 自定义。
@@ -545,9 +547,12 @@ qialike plugin remove-mcp <名字> [--project]
 `/models` 的 `＋ Add provider` 列出**所有已知提供商**——自研适配器的内置模板加上可加载的网关子插件，共
 **62 家**（61 家模板 + 内置 `deepseek-official` 官方端点）。其中三组由**可加载子插件**提供，都默认开启、
 可整体卸载：在 `qialike.json` 写对应开关，模板与已配置路由会一并从 `/models` 与适配器消失。
-另有一行 **QiaLike Bee**（qialike 自有网关，route `qialike`）**出厂关闭**：网关尚未对外服务，故开关
-`bee: { "enabled": true }`（或一次性 `QIALIKE_BEE=1`）打开时才提供该行；关闭时它连同路由名一起从
-`/models` 与适配器消失，`qialike` 这个 route 也不再被保留。
+另有一行 **QiaLike Bee**（qialike 自有网关，route `qialike`）**出厂关闭**：Bee 仍在内测、未对外开放，
+故开关 `bee: { "enabled": true }`（或一次性 `QIALIKE_BEE=1`）打开时才提供该行（网关本身已经在服务）；
+关闭时它连同路由名一起从 `/models` 与适配器消失，`qialike` 这个 route 也不再被保留。打开后它和
+OpenCode Zen 一样带 `modelsApi` 路由表——`claude-` / `qwen` 走 Messages、`gpt-` 走 Responses、
+`gemini-` 走 Google、其余走 chat/completions，因此模型选择器显示 Bee 的**整份实时目录**，而不只是
+单一协议那一部分。
 
 | 子插件 | 开关 | 提供商 |
 | --- | --- | --- |
@@ -557,9 +562,9 @@ qialike plugin remove-mcp <名字> [--project]
 
 以 OpenAI 兼容协议为主，Anthropic 与 MiniMax 走原生 Messages 协议。其中一行模板是 qialike 自有的
 **QiaLike Bee**（route `qialike`，网关 `https://qialike.com/bee/v1`）——`/models` 里**始终在列、没有 key
-时先要求输入、且不可停用**的那一条。DeepSeek 官方端点不在模板目录里，由内置 `deepseek-official` 默认路由
-提供（3 个模型，免配置即用）。另有部署型端点（Vertex AI、Databricks、
-Snowflake Cortex，以及插件提供的 Azure 与 Cloudflare 行）标记 `endpoint required`。
+时先要求输入、且不可停用**的那一条；它自己就带 `modelsApi` 四协议路由（见下）。DeepSeek 官方端点不在模板
+目录里，由内置 `deepseek-official` 默认路由提供（3 个模型，免配置即用）。另有部署型端点（Vertex AI、
+Databricks、Snowflake Cortex，以及插件提供的 Azure 与 Cloudflare 行）标记 `endpoint required`。
 
 已配置的 OpenAI 兼容提供商会显示网关**实时模型列表**（动态 `GET {baseURL}/models`，失败或超时回退模板预
 置模型）；OpenCode Zen 是单个条目，展示全部 63 个模型，选中任一模型保存后，请求时按模型自动路由到正确

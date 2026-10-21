@@ -244,14 +244,26 @@ export const DEEPSEEK_OFFICIAL_ROUTE = 'deepseek-official'
 
 /**
  * Route key of **QiaLike Bee**, qialike's own model gateway
- * (`https://qialike.com/bee/v1`, OpenAI-compatible `/chat/completions`).
+ * (`https://qialike.com/bee/v1`).
  *
  * It is a template row like any other provider — the row in
  * `provider-templates.json` carries the endpoint, the `QIALIKE_API_KEY`
- * credential reference and the `deepseek-` model filter — but the TUI treats
- * this ONE route as qialike-owned: it is always listed in `/models` (even
- * before a key is set, so the dialog can ask for one) and it can never be
- * deactivated with `Ctrl+D`. See `PROTECTED_PROVIDER_ROUTES` in `index.tsx`
+ * credential reference and the model catalogue — but the gateway serves FOUR
+ * wire protocols under one key, so the row also carries a `modelsApi` map (the
+ * same mechanism OpenCode Zen uses). Bee's published endpoints decide it:
+ *
+ *   claude-*  → Anthropic Messages (`x-api-key`; root baseURL so the appended
+ *               `/v1/messages` lands on `/bee/v1/messages`)
+ *   qwen*     → Anthropic Messages (Bee fronts Qwen that way, not via chat)
+ *   gpt-*     → OpenAI Responses (`/bee/v1/responses`)
+ *   gemini-*  → Google generateContent (`/bee/v1/models/<id>:…`)
+ *   the rest  → chat/completions (the route default, `/bee/v1/chat/completions`)
+ *
+ * Because the row is multi-protocol the adapter shows Bee's live
+ * `GET /bee/v1/models` catalogue unfiltered: every family it lists has a wire
+ * route. The TUI treats this ONE route as qialike-owned — always listed in
+ * `/models` (even before a key is set, so the dialog can ask for one), never
+ * deactivatable with `Ctrl+D`. See `PROTECTED_PROVIDER_ROUTES` in `index.tsx`
  * and `listConfigured` in `models.ts`.
  */
 export const QIALIKE_BEE_ROUTE = 'qialike'
@@ -2272,11 +2284,12 @@ export function apply(ctx: Context): void {
   // UI and the adapter, not just the built-in templates.
   const extraTemplates: TuiProviderTemplate[] = []
   const hiddenRoutes = new Set<string>()
-  // QiaLike Bee ships OFF: its gateway is not serving yet, so offering the route
-  // would offer a provider whose dialog cannot work. Seeding it here rather than
-  // removing the template row keeps the row (and the route's reserved name, its
-  // keyless "ask for a key" behaviour, and its Ctrl+D protection) in one place,
-  // ready for the switch to turn back on.
+  // QiaLike Bee ships OFF while the service stays in internal testing: the
+  // gateway serves, but no member of the public can buy a key yet, so shipping
+  // the row on would offer a provider a user cannot sign up for. Seeding it here
+  // rather than removing the template row keeps the row (and the route's
+  // reserved name, its keyless "ask for a key" behaviour, and its Ctrl+D
+  // protection) in one place, ready for the switch to turn back on.
   if (!resolveBeeEnabled()) hiddenRoutes.add(QIALIKE_BEE_ROUTE)
   let adapterReg: { replace(providers: readonly string[]): void } | undefined
   let directoryReg: { replace(entries: readonly LlmConfigurableProvider[]): void } | undefined

@@ -6,16 +6,19 @@
  *    ignores it, and a hand-written `hidden_providers` entry cannot hide it;
  * 2. selecting it while it has NO API key asks for one (the key dialog) instead
  *    of opening an empty model list; once the key is set, selecting it lists the
- *    models qialike serves — the `deepseek-*` family, which is all Bee exposes to
- *    this route for now (`includeModelPrefixes: ["deepseek-"]`).
+ *    whole of Bee's live `/bee/v1/models` catalogue, because the row routes
+ *    every family to the wire protocol Bee documents for it (`modelsApi`:
+ *    `claude-`/`qwen` → Messages, `gpt-` → Responses, `gemini-` → Google,
+ *    everything else → chat/completions).
  *
  * Three layers are pinned here, in the order they can break: the shipped data
- * (the template row), the model filter the adapter applies to Bee's live
- * `/bee/v1/models` catalog, and the store/wiring behaviour the dialog reads.
+ * (the template row and its protocol map), the unfiltered live catalogue the
+ * adapter shows for a multi-protocol route, and the store/wiring behaviour the
+ * dialog reads.
  *
- * The three static ids and their limits mirror the DeepSeek models the built-in
- * `deepseek-official` route already declares — same upstream models, and the
- * row is only the fallback for when Bee's `/models` cannot be reached.
+ * The static ids are the fallback for when Bee's `/models` cannot be reached —
+ * the DeepSeek models the built-in `deepseek-official` route already declares
+ * (plus the `deepseek-v4.1-flash` id Bee answers anonymously today).
  *
  * DSH_HOME points at a throwaway temp dir so the real `~/.dsh` is never touched.
  *
@@ -28,7 +31,7 @@ import { afterAll, beforeEach, afterEach, describe, expect, test } from 'bun:tes
 import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { filterDynamicModels, fetchDynamicModels, PROVIDER_TEMPLATES, QIALIKE_BEE_ROUTE } from '../packages/qialike-app/src/llm.ts'
+import { filterDynamicModels, fetchDynamicModels, PROVIDER_TEMPLATES, QIALIKE_BEE_ROUTE, resolveModelApi } from '../packages/qialike-app/src/llm.ts'
 import { Store, type ProviderModelsEntry } from '../packages/qialike-app/src/index.tsx'
 import { BEE_ENV, DEFAULT_BEE_ENABLED, resolveBeeEnabled } from '../packages/qialike-app/src/config.ts'
 
@@ -81,32 +84,69 @@ describe('the Bee template row', () => {
     expect(bee?.api).toBe('openai-completions')
   })
 
-  test('serves only the deepseek family — the shipped filter and the fallback list agree', () => {
-    expect(bee?.includeModelPrefixes).toEqual(['deepseek-'])
+  test('routes each family to the wire protocol and endpoint Bee documents', () => {
+    // Bee serves four protocols under one key (`/docs/bee` → "Endpoints"):
+    // GPT on Responses, Claude and Qwen on Messages, Gemini on Google, the
+    // rest on chat/completions. The map is the whole feature: without it every
+    // non-DeepSeek model would be posted to /chat/completions and fail.
+    expect(bee?.modelsApi).toEqual({
+      'claude-': { api: 'anthropic-messages', baseURL: 'https://qialike.com/bee' },
+      qwen: { api: 'anthropic-messages', baseURL: 'https://qialike.com/bee' },
+      'gpt-': { api: 'openai-responses' },
+      'gemini-': { api: 'google-generative' },
+    })
+    // `anthropic-messages` appends `/v1/messages`, so that override must be
+    // the root (template validation rejects a baseURL already ending in /v1);
+    // the other protocols append to the route's own `/bee/v1` baseURL.
+    expect(bee?.modelsApi?.['claude-']?.baseURL).toBe('https://qialike.com/bee')
+    expect(bee?.baseURL).toBe('https://qialike.com/bee/v1')
+  })
+
+  test('resolveModelApi lands every documented model on its protocol', () => {
+    const profile = bee as unknown as Parameters<typeof resolveModelApi>[0]
+    const cases: Array<[string, { api?: string; baseURL?: string }]> = [
+      ['gpt-5.6-sol', { api: 'openai-responses' }],
+      ['gpt-5-codex', { api: 'openai-responses' }],
+      ['claude-opus-4-8', { api: 'anthropic-messages', baseURL: 'https://qialike.com/bee' }],
+      ['claude-haiku-4-5', { api: 'anthropic-messages', baseURL: 'https://qialike.com/bee' }],
+      ['qwen3.7-max', { api: 'anthropic-messages', baseURL: 'https://qialike.com/bee' }],
+      ['qwen3.5-plus', { api: 'anthropic-messages', baseURL: 'https://qialike.com/bee' }],
+      ['gemini-3.5-flash', { api: 'google-generative' }],
+      // Everything else keeps the route default: chat/completions, appended to
+      // the route's own `/bee/v1` baseURL by the adapter.
+      ['deepseek-v4.1-flash', {}],
+      ['deepseek-v4-pro', {}],
+      ['glm-5.2', {}],
+      ['kimi-k2.6', {}],
+      ['minimax-m3', {}],
+      ['grok-4.5', {}],
+      ['big-pickle', {}],
+      ['mimo-v2.5-free', {}],
+    ]
+    for (const [model, expected] of cases) {
+      expect(resolveModelApi(profile, model), model).toEqual(expected)
+    }
+  })
+
+  test('the static fallback covers the deepseek family the live catalogue serves', () => {
+    // Fallback only: Bee answers `/models` anonymously with a single id
+    // (`deepseek-v4.1-flash` at the time of writing) and the full catalogue
+    // once a key is set. These rows are what the picker shows when the probe
+    // fails, so they must stay a real, deepseek-served subset.
+    expect(bee?.includeModelPrefixes).toBeUndefined()
+    expect(bee?.excludeModelPrefixes).toBeUndefined()
     const ids = (bee?.models ?? []).map((m) => m.id)
-    expect(ids).toEqual(['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free'])
-    for (const id of ids) expect(id.startsWith('deepseek-')).toBe(true)
-    // A model with no declared limit would silently ride the provider's own
-    // default; the DeepSeek rows keep their explicit ceiling.
+    expect(ids).toEqual(['deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free'])
     for (const model of bee?.models ?? []) {
       expect(model.contextWindow).toBe(1000000)
       expect(model.maxTokens).toBe(256000)
     }
   })
 
-  test('the filter keeps deepseek ids out of Bee’s full live catalog and drops the rest', () => {
-    // What https://qialike.com/bee/v1/models answers with (Bee fronts GPT /
-    // Claude / Gemini / GLM / Kimi / … as well).
-    const live = ['gpt-5.6-sol', 'claude-opus-4-8', 'glm-5.2', 'kimi-k2.6', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free', 'minimax-m3']
-    expect(filterDynamicModels(live, { include: bee?.includeModelPrefixes }))
-      .toEqual(['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free'])
-  })
-
-  test('the live probe reads {baseURL}/models and the template filter narrows it', async () => {
-    // The ids Bee's own docs list (`/docs/bee` in the site repo), minus the
-    // protocol families this adapter cannot speak — a catalogue with no
-    // deepseek- entry would leave the route empty, so the stub has both.
-    const catalog = ['gpt-5.6-sol', 'claude-opus-4-8', 'gemini-3.5-flash', 'qwen3.7-max', 'glm-5.2', 'kimi-k2.6', 'grok-4.5', 'minimax-m3', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free']
+  test('the live probe reads {baseURL}/models and the catalogue stays unfiltered', async () => {
+    // The families Bee's own docs list (`/docs/bee`): all of them are
+    // routable now, so the picker must show all of them.
+    const catalog = ['gpt-5.6-sol', 'claude-opus-4-8', 'gemini-3.5-flash', 'qwen3.7-max', 'glm-5.2', 'kimi-k2.6', 'grok-4.5', 'minimax-m3', 'deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free']
     const realFetch = globalThis.fetch
     const seen: string[] = []
     globalThis.fetch = (async (input: string | URL | Request) => {
@@ -118,21 +158,22 @@ describe('the Bee template row', () => {
       const live = await fetchDynamicModels(bee!.baseURL)
       expect(seen).toEqual(['https://qialike.com/bee/v1/models'])
       expect(live).toEqual(catalog)
-      // …the adapter's own composition for a non-multi-protocol route.
-      expect(filterDynamicModels(live!, { include: bee?.includeModelPrefixes }))
-        .toEqual(['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free'])
+      // The adapter's composition for a modelsApi route: identity, no include
+      // or exclude list (a filter would hide families that DO have a wire).
+      expect(filterDynamicModels(live!, undefined)).toEqual(catalog)
     } finally {
       globalThis.fetch = realFetch
     }
   })
 
-  test('the adapter is what applies that filter, off the effective profile', () => {
-    // Source guard for the one line that makes the row's filter real: a
-    // multi-protocol route (modelsApi) skips it, ordinary routes do not — Bee
-    // is an ordinary single-protocol route.
+  test('the adapter skips the catalogue filter exactly for a modelsApi route', () => {
+    // Source guard for the branch the feature depends on: a multi-protocol
+    // route keeps the whole live catalogue, an ordinary route applies its
+    // include/exclude lists.
     const source = read('llm.ts')
+    expect(source).toContain('const multiProtocol = template?.modelsApi !== undefined')
     expect(source).toContain('include: effective.includeModelPrefixes')
-    expect(bee?.modelsApi).toBeUndefined()
+    expect(bee?.modelsApi).toBeDefined()
   })
 
   test('no other route claims to be qialike-owned', () => {
@@ -226,10 +267,11 @@ describe('selecting Bee: key first, models after', () => {
 /**
  * The `bee` switch (`qialike.json` `bee.enabled`, or `QIALIKE_BEE`).
  *
- * Bee ships OFF because its gateway is not serving yet, so these cases lead with
- * the default and then the two ways to turn it back on. The environment variable
- * deliberately does NOT persist (unlike `QIALIKE_RESUME_LAST`): a one-off
- * override must not silently re-enable the route for every later launch.
+ * Bee ships OFF while the service is in internal testing (the gateway is live but
+ * no one can sign up yet), so these cases lead with the default and then the two
+ * ways to turn it back on. The environment variable deliberately does NOT persist
+ * (unlike `QIALIKE_RESUME_LAST`): a one-off override must not silently re-enable
+ * the route for every later launch.
  */
 describe('the bee switch', () => {
   let home = ''
