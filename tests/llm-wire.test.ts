@@ -15,6 +15,7 @@ import {
   PROVIDER_TEMPLATES,
   REASONING_EFFORTS,
   filterDynamicModels,
+  parseSse,
   resolveModelApi,
   serializeMessagesGoogle,
   serializeRequestOpenAI,
@@ -23,6 +24,91 @@ import {
   translateResponses,
 } from '../packages/qialike-app/src/llm.ts'
 import { OPENCODE_TEMPLATES } from '../packages/qialike-app/src/opencode.ts'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+const SOURCE = readFileSync(join(import.meta.dir, '..', 'packages', 'qialike-app', 'src', 'llm.ts'), 'utf8')
+
+/** A body the runtime hands over without decoding it (see `parseSse`). */
+const stream = (chunks: readonly (Uint8Array | string)[]): ReadableStream<Uint8Array> =>
+  new ReadableStream({
+    start(controller) {
+      for (const chunk of chunks) {
+        controller.enqueue(typeof chunk === 'string' ? new TextEncoder().encode(chunk) : chunk)
+      }
+      controller.close()
+    },
+  })
+
+describe('parseSse', () => {
+  test('yields every data payload, ignoring comments and other fields', async () => {
+    const body = stream([
+      ': keep-alive\n\n',
+      'data: {"a":1}\n\n',
+      'event: ping\ndata: {"a":2}\n\n',
+      'data: [DONE]\n\n',
+    ])
+    const out: unknown[] = []
+    for await (const chunk of parseSse(body)) out.push(chunk)
+    expect(out).toEqual([{ a: 1 }, { a: 2 }])
+  })
+
+  test('a compressed body is an ERROR, not an empty answer', async () => {
+    // The real first bytes Bee answered with once the runtime advertised zstd:
+    // magic 28 b5 2f fd, `content-encoding` already stripped by the time the
+    // app sees the response. Nothing here starts with `data:`, and the turn used
+    // to finish "successfully" with an empty assistant message and a blank
+    // screen — the bug this guard exists for.
+    const zstd = new Uint8Array([0x28, 0xb5, 0x2f, 0xfd, 0x00, 0x48, 0xcc, 0x07, 0x00, 0x86, 0x53])
+    const out: unknown[] = []
+    await expect(async () => {
+      for await (const chunk of parseSse(stream([zstd]))) out.push(chunk)
+    }).toThrow(/compressed/)
+    expect(out).toEqual([])
+  })
+
+  test('payload-shaped lines that never parse are also an error', async () => {
+    // A proxy that re-wraps the body (base64, HTML-escaped JSON) still produces
+    // `data:` lines; every one of them fails to parse. Same silence, same guard.
+    const out: unknown[] = []
+    await expect(async () => {
+      for await (const chunk of parseSse(stream(['data: «not json»\n\n', 'data: \u0000\u0001\n\n']))) out.push(chunk)
+    }).toThrow(/2 unparseable payload/)
+    expect(out).toEqual([])
+  })
+
+  test('one bad payload among good ones is still tolerated', async () => {
+    // The guard must not turn a single malformed frame into a failed turn.
+    const out: unknown[] = []
+    for await (const chunk of parseSse(stream(['data: {"ok":1}\n\n', 'data: <<garbage>>\n\n']))) out.push(chunk)
+    expect(out).toEqual([{ ok: 1 }])
+  })
+
+  test('an honestly empty stream is not an error', async () => {
+    const out: unknown[] = []
+    for await (const chunk of parseSse(stream([': nothing but comments\n\n']))) out.push(chunk)
+    expect(out).toEqual([])
+  })
+})
+
+describe('streaming requests ask for identity encoding', () => {
+  test('every stream method sends accept-encoding: identity', () => {
+    // Four protocols, one helper: a provider that compresses its SSE body with a
+    // codec the runtime advertises but does not decode leaves the app with an
+    // empty answer. Advertising identity is the fix, so no stream path may build
+    // its headers without it.
+    expect(SOURCE).toContain("return { 'accept-encoding': 'identity', ...attributionHeaders() }")
+    const streams = SOURCE.match(/\.\.\.wireHeaders\(\),/g) ?? []
+    expect(streams).toHaveLength(4)
+    expect(SOURCE).not.toContain('      ...attributionHeaders(),\n')
+  })
+
+  test('the live-model probe asks for identity too', () => {
+    // The same gateway serves /models as JSON; a compressed body `response.json()`
+    // cannot read would silently degrade the picker to the static catalogue.
+    expect(SOURCE).toContain("accept: 'application/json', 'accept-encoding': 'identity'")
+  })
+})
 
 describe('filterDynamicModels', () => {
   const ids = ['gpt-5.4-mini', 'gpt-5', 'grok-4.6', 'muse-spark-1.2', 'claude-sonnet-5', 'deepseek-v4-flash']

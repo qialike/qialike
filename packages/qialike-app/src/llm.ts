@@ -268,6 +268,28 @@ export const DEEPSEEK_OFFICIAL_ROUTE = 'deepseek-official'
  */
 export const QIALIKE_BEE_ROUTE = 'qialike'
 
+/**
+ * Headers every streaming provider request carries.
+ *
+ * `accept-encoding: identity` is not a preference, it is a correctness
+ * requirement. A gateway behind nginx (Bee is one) is free to compress a
+ * `text/event-stream` body when the client advertises support — and the
+ * runtime's `fetch` advertises `zstd` on its own. Bee answers with a zstd body
+ * (magic `28 b5 2f fd`) while the `content-encoding` header is gone by the time
+ * the app sees the response, so nothing decodes it: no line starts with
+ * `data:`, the turn ends with an empty assistant message and the screen shows
+ * nothing at all. Asking for identity keeps the bytes exactly as the provider
+ * wrote them — SSE is already a streaming format, so compression buys nothing
+ * a reader can use anyway.
+ *
+ * Attribution stays: it is the harness's own contract (`attributionHeaders()`),
+ * and omitting it would misreport the client.
+ * @returns the header set to merge into a provider request.
+ */
+function wireHeaders(): Record<string, string> {
+  return { 'accept-encoding': 'identity', ...attributionHeaders() }
+}
+
 /** The `qialike-llm` settings section shape. */
 interface TuiLlmSection {
   providers?: Record<string, TuiProviderProfile>
@@ -600,7 +622,10 @@ export async function fetchDynamicModelInfo(
   try {
     // OpenAI-compatible gateways expect `Bearer`. Anthropic-protocol routes never reach
     // here (the caller skips them: they have no `/models`), so one scheme is enough.
-    const headers: Record<string, string> = { accept: 'application/json' }
+    // `accept-encoding: identity` for the same reason {@link wireHeaders} carries it:
+    // a gateway that compresses with a codec the runtime advertises but cannot decode
+    // would otherwise answer 200 with a body `response.json()` cannot read.
+    const headers: Record<string, string> = { accept: 'application/json', 'accept-encoding': 'identity' }
     if (authenticated) headers.authorization = `Bearer ${apiKey}`
     const response = await fetch(`${root}/models`, {
       headers,
@@ -1416,32 +1441,89 @@ function mapUsage(usage: NonNullable<WireChunk['usage']>): TokenUsage {
   }
 }
 
-/** Parse an SSE body into wire chunks. */
-async function* parseSse<T>(body: ReadableStream<Uint8Array>): AsyncIterable<T> {
+/**
+ * Parse an SSE body into wire chunks.
+ *
+ * Exported for the wire tests: the failure it now refuses to hide (below) is a
+ * transport problem that only a body-shaped stub can reproduce.
+ */
+export async function* parseSse<T>(body: ReadableStream<Uint8Array>): AsyncIterable<T> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
+  // A body that is not SSE at all — an HTML error page, or a COMPRESSED stream
+  // the runtime advertised support for and then failed to decode — parses into
+  // zero chunks: no line starts with `data:`, or every payload dies in the
+  // JSON.parse catch below. The turn then "succeeds" with an empty assistant
+  // message and NOTHING on screen, which reads as a hung app. Count both sides
+  // so that one specific case (payload-shaped lines, none of them parseable)
+  // becomes an error the status line can show.
+  let parsed = 0
+  let unparseable = 0
+  let dataLines = 0
+  let received = 0
+  // A compressed body is not just "no data: lines" — it decodes to replacement
+  // characters, which is what separates garbage from a comment-only keepalive.
+  let binaryish = false
+  // First few KB of decoded text, kept only to judge a body that yielded no
+  // payload at all (see the guard after the loop).
+  let head = ''
+  let sawDone = false
   try {
-    while (true) {
+    while (!sawDone) {
       const { done, value } = await reader.read()
       if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      received += value.length
+      const text = decoder.decode(value, { stream: true })
+      if (text.includes('\uFFFD')) binaryish = true
+      if (head.length < 4096) head += text
+      buffer += text
       const lines = buffer.split('\n')
       buffer = lines.pop() ?? ''
       for (const line of lines) {
         const trimmed = line.trim()
         if (!trimmed.startsWith('data:')) continue
+        dataLines++
         const data = trimmed.slice(5).trim()
-        if (data === '[DONE]') return
+        if (data === '[DONE]') { sawDone = true; break }
+        let payload: T
         try {
-          yield JSON.parse(data) as T
+          payload = JSON.parse(data) as T
         } catch {
-          // A malformed SSE payload is not a request failure; skip the line.
+          // A single malformed payload is not a request failure; skip the line
+          // but remember it (see the guards after the loop).
+          unparseable++
+          continue
         }
+        parsed++
+        yield payload
       }
     }
   } finally {
     reader.releaseLock()
+  }
+  if (parsed === 0 && unparseable > 0) {
+    throw new LlmError(
+      `provider stream carried ${unparseable} unparseable payload(s) and no usable chunk — the body is compressed or not server-sent events`,
+      'PROVIDER_ERROR',
+    )
+  }
+  // Bytes arrived but not one of them was an SSE field: a compressed body (the
+  // runtime strips `content-encoding` when it *claims* to have decoded), an HTML
+  // error page, or a proxy's own envelope. An honestly empty stream — comments
+  // only, or a bare `data: [DONE]` — is SSE-shaped and stays a quiet empty
+  // answer, so the judgement is "is this body an SSE document at all".
+  if (parsed === 0 && unparseable === 0 && dataLines === 0 && received > 0) {
+    const lines = head.split('\n').map((line) => line.trim()).filter((line) => line !== '')
+    const sseShaped = lines.every((line) => line.startsWith(':') || /^[a-z]+:/i.test(line))
+    if (!sseShaped) {
+      throw new LlmError(
+        binaryish
+          ? `provider returned ${received} undecodable byte(s) — the stream body is compressed and the runtime did not decode it`
+          : `provider returned ${received} byte(s) that are not server-sent events — the body is compressed or an error page`,
+        'PROVIDER_ERROR',
+      )
+    }
   }
 }
 
@@ -2077,7 +2159,7 @@ class TuiLlmAdapter extends LlmAdapter {
       'x-goog-api-key': apiKey,
       'content-type': 'application/json',
       'accept': 'text/event-stream',
-      ...attributionHeaders(),
+      ...wireHeaders(),
     }
     const response = await this.fetchOrThrow(
       `${profile.baseURL}/models/${encodeURIComponent(options.model)}:streamGenerateContent?alt=sse`,
@@ -2102,7 +2184,7 @@ class TuiLlmAdapter extends LlmAdapter {
       'authorization': `Bearer ${apiKey}`,
       'content-type': 'application/json',
       'accept': 'text/event-stream',
-      ...attributionHeaders(),
+      ...wireHeaders(),
     }
     const response = await this.fetchOrThrow(`${profile.baseURL}/responses`, headers, body, options)
     if (response.body === null) {
@@ -2122,7 +2204,7 @@ class TuiLlmAdapter extends LlmAdapter {
       'authorization': `Bearer ${apiKey}`,
       'content-type': 'application/json',
       'accept': 'text/event-stream',
-      ...attributionHeaders(),
+      ...wireHeaders(),
     }
     const response = await this.fetchOrThrow(`${profile.baseURL}/chat/completions`, headers, body, options)
     if (response.body === null) {
@@ -2146,7 +2228,7 @@ class TuiLlmAdapter extends LlmAdapter {
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
       'accept': 'text/event-stream',
-      ...attributionHeaders(),
+      ...wireHeaders(),
     }
     const response = await this.fetchOrThrow(`${profile.baseURL}/v1/messages`, headers, body, options)
     if (response.body === null) {
