@@ -5,6 +5,18 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.11.3] - 2026-10-21
+
+### Added
+
+- **QiaLike Bee speaks all four of its protocols** — a `modelsApi` map sends `claude-`/`qwen` to Messages, `gpt-` to Responses and `gemini-` to Google.
+- **Bee's model list is now the gateway's whole live catalogue** — the deepseek-only filter is gone, so every family the row can route is offered.
+- **Bee's static fallback gains `deepseek-v4.1-flash`** — the one id `/bee/v1/models` answers anonymously today.
+
+### Fixed
+
+- **Bee's key dialog points at `https://qialike.com/bee`** — it opened the homepage, which has no console entry.
+
 ## [0.11.2] - 2026-10-20
 
 ### Added

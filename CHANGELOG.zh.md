@@ -7,6 +7,18 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.11.3] - 2026-10-21
+
+### 新增
+
+- **QiaLike Bee 接通全部四种协议** —— `modelsApi` 把 `claude-`/`qwen` 交给 Messages、`gpt-` 交给 Responses、`gemini-` 交给 Google。
+- **Bee 的模型列表改为网关整份实时目录** —— 去掉 deepseek 过滤，凡能路由的模型族都会列出。
+- **Bee 静态兜底补上 `deepseek-v4.1-flash`** —— 匿名访问 `/bee/v1/models` 今天只回这一个 id。
+
+### 修复
+
+- **Bee 取 key 弹窗指向 `https://qialike.com/bee`** —— 原先打开首页，那里没有控制台入口。
+
 ## [0.11.2] - 2026-10-20
 
 ### 新增
