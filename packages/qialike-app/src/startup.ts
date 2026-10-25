@@ -46,6 +46,53 @@ export function parseResumeMode(mode: string | undefined): boolean {
   throw new Error(`unknown argument "${mode}" — did you mean "resume"? (see --help)`)
 }
 
+/** A resolved provider + model pair. */
+export interface ModelOverrideTarget {
+  readonly provider: string
+  readonly model: string
+}
+
+/**
+ * Resolve `--model` against the persisted selection.
+ *
+ * WHAT WAS BROKEN. The flag has always been documented as `provider/name`, but
+ * the implementation passed the whole string as the model id and kept the saved
+ * provider — so `--model qialike-bee/deepseek-v4.1-flash` asked the *other*
+ * provider for a model literally called `qialike-bee/deepseek-v4.1-flash`, which
+ * fails at request time with nothing in the UI saying why. `deepseek-v4-flash`
+ * (no slash) kept working, which is why nobody noticed.
+ *
+ * WHY THE PREFIX IS NOT SIMPLY SPLIT AT THE FIRST `/`. Model ids legitimately
+ * contain slashes — the China gateways serve `deepseek/deepseek-v4-flash-202605`
+ * and OpenRouter serves `openrouter/auto` — so splitting blindly would turn a
+ * real model id into a provider lookup. The prefix is consumed as a provider
+ * **only when it names a route this build can serve**; otherwise the whole
+ * argument stays a model id on the persisted provider, which is exactly the old
+ * behaviour for every id that contains a slash.
+ *
+ * An unknown prefix is therefore not an error: `--model foo/bar` with no `foo`
+ * route means "the model called `foo/bar`", and the request fails the same way
+ * it always did. Rejecting it would break ids we cannot enumerate.
+ * @param override - the raw `--model` value, or undefined when the flag is absent.
+ * @param knownRoute - whether a route key is one this build serves.
+ * @param persisted - the provider/model the session would otherwise use.
+ * @returns the provider and model the session should start on.
+ */
+export function resolveModelOverride(
+  override: string | undefined,
+  knownRoute: (route: string) => boolean,
+  persisted: ModelOverrideTarget,
+): ModelOverrideTarget {
+  if (override === undefined || override === '') return persisted
+  const slash = override.indexOf('/')
+  if (slash > 0) {
+    const provider = override.slice(0, slash)
+    const model = override.slice(slash + 1)
+    if (model !== '' && knownRoute(provider)) return { provider, model }
+  }
+  return { provider: persisted.provider, model: override }
+}
+
 /**
  * This app's command. Exported so the single-file launcher's thin entry
  * (apps/tui-bin/src/main.ts) can render the same width-aware `--help` text
@@ -61,7 +108,7 @@ export function tuiCommand(): Command {
     .argument('[mode]', "optional positional mode: 'resume' continues the newest session in this directory")
     .option('--workspace <dir>', 'the directory the agent operates in (default: the invoking directory)')
     .option('--resume <sessionId>', 'resume a specific persisted session (opens the conversation view directly)')
-    .option('--model <model>', 'a provider/name model override, e.g. deepseek-v4-flash')
+    .option('--model <model>', 'provider/name picks a provider too, e.g. qialike-bee/deepseek-v4.1-flash; a bare name keeps the current provider')
     .option('--dump-config', 'print the composed profile layers (embedded + user) and exit')
     .option('--no-project-overlay', "ignore the repository's .dsh/tui.cordis.patch.yml for this run")
     .addHelpText('after', `
@@ -70,6 +117,8 @@ Examples:
   qialike resume              continue the newest session with content here, straight into the conversation view
   qialike --resume <id>       open one specific persisted session
   qialike --workspace ~/proj  operate in ~/proj (its own sessions / New Session placeholder)
+  qialike --model qialike-bee/deepseek-v4.1-flash
+                              start on Bee's model, switching provider as needed
   # opt back into auto-resume on every launch: resume_last: true in ~/.dsh/qialike.json (or QIALIKE_RESUME_LAST=1)
 `)
 }

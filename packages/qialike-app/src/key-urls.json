@@ -61,5 +61,6 @@
   "azure": "https://portal.azure.com/",
   "opencode-zen": "https://opencode.ai/zen",
   "opencode-go": "https://opencode.ai/go",
-  "qialike": "https://qialike.com/bee"
+  "qialike-bee": "https://qialike.com/bee",
+  "qialike-bee-cn": "https://qialike.cn/bee"
 }

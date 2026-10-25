@@ -246,6 +246,12 @@ export const DEEPSEEK_OFFICIAL_ROUTE = 'deepseek-official'
  * Route key of **QiaLike Bee**, qialike's own model gateway
  * (`https://qialike.com/bee/v1`).
  *
+ * NAMED AFTER THE PRODUCT, like every other row in the catalogue: `alibaba-cn`,
+ * `opencode-zen`, `moonshotai-cn`. It was `qialike` through 0.11.3 — a route key
+ * that read like the program rather than a provider, and that made
+ * `--model qialike/<id>` look like a path inside qialike instead of a provider
+ * pick. 0.11.4 renamed it; `qialike` is no longer reserved.
+ *
  * It is a template row like any other provider — the row in
  * `provider-templates.json` carries the endpoint, the `QIALIKE_API_KEY`
  * credential reference and the model catalogue — but the gateway serves FOUR
@@ -261,12 +267,30 @@ export const DEEPSEEK_OFFICIAL_ROUTE = 'deepseek-official'
  *
  * Because the row is multi-protocol the adapter shows Bee's live
  * `GET /bee/v1/models` catalogue unfiltered: every family it lists has a wire
- * route. The TUI treats this ONE route as qialike-owned — always listed in
+ * route. The TUI treats these routes as qialike-owned — always listed in
  * `/models` (even before a key is set, so the dialog can ask for one), never
  * deactivatable with `Ctrl+D`. See `PROTECTED_PROVIDER_ROUTES` in `index.tsx`
  * and `listConfigured` in `models.ts`.
+ *
+ * TWO ROWS, ONE PRODUCT. Bee runs two independent deployments — `qialike.com`
+ * (international) and `qialike.cn` (mainland) — with their own consoles, key
+ * stores and catalogues; a key issued by one answers `Invalid API key` on the
+ * other. They are therefore two rows, the same way `alibaba` and `alibaba-cn`
+ * are, and each carries its own `apiKeyEnv` so a user can hold both keys at once.
  */
-export const QIALIKE_BEE_ROUTE = 'qialike'
+export const QIALIKE_BEE_ROUTE = 'qialike-bee'
+
+/** Route key of Bee's mainland deployment (`https://qialike.cn/bee/v1`). */
+export const QIALIKE_BEE_CN_ROUTE = 'qialike-bee-cn'
+
+/**
+ * Every route qialike owns, in catalogue order.
+ *
+ * One list, not two literals: the switch that hides Bee (`hiddenRoutes`), the
+ * dialog's never-removable set, the keyless-but-listed flag and the reserved
+ * name all have to agree, and they agree by reading this.
+ */
+export const QIALIKE_BEE_ROUTES: readonly string[] = [QIALIKE_BEE_ROUTE, QIALIKE_BEE_CN_ROUTE]
 
 /**
  * Headers every streaming provider request carries.
@@ -2366,13 +2390,13 @@ export function apply(ctx: Context): void {
   // UI and the adapter, not just the built-in templates.
   const extraTemplates: TuiProviderTemplate[] = []
   const hiddenRoutes = new Set<string>()
-  // QiaLike Bee ships OFF while the service stays in internal testing: the
-  // gateway serves, but no member of the public can buy a key yet, so shipping
-  // the row on would offer a provider a user cannot sign up for. Seeding it here
-  // rather than removing the template row keeps the row (and the route's
-  // reserved name, its keyless "ask for a key" behaviour, and its Ctrl+D
-  // protection) in one place, ready for the switch to turn back on.
-  if (!resolveBeeEnabled()) hiddenRoutes.add(QIALIKE_BEE_ROUTE)
+  // QiaLike Bee ships ON (0.11.4). Seeding the hidden set here — rather than
+  // removing the template rows — is what keeps the rows (their reserved names,
+  // their keyless "ask for a key" behaviour and their Ctrl+D protection) in one
+  // place, ready for the switch to turn them back on. BOTH deployments follow
+  // the one switch: they are one product, and a user who turned Bee off does not
+  // want the mainland row left behind.
+  if (!resolveBeeEnabled()) for (const route of QIALIKE_BEE_ROUTES) hiddenRoutes.add(route)
   let adapterReg: { replace(providers: readonly string[]): void } | undefined
   let directoryReg: { replace(entries: readonly LlmConfigurableProvider[]): void } | undefined
   const reRegister = (): void => {

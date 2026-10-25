@@ -59,15 +59,17 @@ export const RESUME_LAST_ENV = 'QIALIKE_RESUME_LAST'
 
 /** Whether QiaLike Bee — qialike's own gateway route — is offered.
  *
- *  OFF by default, and deliberately the opposite default from the other
- *  gateway switches: those unload a family a user may already depend on, so
- *  they stay on unless disabled. Bee's gateway IS serving (its `/models`,
- *  `/chat/completions`, `/responses`, `/messages` and Google endpoints are
- *  live), but the service is still in internal testing and closed to the
- *  public — a shipped-on row would offer every user a provider they cannot
- *  buy a key for. Turn it on (`bee: { enabled: true }`, or `QIALIKE_BEE=1`)
- *  to use the route now; when Bee opens, flip this one constant. */
-export const DEFAULT_BEE_ENABLED = false
+ *  ON by default since 0.11.4, which is the same default the other gateway
+ *  switches have (they unload a family a user may already depend on, so they
+ *  stay on unless disabled). Through 0.11.3 it shipped OFF because Bee was —
+ *  and still is — in internal testing, but a hidden row is worse than a visible
+ *  one that asks for a key: the dialog already says where to get one, and a row
+ *  nobody can see cannot be tried by the testers who do have a key.
+ *
+ *  Turning it off is `bee: { enabled: false }` in `qialike.json`, or
+ *  `QIALIKE_BEE=0` for one run. Off, the row leaves `/models` and the adapter
+ *  entirely and the route name stops being reserved. */
+export const DEFAULT_BEE_ENABLED = true
 
 /** Environment variable that overrides the Bee default, for a one-off run or CI
  *  (unlike {@link RESUME_LAST_ENV} this is NOT persisted — an override should
@@ -175,8 +177,8 @@ export function resolveResumeLast(): boolean {
  * malformed values falling through), with one deliberate difference: the
  * environment variable is **not** written back. Auto-resume is a preference the
  * command line may legitimately re-state; this is a switch a run may need to
- * flip for one invocation — persisting `QIALIKE_BEE=1` would silently turn the
- * route back on for every later launch, which is the opposite of temporary.
+ * flip for one invocation — persisting `QIALIKE_BEE=0` would silently turn the
+ * route off for every later launch, which is the opposite of temporary.
  * @returns whether Bee's template row is offered.
  */
 export function resolveBeeEnabled(): boolean {

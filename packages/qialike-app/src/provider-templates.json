@@ -3433,7 +3433,7 @@
     "needsBaseURL": true
   },
   {
-    "route": "qialike",
+    "route": "qialike-bee",
     "name": "QiaLike Bee",
     "baseURL": "https://qialike.com/bee/v1",
     "apiKeyEnv": "QIALIKE_API_KEY",
@@ -3446,6 +3446,55 @@
       "qwen": {
         "api": "anthropic-messages",
         "baseURL": "https://qialike.com/bee"
+      },
+      "gpt-": {
+        "api": "openai-responses"
+      },
+      "gemini-": {
+        "api": "google-generative"
+      }
+    },
+    "models": [
+      {
+        "id": "deepseek-v4.1-flash",
+        "name": "DeepSeek V4.1 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "deepseek-v4-pro",
+        "name": "DeepSeek V4 Pro",
+        "contextWindow": 1000000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "deepseek-v4-flash",
+        "name": "DeepSeek V4 Flash",
+        "contextWindow": 1000000,
+        "maxTokens": 256000
+      },
+      {
+        "id": "deepseek-v4-flash-free",
+        "name": "DeepSeek V4 Flash Free",
+        "contextWindow": 1000000,
+        "maxTokens": 256000
+      }
+    ]
+  },
+  {
+    "route": "qialike-bee-cn",
+    "name": "QiaLike Bee (China)",
+    "baseURL": "https://qialike.cn/bee/v1",
+    "apiKeyEnv": "QIALIKE_CN_API_KEY",
+    "api": "openai-completions",
+    "modelsApi": {
+      "claude-": {
+        "api": "anthropic-messages",
+        "baseURL": "https://qialike.cn/bee"
+      },
+      "qwen": {
+        "api": "anthropic-messages",
+        "baseURL": "https://qialike.cn/bee"
       },
       "gpt-": {
         "api": "openai-responses"

@@ -6,11 +6,11 @@
  * renders the /models dialog and consumes this service; nothing here touches
  * the UI store.
  *
- * One route is special: **`QIALIKE_BEE_ROUTE`** (QiaLike Bee), qialike's own
- * OpenAI-compatible gateway. It ships as an ordinary template row, but
- * `listProviders` marks it `builtin` and `listConfigured` keeps it listed even
- * while it has no credential (`configured: false`), which is what lets the
- * dialog ask for the key instead of hiding the provider.
+ * Some routes are special: **`QIALIKE_BEE_ROUTES`** (QiaLike Bee, both
+ * deployments), qialike's own OpenAI-compatible gateway. They ship as ordinary
+ * template rows, but `listProviders` marks them `builtin` and `listConfigured`
+ * keeps them listed even while they have no credential (`configured: false`),
+ * which is what lets the dialog ask for the key instead of hiding the provider.
  *
  * @module @qialike/qialike-app/models
  */
@@ -20,7 +20,7 @@ import { credentialRef } from '@deepseek-ai/dsh-credentials'
 import {
   resolveDefaultEffort,
   effectiveProfile,
-  QIALIKE_BEE_ROUTE,
+  QIALIKE_BEE_ROUTES,
   type ReasoningEffortOption,
   type TuiProviderProfile,
   type TuiProviderTemplate,
@@ -61,8 +61,8 @@ export interface ModelsProviderOption {
   name: string
   /** Models this route serves (built-in catalog for deepseek, settings for pi-ai routes). */
   models: readonly ModelsModelOption[]
-  /** qialike's own route (`QIALIKE_BEE_ROUTE`): the dialog always lists it —
-   *  even with no key, so selecting it can ask for one — and never lets it be
+  /** qialike's own routes (`QIALIKE_BEE_ROUTES`): the dialog always lists them —
+   *  even with no key, so selecting one can ask for it — and never lets them be
    *  hidden (`Ctrl+D`). */
   builtin?: boolean
   /** Whether this route's credential is configured. Filled by `listConfigured`
@@ -206,8 +206,9 @@ export function apply(ctx: Context): void {
           name,
           models,
           // qialike's own gateway (Bee) is not a user-contributed route: the
-          // dialog always shows it and refuses to deactivate it.
-          ...(provider === QIALIKE_BEE_ROUTE ? { builtin: true as const } : {}),
+          // dialog always shows it and refuses to deactivate it. Both
+          // deployments qualify — they are one product.
+          ...(QIALIKE_BEE_ROUTES.includes(provider) ? { builtin: true as const } : {}),
         })
       }
       for (const entry of configurable) {
@@ -294,13 +295,13 @@ export function apply(ctx: Context): void {
       if (!ROUTE_PATTERN.test(route)) {
         return { ok: false, error: 'route must be lowercase kebab-case, e.g. my-gateway' }
       }
-      if (resolveBeeEnabled() && route === QIALIKE_BEE_ROUTE) {
+      if (resolveBeeEnabled() && QIALIKE_BEE_ROUTES.includes(route)) {
         // The route is qialike's own gateway: a settings profile under it would
         // shadow the shipped endpoint while the dialog kept treating the entry
         // as qialike-owned (always listed, never removable). While Bee is OFF
-        // the route is not offered at all, so the name stops being reserved —
+        // the routes are not offered at all, so the names stop being reserved —
         // reserving a route nothing uses would just be an unexplained refusal.
-        return { ok: false, error: `route "${QIALIKE_BEE_ROUTE}" is reserved for qialike's own gateway (QiaLike Bee)` }
+        return { ok: false, error: `route "${route}" is reserved for qialike's own gateway (QiaLike Bee)` }
       }
       const baseURL = input.baseURL.trim()
       if (baseURL === '') return { ok: false, error: 'base URL is required' }

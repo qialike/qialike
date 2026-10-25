@@ -31,7 +31,7 @@ import { afterAll, beforeEach, afterEach, describe, expect, test } from 'bun:tes
 import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { filterDynamicModels, fetchDynamicModels, PROVIDER_TEMPLATES, QIALIKE_BEE_ROUTE, resolveModelApi } from '../packages/qialike-app/src/llm.ts'
+import { filterDynamicModels, fetchDynamicModels, PROVIDER_TEMPLATES, QIALIKE_BEE_CN_ROUTE, QIALIKE_BEE_ROUTE, QIALIKE_BEE_ROUTES, resolveModelApi } from '../packages/qialike-app/src/llm.ts'
 import { Store, type ProviderModelsEntry } from '../packages/qialike-app/src/index.tsx'
 import { BEE_ENV, DEFAULT_BEE_ENABLED, resolveBeeEnabled } from '../packages/qialike-app/src/config.ts'
 
@@ -75,7 +75,11 @@ function otherEntry(): ProviderModelsEntry {
 describe('the Bee template row', () => {
   test('is shipped under the qialike-owned route, endpoint and key reference', () => {
     expect(bee).toBeDefined()
-    expect(QIALIKE_BEE_ROUTE).toBe('qialike')
+    // Named after the product, like `alibaba-cn` / `opencode-zen` — not after the
+    // program. `qialike` was the route through 0.11.3; the old key must not come
+    // back, or `--model qialike/<id>` would keep reading as a qialike-internal path.
+    expect(QIALIKE_BEE_ROUTE).toBe('qialike-bee')
+    expect(PROVIDER_TEMPLATES.some((t) => t.route === 'qialike')).toBe(false)
     expect(bee?.name).toBe('QiaLike Bee')
     expect(bee?.baseURL).toBe('https://qialike.com/bee/v1')
     // The credential reference the published Bee docs use, so an exported
@@ -176,8 +180,29 @@ describe('the Bee template row', () => {
     expect(bee?.modelsApi).toBeDefined()
   })
 
+  test('two rows, one product — each deployment with its own endpoint and key', () => {
+    // `qialike.com` and `qialike.cn` are independent deployments: separate
+    // consoles, separate key stores (a .com key answers `Invalid API key` on
+    // .cn), separate catalogues. They are two rows the way `alibaba` and
+    // `alibaba-cn` are, and each names its own credential so both keys can be
+    // held at once.
+    expect(QIALIKE_BEE_ROUTES).toEqual(['qialike-bee', 'qialike-bee-cn'])
+    const cn = PROVIDER_TEMPLATES.find((t) => t.route === QIALIKE_BEE_CN_ROUTE)
+    expect(cn?.name).toBe('QiaLike Bee (China)')
+    expect(cn?.baseURL).toBe('https://qialike.cn/bee/v1')
+    expect(cn?.apiKeyEnv).toBe('QIALIKE_CN_API_KEY')
+    // The anthropic override must be the ROOT (the adapter appends /v1/messages),
+    // exactly as on the international row.
+    expect(cn?.modelsApi?.['claude-']?.baseURL).toBe('https://qialike.cn/bee')
+    expect(cn?.modelsApi?.['qwen']?.baseURL).toBe('https://qialike.cn/bee')
+    // The two rows must not share a credential reference, or switching one
+    // domain would silently break the other.
+    expect(bee?.apiKeyEnv).not.toBe(cn?.apiKeyEnv)
+  })
+
   test('no other route claims to be qialike-owned', () => {
-    expect(PROVIDER_TEMPLATES.filter((t) => t.route === QIALIKE_BEE_ROUTE)).toHaveLength(1)
+    const owned = PROVIDER_TEMPLATES.filter((t) => QIALIKE_BEE_ROUTES.includes(t.route))
+    expect(owned.map((t) => t.route)).toEqual(['qialike-bee', 'qialike-bee-cn'])
   })
 })
 
@@ -213,7 +238,7 @@ describe('Bee cannot be removed from /models', () => {
 
   test('the protected set is derived from the route constant, not a literal', () => {
     const source = read('index.tsx')
-    expect(source).toContain('new Set([QIALIKE_BEE_ROUTE])')
+    expect(source).toContain('new Set(QIALIKE_BEE_ROUTES)')
     // A config that still names it is rewritten, so the file stops carrying an
     // entry that the seed drops and that can never take effect.
     expect(source).toContain('storedHidden.some((route) => PROTECTED_PROVIDER_ROUTES.has(route))')
@@ -245,7 +270,7 @@ describe('selecting Bee: key first, models after', () => {
     expect(models).toContain('if (!configured && provider.builtin !== true) return undefined')
     expect(models).toContain('return { ...provider, models, configured }')
     // The flag is set once, where providers are declared.
-    expect(models).toContain('provider === QIALIKE_BEE_ROUTE ? { builtin: true as const } : {}')
+    expect(models).toContain('QIALIKE_BEE_ROUTES.includes(provider) ? { builtin: true as const } : {}')
     // …and survives the two mappings into the dialog's entry shape.
     expect(read('index.tsx')).toContain('...(p.configured === undefined ? {} : { configured: p.configured })')
     expect(read('panels/models.tsx')).toContain('...(p.builtin === undefined ? {} : { builtin: p.builtin })')
@@ -289,21 +314,25 @@ describe('the bee switch', () => {
     delete process.env[BEE_ENV]
   })
 
-  test('OFF by default — the whole point of the switch', () => {
-    expect(resolveBeeEnabled()).toBe(false)
-    expect(DEFAULT_BEE_ENABLED).toBe(false)
+  test('ON by default since 0.11.4 — the row ships visible', () => {
+    // Through 0.11.3 this was `false`: the gateway served but Bee was closed to
+    // the public, so the row was hidden. 0.11.4 ships it on — a hidden row cannot
+    // be tried by the testers who do hold a key, and the key dialog already says
+    // where to get one.
+    expect(resolveBeeEnabled()).toBe(true)
+    expect(DEFAULT_BEE_ENABLED).toBe(true)
   })
 
-  test('config turns it on, and back off', () => {
-    writeConfig({ bee: { enabled: true } })
-    expect(resolveBeeEnabled()).toBe(true)
+  test('config turns it off, and back on', () => {
     writeConfig({ bee: { enabled: false } })
     expect(resolveBeeEnabled()).toBe(false)
+    writeConfig({ bee: { enabled: true } })
+    expect(resolveBeeEnabled()).toBe(true)
   })
 
-  test('the environment turns it on for one run', () => {
-    process.env[BEE_ENV] = '1'
-    expect(resolveBeeEnabled()).toBe(true)
+  test('the environment turns it off for one run', () => {
+    process.env[BEE_ENV] = '0'
+    expect(resolveBeeEnabled()).toBe(false)
   })
 
   test('the environment wins over the config, both ways', () => {
@@ -317,24 +346,25 @@ describe('the bee switch', () => {
 
   test('the environment is NOT persisted — an override stays an override', () => {
     // The contrast with resolveResumeLast is the contract: that one writes the
-    // env value back, this one must not.
-    process.env[BEE_ENV] = '1'
-    expect(resolveBeeEnabled()).toBe(true)
+    // env value back, this one must not. `0` is the interesting direction now
+    // that the shipped default is ON: a one-off opt-out must not edit the config.
+    process.env[BEE_ENV] = '0'
+    expect(resolveBeeEnabled()).toBe(false)
     delete process.env[BEE_ENV]
-    expect(resolveBeeEnabled(), 'a later run must fall back to the default').toBe(false)
+    expect(resolveBeeEnabled(), 'a later run must fall back to the default').toBe(true)
     expect(existsSync(configFile()) ? JSON.parse(readFileSync(configFile(), 'utf8')) : {}).toEqual({})
   })
 
   test('a malformed value falls through to the config rather than guessing', () => {
-    writeConfig({ bee: { enabled: true } })
+    writeConfig({ bee: { enabled: false } })
     process.env[BEE_ENV] = 'maybe'
-    expect(resolveBeeEnabled()).toBe(true)
+    expect(resolveBeeEnabled(), 'the config still decides, not the default').toBe(false)
   })
 
   test('an empty value is not an override', () => {
-    writeConfig({ bee: { enabled: true } })
+    writeConfig({ bee: { enabled: false } })
     process.env[BEE_ENV] = '  '
-    expect(resolveBeeEnabled()).toBe(true)
+    expect(resolveBeeEnabled(), 'the config still decides').toBe(false)
   })
 
   test('the switch is consulted where the route is offered, and where it is reserved', () => {
@@ -342,7 +372,7 @@ describe('the bee switch', () => {
     // only hid the template row would leave `addProvider` refusing the name for
     // a route nothing offers.
     const llm = read('llm.ts')
-    expect(llm, 'the hidden set is seeded from the switch').toContain('if (!resolveBeeEnabled()) hiddenRoutes.add(QIALIKE_BEE_ROUTE)')
-    expect(read('models.ts')).toContain('if (resolveBeeEnabled() && route === QIALIKE_BEE_ROUTE)')
+    expect(llm, 'the hidden set is seeded from the switch').toContain('if (!resolveBeeEnabled()) for (const route of QIALIKE_BEE_ROUTES) hiddenRoutes.add(route)')
+    expect(read('models.ts')).toContain('if (resolveBeeEnabled() && QIALIKE_BEE_ROUTES.includes(route))')
   })
 })

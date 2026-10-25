@@ -55,13 +55,14 @@ import type {
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 import { type AddProviderInput, type ModelsProviderOption, type ProviderTemplate, type TuiModelsService } from './models.ts'
-import { reasoningEffortName, QIALIKE_BEE_ROUTE, type TuiProviderTemplate } from './llm.ts'
+import { reasoningEffortName, QIALIKE_BEE_ROUTES, type TuiProviderTemplate } from './llm.ts'
+import { resolveModelOverride } from './startup.ts'
 import { isNewerAvailable, parseUpdateReport, updateHintText, updateNoticeLines, type UpdateOffer } from './update-hint.ts'
 import { canSelfInstall } from './upgrade-policy.ts'
 import { installMethod } from './self-update.ts'
 import { emptySessionStats, createSessionStatsFolding, type SessionStats, type SessionStatsFolding } from './session-stats.ts'
 
-import { readHiddenProviders, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
+import { readHiddenProviders, readSection, readSidebarMode, resolveResumeLast, setHiddenProviders, setSidebarMode as persistSidebarMode, type SidebarMode } from './config.ts'
 import { findReusableBlank, foldSessionBlank, isPinned, listRowHeaders, prewarmTitles, rememberBlank, rememberFoldedTitle, rememberTitle, sessionBlank, sessionDisplayTitle, setHeadTitleProbe, type SessionHeaderLike, type SessionTitlesPersistence } from './session-titles.ts'
 import { lastActivity, touchSession } from './session-activity.ts'
 import { theme, type ThemePalette } from './theme.ts'
@@ -201,12 +202,12 @@ export interface ProviderModelsEntry {
 
 /**
  * Provider routes the user cannot deactivate: qialike's own gateway (QiaLike
- * Bee, `QIALIKE_BEE_ROUTE`). `Ctrl+D`/`Alt+D` refuses them with a notice, the
- * store's hide path ignores them, and a hand-written `hidden_providers` entry
- * naming one is filtered out on seed — so no local state can remove the route
- * from `/models`.
+ * Bee, both deployments — `QIALIKE_BEE_ROUTES`). `Ctrl+D`/`Alt+D` refuses them
+ * with a notice, the store's hide path ignores them, and a hand-written
+ * `hidden_providers` entry naming one is filtered out on seed — so no local
+ * state can remove the route from `/models`.
  */
-const PROTECTED_PROVIDER_ROUTES: ReadonlySet<string> = new Set([QIALIKE_BEE_ROUTE])
+const PROTECTED_PROVIDER_ROUTES: ReadonlySet<string> = new Set(QIALIKE_BEE_ROUTES)
 
 // `todo/write` is typed in the harness by declaration merging from
 // `@deepseek-ai/dsh-tool-todo`, whose types this package's typecheck does not
@@ -3966,9 +3967,34 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
 
   /** The model this session runs under: the persisted default. */
   let selection = defaultModel.currentSelection()
-  const agentOptions = config.model === undefined
-    ? { provider: selection.provider, model: selection.model }
-    : { provider: selection.provider, model: config.model }
+  // `--model` may name a provider (`qialike-bee/deepseek-v4.1-flash`) or only a
+  // model (`deepseek-v4-flash`). Which one it is depends on whether the prefix
+  // is a route this build serves — model ids may themselves contain a slash
+  // (the China gateways serve `deepseek/deepseek-v4-flash-202605`), so the flag
+  // cannot simply split on the first one. See `resolveModelOverride`.
+  //
+  // The route set comes from the LIVE template registry, not from
+  // `PROVIDER_TEMPLATES`: the four gateway groups (OpenCode, China, foreign,
+  // Azure) register their rows through `tuiLlmTemplates` at mount time, so a
+  // static import would call every one of them "not a provider" and leave
+  // `--model openrouter/...` looking like a model id. `hiddenRoutes()` is unioned
+  // in because a switch may have unloaded a row this run — that must not turn its
+  // name into a model id.
+  const routeRegistry = ctx.get('tuiLlmTemplates') as
+    | { list(): readonly TuiProviderTemplate[]; hiddenRoutes(): readonly string[] }
+    | undefined
+  const servedRoutes = new Set<string>([
+    'deepseek-official',
+    ...(routeRegistry?.list().map((template) => template.route) ?? []),
+    ...(routeRegistry?.hiddenRoutes() ?? []),
+    ...Object.keys((readSection('llm') as { providers?: Record<string, unknown> } | undefined)?.providers ?? {}),
+  ])
+  const override = resolveModelOverride(
+    config.model,
+    (route) => servedRoutes.has(route),
+    { provider: selection.provider, model: selection.model },
+  )
+  const agentOptions = { provider: override.provider, model: override.model }
   // The mutable selection ref is shared: prompt assembly reads it per request
   // (so the /models dialog can switch the live agent's model), and setup()
   // couples it to the agent.
