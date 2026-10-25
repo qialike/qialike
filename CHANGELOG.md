@@ -5,6 +5,18 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.11.4] - 2026-10-22
+
+### Changed
+
+- **Bee's route is now `qialike-bee`** — it was `qialike`, which read like the program rather than a provider, and made `--model qialike/<id>` look like a path inside qialike.
+- **Bee's mainland deployment is its own row, `qialike-bee-cn`** — `.com` and `.cn` keep separate consoles, keys and catalogues, so each has a row and its own key reference.
+- **QiaLike Bee ships enabled** — the row is offered without a switch, so a tester holding a key no longer has to find one first; `bee.enabled: false` takes it out again.
+
+### Fixed
+
+- **`--model provider/name` really switches provider** — the provider half was ignored, so the whole string became a model id on the old route and the request failed.
+
 ## [0.11.3] - 2026-10-21
 
 ### Added

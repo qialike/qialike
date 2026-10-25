@@ -7,6 +7,18 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.11.4] - 2026-10-22
+
+### 变更
+
+- **Bee 的路由名改为 `qialike-bee`** —— 原名 `qialike` 读起来像程序而不是供应商，也让 `--model qialike/<id>` 看着像 qialike 内部路径。
+- **Bee 国内站独立成行 `qialike-bee-cn`** —— `.com` 与 `.cn` 的控制台、密钥、模型目录都不通用，故各占一行、各自引用自己的凭证。
+- **QiaLike Bee 出厂开启** —— 无需开关即可见，持 key 的内测人员不必先找开关；`bee.enabled: false` 可关掉。
+
+### 修复
+
+- **`--model provider/name` 真的切换供应商** —— 原先只取模型部分，整串被当成旧路由上的模型 id，请求必然失败。
+
 ## [0.11.3] - 2026-10-21
 
 ### 新增
