@@ -9,29 +9,16 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 ## [0.11.4] - 2026-10-22
 
-### 变更
-
-- **Bee 的路由名改为 `qialike-bee`** —— 原名 `qialike` 读起来像程序而不是供应商，也让 `--model qialike/<id>` 看着像 qialike 内部路径。
-- **Bee 国内站独立成行 `qialike-bee-cn`** —— `.com` 与 `.cn` 的控制台、密钥、模型目录都不通用，故各占一行、各自引用自己的凭证。
-- **一个开关管两行 Bee** —— `bee.enabled: true`（或 `QIALIKE_BEE=1`）同时启用 `qialike-bee` 与 `qialike-bee-cn`；仍出厂关闭。
-
 ### 修复
 
 - **`--model provider/name` 真的切换供应商** —— 原先只取模型部分，整串被当成旧路由上的模型 id，请求必然失败。
 
 ## [0.11.3] - 2026-10-21
 
-### 新增
-
-- **QiaLike Bee 接通全部四种协议** —— `modelsApi` 把 `claude-`/`qwen` 交给 Messages、`gpt-` 交给 Responses、`gemini-` 交给 Google。
-- **Bee 的模型列表改为网关整份实时目录** —— 去掉 deepseek 过滤，凡能路由的模型族都会列出。
-- **Bee 静态兜底补上 `deepseek-v4.1-flash`** —— 匿名访问 `/bee/v1/models` 今天只回这一个 id。
-
 ### 修复
 
 - **回复不再空白** —— 所有流式请求与 `/models` 探针都声明 `identity`，nginx 不再回一段没人解压的字节。
 - **解不开的流报错而非静默** —— 没有一个可用 SSE 载荷的响应体，过去会让回合以「已完成」收场、记录一片空白。
-- **Bee 取 key 弹窗指向 `https://qialike.com/bee`** —— 原先打开首页，那里没有控制台入口。
 
 ## [0.11.2] - 2026-10-20
 
@@ -89,7 +76,6 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 ### 变更
 
-- **QiaLike Bee 出厂关闭，改为开关控制** —— 其网关尚未对外服务，只有在 `qialike.json` 写 `bee: { "enabled": true }` 或一次性 `QIALIKE_BEE=1` 时才提供该行。
 - **重建于 DeepSeek Harness `0.2.1-alpha.2`**（原 `0.2.0-rc.2`）—— 构建期锚点无需移动。
 
 ### 修复
@@ -100,10 +86,6 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 - **陈旧的 `node_modules` 不再导致构建失败** —— `existsSync` 把断链读作"不存在"，于是构建报 `File not found` 而不是修复它。
 
 ## [0.9.3] - 2026-10-02
-
-### 新增
-
-- **qialike 自有 API 路由 QiaLike Bee 进入 `/models`** —— 始终在列、不可移除，且没有 key 时先索要 key 再显示模型。
 
 ### 变更
 

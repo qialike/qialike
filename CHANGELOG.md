@@ -7,29 +7,16 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ## [0.11.4] - 2026-10-22
 
-### Changed
-
-- **Bee's route is now `qialike-bee`** — it was `qialike`, which read like the program rather than a provider, and made `--model qialike/<id>` look like a path inside qialike.
-- **Bee's mainland deployment is its own row, `qialike-bee-cn`** — `.com` and `.cn` keep separate consoles, keys and catalogues, so each has a row and its own key reference.
-- **One switch now governs both Bee rows** — `bee.enabled: true` (or `QIALIKE_BEE=1`) brings up `qialike-bee` and `qialike-bee-cn` together; still off by default.
-
 ### Fixed
 
 - **`--model provider/name` really switches provider** — the provider half was ignored, so the whole string became a model id on the old route and the request failed.
 
 ## [0.11.3] - 2026-10-21
 
-### Added
-
-- **QiaLike Bee speaks all four of its protocols** — a `modelsApi` map sends `claude-`/`qwen` to Messages, `gpt-` to Responses and `gemini-` to Google.
-- **Bee's model list is now the gateway's whole live catalogue** — the deepseek-only filter is gone, so every family the row can route is offered.
-- **Bee's static fallback gains `deepseek-v4.1-flash`** — the one id `/bee/v1/models` answers anonymously today.
-
 ### Fixed
 
 - **A compressed reply no longer arrives empty** — every streaming request and the `/models` probe ask for `identity`, so nginx cannot hand back bytes nothing decodes.
 - **An undecodable stream is an error, not silence** — a body with no usable SSE payload used to end a turn as "completed" with a blank transcript.
-- **Bee's key dialog points at `https://qialike.com/bee`** — it opened the homepage, which has no console entry.
 
 ## [0.11.2] - 2026-10-20
 
@@ -87,7 +74,6 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 ### Changed
 
-- **QiaLike Bee ships off, behind a switch** — its gateway is not serving yet, so the row is offered only with `bee: { "enabled": true }` in `qialike.json` or `QIALIKE_BEE=1` for one run.
 - **Rebuilt on DeepSeek Harness `0.2.1-alpha.2`** (up from `0.2.0-rc.2`) — no anchored build patch moved.
 
 ### Fixed
@@ -98,10 +84,6 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 - **A stale `node_modules` no longer fails the build** — `existsSync` reads a dangling link as absent, so the build reported `File not found` instead of repairing it.
 
 ## [0.9.3] - 2026-10-02
-
-### Added
-
-- **QiaLike Bee, qialike's own API route, joins `/models`** — always listed, never removable, and it asks for the key before it shows a model.
 
 ### Changed
 

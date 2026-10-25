@@ -53,12 +53,7 @@ itself — showing every step and the model's streamed output on one screen.
   `/models` → `＋ Add provider` lists **62 providers** — internationally OpenAI, Anthropic, Google
   Gemini, xAI, Mistral, OpenRouter, Groq, Hugging Face; in China Qwen, Zhipu GLM, Kimi, MiniMax,
   Volcengine, SiliconFlow. Selecting one is all it takes (mostly OpenAI-compatible; Anthropic and
-  MiniMax speak their native Messages protocol), and `Ctrl+T` cycles the reasoning effort. Two
-  further rows are qialike's own: **QiaLike Bee** (`qialike-bee`, international) and **QiaLike Bee
-  (China)** (`qialike-bee-cn`). Both ship **off** while Bee stays closed to the public:
-  `bee: { "enabled": true }` in `qialike.json` — or `QIALIKE_BEE=1` for one run — brings both up.
-  Once on, selecting one asks for a key the first time and `Ctrl+D` cannot remove either (see
-  "Provider catalogue").
+  MiniMax speak their native Messages protocol), and `Ctrl+T` cycles the reasoning effort.
 - **Everything under `/`**: typing `/` opens the completion palette — `/models`, `/sessions`,
   `/theme`, `/export`, `/plan`, `/goal`, `/compact`, `/sidebar` and more; `↑/↓` to move, `Enter` to run.
 - **Also opens in a browser**: `qialike web` starts the Web UI DeepSeek Harness ships — it forwards
@@ -575,20 +570,6 @@ token URL does not change: `ssh -L 8080:localhost:3080 user@headless-host`, then
   the hidden one was current, the selection moves to another configured provider, and **with no
   usable provider left the model label reads `not set`**. Re-adding it means setting a key again.
   `＋ Add a custom provider` opens a field-by-field form for a custom endpoint and model ids.
-  **QiaLike Bee** (qialike's own gateway) is the exception, and it ships **off** while Bee stays
-  closed to the public: `bee: { "enabled": true }` in `qialike.json` (or `QIALIKE_BEE=1` for one run)
-  brings it up. It is **two rows, one product** — `qialike-bee` (`https://qialike.com/bee/v1`, key ref
-  `QIALIKE_API_KEY`) and `qialike-bee-cn` (`https://qialike.cn/bee/v1`, key ref
-  `QIALIKE_CN_API_KEY`) — because the two deployments have separate consoles, separate key stores and
-  separate catalogues; a key from one answers `Invalid API key` on the other. Both are listed even
-  before they have a key — selecting one
-  **asks for the API key** (the dialog links to that deployment's own `/bee` page) instead of opening
-  an empty model list — and `Ctrl+D` refuses both, so neither can be removed. With a key set, the
-  sub-list is that gateway's live `GET /bee/v1/models` catalogue **in full**: one key serves four wire
-  protocols, and the row routes each family to the one Bee documents for it — `claude-`/`qwen` to
-  Anthropic Messages, `gpt-` to OpenAI Responses, `gemini-` to Google generateContent, everything else
-  (DeepSeek, GLM, Kimi, MiniMax, Grok, …) to chat/completions. From the command line,
-  `qialike --model qialike-bee/deepseek-v4.1-flash` starts on one directly.
 - **`/theme` color schemes** (vim-style `:colorscheme`): bare `/theme` opens the **theme picker** —
   `↑/↓` to move, type to filter, **live preview** while moving, `Enter` applies and persists, `Esc`
   cancels and restores; `/theme <name>` and `/theme <role> <hex>` remain as shortcuts. **16 schemes**
@@ -692,19 +673,7 @@ templates and already-configured routes both leave `/models` and the adapter.
 | `tui-foreign-gateways` | `qialike-foreign-gateways: { enabled: false }` | OpenRouter, Vercel AI Gateway, Cloudflare, Hugging Face, Baseten, Fireworks AI, Together AI, Nvidia, Groq, Cerebras |
 
 Most speak the OpenAI-compatible protocol; Anthropic and MiniMax use their native Messages
-protocol. Two template rows are qialike's own: **QiaLike Bee** (`qialike-bee`, the gateway at
-`https://qialike.com/bee/v1`, key ref `QIALIKE_API_KEY`) and **QiaLike Bee (China)**
-(`qialike-bee-cn`, `https://qialike.cn/bee/v1`, key ref `QIALIKE_CN_API_KEY`) — the `/models`
-entries that ask for their key when they have none and cannot be deactivated, and that ship
-**disabled** while the service is in internal testing (the gateways themselves are live). The two are
-separate deployments with separate consoles, key stores and catalogues, so the rows are separate too
-(the same pattern as `alibaba` / `alibaba-cn`). The switch is `bee.enabled` in `qialike.json`,
-overridable per run with `QIALIKE_BEE=1`; enabled, both rows appear, and off they leave the
-`/models` list and the adapter entirely and the route names stop being reserved. Because they are multi-protocol gateways they
-carry a `modelsApi` map like OpenCode Zen's — `claude-`/`qwen` to Messages, `gpt-` to Responses,
-`gemini-` to Google, the rest to chat/completions — so the picker shows each gateway's entire live
-catalogue rather than one protocol's slice.
-The official
+protocol. The official
 DeepSeek endpoint is not in the template
 catalogue — the built-in `deepseek-official` default route serves it (3 models, ready with no
 configuration). Deployment-type endpoints (Vertex AI, Databricks, Snowflake Cortex, plus the Azure
