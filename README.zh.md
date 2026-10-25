@@ -49,8 +49,9 @@ qialike 是一个跑在终端里的全屏 AI 编程 Agent：你在项目目录�
   Hugging Face，国内如通义千问 Qwen、智谱 GLM、Kimi、MiniMax、火山引擎、硅基流动；选中即接入（OpenAI 兼容
   为主，Anthropic/MiniMax 走原生 Messages 协议），`Ctrl+T` 循环切换推理强度。另有 qialike 自有的两行
   **QiaLike Bee**（`qialike-bee`，国际站）与 **QiaLike Bee (China)**（`qialike-bee-cn`，国内站），
-  都**出厂开启**：首次选中要求输入 key，`Ctrl+D` 也删不掉（见「提供商目录」一节）。想拿掉这两行，
-  在 `qialike.json` 写 `bee: { "enabled": false }`，或一次性用 `QIALIKE_BEE=0`。
+  在 Bee 仍对外关闭期间都**出厂关闭**：在 `qialike.json` 写 `bee: { "enabled": true }`，或一次性用
+  `QIALIKE_BEE=1`，两行才一起出现。打开后首次选中要求输入 key，`Ctrl+D` 也删不掉
+  （见「提供商目录」一节）。
 - **操作集中在 `/`**：输入 `/` 弹出补全面板——`/models`、`/sessions`、`/theme`、`/export`、`/plan`、
   `/goal`、`/compact`、`/sidebar` 等，`↑/↓` 选择、`Enter` 执行。
 - **也能开在浏览器里**：`qialike web` 启动 DeepSeek Harness 自带的 Web 界面——把整条调用原样转发给已安装
@@ -470,8 +471,9 @@ ssh -L 3080:localhost:3080 user@headless-host
   模板路由设 key 会**当场激活**。列表里按 **`Ctrl+D`**（备用 `Alt+D`）可停用高亮供应商——
   **同步移除其 API key** 并使其从一级列表消失；隐藏的若是当前供应商会自动切换到其它已配置的，
   **若无任何可用供应商则当前模型显示 `not set`**，重新加入即再设一次 key。`＋ Add a custom provider`
-  进入逐字段表单，可填自定义端点与模型 id。例外是 qialike 自有的 **QiaLike Bee**，它**出厂开启**：
-  想拿掉就在 `qialike.json` 写 `bee: { "enabled": false }`，或一次性用 `QIALIKE_BEE=0`。Bee 是
+  进入逐字段表单，可填自定义端点与模型 id。例外是 qialike 自有的 **QiaLike Bee**，它在 Bee 仍对外
+  关闭期间**出厂关闭**：在 `qialike.json` 写 `bee: { "enabled": true }`，或一次性用 `QIALIKE_BEE=1`
+  才打开。Bee 是
   **两行、一个产品**——`qialike-bee`（`https://qialike.com/bee/v1`，凭证引用 `QIALIKE_API_KEY`）与
   `qialike-bee-cn`（`https://qialike.cn/bee/v1`，凭证引用 `QIALIKE_CN_API_KEY`）：两套独立部署，
   控制台、密钥库、模型目录都不通用（一方的 key 在另一方会判 `Invalid API key`），所以像
@@ -552,11 +554,12 @@ qialike plugin remove-mcp <名字> [--project]
 `/models` 的 `＋ Add provider` 列出**所有已知提供商**——自研适配器的内置模板加上可加载的网关子插件，共
 **62 家**（61 家模板 + 内置 `deepseek-official` 官方端点）。其中三组由**可加载子插件**提供，都默认开启、
 可整体卸载：在 `qialike.json` 写对应开关，模板与已配置路由会一并从 `/models` 与适配器消失。
-另有一行 **QiaLike Bee**（qialike 自有网关，route `qialike-bee`）**出厂开启**，与其他网关开关同向：
-Bee 网关在服务，但服务本身仍在内测。要关掉它，在 `qialike.json` 写 `bee: { "enabled": false }`
-（或一次性 `QIALIKE_BEE=0`）；关闭时它连同路由名一起从 `/models` 与适配器消失，`qialike-bee` 这个
-route 也不再被保留。它和 OpenCode Zen 一样带 `modelsApi` 路由表——`claude-` / `qwen` 走 Messages、
-`gpt-` 走 Responses、`gemini-` 走 Google、其余走 chat/completions，因此模型选择器显示 Bee 的
+另有 **两行** qialike 自有网关：**QiaLike Bee**（route `qialike-bee`，国际站）与
+**QiaLike Bee (China)**（route `qialike-bee-cn`，国内站），两者都**出厂关闭**：Bee 网关在服务，但服务
+本身仍在内测。要打开，在 `qialike.json` 写 `bee: { "enabled": true }`（或一次性 `QIALIKE_BEE=1`）——
+**一个开关同时管两行**；关闭时它们连同路由名一起从 `/models` 与适配器消失，两个 route 也不再被保留。
+和 OpenCode Zen 一样带 `modelsApi` 路由表——`claude-` / `qwen` 走 Messages、
+`gpt-` 走 Responses、`gemini-` 走 Google、其余走 chat/completions，因此模型选择器显示该网关的
 **整份实时目录**，而不只是单一协议那一部分。
 
 | 子插件 | 开关 | 提供商 |

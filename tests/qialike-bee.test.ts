@@ -314,25 +314,24 @@ describe('the bee switch', () => {
     delete process.env[BEE_ENV]
   })
 
-  test('ON by default since 0.11.4 — the row ships visible', () => {
-    // Through 0.11.3 this was `false`: the gateway served but Bee was closed to
-    // the public, so the row was hidden. 0.11.4 ships it on — a hidden row cannot
-    // be tried by the testers who do hold a key, and the key dialog already says
-    // where to get one.
-    expect(resolveBeeEnabled()).toBe(true)
-    expect(DEFAULT_BEE_ENABLED).toBe(true)
+  test('OFF by default — a hidden row is the shipped state', () => {
+    // Bee's gateways serve, but the service is still closed to the public, so a
+    // shipped-on row would offer every user two providers they cannot buy a key
+    // for. Testers holding a key opt in with `bee.enabled` / `QIALIKE_BEE=1`.
+    expect(resolveBeeEnabled()).toBe(false)
+    expect(DEFAULT_BEE_ENABLED).toBe(false)
   })
 
-  test('config turns it off, and back on', () => {
-    writeConfig({ bee: { enabled: false } })
-    expect(resolveBeeEnabled()).toBe(false)
+  test('config turns it on, and back off', () => {
     writeConfig({ bee: { enabled: true } })
     expect(resolveBeeEnabled()).toBe(true)
+    writeConfig({ bee: { enabled: false } })
+    expect(resolveBeeEnabled()).toBe(false)
   })
 
-  test('the environment turns it off for one run', () => {
-    process.env[BEE_ENV] = '0'
-    expect(resolveBeeEnabled()).toBe(false)
+  test('the environment turns it on for one run', () => {
+    process.env[BEE_ENV] = '1'
+    expect(resolveBeeEnabled()).toBe(true)
   })
 
   test('the environment wins over the config, both ways', () => {
@@ -346,25 +345,27 @@ describe('the bee switch', () => {
 
   test('the environment is NOT persisted — an override stays an override', () => {
     // The contrast with resolveResumeLast is the contract: that one writes the
-    // env value back, this one must not. `0` is the interesting direction now
-    // that the shipped default is ON: a one-off opt-out must not edit the config.
-    process.env[BEE_ENV] = '0'
-    expect(resolveBeeEnabled()).toBe(false)
+    // env value back, this one must not. `1` is the interesting direction while
+    // the shipped default is OFF: a one-off opt-in must not edit the config.
+    process.env[BEE_ENV] = '1'
+    expect(resolveBeeEnabled()).toBe(true)
     delete process.env[BEE_ENV]
-    expect(resolveBeeEnabled(), 'a later run must fall back to the default').toBe(true)
+    expect(resolveBeeEnabled(), 'a later run must fall back to the default').toBe(false)
     expect(existsSync(configFile()) ? JSON.parse(readFileSync(configFile(), 'utf8')) : {}).toEqual({})
   })
 
   test('a malformed value falls through to the config rather than guessing', () => {
-    writeConfig({ bee: { enabled: false } })
+    // The config says ON while the default says OFF, so `true` proves the value
+    // reached the config instead of being short-circuited to the default.
+    writeConfig({ bee: { enabled: true } })
     process.env[BEE_ENV] = 'maybe'
-    expect(resolveBeeEnabled(), 'the config still decides, not the default').toBe(false)
+    expect(resolveBeeEnabled(), 'the config still decides, not the default').toBe(true)
   })
 
   test('an empty value is not an override', () => {
-    writeConfig({ bee: { enabled: false } })
+    writeConfig({ bee: { enabled: true } })
     process.env[BEE_ENV] = '  '
-    expect(resolveBeeEnabled(), 'the config still decides').toBe(false)
+    expect(resolveBeeEnabled(), 'the config still decides').toBe(true)
   })
 
   test('the switch is consulted where the route is offered, and where it is reserved', () => {

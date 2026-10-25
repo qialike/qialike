@@ -55,9 +55,10 @@ itself — showing every step and the model's streamed output on one screen.
   Volcengine, SiliconFlow. Selecting one is all it takes (mostly OpenAI-compatible; Anthropic and
   MiniMax speak their native Messages protocol), and `Ctrl+T` cycles the reasoning effort. Two
   further rows are qialike's own: **QiaLike Bee** (`qialike-bee`, international) and **QiaLike Bee
-  (China)** (`qialike-bee-cn`). Both ship **on**: selecting one asks for a key the first time, and
-  `Ctrl+D` cannot remove either (see "Provider catalogue"). `bee: { "enabled": false }` in
-  `qialike.json` — or `QIALIKE_BEE=0` for one run — takes both rows out again.
+  (China)** (`qialike-bee-cn`). Both ship **off** while Bee stays closed to the public:
+  `bee: { "enabled": true }` in `qialike.json` — or `QIALIKE_BEE=1` for one run — brings both up.
+  Once on, selecting one asks for a key the first time and `Ctrl+D` cannot remove either (see
+  "Provider catalogue").
 - **Everything under `/`**: typing `/` opens the completion palette — `/models`, `/sessions`,
   `/theme`, `/export`, `/plan`, `/goal`, `/compact`, `/sidebar` and more; `↑/↓` to move, `Enter` to run.
 - **Also opens in a browser**: `qialike web` starts the Web UI DeepSeek Harness ships — it forwards
@@ -574,12 +575,13 @@ token URL does not change: `ssh -L 8080:localhost:3080 user@headless-host`, then
   the hidden one was current, the selection moves to another configured provider, and **with no
   usable provider left the model label reads `not set`**. Re-adding it means setting a key again.
   `＋ Add a custom provider` opens a field-by-field form for a custom endpoint and model ids.
-  **QiaLike Bee** (qialike's own gateway) is the exception, and it ships **on**:
-  `bee: { "enabled": false }` in `qialike.json` (or `QIALIKE_BEE=0` for one run) takes it out. It is
-  **two rows, one product** — `qialike-bee` (`https://qialike.com/bee/v1`, key ref `QIALIKE_API_KEY`)
-  and `qialike-bee-cn` (`https://qialike.cn/bee/v1`, key ref `QIALIKE_CN_API_KEY`) — because the two
-  deployments have separate consoles, separate key stores and separate catalogues; a key from one
-  answers `Invalid API key` on the other. Both are listed even before they have a key — selecting one
+  **QiaLike Bee** (qialike's own gateway) is the exception, and it ships **off** while Bee stays
+  closed to the public: `bee: { "enabled": true }` in `qialike.json` (or `QIALIKE_BEE=1` for one run)
+  brings it up. It is **two rows, one product** — `qialike-bee` (`https://qialike.com/bee/v1`, key ref
+  `QIALIKE_API_KEY`) and `qialike-bee-cn` (`https://qialike.cn/bee/v1`, key ref
+  `QIALIKE_CN_API_KEY`) — because the two deployments have separate consoles, separate key stores and
+  separate catalogues; a key from one answers `Invalid API key` on the other. Both are listed even
+  before they have a key — selecting one
   **asks for the API key** (the dialog links to that deployment's own `/bee` page) instead of opening
   an empty model list — and `Ctrl+D` refuses both, so neither can be removed. With a key set, the
   sub-list is that gateway's live `GET /bee/v1/models` catalogue **in full**: one key serves four wire
@@ -694,11 +696,11 @@ protocol. Two template rows are qialike's own: **QiaLike Bee** (`qialike-bee`, t
 `https://qialike.com/bee/v1`, key ref `QIALIKE_API_KEY`) and **QiaLike Bee (China)**
 (`qialike-bee-cn`, `https://qialike.cn/bee/v1`, key ref `QIALIKE_CN_API_KEY`) — the `/models`
 entries that ask for their key when they have none and cannot be deactivated, and that ship
-**enabled** (Bee's gateways are live, though the service is still in internal testing). The two are
+**disabled** while the service is in internal testing (the gateways themselves are live). The two are
 separate deployments with separate consoles, key stores and catalogues, so the rows are separate too
 (the same pattern as `alibaba` / `alibaba-cn`). The switch is `bee.enabled` in `qialike.json`,
-overridable per run with `QIALIKE_BEE=0`; off, both rows leave the `/models` list and the adapter
-entirely, and the route names stop being reserved. Because they are multi-protocol gateways they
+overridable per run with `QIALIKE_BEE=1`; enabled, both rows appear, and off they leave the
+`/models` list and the adapter entirely and the route names stop being reserved. Because they are multi-protocol gateways they
 carry a `modelsApi` map like OpenCode Zen's — `claude-`/`qwen` to Messages, `gpt-` to Responses,
 `gemini-` to Google, the rest to chat/completions — so the picker shows each gateway's entire live
 catalogue rather than one protocol's slice.

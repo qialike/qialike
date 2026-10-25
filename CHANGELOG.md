@@ -11,7 +11,7 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 
 - **Bee's route is now `qialike-bee`** — it was `qialike`, which read like the program rather than a provider, and made `--model qialike/<id>` look like a path inside qialike.
 - **Bee's mainland deployment is its own row, `qialike-bee-cn`** — `.com` and `.cn` keep separate consoles, keys and catalogues, so each has a row and its own key reference.
-- **QiaLike Bee ships enabled** — the row is offered without a switch, so a tester holding a key no longer has to find one first; `bee.enabled: false` takes it out again.
+- **One switch now governs both Bee rows** — `bee.enabled: true` (or `QIALIKE_BEE=1`) brings up `qialike-bee` and `qialike-bee-cn` together; still off by default.
 
 ### Fixed
 

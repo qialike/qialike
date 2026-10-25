@@ -13,7 +13,7 @@ minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
 - **Bee 的路由名改为 `qialike-bee`** —— 原名 `qialike` 读起来像程序而不是供应商，也让 `--model qialike/<id>` 看着像 qialike 内部路径。
 - **Bee 国内站独立成行 `qialike-bee-cn`** —— `.com` 与 `.cn` 的控制台、密钥、模型目录都不通用，故各占一行、各自引用自己的凭证。
-- **QiaLike Bee 出厂开启** —— 无需开关即可见，持 key 的内测人员不必先找开关；`bee.enabled: false` 可关掉。
+- **一个开关管两行 Bee** —— `bee.enabled: true`（或 `QIALIKE_BEE=1`）同时启用 `qialike-bee` 与 `qialike-bee-cn`；仍出厂关闭。
 
 ### 修复
 
