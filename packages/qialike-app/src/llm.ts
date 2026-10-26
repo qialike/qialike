@@ -504,8 +504,42 @@ export function effectiveProfile(
 /** How long a gateway-fetched `/models` catalog is trusted before re-fetching. */
 const DYNAMIC_MODELS_TTL = 5 * 60_000
 
-/** Timeout for the gateway `/models` probe; a slow gateway degrades to the static catalog. */
-const DYNAMIC_MODELS_TIMEOUT = 4_000
+/**
+ * Timeout for the `/models` probe on the DIALOG path; a slow gateway degrades to the
+ * static catalog.
+ *
+ * SIZED FROM MEASUREMENT, not guessed. The 14 catalogue gateways that answer a
+ * `/models` probe were timed from this host: the slowest (minimax) took 1.03 s, and
+ * everything else landed between 0.13 s (deepseek) and 0.97 s (Bee `.com`). 1.5 s
+ * therefore covers every gateway observed to serve, with 45% headroom — while the old
+ * 4 s only ever bought patience for gateways that were not going to answer.
+ *
+ * The dialog is the one place a user is deliberately looking at the list, so it gets
+ * the longer budget. The request path does not — see {@link MODEL_LIMITS_TIMEOUT}.
+ */
+const DYNAMIC_MODELS_TIMEOUT = 1_500
+
+/**
+ * Timeout for the same probe when it is consulted to fill in a model's LIMITS
+ * (`resolveModel`), i.e. while a request is being assembled.
+ *
+ * DELIBERATELY SHORTER. A failure here costs nothing a user can see: the limits simply
+ * come from the static catalog instead of the endpoint. Spending 4 s — or even 1.5 s —
+ * of a request's latency to maybe refine a context window is not a trade worth making,
+ * so this budget only covers a gateway that answers promptly (13 of the 14 measured
+ * gateways answer in under 1 s; the one that does not keeps its static limits).
+ */
+const MODEL_LIMITS_TIMEOUT = 800
+
+/**
+ * Why a probe produced no catalog.
+ *
+ * `undefined` used to be the only answer, which made "this gateway has no `/models`"
+ * indistinguishable from "it did not answer in time" — and the dialog could not tell a
+ * genuinely short list from one it failed to refresh. The dialog reports a timeout;
+ * the request path ignores both.
+ */
+export type DynamicModelsFailure = 'timeout' | 'unavailable'
 
 /**
  * The per-model metadata a gateway's `/models` endpoint can report.
@@ -546,7 +580,7 @@ export interface DynamicModelInfo {
  */
 const dynamicModelsCache = new Map<
   string,
-  { at: number; models: readonly DynamicModelInfo[] | undefined }
+  { at: number; models: readonly DynamicModelInfo[] | undefined; failure?: DynamicModelsFailure }
 >()
 
 /** Cache key for one endpoint: root plus whether the probe carried a credential. */
@@ -626,10 +660,19 @@ function dynamicModelInfo(entry: unknown): DynamicModelInfo | undefined {
  * {@link DYNAMIC_MODELS_TTL}, a failure for {@link DYNAMIC_MODELS_FAILURE_TTL}. Caching
  * the failure is what keeps `resolveModel` cheap on the request path — see
  * {@link dynamicModelsCache}.
+ *
+ * @param baseURL - the route's endpoint root; `/models` is appended.
+ * @param apiKey - the route's credential, when one is configured.
+ * @param timeoutMs - budget for this probe. The dialog passes
+ *   {@link DYNAMIC_MODELS_TIMEOUT}, the request path {@link MODEL_LIMITS_TIMEOUT};
+ *   they differ because only the dialog's wait is something a user is watching.
+ * @returns the catalogue with whatever metadata the endpoint reports, or `undefined`
+ *   when it is missing/unauthorized/slow — callers fall back to the static catalog.
  */
 export async function fetchDynamicModelInfo(
   baseURL: string,
   apiKey?: string,
+  timeoutMs: number = DYNAMIC_MODELS_TIMEOUT,
 ): Promise<readonly DynamicModelInfo[] | undefined> {
   const root = baseURL.replace(/\/+$/, '')
   // A credential changes the ANSWER, not just the odds of getting one: an anonymous
@@ -653,10 +696,10 @@ export async function fetchDynamicModelInfo(
     if (authenticated) headers.authorization = `Bearer ${apiKey}`
     const response = await fetch(`${root}/models`, {
       headers,
-      signal: AbortSignal.timeout(DYNAMIC_MODELS_TIMEOUT),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) {
-      dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined })
+      dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined, failure: 'unavailable' })
       return undefined
     }
     const body = (await response.json()) as { data?: readonly unknown[] } | undefined
@@ -669,13 +712,28 @@ export async function fetchDynamicModelInfo(
       models.push(info)
     }
     if (models.length === 0) {
-      dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined })
+      dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined, failure: 'unavailable' })
       return undefined
     }
     dynamicModelsCache.set(cacheKey, { at: Date.now(), models })
     return models
-  } catch {
-    dynamicModelsCache.set(cacheKey, { at: Date.now(), models: undefined })
+  } catch (error) {
+    // A TIMEOUT is reported separately from every other failure: it is the one the
+    // dialog can act on ("this gateway is slow — the list below is the cached one"),
+    // while a 404/401 is simply "this endpoint does not serve a catalog".
+    //
+    // Matched by NAME, not `instanceof DOMException`: the identity of that constructor
+    // is not guaranteed across the runtime the binary actually ships on (a compiled
+    // Bun binary resolves globals differently from a script under test), and a check
+    // that silently stops matching would demote every timeout to `unavailable` — which
+    // is exactly the distinction this field exists to carry.
+    const name = (error as { name?: unknown } | null)?.name
+    const timedOut = name === 'TimeoutError' || name === 'AbortError'
+    dynamicModelsCache.set(cacheKey, {
+      at: Date.now(),
+      models: undefined,
+      failure: timedOut ? 'timeout' : 'unavailable',
+    })
     return undefined
   }
 }
@@ -690,6 +748,31 @@ export async function fetchDynamicModelInfo(
 export async function fetchDynamicModels(baseURL: string): Promise<readonly string[] | undefined> {
   const models = await fetchDynamicModelInfo(baseURL)
   return models === undefined ? undefined : models.map((model) => model.id)
+}
+
+/**
+ * Why the last probe for this endpoint produced no catalog, or `undefined` when it has
+ * not failed (it either succeeded or was never attempted).
+ *
+ * Reads the same cache as {@link fetchDynamicModelInfo}, so a caller that has just
+ * probed can ask "was that a timeout?" without a second request. This is what lets the
+ * `/models` dialog say the list it is showing is cached because a gateway was slow,
+ * instead of leaving the user to guess whether the short list is the truth.
+ * @param baseURL - the route's endpoint root.
+ * @param authenticated - whether the probe carried a credential (part of the cache key).
+ * @returns `'timeout'` for a probe that ran out of time, `'unavailable'` for any other
+ *   failure, `undefined` when the last probe succeeded or never ran.
+ */
+export function dynamicModelsFailure(
+  baseURL: string,
+  authenticated: boolean,
+): DynamicModelsFailure | undefined {
+  const root = baseURL.replace(/\/+$/, '')
+  const hit = dynamicModelsCache.get(dynamicModelsCacheKey(root, authenticated))
+  if (hit === undefined || hit.models !== undefined) return undefined
+  const ttl = DYNAMIC_MODELS_FAILURE_TTL
+  if (Date.now() - hit.at >= ttl) return undefined
+  return hit.failure ?? 'unavailable'
 }
 
 /** Resolve the per-model wire override (protocol + endpoint) for one model id
@@ -1877,11 +1960,31 @@ export async function* translateGoogle(source: AsyncIterable<GoogleSseEvent>): A
 
 /** The adapter: one OpenAI-compatible route set, registered under `ctx.llm`. */
 class TuiLlmAdapter extends LlmAdapter {
+  /**
+   * The outcome of the last `/models` probe per route, as this ADAPTER saw it.
+   *
+   * WHY THE ADAPTER HAS TO REMEMBER IT. `models.ts` used to ask the module-level
+   * `dynamicModelsFailure()` — and that silently returned nothing, because the plugins
+   * are separate bundles: the `tui-models` bundle carries its OWN copy of this file,
+   * with its own `dynamicModelsCache`. The probe ran in the `tui-llm` bundle and wrote
+   * that bundle's cache; the reader looked in the other one and always saw an empty map
+   * (verified against a packaged binary: two `dynamicModelsFailure` definitions, two
+   * caches). A service reached through `ctx` is bundle-independent, so the outcome
+   * travels with the adapter instance the dialog actually talks to.
+   */
+  private readonly probeOutcomes = new Map<string, DynamicModelsFailure>()
+
   constructor(
     private readonly ctx: Context,
     private readonly resolve: () => Map<string, TuiProviderProfile>,
   ) {
     super()
+  }
+
+  /** The last probe outcome for a route: `'timeout'` means the list shown is the
+   *  static catalog because the gateway did not answer in the dialog's budget. */
+  lastProbeFailure(route: string): DynamicModelsFailure | undefined {
+    return this.probeOutcomes.get(route)
   }
 
   override providerInfo(provider: string): { id: string; name: string } {
@@ -1915,11 +2018,36 @@ class TuiLlmAdapter extends LlmAdapter {
     // the template carries a small sample). Anthropic-protocol routes stay on
     // the static catalog. Failures (no /models endpoint, auth, timeout) degrade
     // to the static catalog without surfacing.
-    if (effective !== undefined && (effective.api ?? 'openai-completions') !== 'anthropic-messages') {
-      const dynamic = await fetchDynamicModelInfo(
-        effective.baseURL,
-        await optionalApiKey(this.ctx, provider, effective.apiKeyEnv),
-      )
+    //
+    // ONLY A PROVIDER THE USER HAS A KEY FOR IS PROBED — and that is not an optimisation of a
+    // path that already worked, it is what keeps the model list responsive at all.
+    //
+    // `buildModelCatalog` calls `listModels` for EVERY registered provider (62 in the packaged
+    // build) and this loop probed each one over the network whether or not a credential
+    // existed. A gateway with no key eventually answers 401; an unreachable or slow one costs
+    // the full probe budget, and the whole list waits for the slowest.
+    // Measured on a packaged build before the key gate: 4,041 ms for the set — vercel-ai-gateway
+    // 4,038, nvidia 4,035, sakana 3,648, openrouter 3,512 — so the total was the timeout, not the
+    // gateways. That is the "loading models" wait on every cold start and every 5-minute TTL expiry.
+    //
+    // Without a key there is nothing to learn from the endpoint anyway: a live catalogue is
+    // useful because it is the truth about what THAT ACCOUNT can call. No key, no account, so
+    // the static catalogue is not a degraded fallback here — it is the correct answer.
+    const probeKey = effective !== undefined && (effective.api ?? 'openai-completions') !== 'anthropic-messages'
+      ? await optionalApiKey(this.ctx, provider, effective.apiKeyEnv)
+      : undefined
+    if (probeKey !== undefined && effective !== undefined) {
+      // The DIALOG budget: this is the list the user asked to see, so a slow gateway
+      // gets the longer timeout. The outcome is recorded on the adapter (not just in the
+      // module cache) so the dialog can ask this instance why the list is short.
+      const dynamic = await fetchDynamicModelInfo(effective.baseURL, probeKey, DYNAMIC_MODELS_TIMEOUT)
+      if (dynamic === undefined) {
+        const reason = dynamicModelsFailure(effective.baseURL, true)
+        if (reason !== undefined) this.probeOutcomes.set(provider, reason)
+        else this.probeOutcomes.delete(provider)
+      } else {
+        this.probeOutcomes.delete(provider)
+      }
       if (dynamic !== undefined) {
         // A modelsApi route is multi-protocol: every family routes to a wire
         // protocol at stream time, so the live catalog is NOT filtered (a
@@ -2018,10 +2146,18 @@ class TuiLlmAdapter extends LlmAdapter {
   ): Promise<DynamicModelInfo | undefined> {
     if (effective === undefined || effective.baseURL === '') return undefined
     if ((effective.api ?? 'openai-completions') === 'anthropic-messages') return undefined
-    const live = await fetchDynamicModelInfo(
-      effective.baseURL,
-      await optionalApiKey(this.ctx, provider, effective.apiKeyEnv),
-    )
+    // SAME RULE AS `listModels`: no credential, no probe. `buildModelCatalog` resolves EVERY
+    // MODEL of EVERY provider through here, so leaving this one unguarded kept the whole
+    // catalogue waiting on network timeouts even after the list itself was fixed — measured at
+    // 1,176 ms for the set, with the cost scaling with the number of models in the slowest
+    // route rather than with anything the user had configured.
+    const key = await optionalApiKey(this.ctx, provider, effective.apiKeyEnv)
+    if (key === undefined) return undefined
+    // The REQUEST budget, not the dialog's: this runs while a request is being assembled
+    // and only refines `contextWindow` / `maxTokens`. A gateway that does not answer
+    // inside {@link MODEL_LIMITS_TIMEOUT} keeps its static limits — a trade nobody sees,
+    // unlike making the user wait.
+    const live = await fetchDynamicModelInfo(effective.baseURL, key, MODEL_LIMITS_TIMEOUT)
     if (live === undefined) return undefined
     return live.find((candidate) => candidate.id === model)
   }
@@ -2437,6 +2573,18 @@ export function apply(ctx: Context): void {
     return [...routes]
   }
   const adapter = new TuiLlmAdapter(ctx, profiles)
+  // WHY A SERVICE AND NOT A FUNCTION CALL. Every plugin in this build is its own bundle,
+  // so `tui-models` holds a separate copy of this module — including a separate
+  // `dynamicModelsCache`. Reading that cache from the dialog's bundle always found it
+  // empty (two definitions, two caches in the packaged binary). A service reached
+  // through the context is the one thing both bundles share, so the probe outcome
+  // travels over it.
+  ctx.provide('tuiLlmProbe', {
+    /** Why the last probe for this route produced no catalogue, if it failed. */
+    lastFailure(route: string): DynamicModelsFailure | undefined {
+      return adapter.lastProbeFailure(route)
+    },
+  })
   adapterReg = llm.registerAdapter(adapterRoutes(), adapter)
   directoryReg = llm.registerConfigurableProviders(directoryEntries(profiles(), templateService.list()))
   // Live reload: an edit to `qialike.json` (hand-written, or by /models

@@ -18,7 +18,9 @@
  */
 
 import { afterEach, describe, expect, test } from 'bun:test'
-import { fetchDynamicModelInfo, fetchDynamicModels } from '../packages/qialike-app/src/llm.ts'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { dynamicModelsFailure, fetchDynamicModelInfo, fetchDynamicModels } from '../packages/qialike-app/src/llm.ts'
 
 /** Serve one JSON body for every request until the next case installs its own. */
 const stubFetch = (body: unknown, init: { ok?: boolean } = {}): void => {
@@ -249,5 +251,138 @@ describe('an authenticated probe', () => {
       await fetchDynamicModelInfo(baseURL, '')
       expect(seen).toEqual(['(none)'])
     } finally { close() }
+  })
+})
+
+/**
+ * The probe's BUDGET, and why a caller can now tell a timeout from a gateway that
+ * simply has no `/models`.
+ *
+ * Measured on 2026-10-25 across the 14 catalogue gateways that answer a `/models`
+ * probe: the slowest (minimax) took 1.03 s, the fastest (deepseek) 0.13 s, and every
+ * other one landed in between. That is what sizes the two budgets below — the old 4 s
+ * bought patience only for gateways that were never going to answer.
+ */
+describe('the probe budget', () => {
+  /** A fetch that never answers, so only the timeout can end the request. */
+  const hangFetch = (): { seen: { timeoutMs?: number } } => {
+    const seen: { timeoutMs?: number } = {}
+    globalThis.fetch = ((_url: string, init?: RequestInit) => {
+      // Record the signal, then never settle: `AbortSignal.timeout(n)` drives it.
+      seen.timeoutMs = undefined
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError')))
+      })
+    }) as unknown as typeof fetch
+    return { seen }
+  }
+
+  test('a hung gateway ends at the budget it was given, not at some fixed 4 s', async () => {
+    hangFetch()
+    const t0 = Date.now()
+    const out = await fetchDynamicModelInfo('https://budget-a.invalid/v1', 'k', 120)
+    const elapsed = Date.now() - t0
+    expect(out).toBeUndefined()
+    // The budget is honoured (allow generous slack for a loaded CI box) and it is
+    // emphatically NOT the old 4 s constant.
+    expect(elapsed).toBeGreaterThanOrEqual(100)
+    expect(elapsed).toBeLessThan(2_000)
+  })
+
+  test('a timeout is reported as such — the dialog needs the difference', async () => {
+    hangFetch()
+    const base = 'https://budget-b.invalid/v1'
+    expect(await fetchDynamicModelInfo(base, 'k', 100)).toBeUndefined()
+    expect(dynamicModelsFailure(base, true)).toBe('timeout')
+  })
+
+  test('a 401 is `unavailable`, not a timeout — it will never succeed by waiting', async () => {
+    const base = 'https://budget-c.invalid/v1'
+    stubFetch({ error: 'no key' }, { ok: false })
+    expect(await fetchDynamicModelInfo(base, 'k')).toBeUndefined()
+    expect(dynamicModelsFailure(base, true)).toBe('unavailable')
+  })
+
+  test('a healthy gateway reports no failure at all', async () => {
+    const base = 'https://budget-d.invalid/v1'
+    stubFetch({ data: [{ id: 'm' }] })
+    expect(await fetchDynamicModelInfo(base, 'k')).toHaveLength(1)
+    expect(dynamicModelsFailure(base, true)).toBeUndefined()
+  })
+
+  test('the anonymous slot is separate, so an early 401 cannot hide the keyed answer', async () => {
+    const base = 'https://budget-e.invalid/v1'
+    stubFetch({}, { ok: false })
+    expect(await fetchDynamicModelInfo(base)).toBeUndefined()     // anonymous probe fails
+    stubFetch({ data: [{ id: 'm' }] })
+    expect(await fetchDynamicModelInfo(base, 'k')).toHaveLength(1) // keyed probe still asks
+    expect(dynamicModelsFailure(base, true)).toBeUndefined()
+  })
+})
+
+describe('the two budgets differ on purpose', () => {
+  test('the dialog waits longer than the request path', () => {
+    const src = readFileSync(join(import.meta.dir, '..', 'packages', 'qialike-app', 'src', 'llm.ts'), 'utf8')
+    const num = (name: string): number => {
+      const m = new RegExp(`${name}\\s*=\\s*([0-9_]+)`).exec(src)
+      expect(m, `${name} must be a numeric constant`).not.toBeNull()
+      return Number(m![1]!.replace(/_/g, ''))
+    }
+    const dialog = num('DYNAMIC_MODELS_TIMEOUT')
+    const limits = num('MODEL_LIMITS_TIMEOUT')
+    // 1.5 s covers the slowest measured gateway (1.03 s) with ~45% headroom.
+    expect(dialog).toBe(1_500)
+    // The request path only refines limits, so it must not pay the dialog's budget.
+    expect(limits).toBeLessThan(dialog)
+    expect(limits).toBe(800)
+    // Both are far below the 4 s that made a dead gateway cost four seconds.
+    expect(dialog).toBeLessThan(4_000)
+  })
+
+  test('the request path passes the shorter budget, the dialog the longer one', () => {
+    const src = readFileSync(join(import.meta.dir, '..', 'packages', 'qialike-app', 'src', 'llm.ts'), 'utf8')
+    expect(src).toContain('fetchDynamicModelInfo(effective.baseURL, probeKey, DYNAMIC_MODELS_TIMEOUT)')
+    expect(src).toContain('fetchDynamicModelInfo(effective.baseURL, key, MODEL_LIMITS_TIMEOUT)')
+  })
+})
+
+/**
+ * The dialog's notice. A timed-out probe leaves the route on its static catalog, which
+ * makes the list silently shorter than the gateway's — indistinguishable, on screen,
+ * from a gateway that really serves that few. The route therefore carries a `timedOut`
+ * flag all the way to the panel, and the panel renders a line naming it.
+ */
+describe('the dialog reports a timed-out route', () => {
+  const src = (file: string): string =>
+    readFileSync(join(import.meta.dir, '..', 'packages', 'qialike-app', 'src', file), 'utf8')
+
+  test('listConfigured asks the adapter, not its own copy of the cache', () => {
+    const models = src('models.ts')
+    // The flag is set only on a timeout — an unavailable endpoint is not news.
+    expect(models).toContain("probe()?.lastFailure(provider.provider) === 'timeout'")
+    expect(models).toContain('timedOut: true as const')
+    // …and the reason travels over a SERVICE. Every plugin is its own bundle, so this
+    // file's copy of `llm.ts` holds a copy of `dynamicModelsCache` that the probe (in the
+    // `tui-llm` bundle) never writes — reading it always returned undefined, which is
+    // exactly how the first version of this feature shipped broken.
+    expect(models).toContain("ctx.get('tuiLlmProbe')")
+    expect(models).not.toContain('dynamicModelsFailure(')
+    expect(src('llm.ts')).toContain("ctx.provide('tuiLlmProbe'")
+  })
+
+  test('the option carries the flag through both mappings', () => {
+    // `ModelsProviderOption` → `ProviderModelsEntry` → the panel. A flag that stops at
+    // any hop never reaches the screen.
+    expect(src('index.tsx')).toContain('timedOut?: boolean')
+    expect(src('panels/models.tsx')).toContain('...(p.timedOut === true ? { timedOut: true as const } : {})')
+  })
+
+  test('the panel says so, and names the count', () => {
+    const panel = src('panels/models.tsx')
+    expect(panel).toContain('did not answer in time')
+    // Singular and plural both exist; a count of one must not read like a count of many.
+    expect(panel).toContain('showing its cached model list')
+    expect(panel).toContain('gateways did not answer in time')
+    expect(panel).toContain('showing their cached model lists')
   })
 })

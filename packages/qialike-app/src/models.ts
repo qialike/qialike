@@ -69,6 +69,10 @@ export interface ModelsProviderOption {
    *  (which lists keyless routes only when they are `builtin`), so the dialog
    *  can tell "ask for a key" from "show its models" without a second probe. */
   configured?: boolean
+  /** Set when the live `/models` probe for this route ran out of time, so the
+   *  models shown are the static catalog. The dialog says so instead of leaving
+   *  a short list looking like the whole truth. */
+  timedOut?: boolean
 }
 
 /** The "Add provider" form input. */
@@ -181,6 +185,17 @@ export function apply(ctx: Context): void {
     listConfigurableProviders(): { provider: string; displayName: string; declared: boolean }[]
     listModels(provider: string): Promise<readonly { id: string; name: string }[]>
   } | undefined
+  /**
+   * The adapter's own record of why a probe failed, reached through the context.
+   *
+   * A module-level cache cannot answer this: every plugin is its own bundle, so this
+   * file's copy of `llm.ts` has a copy of the cache that the probe (running in the
+   * `tui-llm` bundle) never writes. Optional because a composition may predate the
+   * service — a dialog that cannot say "timed out" still shows the list.
+   */
+  const probe = () => ctx.get('tuiLlmProbe') as {
+    lastFailure(route: string): 'timeout' | 'unavailable' | undefined
+  } | undefined
   /** The merged template directory (core + plugin-registered), read live. */
   const templates = (): readonly TuiProviderTemplate[] =>
     (ctx.get('tuiLlmTemplates') as { list(): readonly TuiProviderTemplate[] } | undefined)?.list() ?? []
@@ -262,6 +277,16 @@ export function apply(ctx: Context): void {
                   ? { id: m.id, name: m.name, ...effortAnnotation(provider.provider, profile, m.id) }
                   : { ...modelOption(provider.provider, known, profile), name: m.name }
               })
+            } else {
+              // An EMPTY answer means the adapter fell back to the static catalog, which
+              // happens both when the gateway serves no `/models` and when the probe timed
+              // out. Ask the ADAPTER which it was — through the `tuiLlmProbe` service, not
+              // the module function — so the dialog can say "this one was slow" instead of
+              // presenting a cached list as the live one. (The module function would read
+              // this bundle's own copy of the cache, which the probe never writes.)
+              if (probe()?.lastFailure(provider.provider) === 'timeout') {
+                return { ...provider, models, configured, timedOut: true as const }
+              }
             }
           } catch {
             // keep `models` as-is

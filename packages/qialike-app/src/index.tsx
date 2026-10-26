@@ -198,6 +198,11 @@ export interface ProviderModelsEntry {
   /** Whether this route's API key is set. `false` on a `builtin` entry means
    *  the dialog must ask for the key before it can show any model. */
   configured?: boolean
+  /** The live `/models` probe for this route ran out of time, so its `models` are
+   *  the static catalog. The list shows a footer notice naming the count, because
+   *  a silently short list is indistinguishable from a gateway that really serves
+   *  that few. */
+  timedOut?: boolean
 }
 
 /**

@@ -5,6 +5,22 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.11.5] - 2026-10-27
+
+### Changed
+
+- **Only a route with a key is asked for its model list** — a gateway you never configured was probed anyway, so the picker waited for the slowest one to give up.
+- **The picker's probe gives up after 1.5 s** — a flat 4 s only bought patience for gateways that were never going to answer; the slowest of the 14 that do answer takes 1.03 s.
+- **The request path's probe gives up after 800 ms** — it only refines a model's limits and already falls back to the static catalog, so it must not cost a request four seconds.
+
+### Added
+
+- **`/models` says when a gateway timed out** — a cached list used to be indistinguishable from a gateway that really serves that few models.
+
+### Fixed
+
+- **The timeout notice survives the bundle boundary** — each plugin is its own bundle, so the dialog read a second copy of the probe cache and never saw the result.
+
 ## [0.11.4] - 2026-10-22
 
 ### Fixed

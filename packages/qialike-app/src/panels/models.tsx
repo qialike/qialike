@@ -59,6 +59,9 @@ function buildProviderEntries(providers: readonly ModelsProviderOption[]): Provi
     // `builtin` blocks Ctrl+D, `configured: false` routes Enter to the key dialog.
     ...(p.builtin === undefined ? {} : { builtin: p.builtin }),
     ...(p.configured === undefined ? {} : { configured: p.configured }),
+    // …and a timed-out probe stays visible as such, so the footer can explain a
+    // short list instead of letting it read as the whole truth.
+    ...(p.timedOut === true ? { timedOut: true as const } : {}),
   }))
 }
 
@@ -347,6 +350,22 @@ function ModelsDialog(): React.JSX.Element {
               {store.providerFiltered.length === 0 && <Text dimColor>no providers match "{store.providerFilter}"</Text>}
             </Box>
             {store.dialogNotice !== '' && <Text color={theme.warning}>{store.dialogNotice}</Text>}
+            {(() => {
+              // A probe that timed out leaves the route on its static catalog. Say so:
+              // the alternative is a list that is silently shorter than the gateway's,
+              // which reads as "this provider really serves that few". The count is
+              // included because it is the only thing that tells the two apart.
+              const slow = store.providers.filter((p) => p.timedOut === true)
+              if (slow.length === 0) return null
+              const names = slow.map((p) => p.name).join(', ')
+              return (
+                <Text color={theme.warning}>
+                  {slow.length === 1
+                    ? `⚠ ${names} did not answer in time — showing its cached model list`
+                    : `⚠ ${slow.length} gateways did not answer in time (${names}) — showing their cached model lists`}
+                </Text>
+              )
+            })()}
             <Box marginTop={1}>
               <Text dimColor>↑/↓ · PgUp/PgDn · Home/End · Enter open models · Ctrl+D hide · Esc back</Text>
             </Box>
