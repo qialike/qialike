@@ -73,7 +73,9 @@ export const HERO_TITLE = HERO_TITLE_EN
  * the caption under the brand mark. It was removed because both deployments
  * (`.com` international, `.cn` mainland) ship the SAME binary, so the site is a
  * property of the machine, not of the build; the run-time rule lives in
- * `site-url.ts` and is still being settled. `heroVersionCaption` still takes an
+ * the machine's own signals (locale, time zone) and is still being settled. The
+ * module that implemented that rule was withdrawn with this release — see
+ * `qialike-cli-update.md` for the measurements — and `heroVersionCaption` still takes an
  * optional url, so the half comes back with one argument once that is decided.
  *
  * The width budget it used to consume is not lost: the caption is now strictly

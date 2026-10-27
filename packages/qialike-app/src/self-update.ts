@@ -33,7 +33,6 @@ import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
-import { resolveSiteUrl, SITE_URL_COM } from './site-url.ts'
 import type { InstallMethod } from './upgrade-policy.ts'
 
 /** The installed executable's name. */
@@ -81,11 +80,24 @@ export function nullDevice(platform: NodeJS.Platform = process.platform): string
 /** The releases directory the installer also defaults to. */
 export const DEFAULT_RELEASES_URL = 'https://github.com/qialike/qialike/releases'
 
-/** Where the installer script is fetched from when upgrading, on the international
- *  site. {@link installUrl} resolves the machine's own site instead — both domains
- *  serve a byte-identical installer, so the only thing the choice changes is whether
- *  a mainland user crosses a border to fetch it. */
-export const DEFAULT_INSTALL_URL = `${SITE_URL_COM}/install`
+/**
+ * Where the installer script is fetched from when upgrading.
+ *
+ * DELIBERATELY FIXED AT `.com`, even though the two deployments ship the same
+ * binary and a mainland machine would reach `.cn` faster. The installer is not a
+ * static file: it carries the list of release sources to measure, and the two sites'
+ * builds have DIVERGED —
+ *
+ *   .com  DEFAULT_SOURCES='https://github.com/qialike/qialike/releases,https://gitcode.com/…'
+ *   .cn   DEFAULT_SOURCES='https://gitcode.com/qialike/qialike/releases'
+ *
+ * (measured 2026-10-27: the two scripts no longer share an md5). Fetching `.cn`'s
+ * installer would therefore silently drop GitHub from the upgrade path — the source
+ * speed test would stop being a test. Reaching across the border for this one small
+ * script is the cheaper cost, and it keeps `/upgrade` behaving identically
+ * everywhere.
+ */
+export const DEFAULT_INSTALL_URL = 'https://qialike.com/install'
 
 /** How much of an asset a source is asked to deliver when it is being measured. */
 export const MEASURE_BYTES = 262144
@@ -400,15 +412,16 @@ export function parseTagFromRedirect(url: string): string | undefined {
 /**
  * The installer endpoint to use.
  *
- * `QIALIKE_INSTALL_URL` still wins outright (it names a whole endpoint, for a mirror
- * or a test). Otherwise the machine's own site is used, by the same rule the hero
- * caption follows — a mainland install should not fetch its upgrade script from the
- * other side of a border when an identical one is next door.
+ * `QIALIKE_INSTALL_URL` overrides it (a mirror, or a test); otherwise it is
+ * {@link DEFAULT_INSTALL_URL} — `.com`, for the reason recorded there: the two
+ * deployments' installers have diverged, and `.cn`'s carries a gitcode-ONLY source
+ * list. Pointing a mainland machine at `.cn` would quietly remove GitHub from the
+ * upgrade path, so this stays fixed and the speed test keeps meaning what it says.
  * @param env - environment to read.
- * @returns the `/install` URL of the applicable site.
+ * @returns the installer URL.
  */
 export function installUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return env.QIALIKE_INSTALL_URL ?? `${resolveSiteUrl(env)}/install`
+  return env.QIALIKE_INSTALL_URL ?? DEFAULT_INSTALL_URL
 }
 
 /**

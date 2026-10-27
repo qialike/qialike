@@ -10,11 +10,6 @@ preview, a minor bump may carry a breaking change — those are marked `!`.
 ### Changed
 
 - **The hero caption no longer names a site** — it reads `Ver: 0.11.6 beta`, because which of the two deployments a machine belongs on cannot be decided at build time.
-- **`/upgrade` fetches its installer from the machine's own site** — a mainland install no longer crosses a border for a script both deployments serve byte-identically.
-
-### Added
-
-- **`QIALIKE_SITE=cn|com|<url>` picks the site explicitly** — one run, not persisted, the same shape as `QIALIKE_BEE` and `QIALIKE_INSTALL_URL`.
 
 ## [0.11.5] - 2026-10-27
 

@@ -70,7 +70,7 @@ export const HERO_CAPTION_MARKS: Record<BuildMode, string> = { beta: 'beta', dev
  * `Ver: … . URL: https://qialike.com`, but the site is now machine-dependent —
  * qialike runs two deployments (`.com` international, `.cn` mainland) that serve
  * the same binary, so which one applies can only be decided at run time from the
- * machine's own signals (locale, time zone — see `site-url.ts`), and that rule is
+ * machine's own signals (locale, time zone), and that rule is
  * still being settled. Rather than print a URL that may be a guess, the hero
  * prints none.
  *
