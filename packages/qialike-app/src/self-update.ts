@@ -33,6 +33,7 @@ import { spawnSync } from 'node:child_process'
 import { closeSync, existsSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, sep } from 'node:path'
+import { resolveSiteUrl, SITE_URL_COM } from './site-url.ts'
 import type { InstallMethod } from './upgrade-policy.ts'
 
 /** The installed executable's name. */
@@ -80,8 +81,11 @@ export function nullDevice(platform: NodeJS.Platform = process.platform): string
 /** The releases directory the installer also defaults to. */
 export const DEFAULT_RELEASES_URL = 'https://github.com/qialike/qialike/releases'
 
-/** Where the installer script is fetched from when upgrading. */
-export const DEFAULT_INSTALL_URL = 'https://qialike.com/install'
+/** Where the installer script is fetched from when upgrading, on the international
+ *  site. {@link installUrl} resolves the machine's own site instead — both domains
+ *  serve a byte-identical installer, so the only thing the choice changes is whether
+ *  a mainland user crosses a border to fetch it. */
+export const DEFAULT_INSTALL_URL = `${SITE_URL_COM}/install`
 
 /** How much of an asset a source is asked to deliver when it is being measured. */
 export const MEASURE_BYTES = 262144
@@ -393,9 +397,18 @@ export function parseTagFromRedirect(url: string): string | undefined {
   return /\/download\/([^/]+)\/[^/]+$/.exec(url.trim())?.[1]
 }
 
-/** The installer endpoint to use. */
+/**
+ * The installer endpoint to use.
+ *
+ * `QIALIKE_INSTALL_URL` still wins outright (it names a whole endpoint, for a mirror
+ * or a test). Otherwise the machine's own site is used, by the same rule the hero
+ * caption follows — a mainland install should not fetch its upgrade script from the
+ * other side of a border when an identical one is next door.
+ * @param env - environment to read.
+ * @returns the `/install` URL of the applicable site.
+ */
 export function installUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return env.QIALIKE_INSTALL_URL ?? DEFAULT_INSTALL_URL
+  return env.QIALIKE_INSTALL_URL ?? `${resolveSiteUrl(env)}/install`
 }
 
 /**

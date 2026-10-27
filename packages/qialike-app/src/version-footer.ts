@@ -55,7 +55,7 @@ export function versionFooterSuffix(version: string, mode: BuildMode): string {
 export const HERO_CAPTION_MARKS: Record<BuildMode, string> = { beta: 'beta', dev: 'dev', prod: '' }
 
 /**
- * The hero's caption line, under the brand mark: `Ver: <version>[ <mark>] . URL: <url>`.
+ * The hero's caption line, under the brand mark: `Ver: <version>[ <mark>]`.
  *
  * It replaced the bare `qialike.com` on 2026-09-22 (user call): the plate now
  * says WHICH build is running, which is the one fact a brand string cannot
@@ -64,9 +64,22 @@ export const HERO_CAPTION_MARKS: Record<BuildMode, string> = { beta: 'beta', dev
  *
  * The channel is only marked when the version does not already spell it, reusing
  * {@link versionFooterSuffix}: a released `0.5.2-beta` build must not read
- * `0.5.2-beta β`, and `prod` adds nothing.
+ * `0.5.2-beta beta`, and `prod` adds nothing.
+ *
+ * THE SITE IS GONE FROM THIS LINE (user call, 2026-10-27). It used to read
+ * `Ver: … . URL: https://qialike.com`, but the site is now machine-dependent —
+ * qialike runs two deployments (`.com` international, `.cn` mainland) that serve
+ * the same binary, so which one applies can only be decided at run time from the
+ * machine's own signals (locale, time zone — see `site-url.ts`), and that rule is
+ * still being settled. Rather than print a URL that may be a guess, the hero
+ * prints none.
+ *
+ * The parameter is therefore OPTIONAL and the composition is preserved: passing a
+ * url reproduces the old two-part line exactly, so re-enabling it is a one-argument
+ * change at the call site rather than a rewrite. Both shapes are pinned by tests.
  */
-export function heroVersionCaption(version: string, mode: BuildMode, url: string): string {
+export function heroVersionCaption(version: string, mode: BuildMode, url?: string): string {
   const mark = versionFooterSuffix(version, mode) === '' ? '' : HERO_CAPTION_MARKS[mode] ?? ''
-  return `Ver: ${version}${mark === '' ? '' : ` ${mark}`} . URL: ${url}`
+  const head = `Ver: ${version}${mark === '' ? '' : ` ${mark}`}`
+  return url === undefined || url === '' ? head : `${head} . URL: ${url}`
 }

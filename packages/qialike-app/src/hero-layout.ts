@@ -67,17 +67,19 @@ export const HERO_TITLE_EN = 'Into the Unknown'
 export const HERO_TITLE = HERO_TITLE_EN
 
 /**
- * The site the caption line UNDER the brand mark points at (user call,
- * 2026-09-13; the line gained the version + build channel on 2026-09-22 — see
- * `heroVersionCaption` in `version-footer.ts`). It is no longer the whole
- * caption: it is the `URL:` half of it, scheme included, because a reader who
- * copies it wants a URL rather than a host name.
+ * RETIRED (user call, 2026-10-27): the hero caption no longer names a site.
  *
- * 19 columns, and the whole caption stays at 37–42 columns (ASCII, so the
- * renderer's width table and every terminal agree on it), well inside every width
- * the brand mark itself is drawn at (its floor is {@link HERO_ART_MIN_WIDTH} = 52).
+ * `HERO_CAPTION_URL` — a baked `https://qialike.com` — used to be the `URL:` half of
+ * the caption under the brand mark. It was removed because both deployments
+ * (`.com` international, `.cn` mainland) ship the SAME binary, so the site is a
+ * property of the machine, not of the build; the run-time rule lives in
+ * `site-url.ts` and is still being settled. `heroVersionCaption` still takes an
+ * optional url, so the half comes back with one argument once that is decided.
+ *
+ * The width budget it used to consume is not lost: the caption is now strictly
+ * shorter, and `tests/version-footer.test.ts` still holds every channel's line
+ * inside {@link HERO_ART_MIN_WIDTH} (52 columns, the brand mark's own floor).
  */
-export const HERO_CAPTION_URL = 'https://qialike.com'
 
 /** Rows between the title (end of the brand block) and the composer card when
  *  nothing sits in between (the hero draws no workspace line). */

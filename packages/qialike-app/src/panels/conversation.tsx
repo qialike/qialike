@@ -48,7 +48,6 @@ import { questionPresentation } from '../plan-review.ts'
 import {
   HERO_ART_CELL_GLYPH,
   HERO_AREA_PADDING_Y,
-  HERO_CAPTION_URL,
   HERO_COMPOSER_EXTRA_ROWS,
   HERO_GAP,
   HERO_HINT_ICON,
@@ -2559,15 +2558,19 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
     }
     heroHintPaint.splice(Math.max(0, heroB.hintLines))
   }
-  // The caption under the brand mark: `Ver: <version>[ <mark>] . URL: <site>`
-  // (user call, 2026-09-22 — it used to be the site alone). The version and the
-  // build channel (`beta` / `dev` / nothing for prod) come from the BAKED
-  // constants `APP_VERSION` / `BUILD_MODE`, so a released binary cannot be
-  // relabelled by the environment it is launched in, and the channel is marked
-  // only when the version does not spell it out (`heroVersionCaption` owns both
-  // rules; `tests/version-footer.test.ts` pins them). Painted PLAIN (see the
-  // render) — a brand plate, not a build stamp.
-  const heroCaptionLine = heroVersionCaption(APP_VERSION, BUILD_MODE, HERO_CAPTION_URL)
+  // The caption under the brand mark: `Ver: <version>[ <mark>]` (user call,
+  // 2026-09-22 — it used to be the site alone). The version and the build channel
+  // (`beta` / `dev` / nothing for prod) come from the BAKED constants `APP_VERSION`
+  // / `BUILD_MODE`, so a released binary cannot be relabelled by the environment it
+  // is launched in, and the channel is marked only when the version does not spell
+  // it out (`heroVersionCaption` owns both rules; `tests/version-footer.test.ts`
+  // pins them). Painted PLAIN (see the render) — a brand plate, not a build stamp.
+  //
+  // NO SITE ANY MORE (user call, 2026-10-27). The line used to end in
+  // `. URL: <site>`, but both deployments (`.com`, `.cn`) ship this same binary and
+  // the rule for choosing one is still being settled, so the hero names none.
+  // `heroVersionCaption` still accepts a url, which is how it comes back.
+  const heroCaptionLine = heroVersionCaption(APP_VERSION, BUILD_MODE)
 
   const filtered = useMemo(
     () => filteredCommands(props.tui),

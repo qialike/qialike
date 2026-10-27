@@ -13,7 +13,6 @@ import { describe, expect, test } from 'bun:test'
 import {
   HERO_AREA_PADDING_Y,
   HERO_ART_MIN_WIDTH,
-  HERO_CAPTION_URL,
   HERO_COMPOSER_EXTRA_ROWS,
   HERO_COMPOSER_MAX_COLS,
   HERO_COMPOSER_MIN_COLS,
@@ -349,15 +348,16 @@ describe('size gates and hero copy', () => {
       .toMatch(/^Describe what you want to build/)
   })
 
-  test('the caption under the brand mark carries the version and the project site', () => {
-    // User call, 2026-09-22: the plate names the build AND the site. The line
-    // itself is composed by `heroVersionCaption` (pinned in
-    // tests/version-footer.test.ts); what belongs HERE is that the URL half is
-    // the site with its scheme, and that the whole caption still fits under
-    // every width the mark is drawn at.
-    expect(HERO_CAPTION_URL).toBe('https://qialike.com')
-    const line = heroVersionCaption('0.6.3', 'beta', HERO_CAPTION_URL)
-    expect(line).toBe('Ver: 0.6.3 beta . URL: https://qialike.com')
+  test('the caption under the brand mark carries the version and no site', () => {
+    // User call, 2026-09-22: the plate names the build. User call, 2026-10-27: it
+    // names ONLY the build — the `URL:` half is gone, because both deployments
+    // (`.com`, `.cn`) ship this same binary and the rule for choosing one is still
+    // being settled (`site-url.ts`). The composition lives in
+    // `tests/version-footer.test.ts`; what belongs HERE is that the hero passes no
+    // url, and that what it does print fits under every width the mark is drawn at.
+    const line = heroVersionCaption('0.6.3', 'beta')
+    expect(line).toBe('Ver: 0.6.3 beta')
+    expect(line).not.toContain('URL')
     // ASCII, so the renderer's width table and the terminal agree: centered
     // exactly rather than drifting a column on an ambiguous-width glyph.
     expect(visualWidth(line)).toBe(line.length)
