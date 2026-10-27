@@ -41,7 +41,7 @@ permissions:
 env:
   # The harness release this build is validated against; keep in sync with
   # HARNESS_VERSION_MAX in apps/tui-bin/build.mjs.
-  HARNESS_REF: dsh-v0.2.1-rc.2
+  HARNESS_REF: dsh-v0.2.1-rc.3
 
 jobs:
   # Fast, hermetic guards: they read the repository, never the harness, so they

@@ -87,9 +87,20 @@ function policyEdits() {
             text: 'import { Service } from "@deepseek-ai/cordis";\nimport { writableRoots } from "@deepseek-ai/dsh-sandbox";',
         },
         {
+            // 0.2.1-rc.3 turned the one-line `case` into a block: it now names the
+            // explicit extra directories before the same sentence. The anchor is the
+            // whole block, and the replacement below still derives the sentence from
+            // `writableRoots(policy)` — which already covers those extras (it composes
+            // `workspaceWritableRoots`), so nothing is lost by replacing it.
             name: 'policy allow-list sentence',
             marker: POLICY_ALLOWSET_MARKER,
-            anchor: '\t\tcase "workspace-write": return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`;',
+            anchor: [
+                '\t\tcase "workspace-write": {',
+                '\t\t\tconst additional = policy.additionalWritableRoots;',
+                '\t\t\tconst extra = additional === void 0 ? "" : ` Additional writable directories: ${JSON.stringify(additional)}.`;',
+                '\t\t\treturn `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}.${extra} Some platform temporary areas may also be writable.`;',
+                '\t\t}',
+            ].join('\n'),
             text,
         },
     ];

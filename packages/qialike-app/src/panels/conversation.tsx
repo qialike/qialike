@@ -42,6 +42,7 @@ import {
   dockedComposerTop,
   dockedFits,
 } from '../layout-budget.ts'
+import { siteUrl } from '../site-url.ts'
 import { questionDockRows, isMultiSelect, optionChecked } from '../question-layout.ts'
 import { approvalReasonLayout } from './approval.tsx'
 import { questionPresentation } from '../plan-review.ts'
@@ -2566,11 +2567,11 @@ function ConversationMain(props: { tui: TuiService }): React.JSX.Element {
   // it out (`heroVersionCaption` owns both rules; `tests/version-footer.test.ts`
   // pins them). Painted PLAIN (see the render) — a brand plate, not a build stamp.
   //
-  // NO SITE ANY MORE (user call, 2026-10-27). The line used to end in
-  // `. URL: <site>`, but both deployments (`.com`, `.cn`) ship this same binary and
-  // the rule for choosing one is still being settled, so the hero names none.
-  // `heroVersionCaption` still accepts a url, which is how it comes back.
-  const heroCaptionLine = heroVersionCaption(APP_VERSION, BUILD_MODE)
+  // The URL half follows the SYSTEM LANGUAGE (user call, 2026-10-27): Simplified
+  // Chinese gets the mainland site, everything else the international one. It cannot
+  // be baked — both deployments ship this same binary — so `siteUrl()` decides, and
+  // it is memoised, which makes asking on every frame a variable read.
+  const heroCaptionLine = heroVersionCaption(APP_VERSION, BUILD_MODE, siteUrl())
 
   const filtered = useMemo(
     () => filteredCommands(props.tui),

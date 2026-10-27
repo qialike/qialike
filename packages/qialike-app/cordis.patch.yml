@@ -24,22 +24,22 @@
 - id: hmr
   disabled: true
 
-- id: tools
-  config:
-    # Keep the same temporary process-wide Code Mode opt-in as the other
-    # surfaces. Unset keeps the schema default (native).
-    #
-    # Harness 0.2.1 removed `both` from ToolPresentationMode (it is `native` |
-    # `ptc` now), so passing the variable through verbatim made a deployment
-    # that had set `DSH_TOOLS_MODE=both` fail schema validation and take the
-    # whole tools row down with it. Normalize instead: `ptc` is the only value
-    # that still selects something other than the default, and `both` maps to
-    # `native` — the presentation it shared with the old default.
-    #
-    # The quotes are required, not style: an unquoted `!!js` scalar carrying a
-    # ternary is parsed by YAML as a MAPPING (the `: ` becomes a key separator),
-    # and the row then receives `{"[object Object]": "native"}`.
-    mode: !!js "process.env.DSH_TOOLS_MODE === 'ptc' ? 'ptc' : 'native'"
+# Tool presentation: the same temporary process-wide Code Mode opt-in the other
+# surfaces honour. `DSH_TOOLS_MODE=ptc` selects it; anything else (including
+# unset, and the `both` a deployment may still carry) keeps the native executor.
+#
+# THE MODE FIELD IS GONE (harness 0.2.1-rc.3). `tools.config.mode` is now
+# `z.never()` with the message "Removed. Mount a native or PTC tool executor
+# instead", and this composition kept writing `native` into it — which took the
+# whole `tools` row down at boot ("invalid config: $.mode expected nullable but
+# got native") and left every tool unregistered. The base bundle already mounts
+# both executors with PTC disabled, so the opt-in now FLIPS THE TWO ROWS instead
+# of naming a mode: same variable, same meaning, one row enabled exactly when it
+# did before.
+- id: tool-executor-native
+  disabled: !!js "process.env.DSH_TOOLS_MODE === 'ptc'"
+- id: tool-executor-ptc
+  disabled: !!js "process.env.DSH_TOOLS_MODE !== 'ptc'"
 
 # The web surface groups sessions under a Workspace (workspaceId); the TUI
 # profile does not mount the Workspace registry by default, so qialike sessions

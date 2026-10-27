@@ -56,7 +56,7 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-versio
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.2.1-rc.2'
+const HARNESS_VERSION_MAX = '0.2.1-rc.3'
 
 /**
  * The npm scope this repo's own packages live under, and the placeholder scope
@@ -1474,20 +1474,35 @@ function patchUndiciImports(nm) {
  * behaviour is unchanged. The injected comment doubles as the idempotency marker.
  */
 function patchWritableRootsWindows() {
+  // The anchor moved with harness 0.2.1-rc.3: `writableRoots` now composes
+  // `workspaceWritableRoots(policy)` (workspace root + explicit extras) with the two
+  // platform temp areas, instead of listing the three roots inline. The Windows rule
+  // is unchanged in substance — keep the workspace-OWNED roots, drop the temp ones —
+  // so the patch now rewrites the composition rather than the literal array.
   const patches = [
     {
       file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox/lib/index.js'),
-      from: '\treturn [...new Set([\n\t\tpolicy.workspaceRoot,\n\t\t"/tmp",\n\t\ttmpdir()\n\t].map(canonicalPath))];',
-      to: '\tconst roots = /* qialike: Windows grants the workspace root alone */ '
-        + 'process.platform === "win32" ? [policy.workspaceRoot] : [policy.workspaceRoot, "/tmp", tmpdir()];\n'
-        + '\treturn [...new Set(roots.map(canonicalPath))];',
+      from: '\tif (policy.mode !== "workspace-write") return [];\n'
+        + '\treturn [...new Set([\n'
+        + '\t\t...workspaceWritableRoots(policy),\n'
+        + '\t\tcanonicalPath("/tmp"),\n'
+        + '\t\tcanonicalPath(tmpdir())\n'
+        + '\t])];',
+      to: '\tif (policy.mode !== "workspace-write") return [];\n'
+        + '\tconst roots = /* qialike: Windows grants the workspace root alone */ '
+        + 'process.platform === "win32"\n'
+        + '\t\t? workspaceWritableRoots(policy)\n'
+        + '\t\t: [...workspaceWritableRoots(policy), canonicalPath("/tmp"), canonicalPath(tmpdir())];\n'
+        + '\treturn [...new Set(roots)];',
     },
     {
       file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox/lib/types/roots.js'),
-      from: "    return [...new Set([policy.workspaceRoot, '/tmp', tmpdir()].map(canonicalPath))];",
+      from: "    return [...new Set([...workspaceWritableRoots(policy), canonicalPath('/tmp'), canonicalPath(tmpdir())])];",
       to: '    const roots = /* qialike: Windows grants the workspace root alone */\n'
-        + "        process.platform === 'win32' ? [policy.workspaceRoot] : [policy.workspaceRoot, '/tmp', tmpdir()];\n"
-        + '    return [...new Set(roots.map(canonicalPath))];',
+        + "        process.platform === 'win32'\n"
+        + "            ? workspaceWritableRoots(policy)\n"
+        + "            : [...workspaceWritableRoots(policy), canonicalPath('/tmp'), canonicalPath(tmpdir())];\n"
+        + '    return [...new Set(roots)];',
     },
   ]
   for (const { file, from, to } of patches) {

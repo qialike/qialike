@@ -5,6 +5,24 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.12.0] - 2026-10-27
+
+### Changed
+
+- **The hero caption names the site again, chosen by system language** — Simplified Chinese gets `https://qialike.cn`, everything else `https://qialike.com`, because both deployments ship this same binary.
+- **Traditional Chinese systems stay on the international site** — `zh_TW` / `zh_HK` / `zh_MO` / `zh-Hant` read Traditional characters, so `.com` is the better default for them.
+- **The time zone is no longer consulted** — a machine in China running an English interface now gets `.com`, because the language is what its user actually chose.
+
+### Added
+
+- **`QIALIKE_SITE=cn|com|<url>` overrides the choice explicitly** — one run, not persisted, the same shape as `QIALIKE_BEE` and `QIALIKE_INSTALL_URL`.
+
+### Fixed
+
+- **The TUI boots again on deepseek-harness 0.2.1-rc.3** — the tool-presentation `mode` key was removed upstream, and writing it took the whole tools row down.
+- **`--model` keeps the reasoning effort it was launched with** — the effort now travels with the route instead of being dropped at startup.
+- **Switching model in `/models` still reaches the live agent** — model selection moved onto the agent itself, so the dialog records the choice there.
+
 ## [0.11.6] - 2026-10-27
 
 ### Changed

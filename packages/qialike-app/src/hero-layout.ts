@@ -13,6 +13,7 @@
  * @module @qialike/qialike-app/hero-layout
  */
 
+import { SITE_URL_COM } from './site-url.ts'
 import {
   HERO_ART_WORDMARK_COLS,
   HERO_ART_WORDMARK_ROWS,
@@ -67,21 +68,21 @@ export const HERO_TITLE_EN = 'Into the Unknown'
 export const HERO_TITLE = HERO_TITLE_EN
 
 /**
- * RETIRED (user call, 2026-10-27): the hero caption no longer names a site.
+ * The WIDEST site the caption can point at — the width budget's worst case.
  *
- * `HERO_CAPTION_URL` — a baked `https://qialike.com` — used to be the `URL:` half of
- * the caption under the brand mark. It was removed because both deployments
- * (`.com` international, `.cn` mainland) ship the SAME binary, so the site is a
- * property of the machine, not of the build; the run-time rule lives in
- * the machine's own signals (locale, time zone) and is still being settled. The
- * module that implemented that rule was withdrawn with this release — see
- * `qialike-cli-update.md` for the measurements — and `heroVersionCaption` still takes an
- * optional url, so the half comes back with one argument once that is decided.
+ * The caption under the brand mark ends in `. URL: <site>`, and the site is chosen at
+ * run time by {@link siteUrl} in `site-url.ts`: Simplified Chinese systems get
+ * `qialike.cn`, everything else `qialike.com` (both deployments serve the same
+ * binary, so this cannot be baked). This constant is therefore NOT what gets
+ * painted — it is `.com`, the longer of the two URLs, exported so tests can hold the
+ * budget against the worse case.
  *
- * The width budget it used to consume is not lost: the caption is now strictly
- * shorter, and `tests/version-footer.test.ts` still holds every channel's line
- * inside {@link HERO_ART_MIN_WIDTH} (52 columns, the brand mark's own floor).
+ * 19 columns, and the whole caption is 43 with the channel mark (ASCII, so the
+ * renderer's width table and every terminal agree), inside every width the brand
+ * mark itself is drawn at ({@link HERO_ART_MIN_WIDTH} = 52). `.cn` is one column
+ * shorter, so a machine switched to it can never overflow where `.com` did not.
  */
+export const HERO_CAPTION_URL = SITE_URL_COM
 
 /** Rows between the title (end of the brand block) and the composer card when
  *  nothing sits in between (the hero draws no workspace line). */

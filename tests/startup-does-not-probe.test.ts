@@ -76,7 +76,10 @@ describe('startup does not enumerate models', () => {
     // path would show up as a delayed first paint. The boot sequence reads
     // `agentDefaultModel` / `sessions` only.
     const src = code('index.tsx')
-    const boot = src.slice(src.indexOf('const defaultModel = ctx.get'), src.indexOf('const selected'))
+    // The window ends at the launch sequence, NOT at a variable named `selected`:
+    // harness 0.2.1-rc.3 removed the caller-owned `ModelSelectionRef`, so that
+    // marker no longer exists and the slice used to swallow the whole file.
+    const boot = src.slice(src.indexOf('const defaultModel = ctx.get'), src.indexOf('let liveAgent'))
     expect(boot.length).toBeGreaterThan(0)
     expect(boot).not.toContain('listConfigured')
     expect(boot).not.toContain('listModels')
