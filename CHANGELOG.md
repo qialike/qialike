@@ -5,6 +5,12 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.12.2] - 2026-10-27
+
+### Reverted
+
+- **0.12.1 is undone — output and context limits are back to their conservative values** — raising the per-request output budget made long sessions hit the model's total capacity sooner, so the round numbers are restored.
+
 ## [0.12.1] - 2026-10-27
 
 ### Fixed

@@ -3458,30 +3458,26 @@
       {
         "id": "deepseek-v4.1-flash",
         "name": "DeepSeek V4.1 Flash",
-        "contextWindow": 1048576,
-        "maxTokens": 393216,
-        "inputModalities": [
-          "text",
-          "image"
-        ]
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       },
       {
         "id": "deepseek-v4-pro",
         "name": "DeepSeek V4 Pro",
-        "contextWindow": 1048576,
-        "maxTokens": 393216
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       },
       {
         "id": "deepseek-v4-flash",
         "name": "DeepSeek V4 Flash",
-        "contextWindow": 1048576,
-        "maxTokens": 393216
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       },
       {
         "id": "deepseek-v4-flash-free",
         "name": "DeepSeek V4 Flash Free",
-        "contextWindow": 1048576,
-        "maxTokens": 393216
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       }
     ]
   },
@@ -3511,26 +3507,26 @@
       {
         "id": "deepseek-v4.1-flash",
         "name": "DeepSeek V4.1 Flash",
-        "contextWindow": 1048576,
-        "maxTokens": 393216
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       },
       {
         "id": "deepseek-v4-pro",
         "name": "DeepSeek V4 Pro",
-        "contextWindow": 1048576,
-        "maxTokens": 393216
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       },
       {
         "id": "deepseek-v4-flash",
         "name": "DeepSeek V4 Flash",
-        "contextWindow": 1048576,
-        "maxTokens": 393216
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       },
       {
         "id": "deepseek-v4-flash-free",
         "name": "DeepSeek V4 Flash Free",
-        "contextWindow": 1048576,
-        "maxTokens": 393216
+        "contextWindow": 1000000,
+        "maxTokens": 256000
       }
     ]
   }
