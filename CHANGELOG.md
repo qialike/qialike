@@ -5,6 +5,18 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.12.1] - 2026-10-27
+
+### Fixed
+
+- **DeepSeek models get their real output budget** — the ceiling was 256,000 while the API allows 393,216, so long answers were cut off with `finish_reason: length` for no reason.
+- **DeepSeek models get their real context window** — 1,000,000 was a rounded figure; the endpoint reports 1,048,576, so compaction no longer fires ~4.6% early.
+- **A gateway that names its limits differently is no longer half-read** — `max_output_tokens` and a top-level `input_modalities` were ignored, so a live catalogue sent them to the static table.
+
+### Added
+
+- **`scripts/release/audit-model-limits.py`** — finds a model's real output ceiling by reading the upstream's own rejection, using minimal requests instead of expensive long ones.
+
 ## [0.12.0] - 2026-10-27
 
 ### Changed

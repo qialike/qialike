@@ -230,12 +230,21 @@ const DEEPSEEK_OFFICIAL: TuiProviderProfile = {
     // (llm-deepseek) DEFAULT_MODELS order; it declares image input, so the TUI-side
     // attachment gate admits images for it. `deepseek-v4-flash-vision-exp` carries the
     // same declaration as the harness row (without it the gate rejected images for a
-    // model whose whole point is vision). `contextWindow` mirrors the harness's
-    // DEFAULT_CONTEXT_WINDOW (1_000_000) — all four official rows are kept in sync with it.
-    { id: 'deepseek-flash', name: 'DeepSeek-V41-Flash', contextWindow: 1000000, maxTokens: 256000, inputModalities: ['text', 'image'], reasoningEfforts: REASONING_EFFORTS },
-    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1000000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
-    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1000000, maxTokens: 256000, reasoningEfforts: REASONING_EFFORTS },
-    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', contextWindow: 1000000, maxTokens: 256000, inputModalities: ['text', 'image'], reasoningEfforts: REASONING_EFFORTS },
+    // model whose whole point is vision).
+    //
+    // THE LIMITS ARE THE OFFICIAL ENDPOINT'S, not a rounded "1M". Measured 2026-10-27
+    // against `api.deepseek.com/models`:
+    //     context_window: 1048576     max_output_tokens: 393216
+    // The rows used to say 1_000_000 / 256_000 — the harness's `DEFAULT_CONTEXT_WINDOW`
+    // and `DEFAULT_MAX_TOKENS`, which are round approximations, and which disagree with
+    // the harness's OWN `DEFAULT_MODELS` (`OFFICIAL_CONTEXT_WINDOW = 1_048_576`, labelled
+    // "as the official `/models` listing declares it"). Being 4.6% low on the context
+    // only mattered when the probe failed, but the 35% low output ceiling was a real cap
+    // on every request until the parser learned `max_output_tokens`.
+    { id: 'deepseek-flash', name: 'DeepSeek-V41-Flash', contextWindow: 1048576, maxTokens: 393216, inputModalities: ['text', 'image'], reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', contextWindow: 1048576, maxTokens: 393216, reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-pro', name: 'DeepSeek V4 Pro', contextWindow: 1048576, maxTokens: 393216, reasoningEfforts: REASONING_EFFORTS },
+    { id: 'deepseek-v4-flash-vision-exp', name: 'DeepSeek V4 Flash Vision Exp', contextWindow: 1048576, maxTokens: 393216, inputModalities: ['text', 'image'], reasoningEfforts: REASONING_EFFORTS },
   ],
 }
 
@@ -620,17 +629,32 @@ function dynamicModelInfo(entry: unknown): DynamicModelInfo | undefined {
     context_length?: unknown
     context_window?: unknown
     top_provider?: { max_completion_tokens?: unknown } | undefined
+    /** DeepSeek's own spelling of the output ceiling (OpenRouter uses `top_provider`). */
+    max_output_tokens?: unknown
     architecture?: { input_modalities?: unknown } | undefined
+    /** DeepSeek also states the input modalities at the TOP level, not under `architecture`. */
+    input_modalities?: unknown
   }
   const id = typeof row.id === 'string' ? row.id : ''
   if (id === '') return undefined
 
   const name = typeof row.name === 'string' && row.name !== '' ? row.name : undefined
+  // TWO GATEWAY DIALECTS, one parser. Every field is read in both spellings because a
+  // live catalogue is the truth about what the endpoint serves, and half-reading it
+  // silently substitutes the static table:
+  //   OpenRouter / Bee  context_length | context_window · top_provider.max_completion_tokens · architecture.input_modalities
+  //   DeepSeek official context_window                        · max_output_tokens                       · input_modalities
+  // Measured 2026-10-27 against `api.deepseek.com/models`: it reports
+  // `context_window: 1048576`, `max_output_tokens: 393216`, top-level
+  // `input_modalities`. Before these two fallbacks existed the probe returned
+  // `maxTok=undefined` for BOTH official models, so every request was capped by the
+  // static 256_000 while the API allowed 393_216.
   const contextWindow = positiveNumber(row.context_length) ?? positiveNumber(row.context_window)
   const maxTokens = positiveNumber(row.top_provider?.max_completion_tokens)
+    ?? positiveNumber(row.max_output_tokens)
 
   let inputModalities: readonly ('text' | 'image')[] | undefined
-  const rawModalities = row.architecture?.input_modalities
+  const rawModalities = row.architecture?.input_modalities ?? row.input_modalities
   if (Array.isArray(rawModalities)) {
     const tagged = rawModalities.filter(
       (m): m is 'text' | 'image' => m === 'text' || m === 'image',
@@ -1959,6 +1983,57 @@ export async function* translateGoogle(source: AsyncIterable<GoogleSseEvent>): A
 }
 
 /** The adapter: one OpenAI-compatible route set, registered under `ctx.llm`. */
+/**
+ * The limits Bee's `/models` UNDER-DECLARES for the DeepSeek family, with the
+ * evidence for each number.
+ *
+ * Bee fronts DeepSeek (`providers: [{ id: "deepseek", model: "deepseek-chat" }]` in its
+ * own `models.json`), and every DeepSeek official model reports
+ * `context_window: 1048576`, `max_output_tokens: 393216`. Bee publishes `1000000` and
+ * `256000` — the same round approximations the harness carries as
+ * `DEFAULT_CONTEXT_WINDOW` / `DEFAULT_MAX_TOKENS` — even though the schema comment on
+ * its own `contextWindow` field says "⚠️ 必须真实 … 报小了则会过早压缩上下文".
+ *
+ * MEASURED, 2026-10-27, through Bee itself: `max_tokens: 393216` is accepted and
+ * `393217` is rejected with "Error from provider (DeepSeek): … the valid range of
+ * max_tokens is [1, 393216]". So the real ceiling is the official one and Bee applies
+ * no cap of its own — the declaration is simply stale. The context window is the same
+ * upstream model, so it is the official 1048576.
+ *
+ * WHY A FLOOR AND NOT A REPLACEMENT: `Math.max`. The moment Bee fixes its catalogue
+ * (its template in `site-code/deploy/models.example.json` already carries the corrected
+ * numbers), the reported value wins on its own and this table stops mattering — so it
+ * cannot rot into a wrong override. It is also keyed to the DeepSeek family only: a Bee
+ * route that later fronts `claude-*` or `gpt-*` keeps whatever those endpoints declare.
+ */
+const BEE_UNDER_DECLARED: { readonly contextWindow: number; readonly maxTokens: number } = {
+  contextWindow: 1_048_576,
+  maxTokens: 393_216,
+}
+
+/** The floor that applies to one route/model pair, or `undefined` when none does.
+ *  @param provider - the route key.
+ *  @param model - the model id on that route.
+ *  @returns the DeepSeek limits when this is a Bee route serving a DeepSeek model. */
+function beeUnderDeclaredFloor(
+  provider: string,
+  model: string,
+): { contextWindow: number; maxTokens: number } | undefined {
+  if (!QIALIKE_BEE_ROUTES.includes(provider)) return undefined
+  if (!model.toLowerCase().startsWith('deepseek')) return undefined
+  return BEE_UNDER_DECLARED
+}
+
+/** Raise a limit to a floor, keeping whatever is larger.
+ *  @param value - the limit resolved from the endpoint or the static catalog.
+ *  @param floor - the minimum this route/model is known to support.
+ *  @returns the larger of the two, or `undefined` when neither is known. */
+function raisedTo(value: number | undefined, floor: number | undefined): number | undefined {
+  if (floor === undefined) return value
+  if (value === undefined) return floor
+  return Math.max(value, floor)
+}
+
 class TuiLlmAdapter extends LlmAdapter {
   /**
    * The outcome of the last `/models` probe per route, as this ADAPTER saw it.
@@ -2100,8 +2175,13 @@ class TuiLlmAdapter extends LlmAdapter {
     // Per-field fallback, not per-entry: an endpoint that reports a context window but
     // no output ceiling still contributes the one it knows.
     const live = await this.liveModelInfo(effective, model, provider)
-    const contextWindow = live?.contextWindow ?? entry?.contextWindow
-    const maxTokens = live?.maxTokens ?? entry?.maxTokens
+    // …EXCEPT WHERE THE ENDPOINT UNDER-DECLARES A LIMIT WE CAN PROVE. See
+    // {@link beeUnderDeclaredFloor}: Bee publishes DeepSeek's round approximations
+    // while its own upstream enforces the real range, so trusting the report costs the
+    // user 35% of the output budget.
+    const floor = beeUnderDeclaredFloor(provider, model)
+    const contextWindow = raisedTo(live?.contextWindow ?? entry?.contextWindow, floor?.contextWindow)
+    const maxTokens = raisedTo(live?.maxTokens ?? entry?.maxTokens, floor?.maxTokens)
     const inputModalities = live?.inputModalities ?? entry?.inputModalities
     // Effort-capable models advertise their levels + route default to the
     // harness, which then validates explicit efforts and materializes the

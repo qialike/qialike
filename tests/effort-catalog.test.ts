@@ -146,8 +146,12 @@ test('deepseek-official catalog leads with V4.1 and mirrors the harness row', ()
   // Order mirrors the harness (llm-deepseek) DEFAULT_MODELS: V4.1 first.
   expect(models[0]?.id).toBe('deepseek-flash')
   expect(models[0]?.name).toBe('DeepSeek-V41-Flash')
-  // contextWindow mirrors the harness DEFAULT_CONTEXT_WINDOW (1_000_000) on every official row.
-  expect(models.map((m) => m.contextWindow)).toEqual([1000000, 1000000, 1000000, 1000000])
+  // The limits are the OFFICIAL endpoint's, measured 2026-10-27 against
+  // `api.deepseek.com/models`: context_window 1048576, max_output_tokens 393216.
+  // They used to be the harness's rounded DEFAULT_CONTEXT_WINDOW / DEFAULT_MAX_TOKENS
+  // (1_000_000 / 256_000), which understated the output ceiling by 35%.
+  expect(models.map((m) => m.contextWindow)).toEqual([1048576, 1048576, 1048576, 1048576])
+  expect(models.map((m) => m.maxTokens)).toEqual([393216, 393216, 393216, 393216])
   // V4.1 declares image input, so the attachment gate admits images for it.
   expect(models[0]?.inputModalities).toEqual(['text', 'image'])
   // The vision model carries the same declaration (it used to be missing, so the gate

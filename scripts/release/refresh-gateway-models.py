@@ -22,6 +22,11 @@ WHAT IT DOES. 对每个可公开读取 `/models` 的网关，取回线上列表�
   · **默认不删**线上已不列出的条目 —— `/models` 不是"其它都下线"的声明，而匿名探测
     分不清"已下线"与"没给你看"（两者都只是 401）。确要按线上为准加 `--prune`。
 
+**手工校正的限额不会被覆盖。** `MANUAL_LIMITS` 里的 route 只刷新模型**列表**，不刷新
+`contextWindow` / `maxTokens` —— 网关声明的限额未必等于它上游真实的限额（实测
+2026-10-27：Bee 对 DeepSeek 报 `256000`，而它自己的上游接受 `393216` 并拒绝 `393217`）。
+没有这份名单，一次 `--write` 会把那些校正悄悄改回去。
+
 用法：
     ./refresh-gateway-models.py                  # 预演：只报告差异，不写文件
     ./refresh-gateway-models.py --write          # 真的写回 JSON
@@ -58,6 +63,21 @@ def positive(value) -> int | None:
     if value != value or value in (float('inf'), float('-inf')) or value <= 0:  # NaN/inf
         return None
     return int(value)
+
+
+"""
+Routes whose LIMITS are hand-corrected against the upstream's real range, so a refresh
+must not overwrite them with whatever the gateway declares.
+
+Bee 是唯一的例子：它对 DeepSeek 报 `contextWindow: 1000000` / `maxTokens: 256000`（取整
+值），而它的上游就是 DeepSeek 官方模型 —— 官方端点报 `1048576` / `393216`，并且上游
+在 `393217` 处**明确拒绝**（"the valid range of max_tokens is [1, 393216]"）。Bee 自己的
+`models.json` schema 注释也写着该字段「必须真实」。所以 qialike 侧按真实值校正。
+
+名单只挡 `contextWindow` 与 `maxTokens`；`name` / `inputModalities` 等仍照常刷新。
+等网关自己改对了（`site-code/deploy/models.example.json` 已改），把这里删掉即可。
+"""
+MANUAL_LIMITS = {'qialike-bee', 'qialike-bee-cn'}
 
 
 def entry_to_model(entry: dict) -> dict | None:
@@ -187,6 +207,12 @@ def main() -> int:
             prior = old_by_id.get(entry['id']) or {}
             combined = dict(prior)
             combined.update(entry)          # live wins for the fields it reports
+            if route in MANUAL_LIMITS:
+                # The gateway's own numbers are not the upstream's numbers here — see
+                # MANUAL_LIMITS. Keep the corrected limits, refresh everything else.
+                for field in ('contextWindow', 'maxTokens'):
+                    if field in prior:
+                        combined[field] = prior[field]
             merged.append(combined)
         # KEEP what the endpoint no longer lists. A gateway's `/models` is not a
         # statement that everything else is gone: some报告 subsets (alibaba-coding-plan

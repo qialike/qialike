@@ -141,9 +141,13 @@ describe('the Bee template row', () => {
     expect(bee?.excludeModelPrefixes).toBeUndefined()
     const ids = (bee?.models ?? []).map((m) => m.id)
     expect(ids).toEqual(['deepseek-v4.1-flash', 'deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-free'])
+    // The limits are DeepSeek's REAL range, not the round 1_000_000 / 256_000 that
+    // Bee's own `/models` used to publish (and that its upstream does not enforce:
+    // measured 2026-10-27, `max_tokens: 393216` is accepted through Bee and `393217`
+    // is rejected with "the valid range of max_tokens is [1, 393216]").
     for (const model of bee?.models ?? []) {
-      expect(model.contextWindow).toBe(1000000)
-      expect(model.maxTokens).toBe(256000)
+      expect(model.contextWindow).toBe(1048576)
+      expect(model.maxTokens).toBe(393216)
     }
   })
 
