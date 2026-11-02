@@ -33,7 +33,13 @@ const occurrences = (haystack, needle) => haystack.split(needle).length - 1;
 
 /**
  * Apply anchored edits to one file. Each edit is skipped when its marker is
- * already present (idempotency) and otherwise requires its anchor exactly once.
+ * already present (idempotency) and otherwise requires ONE of its anchors, and
+ * that one exactly once. `anchors` exists because the same upstream statement is
+ * spelled differently across releases — the released `0.2.1-rc.3 .. rc.5` tags
+ * keep `workspace-write` a one-line `case`, while `master` / `0.2.2-alpha` made
+ * it a block that names the explicit extra directories. The first anchor that
+ * matches exactly once wins, so one carrier patches either shape instead of
+ * pinning the build to a branch.
  * @param file - absolute path of the file to edit.
  * @param edits - the edits, in order.
  * @param readFile - injected reader.
@@ -45,14 +51,16 @@ function applyEdits(file, edits, readFile, writeFile) {
     let changed = false;
     for (const edit of edits) {
         if (source.includes(edit.marker)) continue;
-        const anchorCount = occurrences(source, edit.anchor);
-        if (anchorCount !== 1) {
+        const candidates = edit.anchors ?? [edit.anchor];
+        const anchor = candidates.find(candidate => occurrences(source, candidate) === 1);
+        if (anchor === undefined) {
+            const counts = candidates.map(candidate => occurrences(source, candidate)).join('/');
             throw new Error(
-                `policy-and-hygiene: ${edit.name} anchor not found exactly once in ${file} (found ${anchorCount});`
+                `policy-and-hygiene: ${edit.name} anchor not found exactly once in ${file} (found ${counts});`
                 + ' re-check apps/tui-bin/harness-patches/policy-and-hygiene.mjs against the harness version',
             );
         }
-        source = source.replace(edit.anchor, edit.text);
+        source = source.replace(anchor, edit.text);
         changed = true;
     }
     if (changed) writeFile(file, source, 'utf8');
@@ -87,20 +95,29 @@ function policyEdits() {
             text: 'import { Service } from "@deepseek-ai/cordis";\nimport { writableRoots } from "@deepseek-ai/dsh-sandbox";',
         },
         {
-            // 0.2.1-rc.3 turned the one-line `case` into a block: it now names the
-            // explicit extra directories before the same sentence. The anchor is the
-            // whole block, and the replacement below still derives the sentence from
-            // `writableRoots(policy)` — which already covers those extras (it composes
-            // `workspaceWritableRoots`), so nothing is lost by replacing it.
+            // The sentence has TWO upstream spellings, and both are live:
+            //   * the released `0.2.1-rc.3 .. rc.5` tags keep a one-line `case`
+            //     whose sentence names only the workspace root;
+            //   * `master` / `0.2.2-alpha` turned it into a block that first names
+            //     the policy's explicit extra directories.
+            // The block shape was the only anchor carried before, so a build
+            // against an actual rc TAG failed here ("anchor not found exactly
+            // once, found 0") even though the checkout was a supported release.
+            // Both shapes are accepted now; either way the replacement derives the
+            // sentence from `writableRoots(policy)`, which already covers whatever
+            // extras the policy carries.
             name: 'policy allow-list sentence',
             marker: POLICY_ALLOWSET_MARKER,
-            anchor: [
-                '\t\tcase "workspace-write": {',
-                '\t\t\tconst additional = policy.additionalWritableRoots;',
-                '\t\t\tconst extra = additional === void 0 ? "" : ` Additional writable directories: ${JSON.stringify(additional)}.`;',
-                '\t\t\treturn `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}.${extra} Some platform temporary areas may also be writable.`;',
-                '\t\t}',
-            ].join('\n'),
+            anchors: [
+                [
+                    '\t\tcase "workspace-write": {',
+                    '\t\t\tconst additional = policy.additionalWritableRoots;',
+                    '\t\t\tconst extra = additional === void 0 ? "" : ` Additional writable directories: ${JSON.stringify(additional)}.`;',
+                    '\t\t\treturn `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}.${extra} Some platform temporary areas may also be writable.`;',
+                    '\t\t}',
+                ].join('\n'),
+                '\t\tcase "workspace-write": return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`;',
+            ],
             text,
         },
     ];

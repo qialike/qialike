@@ -76,10 +76,14 @@ describe('startup does not enumerate models', () => {
     // path would show up as a delayed first paint. The boot sequence reads
     // `agentDefaultModel` / `sessions` only.
     const src = code('index.tsx')
-    // The window ends at the launch sequence, NOT at a variable named `selected`:
-    // harness 0.2.1-rc.3 removed the caller-owned `ModelSelectionRef`, so that
-    // marker no longer exists and the slice used to swallow the whole file.
-    const boot = src.slice(src.indexOf('const defaultModel = ctx.get'), src.indexOf('let liveAgent'))
+    // The window ends at the agent-setup callback. The marker is that callback's
+    // DECLARATION SHAPE and not a variable next to it: 0.12.0 briefly split model
+    // selection onto the Agent (`let liveAgent`), 0.12.3 went back to the
+    // caller-owned `ModelSelectionRef` the released rc line still ships, and a
+    // slice keyed on either local name silently collapses to "the rest of the
+    // file" once that name goes away — which is how this guard would stop
+    // guarding. `const setup = (agentCtx` survives both.
+    const boot = src.slice(src.indexOf('const defaultModel = ctx.get'), src.indexOf('const setup = (agentCtx'))
     expect(boot.length).toBeGreaterThan(0)
     expect(boot).not.toContain('listConfigured')
     expect(boot).not.toContain('listModels')

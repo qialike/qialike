@@ -5,6 +5,22 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.13.0] - 2026-11-02
+
+### Changed
+
+- **The embedded harness moves to deepseek-harness 0.2.1-rc.5** — `HARNESS_VERSION_MAX` and CI's `HARNESS_REF` move together, because they are one fact written twice.
+
+### Fixed
+
+- **Building against an actual rc tag no longer dies on the `writableRoots` patch** — 0.12.0 anchored it on a `workspaceWritableRoots` composition that only ever existed on master / 0.2.2-alpha, while the rc line inlines the three roots.
+- **The policy patch accepts both upstream spellings of the `workspace-write` sentence** — a one-line `case` on the rc tags, a block naming the explicit extra directories on master, so neither checkout fails the build.
+- **Model selection is the caller-owned `ModelSelectionRef` again** — rc.5's `Agent` has no `model` member, so 0.12.0's `agent.model.select()` did not typecheck on the release CI pins; `/models` switches the live request through the ref, as the rc line intends.
+- **`DSH_TOOLS_MODE=ptc` presents Code Mode again** — 0.12.0 dropped the `tools` row's `mode` because the checkout it was adapted against had removed the field; on the rc line the field is live, and without it the switch mounted the PTC executor while the model kept seeing the native catalog, so `run_code` was never offered.
+- **The startup guard no longer hangs on a local only one harness shape has** — its window ended at `let liveAgent`, so going back to the caller-owned selection ran the window to end of file and the guard failed for the wrong reason (measured: 4 pass, 1 fail); it now ends at the setup callback's declaration, which both shapes share.
+- **The clone instructions name a release this tree was actually validated against** — `CONTRIBUTING` still said `dsh-v0.2.1-rc.2`, inside the accepted range but two releases behind the one the anchored patches match.
+- **An MCP server that does not advertise resources no longer prints a debug line into the terminal** — the SDK wrote it to stdout, which a full-screen TUI has no way to isolate; the harness now answers the empty page directly and qialike inherits it.
+
 ## [0.12.2] - 2026-10-27
 
 ### Reverted

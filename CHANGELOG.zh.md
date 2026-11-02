@@ -7,6 +7,22 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.13.0] - 2026-11-02
+
+### 变更
+
+- **内嵌 harness 升到 deepseek-harness 0.2.1-rc.5** —— `HARNESS_VERSION_MAX` 与 CI 的 `HARNESS_REF` 一起前移，因为它们是同一个事实的两处写法。
+
+### 修复
+
+- **按 rc 标签构建不再卡在 `writableRoots` 补丁上** —— 0.12.0 锚的是只存在于 master / 0.2.2-alpha 的 `workspaceWritableRoots` 组合形态，而 rc 系列一直内联那三个根。
+- **政策补丁同时认两种上游写法** —— `workspace-write` 的句子在 rc 标签里是单行 `case`、在 master 上是点名显式额外目录的块，两种检出都不会再让构建失败。
+- **模型选择改回调用方持有的 `ModelSelectionRef`** —— rc.5 的 `Agent` 没有 `model` 成员，0.12.0 按 master 写的 `agent.model.select()` 在发布 CI 钉的版本上过不了类型检查；`/models` 通过这个 ref 切换当前会话的下一次请求，正是 rc 系列的机制。
+- **`DSH_TOOLS_MODE=ptc` 重新呈现 Code Mode** —— 0.12.0 删掉了 `tools` 行的 `mode`，因为当时对着的检出已经没有这个字段；rc 系列上它是活的，缺了它开关只挂上 PTC 执行器、模型看到的仍是原生目录，`run_code` 根本没被提供。
+- **启动守卫不再拴在只有一种 harness 形态才有的局部变量上** —— 它的窗口原以 `let liveAgent` 结尾，改回调用方持有的选择后窗口一直延伸到文件末尾，守卫会因为错误的原因报红（实测 4 过 1 败）；现在以 setup 回调的声明为界，两种形态都有。
+- **克隆指引指向的是本树真正验证过的那个发布** —— `CONTRIBUTING` 里还写着 `dsh-v0.2.1-rc.2`，在门禁接受的范围之内，但比锚点真正匹配的版本落后两个发布。
+- **不宣告 resources 的 MCP 服务器不再往终端里写调试行** —— SDK 原来是写到 stdout，全屏 TUI 没法隔离它；harness 现在直接回空页，qialike 随之受益。
+
 ## [0.12.2] - 2026-10-27
 
 ### 回退

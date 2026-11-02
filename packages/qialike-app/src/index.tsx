@@ -31,7 +31,7 @@ import { BUILD_MODE } from './build-mode.ts'
 import { versionFooterSuffix } from './version-footer.ts'
 import { SessionLogReader } from './log-frames.ts'
 import { sanitizeTerminalText } from './terminal-safe.ts'
-import type { Agent, AgentHandle, AgentOptions, AgentSetup, ModelSelection, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
+import type { Agent, AgentHandle, AgentOptions, AgentSetup, ModelSelection, ModelSelectionRef, ResumeAgentOptions } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-default-model'
 import { ManualCompactionError, type CompactionResult, type ManualCompactAgentContext, type ManualCompactionErrorCode } from '@deepseek-ai/dsh-compaction'
 import { createUserMessage, expandAssistantStream } from '@deepseek-ai/dsh-llm'
@@ -3999,25 +3999,25 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     (route) => servedRoutes.has(route),
     { provider: selection.provider, model: selection.model },
   )
-  // The reasoning effort travels WITH the route now: harness 0.12 moved model
-  // selection out of a caller-owned ref and into the Agent (`agent.model`), whose
-  // fallback is exactly these options when the Session has recorded nothing yet.
+  // The reasoning effort travels WITH the route: the Agent's options carry the
+  // startup route AND its saved effort, so a launch that records nothing else still
+  // sends the effort the user last chose.
   const agentOptions = {
     provider: override.provider,
     model: override.model,
     ...(selection.reasoningEffort === undefined ? {} : { reasoningEffort: selection.reasoningEffort }),
   }
-  // THE LIVE AGENT'S MODEL IS THE AGENT'S NOW (harness API change, 2026-10-23).
-  // `installModelSelection(ctx, selectedRef)` split: the ref is gone, the switch
-  // notice is installed from the scoped context alone, and the selection itself is
-  // read and written through `agent.model` — reads prefer the Session's recorded
-  // choice over these options, writes append a `model/selection` event. So the
-  // /models dialog switches the live agent by calling `model.select()`, and this
-  // holds the agent the setup callback was handed.
-  let liveAgent: Agent | undefined
-  const setup = (agentCtx: Context, agent: Agent): void => {
-    installModelSelection(agentCtx)
-    liveAgent = agent
+  // THE RELEASED rc LINE KEEPS THE CALLER-OWNED REF (harness 0.2.1-rc.5). The
+  // `agent.model` API — `installModelSelection(ctx)` with the selection moved onto
+  // the Agent — exists only on `master` / `0.2.2-alpha`, so a build against the
+  // rc.5 TAG (the release CI pins) failed to typecheck on it twice: the two-argument
+  // signature here and `agent.model.select()` below. The ref is the released shape:
+  // prompt assembly and the request path read it per request, which is how the
+  // /models dialog switches the live agent's next request without touching the
+  // Session's recorded history.
+  const selected: ModelSelectionRef = { current: selection, assembled: undefined }
+  const setup = (agentCtx: Context): void => {
+    installModelSelection(agentCtx, selected)
   }
 
   // Explicit `--resume <id>` wins; otherwise `qialike resume` (positional) — or
@@ -5147,16 +5147,17 @@ async function start(ctx: Context, config: Config, io: TuiIo): Promise<void> {
     ...(t.models !== undefined ? { models: t.models } : {}),
   })))
   store.modelsSaveAction = (provider: string, model: string, effort?: string) => {
-    // `model.select()` records the choice on the LIVE agent's Session, so its next
-    // step uses the new route and effort (the same durable mechanism the web Models
-    // page uses); saveSelection persists the default for future runs. An absent
-    // effort clears any inherited one, restoring the model's own default behavior.
+    // The mutable selection ref is read per request by prompt assembly, so
+    // updating it switches the LIVE agent's next request to the new model and
+    // reasoning effort (the same mechanism the web Models page uses);
+    // saveSelection persists the default for future runs. An absent effort
+    // clears any inherited one, restoring the model's own default behavior.
     // Before the agent exists there is nothing to switch — the options above already
     // carry the startup choice.
     const next: ModelSelection = effort === undefined
       ? { provider, model }
       : { provider, model, reasoningEffort: effort as ModelSelection['reasoningEffort'] }
-    liveAgent?.model.select(next)
+    selected.current = next
     store.currentModel = { provider, model, ...(effort === undefined ? {} : { reasoningEffort: effort }) }
     void defaultModel.saveSelection(next).catch(() => { /* best-effort persist */ })
     // Label with the provider name too, so the same model id from different
@@ -5837,9 +5838,11 @@ async function autoResumeNewest(
   agents: { resume(options: ResumeAgentOptions): Promise<AgentHandle> },
   cwd: string,
   agentOptions: AgentOptions,
-  // The setup callback is handed the unpublished Agent too (harness API change,
-  // 2026-10-23): model selection moved onto `agent.model`, so a caller that wants to
-  // switch the live agent later needs the Agent itself, not just its context.
+  // The setup callback also receives the unpublished Agent (0.2.1-rc.3 widened it
+  // from `(agentCtx)`). The released rc line needs only the scoped context here —
+  // model selection is the caller-owned ref below, which prompt assembly reads per
+  // request — but the type stays `AgentSetup` so a harness that moves the selection
+  // onto the Agent can hand it over without another signature change.
   setup: AgentSetup,
 ): Promise<AgentHandle | undefined> {
   const heads = await autoResumeCandidates(ctx, cwd)
