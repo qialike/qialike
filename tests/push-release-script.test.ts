@@ -338,3 +338,37 @@ describe('the token pre-flight runs before any remote write', () => {
     expect(r.status).toBe(0)
   })
 })
+
+describe('the manifest read-back tells propagation apart from a missing upload', () => {
+  // WHY THIS EXISTS. v0.14.0 re-uploaded its assets over an existing release, which
+  // gives every object a FRESH `release-assets.githubusercontent.com` URL. The edge
+  // answered `504 Gateway Time-out` for a few minutes while the manifest was already
+  // on the release and byte-identical. The old loop retried 5 × 3 s ≈ 12 s, then
+  // reported "清单没传上去，安装器会拒绝安装" — and aborted before the gitcode half,
+  // leaving the release HALF published over a false negative.
+  //
+  // The two failures must stay distinct: a 5xx means "not visible from this edge yet"
+  // and is worth waiting for; a 404 means the object is genuinely absent and waiting
+  // cannot help. Conflating them is what made the message wrong.
+
+  test.skipIf(!canRun)('a 5xx keeps retrying, and the verdict says propagation', () => {
+    const r = run({ FIX_RELEASE_STATUS: '200', FIX_MANIFEST_STATUS: '504', QIALIKE_VERIFY_ATTEMPTS: '2', QIALIKE_VERIFY_DELAY: '0' })
+
+    // Still a failure — nothing here claims success — but the reason is the honest one.
+    expect(r.status).toBe(1)
+    expect(r.err).toContain('CDN 仍在传播')
+    expect(r.err).not.toContain('没有 0.14.0/sha256sums.txt')
+    // It really did retry rather than give up on the first answer.
+    expect(r.calls.match(/releases\/download\/.*sha256sums\.txt/g)?.length ?? 0).toBeGreaterThan(1)
+  })
+
+  test.skipIf(!canRun)('a 404 fails at once, without burning the retry budget', () => {
+    const r = run({ FIX_RELEASE_STATUS: '200', FIX_MANIFEST_STATUS: '404', QIALIKE_VERIFY_ATTEMPTS: '9', QIALIKE_VERIFY_DELAY: '0' })
+
+    expect(r.status).toBe(1)
+    expect(r.err).toContain('不是传播延迟')
+    expect(r.err).not.toContain('CDN 仍在传播')
+    // One probe, not nine: waiting cannot create a missing asset.
+    expect(r.calls.match(/releases\/download\/.*sha256sums\.txt/g)?.length ?? 0).toBe(1)
+  })
+})

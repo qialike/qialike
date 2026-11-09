@@ -562,20 +562,55 @@ gc_upload() {  # $1=file $2=name
 }
 
 # 读回清单并与本地逐字节比对 —— 这是"真的传上去了"唯一的硬证据。
+#
+# WHY THE WINDOW IS ~2 MINUTES AND NOT 12 SECONDS (2026-11-09, v0.14.0).
+# It used to be 5 tries × 3 s. That passed for months and then failed on a release
+# whose assets had just been RE-UPLOADED over an existing one: every object gets a
+# fresh `release-assets.githubusercontent.com` URL, and the edge serving it answered
+# `504 Gateway Time-out` for a few minutes while the old URLs were already live. The
+# script reported "清单没传上去，安装器会拒绝安装" — but the manifest was on GitHub
+# the whole time, byte-identical (`sha256` matched the local file), and the same URL
+# returned 200 about six minutes later. A false negative here is expensive: it aborts
+# the run before the gitcode half, so the release ends up HALF published.
+#
+# So the loop now distinguishes the two things it used to conflate:
+#   * 404/410 — the object genuinely is not on the release. Fail at once, because
+#     waiting cannot fix it and the message ("清单没传上去") is then true.
+#   * 403/5xx/000 — the object exists but this edge cannot serve it YET. Retry with
+#     backoff, because that is propagation, not a failed upload.
+# A 200 whose body differs stays an immediate hard failure: that is a different build.
+VERIFY_ATTEMPTS="${QIALIKE_VERIFY_ATTEMPTS:-14}"   # 14 × (2,3,4…capped 15) s ≈ 2.5 min
+# First backoff step. Both knobs are env-overridable so the test suite can drive the
+# retry logic without spending the real two and a half minutes.
+VERIFY_DELAY="${QIALIKE_VERIFY_DELAY:-2}"
 verify_manifest() {  # $1=下载根 $2=源名
-  local base=$1 label=$2 got attempt
-  for attempt in 1 2 3 4 5; do
-    if got="$(curl -fsSL "$base/$TAG/sha256sums.txt" 2>/dev/null)"; then
-      if [[ "$got" == "$(cat "$MANIFEST")" ]]; then
+  local base=$1 label=$2 code attempt delay="$VERIFY_DELAY" want body
+  want="$(cat "$MANIFEST")"
+  for (( attempt = 1; attempt <= VERIFY_ATTEMPTS; attempt++ )); do
+    # Probe the status WITHOUT consuming the body: `-o /dev/null -w` is one request
+    # whose only output is the code, so a 5xx reads as "not visible yet" instead of
+    # as a body that failed to compare. The body is fetched only on a 200.
+    code="$(curl -sS -o /dev/null -w '%{http_code}' "$base/$TAG/sha256sums.txt" 2>/dev/null || true)"
+    [[ -n "$code" ]] || code=000
+    if [[ "$code" == 200 ]]; then
+      body="$(curl -fsSL "$base/$TAG/sha256sums.txt" 2>/dev/null || true)"
+      if [[ "$body" == "$want" ]]; then
         ok "$label 的 sha256sums.txt 与本地逐字节一致"
         return 0
       fi
-      die "$label 上的 sha256sums.txt 与本地不一致（上传的是别的构建？）"
+      # An empty second read is a race on the same edge, not a different build.
+      [[ -n "$body" ]] && die "$label 上的 sha256sums.txt 与本地不一致（上传的是别的构建？）"
     fi
-    # 刚发布的 release 在 CDN 上可能要几秒才可见。
-    sleep 3
+    case "$code" in
+      404 | 410)
+        die "$label 上没有 $TAG/sha256sums.txt（HTTP $code，不是传播延迟）—— 清单没传上去，安装器会拒绝安装" ;;
+    esac
+    warn "$label 回读 HTTP $code（第 $attempt/$VERIFY_ATTEMPTS 次）—— CDN 仍在传播，${delay}s 后重试"
+    sleep "$delay"
+    delay=$(( delay + 2 ))
+    (( delay > 15 )) && delay=15
   done
-  die "$label 上取不到 $TAG/sha256sums.txt（试了 5 次）—— 清单没传上去，安装器会拒绝安装"
+  die "$label 上取不到 $TAG/sha256sums.txt（试了 $VERIFY_ATTEMPTS 次）—— 最后一次 HTTP $code；若随后能取到，重跑本脚本即可（已存在的资产会被覆盖）"
 }
 
 # ── 0b. --notes-only：只把 CHANGELOG 同步到两个源的 Release 正文 ─────────────
