@@ -28,33 +28,23 @@
 # surfaces honour. `DSH_TOOLS_MODE=ptc` selects it; anything else (including
 # unset, and the `both` a deployment may still carry) keeps the native executor.
 #
-# THE OPT-IN HAS TWO HALVES ON THE 0.2.1 LINE, AND BOTH ARE REQUIRED.
-# `tools.config.mode` decides what the model SEES (a `ptc` mode is what offers
-# `run_code` and collapses the catalog to it), while the executor rows decide
-# what RUNS that program. 0.12.0 dropped the `mode` write because the harness it
-# was written against had turned the field into `z.never()` — but that form lives
-# only on `master` / `0.2.2-alpha`; every released `0.2.1-rc.*` tag still carries
-# `mode: z.union(['native', 'ptc'])`. With only the rows flipped, a `ptc` run
-# presented a native catalog, so `run_code` was never offered and the executor
-# was never reached: the opt-in was silently inert. Both halves are written here,
-# so the variable means what it says again.
+# PRESENTATION IS EXECUTOR-OWNED NOW (harness 0.2.2), so the rows are the WHOLE
+# switch — and writing `mode` would be fatal, not redundant.
+# `@deepseek-ai/dsh-tools` no longer chooses a presentation: `tools.config.mode` is
+# `z.never()` ("Removed. Mount a native or PTC tool executor instead"), and the two
+# executors were split out of it into rows the base bundle mounts. The PTC executor
+# registers `run_code` plus the "only run_code is callable" prompt section itself,
+# so mounting it IS the presentation.
 #
-# `both` came off ToolPresentationMode in harness 0.2.1, so a deployment still
-# exporting it must not be passed through verbatim — it would fail schema
-# validation and take the whole tools row down. Normalize instead: `ptc` is the
-# only value that selects something other than the default, and `both` maps to
-# `native`, the presentation it shared with the old default.
-#
-# The quotes are required, not style: an unquoted `!!js` scalar carrying a
-# ternary is parsed by YAML as a MAPPING (the `: ` becomes a key separator), and
-# the row then receives `{"[object Object]": "native"}` — which is exactly how
-# this row died once before (see tests/patch-js-scalars.test.ts).
-- id: tools
-  config:
-    mode: !!js "process.env.DSH_TOOLS_MODE === 'ptc' ? 'ptc' : 'native'"
-
-# The base bundle mounts both executors with PTC disabled, so the same variable
-# also flips the two rows: exactly one executor is mounted per run.
+# That settles an argument this file has now had twice, in opposite directions:
+#   * 0.12.0 dropped the `mode` write because the checkout it read had `z.never()`;
+#   * 0.13.0 put it back, because the released 0.2.1-rc.* tags still had
+#     `mode: z.union(['native','ptc'])` and rows alone left the model on a native
+#     catalog. (On those tags the executor rows qialike flipped did not exist in the
+#     base patch at all — the transport lived inside `dsh-tools`.)
+# 0.2.2 ships both halves of that story at once: real executor rows AND `z.never()`.
+# So: rows only. Anything in `config` here would take the whole tools row down at
+# boot ("invalid config: $.mode"), which is the failure 0.12.0 hit.
 - id: tool-executor-native
   disabled: !!js "process.env.DSH_TOOLS_MODE === 'ptc'"
 - id: tool-executor-ptc
@@ -144,6 +134,29 @@
 - insert:
     - id: qialike-fs-tools
       name: '@qialike/qialike-app/fs-tools'
+
+# READ-BEFORE-WRITE STAYS ON (qialike's call; harness 0.2.2 flipped its default).
+#
+# The base bundle now mounts this row `disabled: true`, on the argument that an
+# unconditional `write` and an unobserved `edit` are what most callers want. qialike
+# keeps the older contract on purpose: `write` refuses to overwrite a file the model
+# has not read, and `edit` refuses an unread or externally changed file. Two reasons
+# it is not just conservatism —
+#   * the failure mode is silent corruption: the model rewrites a file from memory,
+#     and nothing in the transcript says the bytes it never saw are gone;
+#   * this surface is a full-screen TUI with no diff review step, so the read is the
+#     only place the model's picture of the file can be corrected.
+#
+# Stated as an explicit `disabled: false` rather than left absent, because "absent"
+# now means the opposite of what it meant in 0.2.1: a future upstream flip would
+# otherwise re-open the hole with no diff anywhere in this repository.
+- id: fs-observation-policy
+  disabled: false
+
+# `apply_patch` is NOT enabled. The base ships `applyPatch: false` and qialike leaves
+# it that way: the tool applies hunks on context match alone, which is exactly the
+# unread-write this file just opted back out of. Turning it on inside a read-before-
+# write deployment would hand the model a way around the fence.
 
 - insert:
     # Gives the model the `ask_user_question` tool, which asks the user for a

@@ -5,6 +5,22 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.14.0] - 2026-11-09
+
+### Changed
+
+- **The embedded harness moves to deepseek-harness 0.2.2-rc.1** — `HARNESS_VERSION_MAX` and CI's `HARNESS_REF` move together, because they are one fact written twice.
+- **`write` and `edit` still refuse a file the model has not read** — 0.2.2 turns `fs-observation-policy` off by default; this build keeps it on, and says so explicitly so a future upstream flip cannot re-open the hole silently.
+- **Team tools are mounted** — the harness now composes `agent-team`, so the model can hand work to named collaborators; the TUI has no panel for them yet.
+
+### Fixed
+
+- **A build against the 0.2.2 tag no longer dies on the `writableRoots` patch** — the anchor follows the release again: 0.2.2 composes `workspaceWritableRoots`, while the rc line 0.13.0 targeted inlined the three roots.
+- **Model selection is the Agent's again** — 0.2.2 merged `agent.model` and dropped the caller-owned `ModelSelectionRef` that 0.13.0 had restored for the rc line.
+- **The Code Mode opt-in is the executor rows, and only them** — 0.2.2 split the executors out of `dsh-tools` and made `tools.config.mode` `z.never()`, so the row 0.13.0 wrote would have taken the whole tools row down at boot.
+- **The single-file build compiles again** — `@deepseek-ai/dsh-util-time` imports `rrule` as a default, which Node's CJS interop supplies and Bun's ESM resolution does not, so the bundle failed before writing any target.
+- **`/models` keeps working after a switch** — the reasoning effort travels with the route on the Agent, so the persisted effort survives both startup and a live switch.
+
 ## [0.13.0] - 2026-11-02
 
 ### Changed

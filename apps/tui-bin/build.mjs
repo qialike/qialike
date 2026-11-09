@@ -31,6 +31,7 @@ import { gunzipSync } from 'node:zlib'
 import { build } from 'esbuild'
 import semver from 'semver'
 import { ACL_PACKAGE_DIR, patchDeleteConstraint } from './harness-patches/delete-constraint.mjs'
+import { patchCjsInterop } from './harness-patches/cjs-interop.mjs'
 import { patchPolicyAndHygiene } from './harness-patches/policy-and-hygiene.mjs'
 import { patchWindowsAclGrant } from './harness-patches/windows-acl-grant.mjs'
 
@@ -56,7 +57,7 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-versio
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.2.1-rc.5'
+const HARNESS_VERSION_MAX = '0.2.2-rc.1'
 
 /**
  * The npm scope this repo's own packages live under, and the placeholder scope
@@ -850,6 +851,10 @@ function createResolveFarm() {
   // allow-list the fence enforces, and the shared temp tree gets its stale
   // `dsh-*` residue reclaimed (see the module).
   patchPolicyAndHygiene({ root: join(ROOT, 'apps/tui-bin/x'), log: console.log })
+  // Default imports of CJS-only packages: Node's interop supplies a default, Bun's
+  // ESM resolution does not, and the compile fails on the missing export before any
+  // target is written (see the module).
+  patchCjsInterop({ root: join(ROOT, 'apps/tui-bin/x'), log: console.log })
   // The `glob` / `grep` tools spawn the packaged ripgrep, which a single file
   // can neither resolve nor carry implicitly (see the functions).
   embedRipgrepBinaries()
@@ -1474,36 +1479,39 @@ function patchUndiciImports(nm) {
  * behaviour is unchanged. The injected comment doubles as the idempotency marker.
  */
 function patchWritableRootsWindows() {
-  // The released 0.2.1-rc.3 .. rc.5 line lists the three roots inline. An earlier
-  // revision of this patch matched a `workspaceWritableRoots(policy)` composition,
-  // but that shape only ever existed on master / 0.2.2-alpha and never in an rc
-  // tag, so a build against the exact tag failed here. The Windows rule is
-  // unchanged in substance — keep the workspace-OWNED roots, drop the temp ones —
-  // and the anchor is back to the literal array those tags actually ship.
+  // The anchor follows the RELEASE this build targets. 0.2.2 composes
+  // `workspaceWritableRoots(policy)` (workspace root + the policy's explicit extras,
+  // each validated) with the two platform temp areas, so the patch rewrites the
+  // composition and keeps exactly the workspace-OWNED half on Windows.
+  //
+  // History worth keeping, because the same anchor has now moved twice: the
+  // 0.2.1-rc.3 .. rc.5 tags listed the three roots INLINE, so 0.13.0's anchor was the
+  // literal array. Both shapes have shipped in a release at some point, which is why
+  // the rule below is stated in terms of the half to keep, not the exact text.
   const patches = [
     {
       file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox/lib/index.js'),
       from: '\tif (policy.mode !== "workspace-write") return [];\n'
         + '\treturn [...new Set([\n'
-        + '\t\tpolicy.workspaceRoot,\n'
-        + '\t\t"/tmp",\n'
-        + '\t\ttmpdir()\n'
-        + '\t].map(canonicalPath))];',
+        + '\t\t...workspaceWritableRoots(policy),\n'
+        + '\t\tcanonicalPath("/tmp"),\n'
+        + '\t\tcanonicalPath(tmpdir())\n'
+        + '\t])];',
       to: '\tif (policy.mode !== "workspace-write") return [];\n'
         + '\tconst roots = /* qialike: Windows grants the workspace root alone */ '
         + 'process.platform === "win32"\n'
-        + '\t\t? [policy.workspaceRoot]\n'
-        + '\t\t: [policy.workspaceRoot, "/tmp", tmpdir()];\n'
-        + '\treturn [...new Set(roots.map(canonicalPath))];',
+        + '\t\t? workspaceWritableRoots(policy)\n'
+        + '\t\t: [...workspaceWritableRoots(policy), canonicalPath("/tmp"), canonicalPath(tmpdir())];\n'
+        + '\treturn [...new Set(roots)];',
     },
     {
       file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-sandbox/lib/types/roots.js'),
-      from: "    return [...new Set([policy.workspaceRoot, '/tmp', tmpdir()].map(canonicalPath))];",
+      from: "    return [...new Set([...workspaceWritableRoots(policy), canonicalPath('/tmp'), canonicalPath(tmpdir())])];",
       to: '    const roots = /* qialike: Windows grants the workspace root alone */\n'
         + "        process.platform === 'win32'\n"
-        + "            ? [policy.workspaceRoot]\n"
-        + "            : [policy.workspaceRoot, '/tmp', tmpdir()];\n"
-        + '    return [...new Set(roots.map(canonicalPath))];',
+        + "            ? workspaceWritableRoots(policy)\n"
+        + "            : [...workspaceWritableRoots(policy), canonicalPath('/tmp'), canonicalPath(tmpdir())];\n"
+        + '    return [...new Set(roots)];',
     },
   ]
   for (const { file, from, to } of patches) {

@@ -7,6 +7,22 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.14.0] - 2026-11-09
+
+### 变更
+
+- **内嵌 harness 升到 deepseek-harness 0.2.2-rc.1** —— `HARNESS_VERSION_MAX` 与 CI 的 `HARNESS_REF` 一起前移，因为它们是同一个事实的两处写法。
+- **`write` / `edit` 仍然拒绝改动模型没读过的文件** —— 0.2.2 默认关掉了 `fs-observation-policy`；本版保持开启，并且显式写出来，免得以后上游再翻默认值时无声地把口子放开。
+- **团队工具改为默认挂载** —— harness 现在编排 `agent-team`，模型可以把活分给具名协作者；TUI 暂时没有对应面板。
+
+### 修复
+
+- **按 0.2.2 标签构建不再卡在 `writableRoots` 补丁上** —— 锚点重新跟着发布走：0.2.2 组合 `workspaceWritableRoots`，而 0.13.0 针对的 rc 系列是内联那三个根。
+- **模型选择重新属于 Agent 自己** —— 0.2.2 合入了 `agent.model`，去掉了 0.13.0 为 rc 系列恢复的调用方持有 `ModelSelectionRef`。
+- **Code Mode 开关只由执行器行决定，也只由它们决定** —— 0.2.2 把执行器从 `dsh-tools` 里拆出来，并把 `tools.config.mode` 变成 `z.never()`；0.13.0 写的那一行会让整个 tools 行在启动时失效。
+- **单文件构建重新能过** —— `@deepseek-ai/dsh-util-time` 用默认导入引 `rrule`，Node 的 CJS 互操作会补上 default，Bun 的 ESM 解析不会，于是打包在任何目标产出前就失败。
+- **`/models` 换模型后仍然生效** —— 推理强度随路由挂在 Agent 上，启动与运行时切换都不再丢。
+
 ## [0.13.0] - 2026-11-02
 
 ### 变更

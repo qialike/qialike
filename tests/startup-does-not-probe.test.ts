@@ -77,12 +77,12 @@ describe('startup does not enumerate models', () => {
     // `agentDefaultModel` / `sessions` only.
     const src = code('index.tsx')
     // The window ends at the agent-setup callback. The marker is that callback's
-    // DECLARATION SHAPE and not a variable next to it: 0.12.0 briefly split model
-    // selection onto the Agent (`let liveAgent`), 0.12.3 went back to the
-    // caller-owned `ModelSelectionRef` the released rc line still ships, and a
-    // slice keyed on either local name silently collapses to "the rest of the
-    // file" once that name goes away — which is how this guard would stop
-    // guarding. `const setup = (agentCtx` survives both.
+    // DECLARATION SHAPE and not a variable next to it: model selection has now moved
+    // twice (0.12.0/0.14.0 hold the Agent in `let liveAgent`, 0.13.0 held the
+    // caller-owned `ModelSelectionRef` instead), and a slice keyed on either local
+    // name collapses to "the rest of the file" as soon as that name goes away —
+    // measured: the guard then fails for the wrong reason instead of guarding.
+    // `const setup = (agentCtx` is the one prefix every shape shares.
     const boot = src.slice(src.indexOf('const defaultModel = ctx.get'), src.indexOf('const setup = (agentCtx'))
     expect(boot.length).toBeGreaterThan(0)
     expect(boot).not.toContain('listConfigured')
