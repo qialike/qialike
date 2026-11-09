@@ -590,7 +590,16 @@ verify_manifest() {  # $1=下载根 $2=源名
     # Probe the status WITHOUT consuming the body: `-o /dev/null -w` is one request
     # whose only output is the code, so a 5xx reads as "not visible yet" instead of
     # as a body that failed to compare. The body is fetched only on a 200.
-    code="$(curl -sS -o /dev/null -w '%{http_code}' "$base/$TAG/sha256sums.txt" 2>/dev/null || true)"
+    #
+    # `-L` IS NOT OPTIONAL HERE (regression, caught live on the v0.14.0 gitcode push).
+    # The original code was `curl -fsSL`; this probe was first written as `curl -sS`
+    # and cost a full 14-attempt window on gitcode, whose download URL answers a bare
+    # `302` towards its object store: without `-L` every attempt re-read the redirect
+    # and the loop reported "CDN 仍在传播" 14 times for a manifest that was already
+    # live. Measured on 0.13.0 — no `-L`: 302; with `-L`: 200.
+    # `-w '%{http_code}'` reports the LAST response after following, which is the one
+    # that actually says whether the object is readable.
+    code="$(curl -sSL -o /dev/null -w '%{http_code}' "$base/$TAG/sha256sums.txt" 2>/dev/null || true)"
     [[ -n "$code" ]] || code=000
     if [[ "$code" == 200 ]]; then
       body="$(curl -fsSL "$base/$TAG/sha256sums.txt" 2>/dev/null || true)"

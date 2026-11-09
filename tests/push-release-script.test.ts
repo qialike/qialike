@@ -372,3 +372,22 @@ describe('the manifest read-back tells propagation apart from a missing upload',
     expect(r.calls.match(/releases\/download\/.*sha256sums\.txt/g)?.length ?? 0).toBe(1)
   })
 })
+
+describe('the manifest probe follows redirects', () => {
+  // WHY THIS EXISTS. The probe is `curl -sSL -o /dev/null -w '%{http_code}'`, and the
+  // `-L` is load-bearing: gitcode answers its download URL with a bare `302` towards
+  // the object store, so a probe WITHOUT `-L` reads 302 forever and reports "CDN 仍在
+  // 传播" for an object that is already live. That happened for real on the v0.14.0
+  // gitcode push — a freshly introduced probe used `-sS` where the code it replaced
+  // had `-fsSL`, and burned the whole 14-attempt window before anyone noticed.
+  //
+  // Asserted on the recorded argv rather than on a stub's behaviour, because the one
+  // thing that regressed is exactly "which flags did we pass".
+  test.skipIf(!canRun)('the status probe passes -L, so a 302 is followed to the object', () => {
+    const r = run({ FIX_RELEASE_STATUS: '200' })
+
+    const probes = r.calls.split('\n').filter((l) => l.includes('releases/download/') && l.includes('%{http_code}'))
+    expect(probes.length).toBeGreaterThan(0)
+    for (const probe of probes) expect(probe, probe).toMatch(/-sSL\b/)
+  })
+})
