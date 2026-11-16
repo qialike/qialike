@@ -45,6 +45,41 @@ import {
 /** Stable Cordis plugin name. */
 export const name = 'tui-llm'
 
+/**
+ * Raise a model-request failure whose code is qialike's own, or a provider's.
+ *
+ * WHY THIS EXISTS. Harness 0.2.2 narrowed the `LlmError` CONSTRUCTOR's `code`
+ * parameter to `BuiltinLlmFailureCode` — a key of `LLM_FAILURE_CODES` or
+ * `HTTP_<status>`. This adapter is out-of-tree: it raises `PROVIDER_ERROR` and
+ * `UNKNOWN_PROVIDER`, and it re-raises codes a gateway chose for itself (Anthropic's
+ * `error.type`, an OpenAI-compatible `error.code`), none of which are in that union.
+ *
+ * The sanctioned door for those is `LlmError.fromFailure`, which accepts any code and
+ * checks only that it is a non-empty string. Routing through it keeps the taxonomy
+ * identical — the same `PROVIDER_ERROR` a user has always seen in the status line and
+ * the session log — while satisfying the constructor's narrower type. Mapping them
+ * onto a built-in code instead would have been a behaviour change dressed as a type
+ * fix.
+ * @param message - non-empty human-readable summary.
+ * @param code - this adapter's, or a provider's, own machine code.
+ * @param facts - optional cause plus the serializable facts an `LlmFailure` carries.
+ * @returns the error to throw.
+ */
+function llmFailure(
+  message: string,
+  code: string,
+  facts: { cause?: unknown; status?: number } = {},
+): LlmError {
+  return LlmError.fromFailure(
+    {
+      message,
+      code,
+      ...facts.status === undefined ? {} : { status: facts.status },
+    } as Parameters<typeof LlmError.fromFailure>[0],
+    facts.cause === undefined ? undefined : { cause: facts.cause },
+  )
+}
+
 /** Services required before adapter registration can run. */
 export const inject = ['credentials', 'llm']
 
@@ -1509,7 +1544,7 @@ async function* translateAnthropic(source: AsyncIterable<AnthropicSseEvent>): As
       }
       case 'error': {
         const detail = event.error?.message ?? event.error?.type ?? 'anthropic stream error'
-        throw new LlmError(detail, 'PROVIDER_ERROR')
+        throw llmFailure(detail, 'PROVIDER_ERROR')
       }
       default:
         // Other events (ping, message_stop) carry no content.
@@ -1610,7 +1645,7 @@ export async function* parseSse<T>(body: ReadableStream<Uint8Array>): AsyncItera
     reader.releaseLock()
   }
   if (parsed === 0 && unparseable > 0) {
-    throw new LlmError(
+    throw llmFailure(
       `provider stream carried ${unparseable} unparseable payload(s) and no usable chunk — the body is compressed or not server-sent events`,
       'PROVIDER_ERROR',
     )
@@ -1624,7 +1659,7 @@ export async function* parseSse<T>(body: ReadableStream<Uint8Array>): AsyncItera
     const lines = head.split('\n').map((line) => line.trim()).filter((line) => line !== '')
     const sseShaped = lines.every((line) => line.startsWith(':') || /^[a-z]+:/i.test(line))
     if (!sseShaped) {
-      throw new LlmError(
+      throw llmFailure(
         binaryish
           ? `provider returned ${received} undecodable byte(s) — the stream body is compressed and the runtime did not decode it`
           : `provider returned ${received} byte(s) that are not server-sent events — the body is compressed or an error page`,
@@ -1647,7 +1682,7 @@ async function* translate(source: AsyncIterable<WireChunk>): AsyncIterable<Strea
   for await (const chunk of source) {
     if (chunk.error !== undefined) {
       const detail = chunk.error.message ?? chunk.error.type ?? 'provider stream error'
-      throw new LlmError(detail, typeof chunk.error.code === 'string' && chunk.error.code !== ''
+      throw llmFailure(detail, typeof chunk.error.code === 'string' && chunk.error.code !== ''
         ? chunk.error.code
         : 'PROVIDER_ERROR')
     }
@@ -1757,7 +1792,7 @@ export async function* translateResponses(source: AsyncIterable<ResponsesSseEven
   for await (const event of source) {
     if (event.error !== undefined) {
       const detail = event.error.message ?? event.error.type ?? 'responses stream error'
-      throw new LlmError(detail, typeof event.error.code === 'string' && event.error.code !== '' ? event.error.code : 'PROVIDER_ERROR')
+      throw llmFailure(detail, typeof event.error.code === 'string' && event.error.code !== '' ? event.error.code : 'PROVIDER_ERROR')
     }
     switch (event.type) {
       case 'response.output_item.added': {
@@ -1904,7 +1939,7 @@ export async function* translateGoogle(source: AsyncIterable<GoogleSseEvent>): A
   let finish: FinishReason = { kind: 'stop' }
   for await (const event of source) {
     if (event.error !== undefined) {
-      throw new LlmError(event.error.message ?? event.error.status ?? 'google stream error', 'PROVIDER_ERROR')
+      throw llmFailure(event.error.message ?? event.error.status ?? 'google stream error', 'PROVIDER_ERROR')
     }
     const usage = event.usageMetadata
     if (usage !== undefined) {
@@ -2172,7 +2207,7 @@ class TuiLlmAdapter extends LlmAdapter {
       const profile = this.resolve().get(options.provider)
         ?? this.templates().find((t) => t.route === options.provider)
       if (profile === undefined) {
-        throw new LlmError(`provider route "${options.provider}" is not configured`, 'UNKNOWN_PROVIDER')
+        throw llmFailure(`provider route "${options.provider}" is not configured`, 'UNKNOWN_PROVIDER')
       }
       // A multi-protocol gateway (modelsApi) routes each model family to its
       // own wire protocol + endpoint at stream time; everything else uses the
@@ -2449,13 +2484,13 @@ class TuiLlmAdapter extends LlmAdapter {
         const finalCode = isContextWindowExceededError(message)
           ? CONTEXT_WINDOW_EXCEEDED_CODE
           : (typeof code === 'string' && code !== '' ? code : httpErrorCode(response.status))
-        throw new LlmError(message, finalCode, {
+        throw llmFailure(message, finalCode, {
           cause: new Error(raw.length > 0 ? raw : `HTTP ${response.status}`),
           status: response.status,
         })
       } catch (error) {
         if (error instanceof LlmError) throw error
-        throw new LlmError(
+        throw llmFailure(
           message,
           isContextWindowExceededError(message) ? CONTEXT_WINDOW_EXCEEDED_CODE : httpErrorCode(response.status),
           {

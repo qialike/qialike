@@ -57,7 +57,7 @@ const HARNESS_VERSION_FILE = join(ROOT, 'packages/qialike-app/src/harness-versio
  * compile time instead of breaking silently at runtime.
  */
 const HARNESS_VERSION_MIN = '0.1.0-rc.7'
-const HARNESS_VERSION_MAX = '0.2.2-rc.1'
+const HARNESS_VERSION_MAX = '0.2.2-rc.3'
 
 /**
  * The npm scope this repo's own packages live under, and the placeholder scope
@@ -1686,24 +1686,19 @@ function embedRipgrepBinaries() {
  * on-disk install keeps behaving exactly as it did.
  */
 function patchRipgrepPath() {
-  const file = join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-tool-fs-search/lib/index.js')
-  if (!existsSync(file)) {
-    console.log('qialike: tool-fs-search not in the farm; leaving the ripgrep path unpatched')
-    return
-  }
-  const text = readFileSync(file, 'utf8')
-  if (text.includes('QIALIKE_RIPGREP_PATH')) {
-    console.log('qialike: ripgrep path already patched')
-    return
-  }
-  const anchor = '\t\tconst executableSidecar = process.platform === "win32" ? join(executable.dir, `${executable.name}-rg.exe`) : `${process.execPath}-rg`;\n'
-  const importAnchor = 'import { existsSync } from "node:fs";\n'
-  if (!text.includes(anchor) || !text.includes(importAnchor)) {
-    throw new Error(
-      'qialike: the bundled tool-fs-search no longer matches the ripgrep path resolution '
-      + 'this build patches; re-check apps/tui-bin/build.mjs against the harness version',
-    )
-  }
+  // WHERE THE RESOLUTION LIVES MOVED (harness 0.2.2-rc.3). `tool-fs-search` no
+  // longer resolves ripgrep itself: it calls `@deepseek-ai/dsh-util-ripgrep`, whose
+  // `resolveRgPath()` owns the "single-file sidecar, else `@vscode/ripgrep`, else
+  // Electron unpack" ladder. Patching the old call site now fails the build, which is
+  // the carrier doing its job — the search tool would otherwise have shipped with a
+  // resolution that cannot work inside the artifact.
+  //
+  // Both locations are carried: the legacy one keeps an older checkout (the version
+  // range still accepts 0.2.1 and earlier) building, and the new one is what the
+  // pinned release uses. Each is patched only if it exists, and the embedded path is
+  // tried BEFORE the module import in both — that is the whole point, since
+  // `@vscode/ripgrep` cannot resolve its platform package from a single file.
+  const shimImport = 'import { ripgrepPath as QIALIKE_RIPGREP_PATH } from "@qialike/qialike-app/src/ripgrep-shim.ts";\n'
   const injected = [
     '\t\t// qialike patch (see build.mjs): the artifact carries its own ripgrep,',
     '\t\t// because `@vscode/ripgrep` cannot resolve its platform package from a',
@@ -1714,9 +1709,58 @@ function patchRipgrepPath() {
     '\t\t} catch { /* no embedded binary for this platform: use the module */ }',
     '',
   ].join('\n')
-  const shimImport = 'import { ripgrepPath as QIALIKE_RIPGREP_PATH } from "@qialike/qialike-app/src/ripgrep-shim.ts";\n'
-  writeFileSync(file, text.replace(importAnchor, importAnchor + shimImport).replace(anchor, injected + anchor))
-  console.log('qialike: patched the ripgrep path in the bundled tool-fs-search')
+  const targets = [
+    {
+      // 0.2.2-rc.3+: the shared resolution helper.
+      file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-util-ripgrep/lib/index.js'),
+      // Injected AFTER the `pkg` sidecar probe and before the module import, so the
+      // order stays sidecar → embedded → module. `await` is legal here: the line sits
+      // inside the async arrow that `rgPathPromise` wraps.
+      anchor: '\t\tif ("pkg" in process && existsSync(executableSidecar)) return executableSidecar;\n',
+    },
+    {
+      // 0.2.1 and earlier: resolved inline by the search tool.
+      file: join(ROOT, 'apps/tui-bin/x/-deepseek-ai-dsh-tool-fs-search/lib/index.js'),
+      anchor: '\t\tconst executableSidecar = process.platform === "win32" ? join(executable.dir, `${executable.name}-rg.exe`) : `${process.execPath}-rg`;\n',
+    },
+  ]
+  const importAnchor = 'import { existsSync } from "node:fs";\n'
+  let patchedAny = false
+  // Candidates whose resolution this patch no longer recognises. The legacy package
+  // still exists on 0.2.2-rc.3 — it simply delegates now — so "present but moved" is
+  // an expected state there, not a failure. The failure is every candidate missing
+  // its anchor: then nothing in the farm resolves ripgrep the way the artifact needs.
+  const moved = []
+  for (const { file, anchor } of targets) {
+    if (!existsSync(file)) continue
+    const short = file.replace(ROOT + '/', '')
+    const text = readFileSync(file, 'utf8')
+    if (text.includes('QIALIKE_RIPGREP_PATH')) {
+      console.log(`qialike: ripgrep path already patched (${short})`)
+      patchedAny = true
+      continue
+    }
+    if (!text.includes(anchor) || !text.includes(importAnchor)) {
+      moved.push(short)
+      continue
+    }
+    writeFileSync(file, text.replace(importAnchor, importAnchor + shimImport).replace(anchor, anchor + injected))
+    console.log(`qialike: patched the ripgrep path in the bundled ${short}`)
+    patchedAny = true
+  }
+  if (!patchedAny) {
+    if (moved.length === 0) {
+      console.log('qialike: no ripgrep resolution module in the farm; leaving it unpatched')
+      return
+    }
+    throw new Error(
+      'qialike: no bundled module still resolves ripgrep the way this build patches it '
+      + `(checked and missed: ${moved.join(', ')}); re-check apps/tui-bin/build.mjs against the `
+      + 'harness version — shipping the unpatched resolution leaves every glob/grep call '
+      + 'failing as "ripgrep launch failed" inside the artifact',
+    )
+  }
+  for (const short of moved) console.log(`qialike: ${short} no longer owns ripgrep resolution; skipped`)
 }
 
 /** Symlink every entry of the harness virtual-store `node_modules` we don't own. */

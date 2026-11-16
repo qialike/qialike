@@ -5,6 +5,20 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.15.0] - 2026-11-09
+
+### Changed
+
+- **The embedded harness moves to deepseek-harness 0.2.2-rc.3** — `HARNESS_VERSION_MAX` and CI's `HARNESS_REF` move together, because they are one fact written twice.
+
+### Fixed
+
+- **`PROVIDER_ERROR` and `UNKNOWN_PROVIDER` still reach the status line** — 0.2.2 narrowed `new LlmError` to the harness's own code union, so this adapter's codes (and a gateway's own) go through `LlmError.fromFailure`, which accepts any code, instead of being remapped to a built-in one.
+- **Building against the 0.2.2-rc.3 tag no longer dies on the temp-sweep anchor** — the session temp directory is now created inside a `try` that classifies its failure, so the sweep hangs off the `let tempDir;` above it and stays a once-per-process side effect outside that `try`.
+- **The workspace-write sentence patch accepts the third upstream spelling** — rc.3 appended a Windows note to the extra-directories clause; all three shipped shapes are carried, so the next release that rewrites it does not need this rediscovered.
+- **The Windows workspace grant is still awaited off the UI thread** — upstream split grant creation and `grant.add` into two classified `try` blocks, so the gate now anchors on the add itself; `grant.add` remains the authority.
+- **`glob` and `grep` find their ripgrep inside the artifact again** — 0.2.2-rc.3 moved resolution into `@deepseek-ai/dsh-util-ripgrep`, so the patch follows it there and keeps the old call site as a fallback for older checkouts.
+
 ## [0.14.0] - 2026-11-09
 
 ### Changed

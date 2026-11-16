@@ -7,6 +7,20 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.15.0] - 2026-11-09
+
+### 变更
+
+- **内嵌 harness 升到 deepseek-harness 0.2.2-rc.3** —— `HARNESS_VERSION_MAX` 与 CI 的 `HARNESS_REF` 一起前移，因为它们是同一个事实的两处写法。
+
+### 修复
+
+- **`PROVIDER_ERROR` 与 `UNKNOWN_PROVIDER` 仍然如实显示** —— 0.2.2 把 `new LlmError` 收窄到 harness 自己的错误码联合，本适配器自己的码（以及网关自带的码）改走 `LlmError.fromFailure`（它接受任意码），而不是被映射成某个内置码。
+- **按 0.2.2-rc.3 标签构建不再卡在 temp-sweep 锚点上** —— 会话临时目录现在建在一个会分类失败的 `try` 里，于是清扫调用挂到它上方的 `let tempDir;`，仍然是那个 `try` 之外的一次性副作用。
+- **workspace-write 句子补丁认第三种上游写法** —— rc.3 给「额外可写目录」那句追加了一句 Windows 说明；三种发布过的形态都带着，下一个改写它的版本不必重新发现这件事。
+- **Windows 工作区授权仍然在 UI 线程之外等待** —— 上游把授权创建与 `grant.add` 拆成两个带错误分类的 `try`，于是门改锚在 add 本身；`grant.add` 仍是权威。
+- **`glob` / `grep` 重新能在产物里找到自己的 ripgrep** —— 0.2.2-rc.3 把解析搬进了 `@deepseek-ai/dsh-util-ripgrep`，补丁随之迁过去，并保留旧调用点作为旧检出的回退。
+
 ## [0.14.0] - 2026-11-09
 
 ### 变更

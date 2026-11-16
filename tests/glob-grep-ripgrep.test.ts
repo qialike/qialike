@@ -24,7 +24,20 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 
 const BINARY = join(process.cwd(), 'dist', process.platform === 'win32' ? 'qialike.exe' : 'qialike')
-const HARNESS_SEARCH_DIR = join(process.cwd(), 'apps', 'tui-bin', 'x', '-deepseek-ai-dsh-tool-fs-search')
+// WHERE THE RESOLUTION LIVES MOVED in harness 0.2.2-rc.3: `tool-fs-search` stopped
+// resolving ripgrep itself and now calls `@deepseek-ai/dsh-util-ripgrep`, whose
+// `resolveRgPath()` owns the ladder the patch rewrites. Both are listed so the guard
+// follows whichever the vendored farm actually carries, and so a future move is a
+// visible skip rather than a false pass.
+const HARNESS_SEARCH_DIRS = [
+  join(process.cwd(), 'apps', 'tui-bin', 'x', '-deepseek-ai-dsh-util-ripgrep'),
+  join(process.cwd(), 'apps', 'tui-bin', 'x', '-deepseek-ai-dsh-tool-fs-search'),
+]
+/** The vendored module that owns ripgrep resolution in this farm, if any. */
+const HARNESS_SEARCH_DIR = HARNESS_SEARCH_DIRS.find((dir) => {
+  const entry = join(dir, 'lib', 'index.js')
+  return existsSync(entry) && readFileSync(entry, 'utf8').includes('@vscode/ripgrep')
+})
 const GENERATED = new URL('../packages/qialike-app/src/ripgrep-binary.generated.ts', import.meta.url)
 
 /** The maps the last build emitted, or empty ones when it emitted no module at all. */
@@ -119,12 +132,20 @@ describe('the embedded ripgrep', () => {
     // that moves it fails the build loudly instead of silently leaving the tools
     // unable to find ripgrep.
     expect(build).toContain('`${executable.name}-rg.exe`')
+    // Both homes are named: the legacy inline resolution and the shared helper
+    // that owns it from 0.2.2-rc.3 on.
+    expect(build).toContain('-deepseek-ai-dsh-util-ripgrep')
+    expect(build).toContain('-deepseek-ai-dsh-tool-fs-search')
     expect(build).toContain('QIALIKE_RIPGREP_PATH')
     expect(build).toContain('embedRipgrepBinaries')
   })
 
-  test.skipIf(!existsSync(HARNESS_SEARCH_DIR))('the bundled search module asks the shim, not only the module', () => {
-    const bundled = readFileSync(join(HARNESS_SEARCH_DIR, 'lib', 'index.js'), 'utf8')
+  test.skipIf(HARNESS_SEARCH_DIR === undefined)('the bundled search module asks the shim, not only the module', () => {
+    // Reads whichever vendored module owns the resolution (see HARNESS_SEARCH_DIRS),
+    // so this keeps guarding the patch after 0.2.2-rc.3 moved it into
+    // `dsh-util-ripgrep` — the exact drift that a hardcoded path turns into a silent
+    // skip.
+    const bundled = readFileSync(join(HARNESS_SEARCH_DIR!, 'lib', 'index.js'), 'utf8')
     expect(bundled).toContain('QIALIKE_RIPGREP_PATH')
     // The module branch has to survive as the on-disk fallback.
     expect(bundled).toContain('@vscode/ripgrep')

@@ -95,20 +95,36 @@ function policyEdits() {
             text: 'import { Service } from "@deepseek-ai/cordis";\nimport { writableRoots } from "@deepseek-ai/dsh-sandbox";',
         },
         {
-            // The sentence has TWO upstream spellings, and both are live:
-            //   * the released `0.2.1-rc.3 .. rc.5` tags keep a one-line `case`
-            //     whose sentence names only the workspace root;
-            //   * `master` / `0.2.2-alpha` turned it into a block that first names
-            //     the policy's explicit extra directories.
-            // The block shape was the only anchor carried before, so a build
-            // against an actual rc TAG failed here ("anchor not found exactly
-            // once, found 0") even though the checkout was a supported release.
-            // Both shapes are accepted now; either way the replacement derives the
-            // sentence from `writableRoots(policy)`, which already covers whatever
-            // extras the policy carries.
+            // The sentence has had THREE upstream spellings, and all three have
+            // shipped in a release this tree was once pinned to:
+            //   * `0.2.1-rc.3 .. rc.5` — a one-line `case` naming only the root;
+            //   * `0.2.2-rc.1` — a block that first names the policy's extra
+            //     writable directories;
+            //   * `0.2.2-rc.3` — the same block, whose `extra` line gained a
+            //     Windows clarification ("these additional grants apply to file
+            //     tools only, not sandboxed processes").
+            // Each move broke the build loudly at this anchor, which is the carrier
+            // working as designed — but the fix should not have to be rediscovered
+            // every release, so every shape is carried as a candidate and the first
+            // one that matches exactly once wins.
+            //
+            // The replacement derives the sentence from `writableRoots(policy)`,
+            // which already covers whatever extras the policy carries, so the
+            // Windows clause is dropped deliberately: qialike never sets
+            // `additionalWritableRoots`, and listing the enforced allow-list is a
+            // stronger statement than restating where those extras apply.
             name: 'policy allow-list sentence',
             marker: POLICY_ALLOWSET_MARKER,
             anchors: [
+                // 0.2.2-rc.3+: the block with the Windows clarification.
+                [
+                    '\t\tcase "workspace-write": {',
+                    '\t\t\tconst additional = policy.additionalWritableRoots;',
+                    '\t\t\tconst extra = additional === void 0 ? "" : ` Additional writable directories: ${JSON.stringify(additional)}. On Windows, these additional grants apply to file tools only, not sandboxed processes.`;',
+                    '\t\t\treturn `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}.${extra} Some platform temporary areas may also be writable.`;',
+                    '\t\t}',
+                ].join('\n'),
+                // 0.2.2-rc.1 .. rc.2: the block before the clarification.
                 [
                     '\t\tcase "workspace-write": {',
                     '\t\t\tconst additional = policy.additionalWritableRoots;',
@@ -116,6 +132,7 @@ function policyEdits() {
                     '\t\t\treturn `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}.${extra} Some platform temporary areas may also be writable.`;',
                     '\t\t}',
                 ].join('\n'),
+                // 0.2.1-rc.3 .. rc.5: the one-line `case`.
                 '\t\tcase "workspace-write": return `Current DSH file policy: workspace-write. Any available operation enforced by the DSH file sandbox may modify files under the session workspace: ${JSON.stringify(policy.workspaceRoot)}. Some platform temporary areas may also be writable.`;',
             ],
             text,
@@ -203,8 +220,19 @@ function hygieneEdits(indent, q) {
         {
             name: 'temp-sweep call',
             marker: `${TEMP_SWEEP_MARKER}(tmpdir());`,
-            anchor: `${indent}${indent}const tempDir = mkdtempSync(join(tmpdir(), ${qq('dsh-')}));`,
-            text: `${call}${indent}${indent}const tempDir = mkdtempSync(join(tmpdir(), ${qq('dsh-')}));`,
+            // Re-anchored for harness 0.2.2-rc.3: the session temp directory is now
+            // created as `tempDir = mkdtempSync(...)` inside a try that classifies the
+            // failure, so the old `const tempDir = mkdtempSync(...)` line is gone.
+            //
+            // The `let tempDir;` declaration immediately above that try is the better
+            // anchor on its own merits, not just a substitute: the sweep must stay in
+            // the METHOD BODY (2 tabs), because it is a once-per-process side effect
+            // whose failure must never be reported as "private temp directory
+            // creation" — which is exactly what would happen if the call were moved
+            // inside the new try. It still runs before the first `dsh-*` directory of
+            // this process is created, which is what makes the sweep useful.
+            anchor: `${indent}${indent}let tempDir;`,
+            text: `${call}${indent}${indent}let tempDir;`,
         },
     ];
 }

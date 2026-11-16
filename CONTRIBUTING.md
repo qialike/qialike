@@ -29,7 +29,7 @@ Prerequisites:
 cd yourpath
 git clone https://github.com/deepseek-ai/deepseek-harness.git
 cd deepseek-harness
-git checkout dsh-v0.2.2-rc.1   # the tag must be the version qialike supports
+git checkout dsh-v0.2.2-rc.3   # the tag must be the version qialike supports
 pnpm install
 pnpm run build
 ```

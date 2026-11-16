@@ -109,13 +109,21 @@ function grantEdits() {
         {
             name: 'awaited workspace grant',
             marker: GRANT_GATE_MARKER,
-            anchor: '\t\tif (!this.workspaceGrants.has(workspaceRoot)) {\n'
-                + '\t\t\tconst grant = AclWriteGrant.create(writeSid);\n'
-                + '\t\t\ttry {\n'
+            // Re-anchored for harness 0.2.2-rc.3. Upstream split the grant creation and
+            // `grant.add` into TWO try/catch blocks, each classifying its failure
+            // through `aclPreparationFailure` (and disposing the grant when the add
+            // fails), so the four-line prologue this edit used to quote is no longer
+            // contiguous.
+            //
+            // The meaning is unchanged: the await goes immediately BEFORE
+            // `grant.add`, and `grant.add` stays the authority — a child runner that
+            // never ran leaves exactly the previous behaviour. Anchoring on the add is
+            // also stricter than the old prologue: it cannot match the temp grant's
+            // `grant.add(tempDir)` (a different call), and the shared indentation is
+            // what places the injected block inside that same `try`.
+            anchor: '\t\t\ttry {\n'
                 + '\t\t\t\tgrant.add(workspaceRoot, true);\n',
-            text: '\t\tif (!this.workspaceGrants.has(workspaceRoot)) {\n'
-                + '\t\t\tconst grant = AclWriteGrant.create(writeSid);\n'
-                + '\t\t\ttry {\n'
+            text: '\t\t\ttry {\n'
                 + `${gateCall}\n`,
         },
         {
