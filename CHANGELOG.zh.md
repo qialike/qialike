@@ -7,6 +7,17 @@ qialike 的主要变更，最新在前。本文件从 **0.6.0** 开始记录。
 版本号遵循 [SemVer](https://semver.org/lang/zh-CN/)。由于内嵌的 DeepSeek Harness 仍是开发者预览，
 minor 升级可能包含不兼容变更 —— 这类变更以 `!` 标出。
 
+## [0.16.0] - 2026-11-09
+
+### 变更
+
+- **内嵌 harness 升到 deepseek-harness 0.2.2-rc.5** —— `HARNESS_VERSION_MAX` 与 CI 的 `HARNESS_REF` 一起前移，因为它们是同一个事实的两处写法；这次没有任何锚点需要重新对齐。
+- **web 搜索维持 DeepSeek Search API** —— rc.5 删掉了 base `web` 行的 `searchProvider`，未固定时改为按模型路由选择；本版固定回按次计费的 Search API，因为 Messages 那条会把最多 5 次服务端搜索算成模型 token，而且会把被覆盖过的 `deepseek-official` 网关的 key 发到官方端点。
+
+### 修复
+
+- **Anthropic 线路上的内容拒绝现在会如实报出，而不是被吞掉** —— `stop_reason: "refusal"` 会让这类流“正常”结束，原先被当成普通 stop，于是回合以静默成功收场、只剩拒绝前的那半句；现在改用 harness 新增的 `CONTENT_REFUSED` 码失败，先报已计费的用量，并保留供应商给出的解释（例如被拦下的图片）。
+
 ## [0.15.0] - 2026-11-09
 
 ### 变更

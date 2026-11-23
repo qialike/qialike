@@ -1422,10 +1422,43 @@ interface AnthropicSseEvent {
   type: string
   index?: number
   content_block?: { type?: string; id?: string; name?: string }
-  delta?: { type?: string; text?: string; partial_json?: string; thinking?: string; stop_reason?: string }
+  delta?: {
+    type?: string
+    text?: string
+    partial_json?: string
+    thinking?: string
+    stop_reason?: string
+    /** Present with `stop_reason: 'refusal'`; `explanation` names what was blocked. */
+    stop_details?: { type?: string; explanation?: string }
+  }
   usage?: { input_tokens?: number; output_tokens?: number }
   error?: { type?: string; message?: string }
   message?: { usage?: { input_tokens?: number; output_tokens?: number } }
+}
+
+/**
+ * The failure a `stop_reason: 'refusal'` reports.
+ *
+ * WHY IT IS AN ERROR AND NOT A FINISH. A refusal ends the stream normally — no
+ * `error` event, blocks already closed — so mapping it in {@link mapAnthropicFinish}
+ * would produce `{ kind: 'stop' }` and the turn would end silently with whatever
+ * partial text preceded the refusal. That is the worst possible shape: the user sees
+ * an assistant that "said nothing", the transcript records a completed turn, and the
+ * retry/summary paths all treat it as success. Harness 0.2.2-rc.5 introduced
+ * `CONTENT_REFUSED` for exactly this case, and its own DeepSeek adapter raises it
+ * from the same `stop_reason`.
+ *
+ * The provider's `stop_details.explanation` is kept verbatim after a colon because it
+ * is actionable ("blocked images"), and dropping it leaves only "refused".
+ * @param details - the `stop_details` object from the `message_delta`, if any.
+ * @returns the error to throw once usage is reported.
+ */
+function anthropicRefusal(details: { explanation?: string } | undefined): LlmError {
+  const explanation = details?.explanation
+  return new LlmError(
+    `the provider refused to answer under its content safety review${typeof explanation === 'string' && explanation !== '' ? `: ${explanation}` : ''}`,
+    'CONTENT_REFUSED',
+  )
 }
 
 /** Map an Anthropic `stop_reason` to the harness vocabulary. */
@@ -1436,6 +1469,9 @@ function mapAnthropicFinish(reason: string): FinishReason {
     case 'max_tokens':
       return { kind: 'max-tokens' }
     default:
+      // `refusal` never reaches here: `translateAnthropic` intercepts it and throws
+      // `CONTENT_REFUSED`, because a refusal that reported `stop` would end the turn
+      // as a silent success (see {@link anthropicRefusal}).
       return { kind: 'stop' }
   }
 }
@@ -1446,10 +1482,14 @@ function mapAnthropicFinish(reason: string): FinishReason {
  * blocks map to text/reasoning/tool-call chunks, and `usage`/`finish` are
  * emitted once at the stream end.
  */
-async function* translateAnthropic(source: AsyncIterable<AnthropicSseEvent>): AsyncIterable<StreamChunk> {
+export async function* translateAnthropic(source: AsyncIterable<AnthropicSseEvent>): AsyncIterable<StreamChunk> {
   const open = new Map<number, { type: 'text' | 'reasoning' | 'tool-call'; id?: string; name?: string; arguments?: string; text?: string }>()
   let pendingUsage: TokenUsage | undefined
   let finish: FinishReason = { kind: 'stop' }
+  // Held rather than thrown at the `message_delta`: a refusal is reported only
+  // after the stream's final usage, because the tokens it consumed are still
+  // billed (harness 0.2.2-rc.5 documents the same order in its own adapter).
+  let refused: LlmError | undefined
   for await (const event of source) {
     switch (event.type) {
       case 'message_start': {
@@ -1531,7 +1571,13 @@ async function* translateAnthropic(source: AsyncIterable<AnthropicSseEvent>): As
         break
       }
       case 'message_delta': {
-        if (event.delta?.stop_reason !== undefined && event.delta.stop_reason !== '') {
+        // A refusal is NOT a finish reason here: it ends the stream with blocks
+        // already closed, so leaving it to `mapAnthropicFinish` would report `stop`
+        // and the turn would end as a silent success with only the partial text
+        // before the refusal. Recorded now, thrown after usage below.
+        if (event.delta?.stop_reason === 'refusal') {
+          refused = anthropicRefusal(event.delta.stop_details)
+        } else if (event.delta?.stop_reason !== undefined && event.delta.stop_reason !== '') {
           finish = mapAnthropicFinish(event.delta.stop_reason)
         }
         if (event.usage?.output_tokens !== undefined) {
@@ -1552,6 +1598,9 @@ async function* translateAnthropic(source: AsyncIterable<AnthropicSseEvent>): As
     }
   }
   if (pendingUsage !== undefined) yield { type: 'usage', usage: pendingUsage }
+  // Tokens consumed before a refusal are billed, so usage goes out first and only
+  // then does the stream fail — the same order the harness's own adapter uses.
+  if (refused !== undefined) throw refused
   yield { type: 'finish', reason: finish }
 }
 

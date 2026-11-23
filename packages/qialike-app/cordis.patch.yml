@@ -292,6 +292,35 @@
   config:
     enabled: false
 
+# ── web search stays on the DeepSeek Search API (qialike's call) ────────────
+#
+# Harness 0.2.2-rc.5 removed `searchProvider` from the base `web` row, so with
+# nothing pinned `dsh-web` selects per model route: on `deepseek-official` /
+# `deepseek-account` it runs `deepseek-official` — a Messages request carrying the
+# server-side `web_search_20250305` tool — and `deepseek-search-api` everywhere
+# else. qialike pins the Search API for every route, which is what 0.15.0 shipped.
+#
+# WHY THE OLD BEHAVIOUR IS KEPT, in the two facts that differ:
+#   * BILLING. A Messages search is free per search but is an auxiliary model
+#     request, so up to `maxUses` (5) server-side searches land on the token bill,
+#     and long sessions pay more than a per-search API call did. The Search API is
+#     a flat per-search charge that does not grow with context.
+#   * ENDPOINT. `web-search-deepseek` deliberately does NOT follow the model
+#     provider's base URL — it reads `baseURL`, else `$DEEPSEEK_SEARCH_BASE_URL`,
+#     else `https://api.deepseek.com/anthropic/v1`. qialike lets a user OVERRIDE
+#     the built-in `deepseek-official` route's baseURL (`effectiveProviders`), so
+#     following the route default would send that gateway's key to the OFFICIAL
+#     endpoint — a credential failure, or a charge on the official account.
+#
+# Pinning here rather than in the base keeps the choice legible in this repository
+# instead of inheriting whatever upstream's default becomes. A deployment that
+# wants the route-following behaviour can still override this row in its profile
+# patch, and `DSH_WEB_SEARCH_PROVIDER` feeds the same field.
+- id: web
+  config:
+    searchProvider: deepseek-search-api
+    fetchProvider: http
+
 # ── self-hosted provider layer replaces pi-ai and the deepseek adapter ──────
 #
 # `tui-llm` registers its own OpenAI-compatible adapter (built-in DeepSeek

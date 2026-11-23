@@ -5,6 +5,17 @@ Notable changes to qialike, newest first. This file starts at **0.6.0**.
 Versioning is [SemVer](https://semver.org/). While the embedded DeepSeek Harness is a developer
 preview, a minor bump may carry a breaking change — those are marked `!`.
 
+## [0.16.0] - 2026-11-09
+
+### Changed
+
+- **The embedded harness moves to deepseek-harness 0.2.2-rc.5** — `HARNESS_VERSION_MAX` and CI's `HARNESS_REF` move together, because they are one fact written twice; no anchored patch needed re-aligning this time.
+- **Web search stays on the DeepSeek Search API** — rc.5 deleted `searchProvider` from the base `web` row, so an unconfigured build now picks per model route; this build pins the flat per-search API instead, because the Messages alternative bills up to five server-side searches as model tokens and would send an overridden `deepseek-official` gateway's key to the official endpoint.
+
+### Fixed
+
+- **A content refusal on an Anthropic-wire route is reported, not swallowed** — a `stop_reason: "refusal"` ends such a stream normally, so it used to map to an ordinary stop and the turn finished as a silent success with only the partial text; it now fails with the harness's new `CONTENT_REFUSED` code, after the billed usage, and keeps the provider's explanation (e.g. blocked images).
+
 ## [0.15.0] - 2026-11-09
 
 ### Changed

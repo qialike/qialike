@@ -20,6 +20,7 @@ import {
   serializeMessagesGoogle,
   serializeRequestOpenAI,
   serializeRequestResponses,
+  translateAnthropic,
   translateGoogle,
   translateResponses,
 } from '../packages/qialike-app/src/llm.ts'
@@ -520,5 +521,91 @@ describe('serializeRequestOpenAI provider-specific effort sets', () => {
     const high = await serializeRequestOpenAI(undefined as never, { ...base, model: 'm3', reasoningEffort: 'high' }, profile, undefined)
     expect(high.thinking).toEqual({ type: 'enabled' })
     expect(high.reasoning_effort).toBe('high')
+  })
+})
+
+describe('translateAnthropic refusal', () => {
+  // WHY THIS EXISTS. A `stop_reason: 'refusal'` ends the stream NORMALLY: no `error`
+  // event, every block already closed. Treating it as a finish reason therefore
+  // produced `{ kind: 'stop' }` — the turn ended as a silent success with only the
+  // partial text before the refusal, and the retry/summary paths saw nothing wrong.
+  // Harness 0.2.2-rc.5 added `CONTENT_REFUSED` for this case; these cases pin that
+  // qialike reports it instead of swallowing it.
+
+  /** Drive the translator, returning the chunks emitted before any throw. */
+  async function drive(events: unknown[]): Promise<{ chunks: unknown[]; error?: { code?: string; message?: string } }> {
+    const chunks: unknown[] = []
+    try {
+      for await (const chunk of translateAnthropic(events as never)) chunks.push(chunk)
+      return { chunks }
+    } catch (error) {
+      return { chunks, error: error as { code?: string; message?: string } }
+    }
+  }
+
+  /** A refusal after one settled text block, as DeepSeek emits it. */
+  const refusalStream = (stopDetails?: unknown) => [
+    { type: 'message_start', message: { usage: { input_tokens: 12 } } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial answer' } },
+    { type: 'content_block_stop', index: 0 },
+    {
+      type: 'message_delta',
+      delta: {
+        stop_reason: 'refusal',
+        ...(stopDetails === undefined ? {} : { stop_details: stopDetails }),
+      },
+      usage: { output_tokens: 7 },
+    },
+    { type: 'message_stop' },
+  ]
+
+  test('a refusal fails the stream with CONTENT_REFUSED instead of finishing', async () => {
+    const { chunks, error } = await drive(refusalStream({ type: 'refusal', explanation: 'blocked images' }))
+
+    expect(error?.code).toBe('CONTENT_REFUSED')
+    // The explanation is the actionable half: "blocked images" says what to change.
+    expect(error?.message).toContain('content safety review')
+    expect(error?.message).toContain('blocked images')
+    // The decisive assertion: no finish chunk. A `stop` here is the silent-success bug.
+    expect(chunks.some((chunk) => (chunk as { type?: string }).type === 'finish')).toBe(false)
+  })
+
+  test('the partial text before a refusal is still delivered', async () => {
+    // Not cosmetic: the user has to see WHAT was cut off, and the transcript is the
+    // only place that survives the error.
+    const { chunks } = await drive(refusalStream({ explanation: 'blocked images' }))
+
+    expect(chunks).toContainEqual({ type: 'block-end', index: 0, block: { type: 'text', text: 'partial answer' } })
+  })
+
+  test('usage is reported BEFORE the failure, because those tokens are billed', async () => {
+    const { chunks, error } = await drive(refusalStream({ explanation: 'blocked images' }))
+
+    expect(error?.code).toBe('CONTENT_REFUSED')
+    expect(chunks).toContainEqual({ type: 'usage', usage: { inputTokens: 12, outputTokens: 7 } })
+  })
+
+  test('a refusal without stop_details still names the reason, without an empty colon', async () => {
+    const { error } = await drive(refusalStream())
+
+    expect(error?.code).toBe('CONTENT_REFUSED')
+    expect(error?.message).toContain('content safety review')
+    expect(error?.message).not.toMatch(/:\s*$/)
+  })
+
+  test('an ordinary end_turn is unaffected', async () => {
+    // The regression guard for the fix itself: only `refusal` is special-cased.
+    const { chunks, error } = await drive([
+      { type: 'message_start', message: { usage: { input_tokens: 3 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'ok' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+      { type: 'message_stop' },
+    ])
+
+    expect(error).toBeUndefined()
+    expect(chunks).toContainEqual({ type: 'finish', reason: { kind: 'stop' } })
   })
 })

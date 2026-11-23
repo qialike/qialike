@@ -43,8 +43,11 @@ function row(id: string): string {
   const lines = PATCH.split('\n')
   const start = lines.findIndex(line => line === `- id: ${id}`)
   expect(start, `the composition must carry a row named ${id}`).toBeGreaterThan(-1)
+  // Stop at the next TOP-LEVEL entry: a row (`- `) or a section banner (`#`).
+  // Terminating on `- ` alone drags the following comment block into the slice,
+  // whose prose names the very providers and plugin ids these assertions look for.
   let end = start + 1
-  while (end < lines.length && !lines[end]!.startsWith('- ')) end += 1
+  while (end < lines.length && !lines[end]!.startsWith('- ') && !lines[end]!.startsWith('#')) end += 1
   return lines.slice(start, end).join('\n')
 }
 

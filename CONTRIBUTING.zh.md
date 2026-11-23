@@ -26,7 +26,7 @@
 cd yourpath
 git clone https://github.com/deepseek-ai/deepseek-harness.git
 cd deepseek-harness
-git checkout dsh-v0.2.2-rc.3   # 检出的版本应与 qialike 支持的版本相同
+git checkout dsh-v0.2.2-rc.5   # 检出的版本应与 qialike 支持的版本相同
 pnpm install
 pnpm run build
 ```
